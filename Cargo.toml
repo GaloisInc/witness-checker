@@ -1,0 +1,10 @@
+[package]
+name = "cheesecloth"
+version = "0.1.0"
+authors = ["Stuart Pernsteiner <spernsteiner@galois.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+scale_isa = { path = "../dialogue/scale_isa" }
