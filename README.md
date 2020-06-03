@@ -6,10 +6,11 @@ SCALE bytecode and can be run using the SCALE engine.
 
 To generate the witness checker:
 
-    cargo run
+    cargo run -- examples/poly-prog.txt examples/poly-trace-good.txt
 
-Currently the input program and trace are hardcoded - see `main` in
-`src/main.rs`.  The bytecode output path is also hardcoded as `out.bc`.
+The first argument is the program (a list of instructions) and the second is
+the trace (a list of machine states).  Currently the bytecode output path is
+hardcoded as `out.bc`.
 
 To run the checker using the SCALE engine:
 

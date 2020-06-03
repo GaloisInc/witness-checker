@@ -1,9 +1,11 @@
-use std::fs::File;
+use std::env;
+use std::fs::{self, File};
 use std::io::{self, BufWriter};
 use scale_isa;
 use scale_isa::types::{RegSecretRegint, RegSecretBit};
 
 use cheesecloth::builder::Builder;
+use cheesecloth::parse;
 use cheesecloth::tiny_ram::{RamInstr, RamState, Opcode, RAM_REGS};
 
 fn operand_value(
@@ -79,41 +81,42 @@ fn check_last(b: &mut Builder, prog: &[RamInstr], s: &RamState) -> Vec<RegSecret
 }
 
 fn main() -> io::Result<()> {
+    let args = env::args().collect::<Vec<_>>();
+    assert!(args.len() == 3, "usage: {} PROGRAM TRACE", args.get(0).map_or("witness-checker", |x| x));
+
     let mut b = Builder::default();
 
-    {
-        let prog = vec![
-            RamInstr::mull(&mut b, 2, 0, 0),        // r2 = r0 * r0 (x^2)
-            RamInstr::mull_imm(&mut b, 1, 0, 3),    // r1 = 3 * r0 (3x)
-            RamInstr::add(&mut b, 0, 1, 2),         // r0 = r1 + r2 (x^2 + 3x)
-            RamInstr::sub_imm(&mut b, 0, 0, 10),    // r0 = r0 - 10 (x^2 + 3x - 10)
-        ];
-
-        let trace = vec![
-            RamState::new(&mut b, 0, [2, 0, 0], false),
-            RamState::new(&mut b, 1, [2, 0, 4], false),
-            RamState::new(&mut b, 2, [2, 6, 4], false),
-            RamState::new(&mut b, 3, [10, 6, 4], false),
-            RamState::new(&mut b, 4, [0, 6, 4], false),
-        ];
-
-        let mut ok = Vec::new();
-
-        ok.append(&mut check_first(&mut b, &prog, trace.first().unwrap()));
-
-        for (s1, s2) in trace.iter().zip(trace.iter().skip(1)) {
-            ok.append(&mut check_step(&mut b, &prog, s1, s2));
-        }
-
-        ok.append(&mut check_last(&mut b, &prog, trace.last().unwrap()));
-
-        for sb in ok {
-            let sr = b.sb_to_sr(sb);
-            let clear = b.reveal(sr);
-            b.print(clear);
-        }
+    // Load the program and trace from files
+    let mut prog = Vec::new();
+    let prog_str = fs::read_to_string(&args[1]).unwrap();
+    for line in prog_str.lines() {
+        prog.push(parse::parse_instr(&mut b, line));
     }
 
+    let mut trace = Vec::new();
+    let trace_str = fs::read_to_string(&args[2]).unwrap();
+    for line in trace_str.lines() {
+        trace.push(parse::parse_state(&mut b, line));
+    }
+
+    // Generate SCALE code to check the trace
+    let mut ok = Vec::new();
+
+    ok.append(&mut check_first(&mut b, &prog, trace.first().unwrap()));
+
+    for (s1, s2) in trace.iter().zip(trace.iter().skip(1)) {
+        ok.append(&mut check_step(&mut b, &prog, s1, s2));
+    }
+
+    ok.append(&mut check_last(&mut b, &prog, trace.last().unwrap()));
+
+    for sb in ok {
+        let sr = b.sb_to_sr(sb);
+        let clear = b.reveal(sr);
+        b.print(clear);
+    }
+
+    // Write out the generated SCALE program
     let instrs = b.finish();
     let mut f = BufWriter::new(File::create("out.bc")?);
     for i in instrs {

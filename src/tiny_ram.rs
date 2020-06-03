@@ -78,7 +78,7 @@ impl Mux for RamInstr {
     }
 }
 
-pub const RAM_REGS: usize = 3;
+pub const RAM_REGS: usize = 16;
 
 pub struct RamState {
     pub pc: RegSecretRegint,
