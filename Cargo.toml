@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 scale_isa = { path = "../dialogue/scale_isa" }
+bumpalo = "3.4"
