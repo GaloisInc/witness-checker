@@ -221,8 +221,8 @@ impl TyKind {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Ty {
-    kind: TyKind,
-    secret: bool,
+    pub kind: TyKind,
+    pub secret: bool,
 }
 
 impl Ty {
@@ -233,8 +233,8 @@ impl Ty {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
-    ty: Ty,
-    kind: GateKind<'a>,
+    pub ty: Ty,
+    pub kind: GateKind<'a>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
