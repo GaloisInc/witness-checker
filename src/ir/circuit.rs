@@ -208,6 +208,17 @@ pub enum TyKind {
     Uint(IntSize),
 }
 
+impl TyKind {
+    pub const I8: TyKind = TyKind::Int(IntSize::I8);
+    pub const I16: TyKind = TyKind::Int(IntSize::I16);
+    pub const I32: TyKind = TyKind::Int(IntSize::I32);
+    pub const I64: TyKind = TyKind::Int(IntSize::I64);
+    pub const U8: TyKind = TyKind::Uint(IntSize::I8);
+    pub const U16: TyKind = TyKind::Uint(IntSize::I16);
+    pub const U32: TyKind = TyKind::Uint(IntSize::I32);
+    pub const U64: TyKind = TyKind::Uint(IntSize::I64);
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Ty {
     kind: TyKind,
