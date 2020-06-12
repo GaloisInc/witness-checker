@@ -228,6 +228,14 @@ impl TyKind {
     pub const U16: TyKind = TyKind::Uint(IntSize::I16);
     pub const U32: TyKind = TyKind::Uint(IntSize::I32);
     pub const U64: TyKind = TyKind::Uint(IntSize::I64);
+
+    pub fn is_integer(&self) -> bool {
+        match *self {
+            TyKind::Bool => false,
+            TyKind::Int(_) => true,
+            TyKind::Uint(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

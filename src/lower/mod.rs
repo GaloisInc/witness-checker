@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use crate::ir::circuit::{Circuit, Gate, Wire, GateKind};
 
 pub mod bool_;
+pub mod int;
 
 struct RunPass<'a, 'old, 'new, F> {
     c: &'a Circuit<'new>,
