@@ -32,6 +32,10 @@ impl<'a> Circuit<'a> {
         }
     }
 
+    pub fn gate(&self, gate: Gate<'a>) -> Wire<'a> {
+        Wire(self.intern(gate))
+    }
+
     fn mk_gate(&self, ty: Ty, kind: GateKind<'a>) -> Wire<'a> {
         Wire(self.intern(Gate { ty, kind }))
     }

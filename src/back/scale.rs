@@ -171,7 +171,6 @@ impl<'a> Lower<'a> {
                 let dest = self.fresh::<RegSecretRegint>();
                 let a = self.wire(a).unpack();
                 match op {
-                    // Should be lowered to `xor(x, -1)`
                     UnOp::Not => self.instr(instr::invsint(0, dest, a)),
                     UnOp::Neg => self.instr(instr::neg(0, dest, a)),
                 }
@@ -194,7 +193,7 @@ impl<'a> Lower<'a> {
                 }
                 dest.pack()
             },
-            GateKind::Shift(_, _, _) => unimplemented!("Shift on Bool"),
+            GateKind::Shift(_, _, _) => unimplemented!("Shift on u64"),
             GateKind::Compare(op, a, b) => {
                 let dest = self.fresh::<RegSecretBit>();
                 let a = self.wire(a).unpack();
