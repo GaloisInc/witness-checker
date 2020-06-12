@@ -44,10 +44,6 @@ impl<'a> Circuit<'a> {
         self.mk_gate(ty, GateKind::Lit(val))
     }
 
-    pub fn secret(&self, arg: Wire<'a>) -> Wire<'a> {
-        return arg;
-    }
-
     pub fn input(&self, idx: usize) -> Wire<'a> {
         self.mk_gate(Ty::new(self.input_tys[idx]), GateKind::Input(idx))
     }
@@ -223,8 +219,6 @@ pub struct Gate<'a> {
 pub enum GateKind<'a> {
     /// A literal/constant value.
     Lit(u64),
-    /// Convert a public value to a secret one.
-    Secret(Wire<'a>),
     /// Retrieve a secret input, given its index.
     Input(usize),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.

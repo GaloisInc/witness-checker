@@ -111,7 +111,6 @@ impl<'a> Lower<'a> {
     fn lit(&self, wire: Wire<'a>) -> Option<u64> {
         match wire.kind {
             GateKind::Lit(x) => Some(x),
-            GateKind::Secret(w) => self.lit(w),
             _ => None,
         }
     }
@@ -122,9 +121,6 @@ impl<'a> Lower<'a> {
             GateKind::Lit(x) => {
                 assert!(x == 0 || x == 1, "unsupported literal {} for Bool", x);
                 self.instr(instr::ldsbit(0, dest, Imm::from_u32(x as u32)));
-            },
-            GateKind::Secret(wire) => {
-                return self.wire(wire);
             },
             GateKind::Input(_) => todo!("GateKind::Input"),
             GateKind::Unary(op, _a) => {
@@ -169,9 +165,6 @@ impl<'a> Lower<'a> {
                 assert!(x <= u32::MAX as u64, "literal {} out of range for", x);
                 self.instr(instr::ldsint(0, dest, Imm::from_u32(x as u32)));
                 dest.pack()
-            },
-            GateKind::Secret(wire) => {
-                self.wire(wire)
             },
             GateKind::Input(_) => todo!("GateKind::Input"),
             GateKind::Unary(op, a) => {
