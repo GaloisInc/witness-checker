@@ -34,6 +34,19 @@ impl<'a, T: Repr<'a>> TWire<'a, T> {
     }
 }
 
+impl<'a, T> Clone for TWire<'a, T>
+where T: Repr<'a>, T::Repr: Clone {
+    fn clone(&self) -> Self {
+        TWire {
+            repr: self.repr.clone(),
+        }
+    }
+}
+
+impl<'a, T> Copy for TWire<'a, T>
+where T: Repr<'a>, T::Repr: Copy {
+}
+
 impl<'a, T: Repr<'a>> Deref for TWire<'a, T> {
     type Target = T::Repr;
     fn deref(&self) -> &T::Repr {
@@ -264,7 +277,7 @@ integer_impls!(u64, U64);
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {
         impl<'a, $($A: Repr<'a>,)*> Repr<'a> for ($($A,)*) {
-            type Repr = ($(<$A as Repr<'a>>::Repr,)*);
+            type Repr = ($(TWire<'a, $A>,)*);
         }
 
         impl<'a, $($A: Lit<'a>,)*> Lit<'a> for ($($A,)*) {
@@ -272,7 +285,7 @@ macro_rules! tuple_impl {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 #![allow(unused)]       // `bld` in the zero-element case
                 let ($($A,)*) = x;
-                ($($A::lit(bld, $A),)*)
+                ($(bld.lit($A),)*)
             }
         }
 
@@ -288,14 +301,15 @@ macro_rules! tuple_impl {
             fn mux(
                 bld: &Builder<'a>,
                 c: C::Repr,
-                a: ($($A::Repr,)*),
-                b: ($($B::Repr,)*),
-            ) -> ($(<<$A as Mux<'a, C, $B>>::Output as Repr<'a>>::Repr,)*) {
+                a: ($(TWire<'a, $A>,)*),
+                b: ($(TWire<'a, $B>,)*),
+            ) -> ($(TWire<'a, <$A as Mux<'a, C, $B>>::Output>,)*) {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 #![allow(unused)]       // `bld` in the zero-element case
                 let ($($A,)*) = a;
                 let ($($B,)*) = b;
-                ($($A::mux(bld, c.clone(), $A, $B),)*)
+                let c = TWire::<C>::new(c);
+                ($(bld.mux(c.clone(), $A, $B),)*)
             }
         }
     };
@@ -318,11 +332,11 @@ macro_rules! array_impls {
     ($($n:expr),*) => {
         $(
             impl<'a, A: Repr<'a>> Repr<'a> for [A; $n] {
-                type Repr = [A::Repr; $n];
+                type Repr = [TWire<'a, A>; $n];
             }
 
             impl<'a, A: Lit<'a>> Lit<'a> for [A; $n] {
-                fn lit(bld: &Builder<'a>, a: [A; $n]) -> [A::Repr; $n] {
+                fn lit(bld: &Builder<'a>, a: [A; $n]) -> [TWire<'a, A>; $n] {
                     // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
                     // to implement without unnecessary allocation.
                     unsafe {
@@ -332,9 +346,9 @@ macro_rules! array_impls {
                         for i in 0 .. $n {
                             let a_val = (a.as_ptr() as *const A).add(i).read();
                             // If this panics, the remaining elements of `a` and `b` will leak.
-                            let o_val = Lit::lit(bld, a_val);
+                            let o_val = bld.lit(a_val);
 
-                            (o.as_mut_ptr() as *mut A::Repr).add(i).write(o_val);
+                            (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
                         }
 
                         o.assume_init()
@@ -354,9 +368,11 @@ macro_rules! array_impls {
                 fn mux(
                     bld: &Builder<'a>,
                     c: C::Repr,
-                    a: [A::Repr; $n],
-                    b: [B::Repr; $n],
-                ) -> [<A::Output as Repr<'a>>::Repr; $n] {
+                    a: [TWire<'a, A>; $n],
+                    b: [TWire<'a, B>; $n],
+                ) -> [TWire<'a, A::Output>; $n] {
+                    let c = TWire::<C>::new(c);
+
                     // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
                     // to implement without unnecessary allocation.
                     unsafe {
@@ -365,12 +381,12 @@ macro_rules! array_impls {
                         let mut o = MaybeUninit::uninit();
 
                         for i in 0 .. $n {
-                            let a_val = (a.as_ptr() as *const A::Repr).add(i).read();
-                            let b_val = (b.as_ptr() as *const B::Repr).add(i).read();
+                            let a_val = (a.as_ptr() as *const TWire<A>).add(i).read();
+                            let b_val = (b.as_ptr() as *const TWire<B>).add(i).read();
                             // If this panics, the remaining elements of `a` and `b` will leak.
-                            let o_val = <A as Mux<C, B>>::mux(bld, c.clone(), a_val, b_val);
+                            let o_val = bld.mux(c.clone(), a_val, b_val);
 
-                            (o.as_mut_ptr() as *mut <A::Output as Repr>::Repr)
+                            (o.as_mut_ptr() as *mut TWire<A::Output>)
                                 .add(i).write(o_val);
                         }
 
@@ -391,12 +407,12 @@ array_impls!(
 
 
 impl<'a, A: Repr<'a>> Repr<'a> for Vec<A> {
-    type Repr = Vec<A::Repr>;
+    type Repr = Vec<TWire<'a, A>>;
 }
 
 impl<'a, A: Lit<'a>> Lit<'a> for Vec<A> {
-    fn lit(bld: &Builder<'a>, a: Vec<A>) -> Vec<A::Repr> {
-        a.into_iter().map(|x| A::lit(bld, x)).collect()
+    fn lit(bld: &Builder<'a>, a: Vec<A>) -> Vec<TWire<'a, A>> {
+        a.into_iter().map(|x| bld.lit(x)).collect()
     }
 }
 
@@ -412,13 +428,14 @@ where
     fn mux(
         bld: &Builder<'a>,
         c: C::Repr,
-        a: Vec<A::Repr>,
-        b: Vec<B::Repr>,
-    ) -> Vec<<A::Output as Repr<'a>>::Repr> {
+        a: Vec<TWire<'a, A>>,
+        b: Vec<TWire<'a, B>>,
+    ) -> Vec<TWire<'a, A::Output>> {
         assert!(
             a.len() == b.len(),
             "can't mux Vecs of unequal len ({} != {})", a.len(), b.len(),
         );
-        a.into_iter().zip(b.into_iter()).map(|(a, b)| A::mux(bld, c.clone(), a, b)).collect()
+        let c = TWire::<C>::new(c);
+        a.into_iter().zip(b.into_iter()).map(|(a, b)| bld.mux(c.clone(), a, b)).collect()
     }
 }
