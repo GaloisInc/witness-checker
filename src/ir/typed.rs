@@ -1,8 +1,7 @@
-use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use bumpalo::Bump;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, UnOp, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
 
 
 pub struct Builder<'a> {

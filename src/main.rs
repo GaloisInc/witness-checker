@@ -4,11 +4,10 @@ use std::io::{self, BufWriter};
 use bumpalo::Bump;
 
 use cheesecloth::back;
-use cheesecloth::ir::circuit::{Wire, TyKind};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::parse;
-use cheesecloth::tiny_ram::{RamInstr, RamState, Opcode, RAM_REGS};
+use cheesecloth::tiny_ram::{RamInstr, RamState, Opcode};
 
 fn operand_value<'a>(
     b: &Builder<'a>,
@@ -71,7 +70,7 @@ fn check_step<'a>(
 
 fn check_first<'a>(
     b: &Builder<'a>,
-    prog: &[TWire<'a, RamInstr>],
+    _prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) -> Vec<TWire<'a, bool>> {
     let mut ok = Vec::new();

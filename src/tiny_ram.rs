@@ -1,5 +1,4 @@
 use std::convert::TryInto;
-use scale_isa::types::{RegSecretRegint, RegSecretBit};
 use crate::ir::typed::{Builder, TWire, Repr, Lit, Mux};
 
 
@@ -172,6 +171,7 @@ macro_rules! mk_opcode {
 
         impl Opcode {
             pub fn from_raw(x: u8) -> Opcode {
+                #![allow(unused)]   // Final write to `y` is never read
                 let mut y = x;
                 $(
                     if y == 0 { return Opcode::$Variant; }

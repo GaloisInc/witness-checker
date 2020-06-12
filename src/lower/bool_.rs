@@ -1,4 +1,4 @@
-use crate::ir::circuit::{Circuit, Gate, Wire, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Circuit, Gate, Wire, TyKind, GateKind, UnOp, CmpOp};
 
 /// Replace `UnOp::Not` with `BinOp::Xor`.
 pub fn not_to_xor<'a>(c: &Circuit<'a>, g: Gate<'a>) -> Wire<'a> {

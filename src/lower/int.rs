@@ -1,4 +1,4 @@
-use crate::ir::circuit::{Circuit, Gate, Wire, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Circuit, Gate, Wire, GateKind, CmpOp};
 
 // TODO: mod -> div + sub
 
