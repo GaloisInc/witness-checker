@@ -151,6 +151,16 @@ impl<'a> Lower<'a> {
             // `eq(x, y)` should be lowered to `not(xor(x, y))`
             GateKind::Compare(_, _, _) => unimplemented!("Compare on Bool"),
             GateKind::Mux(_, _, _) => unimplemented!("Mux on Bool"),
+            GateKind::Cast(a_wire, _) => {
+                let a = self.wire(a_wire);
+                match a_wire.ty.kind {
+                    TyKind::Bool => return a,
+                    TyKind::U64 => {
+                        self.instr(instr::bitsint(0, dest, a.unpack(), Imm::new(0)));
+                    },
+                    _ => unimplemented!("cast to Bool from {:?}", a_wire.ty.kind),
+                }
+            },
         }
         dest.pack()
     }
@@ -209,6 +219,20 @@ impl<'a> Lower<'a> {
                 dest.pack()
             },
             GateKind::Mux(_, _, _) => unimplemented!("Mux on u64"),
+            GateKind::Cast(a_wire, _) => {
+                let dest = self.fresh::<RegSecretRegint>();
+                let a = self.wire(a_wire);
+                match a_wire.ty.kind {
+                    TyKind::Bool => {
+                        let zero = self.fresh::<RegSecretRegint>();
+                        self.instr(instr::ldsint(0, zero, Imm::new(0)));
+                        self.instr(instr::sintsbit(0, dest, zero, a.unpack(), Imm::new(0)));
+                    },
+                    TyKind::U64 => return a,
+                    _ => unimplemented!("cast to U64 from {:?}", a_wire.ty.kind),
+                }
+                dest.pack()
+            },
         }
     }
 }

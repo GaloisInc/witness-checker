@@ -26,6 +26,7 @@ where F: FnMut(&Circuit<'new>, Gate<'new>) -> Wire<'new> {
             GateKind::Shift(op, a, b) => GateKind::Shift(op, self.wire(a), self.wire(b)),
             GateKind::Compare(op, a, b) => GateKind::Compare(op, self.wire(a), self.wire(b)),
             GateKind::Mux(c, t, e) => GateKind::Mux(self.wire(c), self.wire(t), self.wire(e)),
+            GateKind::Cast(w, ty) => GateKind::Cast(self.wire(w), ty),
         };
         let new_gate = Gate {
             ty: old_gate.ty,

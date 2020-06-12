@@ -195,6 +195,13 @@ impl<'a> Circuit<'a> {
             )
         }
     }
+
+    pub fn cast(&self, w: Wire<'a>, ty: TyKind) -> Wire<'a> {
+        self.mk_gate(
+            Ty::new(ty, w.ty.secret),
+            GateKind::Cast(w, ty),
+        )
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -259,6 +266,8 @@ pub enum GateKind<'a> {
     Compare(CmpOp, Wire<'a>, Wire<'a>),
     /// `Mux(cond, then_, else)`: depending on `cond`, select either `then_` or `else`.
     Mux(Wire<'a>, Wire<'a>, Wire<'a>),
+    /// Convert a value to a different type.
+    Cast(Wire<'a>, TyKind),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
