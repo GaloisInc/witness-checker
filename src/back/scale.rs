@@ -5,7 +5,7 @@ use scale_isa::types::{
     Operand, Instruction,
     Imm, RegClearModp, RegClearRegint, RegSecretBit, RegSecretModp, RegSecretRegint,
 };
-use crate::ir::circuit::{Circuit, Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp};
 
 
 trait OperandKind: Sized {
@@ -244,7 +244,19 @@ impl<'a> Backend<'a> {
                 }
                 dest.pack()
             },
-            GateKind::Shift(_, _, _) => unimplemented!("Shift on u64"),
+            GateKind::Shift(op, a, b) => {
+                let dest = self.fresh::<RegSecretRegint>();
+                let a = self.wire(a).unpack();
+                let b = self.lit(b).unwrap_or_else(|| {
+                    panic!("only shifts by literals (not {:?}) are supported", b);
+                });
+                assert!(b <= u32::MAX as u64, "shift amount {} out of range", b);
+                match op {
+                    ShiftOp::Shl => self.instr(instr::shlsint(0, dest, a, Imm::new(b as u32))),
+                    ShiftOp::Shr => self.instr(instr::shrsint(0, dest, a, Imm::new(b as u32))),
+                }
+                dest.pack()
+            },
             GateKind::Compare(op, a, b) => {
                 let dest = self.fresh::<RegSecretBit>();
                 let a = self.wire(a).unpack();
