@@ -1,8 +1,7 @@
 use std::str::FromStr;
-use crate::builder::Builder;
 use crate::tiny_ram::{RamInstr, RamState, Opcode, RAM_REGS};
 
-pub fn parse_instr(b: &mut Builder, s: &str) -> RamInstr {
+pub fn parse_instr(s: &str) -> RamInstr {
     let words = s.split(" ").collect::<Vec<_>>();
     assert!(words.len() == 5);
     let opcode = match words[0] {
@@ -20,10 +19,10 @@ pub fn parse_instr(b: &mut Builder, s: &str) -> RamInstr {
         "imm" => true,
         x => panic!("unknown operand kind {}", x),
     };
-    RamInstr::new(b, opcode, dest, op1, op2, imm)
+    RamInstr::new(opcode, dest, op1, op2, imm)
 }
 
-pub fn parse_state(b: &mut Builder, s: &str) -> RamState {
+pub fn parse_state(s: &str) -> RamState {
     let mut pc = 0;
     let mut regs = [0; RAM_REGS];
     let mut flag = false;
@@ -49,5 +48,5 @@ pub fn parse_state(b: &mut Builder, s: &str) -> RamState {
         }
     }
 
-    RamState::new(b, pc, regs, flag)
+    RamState::new(pc, regs, flag)
 }

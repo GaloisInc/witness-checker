@@ -13,8 +13,11 @@ pub fn not_to_xor<'a>(c: &Circuit<'a>, g: Gate<'a>) -> Wire<'a> {
 
 /// Replace comparison operations on booleans with standard logical operations.
 pub fn compare_to_logic<'a>(c: &Circuit<'a>, g: Gate<'a>) -> Wire<'a> {
-    if g.ty.kind == TyKind::Bool {
-        if let GateKind::Compare(op, a, b) = g.kind {
+    // Note the usual pattern of checking `g.ty.kind` fails here, since all comparison gates have
+    // `Bool` outputs.
+    if let GateKind::Compare(op, a, b) = g.kind {
+        if a.ty.kind == TyKind::Bool {
+            eprintln!("fired {:?}",g);
             return match op {
                 CmpOp::Eq => c.not(c.xor(a, b)),
                 CmpOp::Ne => c.xor(a, b),

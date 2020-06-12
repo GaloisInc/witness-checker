@@ -40,8 +40,9 @@ where F: FnMut(&Circuit<'new>, Gate<'new>) -> Wire<'new> {
 
 pub fn run_pass<'old, 'new>(
     c: &Circuit<'new>,
-    wire: Wire<'old>,
+    wire: Vec<Wire<'old>>,
     f: impl FnMut(&Circuit<'new>, Gate<'new>) -> Wire<'new>,
-) -> Wire<'new> {
-    RunPass { c, f, m: HashMap::new() }.wire(wire)
+) -> Vec<Wire<'new>> {
+    let mut rp = RunPass { c, f, m: HashMap::new() };
+    wire.into_iter().map(|w| rp.wire(w)).collect()
 }

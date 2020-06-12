@@ -61,7 +61,10 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn binary(&self, op: BinOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(a.ty.kind == b.ty.kind);
+        assert!(
+            a.ty.kind == b.ty.kind,
+            "type mismatch for {:?}: {:?} != {:?}", op, a.ty.kind, b.ty.kind,
+        );
         self.mk_gate(
             Ty::new(a.ty.kind),
             GateKind::Binary(op, a, b),

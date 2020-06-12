@@ -17,13 +17,17 @@ impl<'a> Builder<'a> {
     pub fn circuit(&self) -> &Circuit<'a> {
         &self.c
     }
+
+    pub fn finish(self) -> Circuit<'a> {
+        self.c
+    }
 }
 
 
 /// Typed wire, which carries a a representation of `T`.  This is useful for distinguishing wires
 /// with different high-level types, even when they share a low-level representation.
 pub struct TWire<'a, T: Repr<'a>> {
-    repr: T::Repr,
+    pub repr: T::Repr,
 }
 
 impl<'a, T: Repr<'a>> TWire<'a, T> {
@@ -59,8 +63,6 @@ impl<'a, T: Repr<'a>> Deref for TWire<'a, T> {
 pub trait Repr<'a> {
     type Repr;
 }
-
-type ReprOf<'a, T> = <T as Repr<'a>>::Repr;
 
 
 pub trait Lit<'a>
@@ -162,7 +164,7 @@ where Cond: Repr<'a>, Self: Repr<'a>, Other: Repr<'a> {
 }
 
 impl<'a> Builder<'a> {
-    fn mux<C: Repr<'a>, T: Mux<'a, C, E>, E: Repr<'a>>(
+    pub fn mux<C: Repr<'a>, T: Mux<'a, C, E>, E: Repr<'a>>(
         &self,
         c: TWire<'a, C>,
         t: TWire<'a, T>,
@@ -437,5 +439,47 @@ where
         );
         let c = TWire::<C>::new(c);
         a.into_iter().zip(b.into_iter()).map(|(a, b)| bld.mux(c.clone(), a, b)).collect()
+    }
+}
+
+
+impl<'a> Builder<'a> {
+    pub fn mux_multi<C, A>(
+        &self,
+        cases: &[TWire<'a, (C, A)>],
+        default: TWire<'a, A>,
+    ) -> TWire<'a, A>
+    where
+        C: Repr<'a>,
+        A: Mux<'a, C, A, Output = A>,
+        C::Repr: Clone,
+        A::Repr: Clone,
+    {
+        let mut val = default;
+        for case in cases {
+            let (cond, then) = case.clone().repr;
+            val = self.mux(cond, then, val);
+        }
+        val
+    }
+
+    pub fn index<I, T>(
+        &self,
+        arr: &[TWire<'a, T>],
+        idx: TWire<'a, I>,
+        mut mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
+    ) -> TWire<'a, T>
+    where
+        I: Eq<'a, I>,
+        I::Repr: Clone,
+        T: Mux<'a, <I as Eq<'a, I>>::Output, T, Output = T>,
+        T::Repr: Clone,
+    {
+        let mut val = arr.first().expect("can't index in an empty array").clone();
+        for (i, x) in arr.iter().enumerate().skip(1) {
+            let eq = self.eq(idx.clone(), mk_idx(self, i));
+            val = self.mux(eq, x.clone(), val);
+        }
+        val
     }
 }

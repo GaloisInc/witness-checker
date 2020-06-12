@@ -1,23 +1,23 @@
+use std::convert::TryInto;
 use scale_isa::types::{RegSecretRegint, RegSecretBit};
-use crate::builder::{Builder, Mux};
+use crate::ir::typed::{Builder, TWire, Repr, Lit, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
 #[derive(Clone, Copy)]
 pub struct RamInstr {
-    pub opcode: RegSecretRegint,
-    pub dest: RegSecretRegint,
-    pub op1: RegSecretRegint,
-    pub op2: RegSecretRegint,
+    pub opcode: u64,
+    pub dest: u64,
+    pub op1: u64,
+    pub op2: u64,
     /// Some opcodes have an operand that can be either a register name or an immediate value.  If
     /// `imm` is set, it's interpreted as an immediate; otherwise, it's a register.
-    pub imm: RegSecretBit,
+    pub imm: bool,
 }
 
 impl RamInstr {
     pub fn new(
-        b: &mut Builder,
         opcode: Opcode,
         dest: u32,
         op1: u32,
@@ -25,78 +25,139 @@ impl RamInstr {
         imm: bool,
     ) -> RamInstr {
         RamInstr {
-            opcode: b.ld(opcode as u32),
-            dest: b.ld(dest),
-            op1: b.ld(op1),
-            op2: b.ld(op2),
-            imm: b.ld(imm as u32),
+            opcode: opcode as u64,
+            dest: dest as u64,
+            op1: op1 as u64,
+            op2: op2 as u64,
+            imm,
         }
     }
 
-    pub fn mov(b: &mut Builder, rd: u32, r1: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Mov, rd, r1, 0, false)
+    pub fn mov(rd: u32, r1: u32) -> RamInstr {
+        RamInstr::new(Opcode::Mov, rd, r1, 0, false)
     }
 
-    pub fn mov_imm(b: &mut Builder, rd: u32, imm: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Mov, rd, imm, 0, true)
+    pub fn mov_imm(rd: u32, imm: u32) -> RamInstr {
+        RamInstr::new(Opcode::Mov, rd, imm, 0, true)
     }
 
-    pub fn add(b: &mut Builder, rd: u32, r1: u32, r2: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Add, rd, r1, r2, false)
+    pub fn add(rd: u32, r1: u32, r2: u32) -> RamInstr {
+        RamInstr::new(Opcode::Add, rd, r1, r2, false)
     }
 
-    pub fn add_imm(b: &mut Builder, rd: u32, r1: u32, imm: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Add, rd, r1, imm, true)
+    pub fn add_imm(rd: u32, r1: u32, imm: u32) -> RamInstr {
+        RamInstr::new(Opcode::Add, rd, r1, imm, true)
     }
 
-    pub fn sub(b: &mut Builder, rd: u32, r1: u32, r2: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Sub, rd, r1, r2, false)
+    pub fn sub(rd: u32, r1: u32, r2: u32) -> RamInstr {
+        RamInstr::new(Opcode::Sub, rd, r1, r2, false)
     }
 
-    pub fn sub_imm(b: &mut Builder, rd: u32, r1: u32, imm: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Sub, rd, r1, imm, true)
+    pub fn sub_imm(rd: u32, r1: u32, imm: u32) -> RamInstr {
+        RamInstr::new(Opcode::Sub, rd, r1, imm, true)
     }
 
-    pub fn mull(b: &mut Builder, rd: u32, r1: u32, r2: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Mull, rd, r1, r2, false)
+    pub fn mull(rd: u32, r1: u32, r2: u32) -> RamInstr {
+        RamInstr::new(Opcode::Mull, rd, r1, r2, false)
     }
 
-    pub fn mull_imm(b: &mut Builder, rd: u32, r1: u32, imm: u32) -> RamInstr {
-        RamInstr::new(b, Opcode::Mull, rd, r1, imm, true)
+    pub fn mull_imm(rd: u32, r1: u32, imm: u32) -> RamInstr {
+        RamInstr::new(Opcode::Mull, rd, r1, imm, true)
     }
 }
 
-impl Mux for RamInstr {
-    fn mux(b: &mut Builder, cond: RegSecretBit, then: Self, else_: Self) -> Self {
-        RamInstr {
-            opcode: b.mux(cond, then.opcode, else_.opcode),
-            dest: b.mux(cond, then.dest, else_.dest),
-            op1: b.mux(cond, then.op1, else_.op1),
-            op2: b.mux(cond, then.op2, else_.op2),
-            imm: b.mux(cond, then.imm, else_.imm),
+#[derive(Clone, Copy)]
+pub struct RamInstrRepr<'a> {
+    pub opcode: TWire<'a, u64>,
+    pub dest: TWire<'a, u64>,
+    pub op1: TWire<'a, u64>,
+    pub op2: TWire<'a, u64>,
+    pub imm: TWire<'a, bool>,
+}
+
+impl<'a> Repr<'a> for RamInstr {
+    type Repr = RamInstrRepr<'a>;
+}
+
+impl<'a> Lit<'a> for RamInstr {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        RamInstrRepr {
+            opcode: bld.lit(a.opcode),
+            dest: bld.lit(a.dest),
+            op1: bld.lit(a.op1),
+            op2: bld.lit(a.op2),
+            imm: bld.lit(a.imm),
         }
     }
 }
+
+impl<'a, C: Repr<'a>> Mux<'a, C, RamInstr> for RamInstr
+where
+    C::Repr: Clone,
+    u64: Mux<'a, C, u64, Output = u64>,
+    bool: Mux<'a, C, bool, Output = bool>,
+{
+    type Output = RamInstr;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: RamInstrRepr<'a>,
+        e: RamInstrRepr<'a>,
+    ) -> RamInstrRepr<'a> {
+        let c: TWire<C> = TWire::new(c);
+        RamInstrRepr {
+            opcode: bld.mux(c.clone(), t.opcode, e.opcode),
+            dest: bld.mux(c.clone(), t.dest, e.dest),
+            op1: bld.mux(c.clone(), t.op1, e.op1),
+            op2: bld.mux(c.clone(), t.op2, e.op2),
+            imm: bld.mux(c.clone(), t.imm, e.imm),
+        }
+    }
+}
+
 
 pub const RAM_REGS: usize = 16;
 
 pub struct RamState {
-    pub pc: RegSecretRegint,
-    pub regs: [RegSecretRegint; RAM_REGS],
-    pub flag: RegSecretBit,
+    pub pc: u64,
+    pub regs: [u64; RAM_REGS],
+    pub flag: bool,
 }
 
 impl RamState {
-    pub fn new(b: &mut Builder, pc: u32, regs: [u32; RAM_REGS], flag: bool) -> RamState {
-        let mut state_regs = [RegSecretRegint::new(0); RAM_REGS];
-        for (i, &v) in regs.iter().enumerate() {
-            state_regs[i] = b.ld(v);
+    pub fn new(pc: u32, regs: [u32; RAM_REGS], flag: bool) -> RamState {
+        let mut state_regs = [0; RAM_REGS];
+        for i in 0 .. RAM_REGS {
+            state_regs[i] = regs[i] as u64;
         }
-
         RamState {
-            pc: b.ld(pc),
+            pc: pc as u64,
             regs: state_regs,
-            flag: b.ld(flag as u32),
+            flag,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RamStateRepr<'a> {
+    pub pc: TWire<'a, u64>,
+    pub regs: [TWire<'a, u64>; RAM_REGS],
+    pub flag: TWire<'a, bool>,
+}
+
+impl<'a> Repr<'a> for RamState {
+    type Repr = RamStateRepr<'a>;
+}
+
+impl<'a> Lit<'a> for RamState {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        let regs = a.regs.iter().cloned().map(|x| bld.lit(x)).collect::<Vec<_>>();
+        let regs: [_; RAM_REGS] = (&regs as &[_]).try_into().unwrap();
+        RamStateRepr {
+            pc: bld.lit(a.pc),
+            regs,
+            flag: bld.lit(a.flag),
         }
     }
 }

@@ -66,15 +66,15 @@ impl OperandExt for Operand {
 }
 
 
-struct Lower<'a> {
+pub struct Backend<'a> {
     operand_map: HashMap<Wire<'a>, Operand>,
     instrs: Vec<Instruction>,
     next_reg: u32,
 }
 
-impl<'a> Lower<'a> {
-    fn new() -> Lower<'a> {
-        Lower {
+impl<'a> Backend<'a> {
+    pub fn new() -> Backend<'a> {
+        Backend {
             operand_map: HashMap::new(),
             instrs: Vec::new(),
             next_reg: 0,
@@ -87,18 +87,23 @@ impl<'a> Lower<'a> {
         T::from_u32(x)
     }
 
-    fn instr(&mut self, instr: Instruction) {
+    pub fn instr(&mut self, instr: Instruction) {
         self.instrs.push(instr);
     }
 
-    fn wire(&mut self, wire: Wire<'a>) -> Operand {
+    pub fn wire(&mut self, wire: Wire<'a>) -> Operand {
         if let Some(operand) = self.operand_map.get(&wire) {
             return operand.clone();
         }
 
         let gate = &*wire;
 
-        let operand = match gate.ty.kind {
+        let gate_ty = match gate.kind {
+            GateKind::Compare(_, a, _) => a.ty.kind,
+            _ => gate.ty.kind
+        };
+
+        let operand = match gate_ty {
             TyKind::Bool => self.gate_bool(gate),
             TyKind::U64 => self.gate_u64(gate),
             k => unimplemented!("TyKind {:?}", k),
@@ -107,6 +112,52 @@ impl<'a> Lower<'a> {
         self.operand_map.insert(wire, operand.clone());
         operand
     }
+
+    pub fn finish(self) -> Vec<Instruction> {
+        self.instrs
+    }
+
+
+    pub fn reveal(&mut self, x: Operand) -> Operand {
+        match x {
+            Operand::RegSecretBit(x) => {
+                let dest = self.fresh::<RegClearRegint>();
+                self.instr(instr::opensbit(0, dest, x));
+                dest.pack()
+            },
+            Operand::RegSecretModp(x) => {
+                let dest = self.fresh::<RegClearModp>();
+                self.instr(instr::start_open(0, vec![x]));
+                self.instr(instr::stop_open(0, vec![dest]));
+                dest.pack()
+            },
+            Operand::RegSecretRegint(x) => {
+                let dest = self.fresh::<RegClearRegint>();
+                self.instr(instr::opensint(0, dest, x));
+                dest.pack()
+            },
+            x => unimplemented!("unsupported operand {:?} in reveal", x),
+        }
+    }
+
+    pub fn print(&mut self, x: Operand) {
+        match x {
+            Operand::RegClearModp(x) => {
+                self.instr(instr::print_reg(0, x));
+            },
+            Operand::RegClearRegint(x) => {
+                self.instr(instr::print_int(0, x));
+            },
+            x => unimplemented!("unsupported operand {:?} in print", x),
+        }
+    }
+
+    pub fn print_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.instr(instr::print_char(0, Imm::new(c as u32)));
+        }
+    }
+
 
     fn lit(&self, wire: Wire<'a>) -> Option<u64> {
         match wire.kind {
