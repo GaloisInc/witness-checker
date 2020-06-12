@@ -82,20 +82,17 @@ impl<'a, A: Repr<'a>> Repr<'a> for Vec<A> {
 }
 
 
-pub struct TypedWire<'a, T: Repr<'a>> {
+pub struct TWire<'a, T: Repr<'a>> {
     repr: T::Repr,
 }
 
-impl<'a, T: Repr<'a>> TypedWire<'a, T> {
-    pub fn new(repr: T::Repr) -> TypedWire<'a, T> {
-        TypedWire {
+impl<'a, T: Repr<'a>> TWire<'a, T> {
+    pub fn new(repr: T::Repr) -> TWire<'a, T> {
+        TWire {
             repr,
         }
     }
 }
-
-pub type SWire<'a, T> = TypedWire<'a, T>;
-pub type PWire<'a, T> = TypedWire<'a, T>;
 
 type ReprOf<'a, T> = <T as Repr<'a>>::Repr;
 
@@ -117,7 +114,7 @@ macro_rules! define_unary_op {
             type Output: Repr<'a>;
         }
 
-        impl<'a, X> builder::$Op<'a> for TypedWire<'a, X>
+        impl<'a, X> builder::$Op<'a> for TWire<'a, X>
         where
             X: Repr<'a> + $Op<'a>,
             ReprOf<'a, X>: builder::$Op<
@@ -125,13 +122,13 @@ macro_rules! define_unary_op {
                 Output = ReprOf<'a, <X as $Op<'a>>::Output>,
             >,
         {
-            type Output = TypedWire<'a, <X as $Op<'a>>::Output>;
+            type Output = TWire<'a, <X as $Op<'a>>::Output>;
 
             fn $op(
                 bld: &Builder<'a>,
-                x: TypedWire<'a, X>,
-            ) -> TypedWire<'a, <X as $Op<'a>>::Output> {
-                TypedWire::new(builder::$Op::$op(bld, x.repr))
+                x: TWire<'a, X>,
+            ) -> TWire<'a, <X as $Op<'a>>::Output> {
+                TWire::new(builder::$Op::$op(bld, x.repr))
             }
         }
     };
@@ -156,8 +153,8 @@ macro_rules! define_binary_op {
 
         impl<'a, X, Y> builder::$Op<
             'a,
-            TypedWire<'a, Y>,
-        > for TypedWire<'a, X>
+            TWire<'a, Y>,
+        > for TWire<'a, X>
         where
             X: Repr<'a> + $Op<'a, Y>,
             Y: Repr<'a>,
@@ -167,14 +164,14 @@ macro_rules! define_binary_op {
                 Output = ReprOf<'a, <X as $Op<'a, Y>>::Output>,
             >,
         {
-            type Output = TypedWire<'a, <X as $Op<'a, Y>>::Output>;
+            type Output = TWire<'a, <X as $Op<'a, Y>>::Output>;
 
             fn $op(
                 bld: &Builder<'a>,
-                x: TypedWire<'a, X>,
-                y: TypedWire<'a, Y>,
-            ) -> TypedWire<'a, <X as $Op<'a, Y>>::Output> {
-                TypedWire::new(builder::$Op::$op(bld, x.repr, y.repr))
+                x: TWire<'a, X>,
+                y: TWire<'a, Y>,
+            ) -> TWire<'a, <X as $Op<'a, Y>>::Output> {
+                TWire::new(builder::$Op::$op(bld, x.repr, y.repr))
             }
         }
     };
@@ -205,9 +202,9 @@ macro_rules! define_mux {
 
         impl<'a, C, T, E> builder::$Op<
             'a,
-            TypedWire<'a, C>,
-            TypedWire<'a, E>,
-        > for TypedWire<'a, T>
+            TWire<'a, C>,
+            TWire<'a, E>,
+        > for TWire<'a, T>
         where
             C: Repr<'a>,
             T: Repr<'a> + $Op<'a, C, E>,
@@ -219,15 +216,15 @@ macro_rules! define_mux {
                 Output = ReprOf<'a, <T as $Op<'a, C, E>>::Output>,
             >,
         {
-            type Output = TypedWire<'a, <T as $Op<'a, C, E>>::Output>;
+            type Output = TWire<'a, <T as $Op<'a, C, E>>::Output>;
 
             fn $op(
                 bld: &Builder<'a>,
-                c: TypedWire<'a, C>,
-                t: TypedWire<'a, T>,
-                e: TypedWire<'a, E>,
-            ) -> TypedWire<'a, <T as $Op<'a, C, E>>::Output> {
-                TypedWire::new(builder::$Op::$op(bld, c.repr, t.repr, e.repr))
+                c: TWire<'a, C>,
+                t: TWire<'a, T>,
+                e: TWire<'a, E>,
+            ) -> TWire<'a, <T as $Op<'a, C, E>>::Output> {
+                TWire::new(builder::$Op::$op(bld, c.repr, t.repr, e.repr))
             }
         }
     };
