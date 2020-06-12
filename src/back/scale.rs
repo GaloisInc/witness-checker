@@ -98,9 +98,6 @@ impl<'a> Lower<'a> {
 
         let gate = &*wire;
 
-        // Public gates should be constant-folded away before this point.
-        assert!(gate.ty.secret, "unsupported public gate in lowering");
-
         let operand = match gate.ty.kind {
             TyKind::Bool => self.gate_bool(gate),
             TyKind::U64 => self.gate_u64(gate),

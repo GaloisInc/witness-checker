@@ -260,7 +260,7 @@ macro_rules! define_prim_reprs {
             impl<'a> Repr<'a> for $T {
                 type Repr = Wire<'a>;
                 fn lit(bld: &Builder<'a>, x: $T) -> Wire<'a> {
-                    bld.circuit().lit(Ty::new(TyKind::$TyKind, false), x as u64)
+                    bld.circuit().lit(Ty::new(TyKind::$TyKind), x as u64)
                 }
             }
 

@@ -101,7 +101,7 @@ macro_rules! define_shift_ops {
             impl<'a> $Op<'a, u8> for Wire<'a> {
                 type Output = Wire<'a>;
                 fn $op(bld: &Builder<'a>, a: Wire<'a>, b: u8) -> Wire<'a> {
-                    let b = bld.c.lit(Ty::new(TyKind::U8, false), b as u64);
+                    let b = bld.c.lit(Ty::new(TyKind::U8), b as u64);
                     bld.c.shift(ShiftOp::$Op, a, b)
                 }
             }

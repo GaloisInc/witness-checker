@@ -45,15 +45,11 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn secret(&self, arg: Wire<'a>) -> Wire<'a> {
-        if arg.ty.secret {
-            return arg;
-        }
-
-        self.mk_gate(Ty::new(arg.ty.kind, true), GateKind::Secret(arg))
+        return arg;
     }
 
     pub fn input(&self, idx: usize) -> Wire<'a> {
-        self.mk_gate(Ty::new(self.input_tys[idx], true), GateKind::Input(idx))
+        self.mk_gate(Ty::new(self.input_tys[idx]), GateKind::Input(idx))
     }
 
     pub fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
@@ -70,17 +66,10 @@ impl<'a> Circuit<'a> {
 
     pub fn binary(&self, op: BinOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
         assert!(a.ty.kind == b.ty.kind);
-        if a.ty.secret || b.ty.secret {
-            self.mk_gate(
-                Ty::new(a.ty.kind, true),
-                GateKind::Binary(op, self.secret(a), self.secret(b)),
-            )
-        } else {
-            self.mk_gate(
-                Ty::new(a.ty.kind, false),
-                GateKind::Binary(op, a, b),
-            )
-        }
+        self.mk_gate(
+            Ty::new(a.ty.kind),
+            GateKind::Binary(op, a, b),
+        )
     }
 
     pub fn add(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -117,17 +106,10 @@ impl<'a> Circuit<'a> {
 
     pub fn shift(&self, op: ShiftOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
         assert!(b.ty.kind == TyKind::Uint(IntSize::I8));
-        if a.ty.secret || b.ty.secret {
-            self.mk_gate(
-                Ty::new(a.ty.kind, true),
-                GateKind::Shift(op, self.secret(a), self.secret(b)),
-            )
-        } else {
-            self.mk_gate(
-                Ty::new(a.ty.kind, false),
-                GateKind::Shift(op, a, b),
-            )
-        }
+        self.mk_gate(
+            Ty::new(a.ty.kind),
+            GateKind::Shift(op, a, b),
+        )
     }
 
     pub fn shl(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -140,17 +122,10 @@ impl<'a> Circuit<'a> {
 
     pub fn compare(&self, op: CmpOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
         assert!(a.ty.kind == b.ty.kind);
-        if a.ty.secret || b.ty.secret {
-            self.mk_gate(
-                Ty::new(TyKind::Bool, true),
-                GateKind::Compare(op, self.secret(a), self.secret(b)),
-            )
-        } else {
-            self.mk_gate(
-                Ty::new(TyKind::Bool, false),
-                GateKind::Compare(op, a, b),
-            )
-        }
+        self.mk_gate(
+            Ty::new(TyKind::Bool),
+            GateKind::Compare(op, a, b),
+        )
     }
 
     pub fn eq(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -179,26 +154,15 @@ impl<'a> Circuit<'a> {
 
     pub fn mux(&self, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
         assert!(t.ty.kind == e.ty.kind);
-        if c.ty.secret || t.ty.secret || e.ty.secret {
-            self.mk_gate(
-                Ty::new(t.ty.kind, true),
-                GateKind::Mux(
-                    self.secret(c),
-                    self.secret(t),
-                    self.secret(e),
-                ),
-            )
-        } else {
-            self.mk_gate(
-                Ty::new(t.ty.kind, false),
-                GateKind::Mux(c, t, e),
-            )
-        }
+        self.mk_gate(
+            Ty::new(t.ty.kind),
+            GateKind::Mux(c, t, e),
+        )
     }
 
     pub fn cast(&self, w: Wire<'a>, ty: TyKind) -> Wire<'a> {
         self.mk_gate(
-            Ty::new(ty, w.ty.secret),
+            Ty::new(ty),
             GateKind::Cast(w, ty),
         )
     }
@@ -241,12 +205,11 @@ impl TyKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Ty {
     pub kind: TyKind,
-    pub secret: bool,
 }
 
 impl Ty {
-    pub fn new(kind: TyKind, secret: bool) -> Ty {
-        Ty { kind, secret }
+    pub fn new(kind: TyKind) -> Ty {
+        Ty { kind }
     }
 }
 
