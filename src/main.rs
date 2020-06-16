@@ -132,22 +132,24 @@ fn main() -> io::Result<()> {
     let ok = run_pass(&c, ok, lower::bool_::compare_to_logic);
     let ok = run_pass(&c, ok, lower::bool_::not_to_xor);
 
-    // Generate SCALE
-    let mut backend = back::scale::Backend::new();
-    backend.print_str("results: ");
-    for w in ok {
-        let sbit = backend.wire(w);
-        let bit = backend.reveal(sbit);
-        backend.print(bit);
-    }
-    backend.print_str("\n");
+    #[cfg(feature = "scale")] {
+        // Generate SCALE
+        let mut backend = back::scale::Backend::new();
+        backend.print_str("results: ");
+        for w in ok {
+            let sbit = backend.wire(w);
+            let bit = backend.reveal(sbit);
+            backend.print(bit);
+        }
+        backend.print_str("\n");
 
 
-    // Write out the generated SCALE program
-    let instrs = backend.finish();
-    let mut f = BufWriter::new(File::create("out.bc")?);
-    for i in instrs {
-        scale_isa::functions::write_instruction(&mut f, i)?;
+        // Write out the generated SCALE program
+        let instrs = backend.finish();
+        let mut f = BufWriter::new(File::create("out.bc")?);
+        for i in instrs {
+            scale_isa::functions::write_instruction(&mut f, i)?;
+        }
     }
 
     Ok(())
