@@ -261,25 +261,44 @@ pub enum CmpOp {
 }
 
 
-#[derive(Clone, Copy)]
-pub struct Wire<'a>(&'a Gate<'a>);
+/// Declare a wrapper around an immutable reference, with `Eq` and `Hash` instances that compare by
+/// address instead of by value.
+macro_rules! declare_interned_pointer {
+    ($(#[$attr:meta])* $pub_:vis struct $Ptr:ident <$lt:lifetime> => $T:ty;) => {
+        $(#[$attr])*
+        #[derive(Clone, Copy)]
+        $pub_ struct $Ptr<$lt>(&$lt $T);
 
-impl<'a> PartialEq for Wire<'a> {
-    fn eq(&self, other: &Wire<'a>) -> bool {
-        self.0 as *const _ == other.0 as *const _
-    }
+        impl<$lt> PartialEq for $Ptr<$lt> {
+            fn eq(&self, other: &$Ptr<$lt>) -> bool {
+                self.0 as *const _ == other.0 as *const _
+            }
 
-    fn ne(&self, other: &Wire<'a>) -> bool {
-        self.0 as *const _ != other.0 as *const _
-    }
+            fn ne(&self, other: &$Ptr<$lt>) -> bool {
+                self.0 as *const _ != other.0 as *const _
+            }
+        }
+
+        impl Eq for $Ptr<'_> {}
+
+        impl<$lt> Hash for $Ptr<$lt> {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                (self.0 as *const $T).hash(state)
+            }
+        }
+
+        impl<$lt> Deref for $Ptr<$lt> {
+            type Target = $T;
+            fn deref(&self) -> &$T {
+                self.0
+            }
+        }
+    };
 }
 
-impl Eq for Wire<'_> {}
-
-impl<'a> Hash for Wire<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const Gate).hash(state)
-    }
+declare_interned_pointer! {
+    /// The output of a `Gate`, which carries a value during circuit evaluation.
+    pub struct Wire<'a> => Gate<'a>;
 }
 
 thread_local! {
@@ -299,12 +318,5 @@ impl<'a> fmt::Debug for Wire<'a> {
                 write!(fmt, "Wire({:p})", self.0)
             }
         })
-    }
-}
-
-impl<'a> Deref for Wire<'a> {
-    type Target = Gate<'a>;
-    fn deref(&self) -> &Gate<'a> {
-        self.0
     }
 }
