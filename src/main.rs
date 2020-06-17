@@ -132,6 +132,11 @@ fn main() -> io::Result<()> {
     let ok = run_pass(&c, ok, lower::bool_::compare_to_logic);
     let ok = run_pass(&c, ok, lower::bool_::not_to_xor);
 
+    // Print
+    for wire in ok {
+        println!("Wire {:?}", wire);
+    }
+
     #[cfg(feature = "scale")] {
         // Generate SCALE
         let mut backend = back::scale::Backend::new();
