@@ -9,8 +9,8 @@ pub struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    pub fn new(arena: &'a Bump, input_tys: Vec<TyKind>) -> Builder<'a> {
-        Builder { c: Circuit::new(arena, input_tys) }
+    pub fn new(arena: &'a Bump) -> Builder<'a> {
+        Builder { c: Circuit::new(arena) }
     }
 
     pub fn circuit(&self) -> &Circuit<'a> {

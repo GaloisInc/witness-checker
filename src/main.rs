@@ -96,7 +96,7 @@ fn main() -> io::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     assert!(args.len() == 3, "usage: {} PROGRAM TRACE", args.get(0).map_or("witness-checker", |x| x));
     let arena = Bump::new();
-    let b = Builder::new(&arena, vec![]);
+    let b = Builder::new(&arena);
 
     // Load the program and trace from files
     let mut prog = Vec::new();

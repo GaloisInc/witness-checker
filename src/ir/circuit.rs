@@ -5,18 +5,23 @@ use std::fmt;
 use std::ops::Deref;
 use bumpalo::Bump;
 
+/// A high-level arithmetic/boolean circuit.
+///
+/// If a witness is available, the `Circuit` includes its values.  This allows circuit
+/// transformations to make corresponding changes to the witness if necessary.  The witness itself
+/// is not represented explicitly, but is accessible through the `GateKind::Input` gates present in
+/// the circuit.  Use the `walk_witness` function to obtain the witness values that are used to
+/// compute some set of `Wire`s.
 pub struct Circuit<'a> {
     arena: &'a Bump,
     intern: RefCell<HashSet<&'a Gate<'a>>>,
-    input_tys: Vec<TyKind>,
 }
 
 impl<'a> Circuit<'a> {
-    pub fn new(arena: &'a Bump, input_tys: Vec<TyKind>) -> Circuit<'a> {
+    pub fn new(arena: &'a Bump) -> Circuit<'a> {
         Circuit {
             arena,
             intern: RefCell::new(HashSet::new()),
-            input_tys,
         }
     }
 
@@ -44,8 +49,17 @@ impl<'a> Circuit<'a> {
         self.mk_gate(ty, GateKind::Lit(val))
     }
 
-    pub fn input(&self, idx: usize) -> Wire<'a> {
-        self.mk_gate(Ty::new(self.input_tys[idx]), GateKind::Input(idx))
+    pub fn input(&self, input: Input<'a>) -> Wire<'a> {
+        self.mk_gate(input.ty, GateKind::Input(input))
+    }
+
+    /// Add a new input value to the witness, and return a `Wire` that carries that value.
+    ///
+    /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
+    /// prover) is generating the circuit.
+    pub fn new_input(&self, ty: Ty, val: Option<u64>) -> Wire<'a> {
+        let inp = Input(self.arena.alloc(InputData { ty, val }));
+        self.input(inp)
     }
 
     pub fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
@@ -165,6 +179,93 @@ impl<'a> Circuit<'a> {
             GateKind::Cast(w, ty),
         )
     }
+
+
+    pub fn walk_wires<I, F>(&self, wires: I, mut f: F)
+    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Wire<'a>) {
+        // This is a depth-first postorder traversal.  Since it's postorder, we need to distinguish
+        // the first visit to a given node (when it gets expanded and its children are pushed)
+        // from the second (when the node itself is yielded to the callback).
+        enum Entry<'a> {
+            Expand(Wire<'a>),
+            Yield(Wire<'a>),
+        }
+
+        let mut stack = wires.into_iter().map(Entry::Expand).collect::<Vec<_>>();
+        stack.reverse();
+
+        // Wires that have already been yielded.  We avoid processing the same wire twice.
+        let mut yielded = HashSet::new();
+
+        while let Some(entry) = stack.pop() {
+            match entry {
+                Entry::Expand(w) => {
+                    // It's possible for a yielded wire to appear in an `Expand` entry, as a wire
+                    // may have multiple parents.  We ignore these entries to avoid duplicate work.
+                    if yielded.contains(&w) {
+                        continue;
+                    }
+
+                    stack.push(Entry::Yield(w));
+                    match w.kind {
+                        GateKind::Lit(_) => {}
+                        GateKind::Input(_) => {}
+                        GateKind::Unary(_, a) => {
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Binary(_, a, b) => {
+                            stack.push(Entry::Expand(b));
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Shift(_, a, b) => {
+                            stack.push(Entry::Expand(b));
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Compare(_, a, b) => {
+                            stack.push(Entry::Expand(b));
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Mux(c, t, e) => {
+                            stack.push(Entry::Expand(e));
+                            stack.push(Entry::Expand(t));
+                            stack.push(Entry::Expand(c));
+                        },
+                        GateKind::Cast(w, _) => {
+                            stack.push(Entry::Expand(w));
+                        },
+                    }
+                },
+
+                Entry::Yield(w) => {
+                    let inserted = yielded.insert(w);
+                    // It's not possible for a yielded wire to appear in a `Yield` entry.  This
+                    // would imply that there were once two different `Yield` entries for the same
+                    // wire in the stack.  But `Yield` entries correspond to the direct ancestors
+                    // of the current node, so two `Yield` entries would imply that the wire is its
+                    // own ancestor (a cycle in the circuit).  Cycles are impossible to construct,
+                    // since gates are read-only after construction.
+                    assert!(inserted);
+
+                    f(w);
+                },
+            }
+        }
+    }
+
+    /// Visit all `Input`s that are used in the computation of `wires`.  Yields each `Input` once,
+    /// in some deterministic order (assuming `wires` itself is deterministic).
+    pub fn walk_witness<I, F>(&self, wires: I, mut f: F)
+    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Input<'a>) {
+        // In the normal case where every gate is interned properly, we should visit each distinct
+        // `GateKind::Input` only once, and see each `Input` only once.  However, this can go wrong
+        // if there are multiple `Circuit`s using the same arena but different `intern` tables, and
+        // wires from one `Circuit` are referenced in another.  Currently we don't defend against
+        // this misuse.
+        self.walk_wires(wires, |w| match w.kind {
+            GateKind::Input(inp) => f(inp),
+            _ => {},
+        });
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -222,8 +323,8 @@ pub struct Gate<'a> {
 pub enum GateKind<'a> {
     /// A literal/constant value.
     Lit(u64),
-    /// Retrieve a secret input, given its index.
-    Input(usize),
+    /// Retrieve a secret input from the witness.
+    Input(Input<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
     Unary(UnOp, Wire<'a>),
     /// Compute a binary operation.  All `BinOp`s have type `T -> T -> T`
@@ -319,4 +420,16 @@ impl<'a> fmt::Debug for Wire<'a> {
             }
         })
     }
+}
+
+declare_interned_pointer! {
+    /// A secret input value, part of the witness.
+    #[derive(Debug)]
+    pub struct Input<'a> => InputData;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct InputData {
+    pub ty: Ty,
+    pub val: Option<u64>,
 }
