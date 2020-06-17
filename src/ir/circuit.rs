@@ -7,11 +7,16 @@ use bumpalo::Bump;
 
 /// A high-level arithmetic/boolean circuit.
 ///
+/// This circuit representation has no notion of a "public wire" - all wires carry secret values.
+/// This works because we provide no "open" or "reveal" operation.  The only way to produce a
+/// public/cleartext value is with `GateKind::Lit`, which contains a compile-time constant, so any
+/// operations over literals can be computed entirely at compile time.
+///
 /// If a witness is available, the `Circuit` includes its values.  This allows circuit
-/// transformations to make corresponding changes to the witness if necessary.  The witness itself
-/// is not represented explicitly, but is accessible through the `GateKind::Secret` gates present
-/// in the circuit.  Use the `walk_witness` function to obtain the witness values that are used to
-/// compute some set of `Wire`s.
+/// transformations to make corresponding changes to the witness if necessary.  The full witness is
+/// not represented explicitly, but the individual values are accessible through the
+/// `GateKind::Secret` gates present in the circuit.  Use the `walk_witness` function to obtain the
+/// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a> {
     arena: &'a Bump,
     intern: RefCell<HashSet<&'a Gate<'a>>>,
