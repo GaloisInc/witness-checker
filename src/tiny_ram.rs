@@ -1,5 +1,4 @@
-use std::convert::TryInto;
-use crate::ir::typed::{Builder, TWire, Repr, Lit, Mux};
+use crate::ir::typed::{Builder, TWire, Repr, Lit, Input, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -151,12 +150,28 @@ impl<'a> Repr<'a> for RamState {
 
 impl<'a> Lit<'a> for RamState {
     fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
-        let regs = a.regs.iter().cloned().map(|x| bld.lit(x)).collect::<Vec<_>>();
-        let regs: [_; RAM_REGS] = (&regs as &[_]).try_into().unwrap();
         RamStateRepr {
             pc: bld.lit(a.pc),
-            regs,
+            regs: *bld.lit(a.regs),
             flag: bld.lit(a.flag),
+        }
+    }
+}
+
+impl<'a> Input<'a> for RamState {
+    fn input(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+        if let Some(a) = a {
+            RamStateRepr {
+                pc: bld.input(Some(a.pc)),
+                regs: *bld.input(Some(a.regs)),
+                flag: bld.input(Some(a.flag)),
+            }
+        } else {
+            RamStateRepr {
+                pc: bld.input(None),
+                regs: *bld.input::<[u64; RAM_REGS]>(None),
+                flag: bld.input(None),
+            }
         }
     }
 }

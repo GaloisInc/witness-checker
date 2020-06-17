@@ -108,7 +108,7 @@ fn main() -> io::Result<()> {
     let mut trace = Vec::new();
     let trace_str = fs::read_to_string(&args[2]).unwrap();
     for line in trace_str.lines() {
-        trace.push(b.lit(parse::parse_state(line)));
+        trace.push(b.input(Some(parse::parse_state(line))));
     }
 
     // Generate IR code to check the trace
