@@ -69,9 +69,9 @@ where Self: Repr<'a> {
     fn lit(bld: &Builder<'a>, x: Self) -> Self::Repr;
 }
 
-pub trait Input<'a>
+pub trait Secret<'a>
 where Self: Repr<'a> + Sized {
-    fn input(bld: &Builder<'a>, x: Option<Self>) -> Self::Repr;
+    fn secret(bld: &Builder<'a>, x: Option<Self>) -> Self::Repr;
 }
 
 impl<'a> Builder<'a> {
@@ -79,8 +79,8 @@ impl<'a> Builder<'a> {
         TWire::new(Lit::lit(self, x))
     }
 
-    pub fn input<T: Input<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
-        TWire::new(Input::input(self, x))
+    pub fn secret<T: Secret<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
+        TWire::new(Secret::secret(self, x))
     }
 }
 
@@ -215,9 +215,9 @@ impl<'a> Lit<'a> for bool {
     }
 }
 
-impl<'a> Input<'a> for bool {
-    fn input(bld: &Builder<'a>, x: Option<bool>) -> Wire<'a> {
-        bld.c.new_input(Ty::new(TyKind::Bool), x.map(|x| x as u64))
+impl<'a> Secret<'a> for bool {
+    fn secret(bld: &Builder<'a>, x: Option<bool>) -> Wire<'a> {
+        bld.c.new_secret(Ty::new(TyKind::Bool), x.map(|x| x as u64))
     }
 }
 
@@ -251,9 +251,9 @@ macro_rules! integer_impls {
             }
         }
 
-        impl<'a> Input<'a> for $T {
-            fn input(bld: &Builder<'a>, x: Option<$T>) -> Wire<'a> {
-                bld.c.new_input(Ty::new(TyKind::$K), x.map(|x| x as u64))
+        impl<'a> Secret<'a> for $T {
+            fn secret(bld: &Builder<'a>, x: Option<$T>) -> Wire<'a> {
+                bld.c.new_secret(Ty::new(TyKind::$K), x.map(|x| x as u64))
             }
         }
 
@@ -311,14 +311,14 @@ macro_rules! tuple_impl {
             }
         }
 
-        impl<'a, $($A: Input<'a>,)*> Input<'a> for ($($A,)*) {
-            fn input(bld: &Builder<'a>, x: Option<Self>) -> Self::Repr {
+        impl<'a, $($A: Secret<'a>,)*> Secret<'a> for ($($A,)*) {
+            fn secret(bld: &Builder<'a>, x: Option<Self>) -> Self::Repr {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 #![allow(unused)]       // `bld` in the zero-element case
                 if let Some(($($A,)*)) = x {
-                    ($(bld.input(Some($A)),)*)
+                    ($(bld.secret(Some($A)),)*)
                 } else {
-                    ($(bld.input::<$A>(None),)*)
+                    ($(bld.secret::<$A>(None),)*)
                 }
             }
         }
@@ -390,8 +390,8 @@ macro_rules! array_impls {
                 }
             }
 
-            impl<'a, A: Input<'a>> Input<'a> for [A; $n] {
-                fn input(bld: &Builder<'a>, a: Option<[A; $n]>) -> [TWire<'a, A>; $n] {
+            impl<'a, A: Secret<'a>> Secret<'a> for [A; $n] {
+                fn secret(bld: &Builder<'a>, a: Option<[A; $n]>) -> [TWire<'a, A>; $n] {
                     // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
                     // to implement without unnecessary allocation.
                     unsafe {
@@ -402,12 +402,12 @@ macro_rules! array_impls {
                             for i in 0 .. $n {
                                 let a_val = (a.as_ptr() as *const A).add(i).read();
                                 // If this panics, the remaining elements of `a` and `b` will leak.
-                                let o_val = bld.input(Some(a_val));
+                                let o_val = bld.secret(Some(a_val));
                                 (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
                             }
                         } else {
                             for i in 0 .. $n {
-                                let o_val = bld.input::<A>(None);
+                                let o_val = bld.secret::<A>(None);
                                 (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
                             }
                         }
@@ -477,7 +477,7 @@ impl<'a, A: Lit<'a>> Lit<'a> for Vec<A> {
     }
 }
 
-// No `impl Input for Vec<A>`, since we can't determine how many wires to create in the case where
+// No `impl Secret for Vec<A>`, since we can't determine how many wires to create in the case where
 // the value is unknown.
 
 impl<'a, C, A, B> Mux<'a, C, Vec<B>> for Vec<A>

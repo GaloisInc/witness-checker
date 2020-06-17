@@ -20,8 +20,8 @@ where F: FnMut(&Circuit<'new>, Gate<'new>) -> Wire<'new> {
         let old_gate = &*old_wire;
         let new_gate_kind = match old_gate.kind {
             GateKind::Lit(val) => GateKind::Lit(val),
-            // TODO: avoid unnecessary duplication of Inputs
-            GateKind::Input(inp) => self.c.new_input(inp.ty, inp.val).kind,
+            // TODO: avoid unnecessary duplication of Secrets
+            GateKind::Secret(s) => self.c.new_secret(s.ty, s.val).kind,
             GateKind::Unary(op, a) => GateKind::Unary(op, self.wire(a)),
             GateKind::Binary(op, a, b) => GateKind::Binary(op, self.wire(a), self.wire(b)),
             GateKind::Shift(op, a, b) => GateKind::Shift(op, self.wire(a), self.wire(b)),

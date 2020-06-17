@@ -9,8 +9,8 @@ use bumpalo::Bump;
 ///
 /// If a witness is available, the `Circuit` includes its values.  This allows circuit
 /// transformations to make corresponding changes to the witness if necessary.  The witness itself
-/// is not represented explicitly, but is accessible through the `GateKind::Input` gates present in
-/// the circuit.  Use the `walk_witness` function to obtain the witness values that are used to
+/// is not represented explicitly, but is accessible through the `GateKind::Secret` gates present
+/// in the circuit.  Use the `walk_witness` function to obtain the witness values that are used to
 /// compute some set of `Wire`s.
 pub struct Circuit<'a> {
     arena: &'a Bump,
@@ -49,17 +49,17 @@ impl<'a> Circuit<'a> {
         self.mk_gate(ty, GateKind::Lit(val))
     }
 
-    pub fn input(&self, input: Input<'a>) -> Wire<'a> {
-        self.mk_gate(input.ty, GateKind::Input(input))
+    pub fn secret(&self, secret: Secret<'a>) -> Wire<'a> {
+        self.mk_gate(secret.ty, GateKind::Secret(secret))
     }
 
-    /// Add a new input value to the witness, and return a `Wire` that carries that value.
+    /// Add a new secret value to the witness, and return a `Wire` that carries that value.
     ///
     /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
     /// prover) is generating the circuit.
-    pub fn new_input(&self, ty: Ty, val: Option<u64>) -> Wire<'a> {
-        let inp = Input(self.arena.alloc(InputData { ty, val }));
-        self.input(inp)
+    pub fn new_secret(&self, ty: Ty, val: Option<u64>) -> Wire<'a> {
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        self.secret(secret)
     }
 
     pub fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
@@ -209,7 +209,7 @@ impl<'a> Circuit<'a> {
                     stack.push(Entry::Yield(w));
                     match w.kind {
                         GateKind::Lit(_) => {}
-                        GateKind::Input(_) => {}
+                        GateKind::Secret(_) => {}
                         GateKind::Unary(_, a) => {
                             stack.push(Entry::Expand(a));
                         },
@@ -252,17 +252,17 @@ impl<'a> Circuit<'a> {
         }
     }
 
-    /// Visit all `Input`s that are used in the computation of `wires`.  Yields each `Input` once,
-    /// in some deterministic order (assuming `wires` itself is deterministic).
+    /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
+    /// once, in some deterministic order (assuming `wires` itself is deterministic).
     pub fn walk_witness<I, F>(&self, wires: I, mut f: F)
-    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Input<'a>) {
+    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Secret<'a>) {
         // In the normal case where every gate is interned properly, we should visit each distinct
-        // `GateKind::Input` only once, and see each `Input` only once.  However, this can go wrong
-        // if there are multiple `Circuit`s using the same arena but different `intern` tables, and
-        // wires from one `Circuit` are referenced in another.  Currently we don't defend against
-        // this misuse.
+        // `GateKind::Secret` only once, and see each `Secret` only once.  However, this can go
+        // wrong if there are multiple `Circuit`s using the same arena but different `intern`
+        // tables, and wires from one `Circuit` are referenced in another.  Currently we don't
+        // defend against this misuse.
         self.walk_wires(wires, |w| match w.kind {
-            GateKind::Input(inp) => f(inp),
+            GateKind::Secret(s) => f(s),
             _ => {},
         });
     }
@@ -323,8 +323,8 @@ pub struct Gate<'a> {
 pub enum GateKind<'a> {
     /// A literal/constant value.
     Lit(u64),
-    /// Retrieve a secret input from the witness.
-    Input(Input<'a>),
+    /// Retrieve a secret value from the witness.
+    Secret(Secret<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
     Unary(UnOp, Wire<'a>),
     /// Compute a binary operation.  All `BinOp`s have type `T -> T -> T`
@@ -425,11 +425,11 @@ impl<'a> fmt::Debug for Wire<'a> {
 declare_interned_pointer! {
     /// A secret input value, part of the witness.
     #[derive(Debug)]
-    pub struct Input<'a> => InputData;
+    pub struct Secret<'a> => SecretData;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub struct InputData {
+pub struct SecretData {
     pub ty: Ty,
     pub val: Option<u64>,
 }

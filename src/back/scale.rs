@@ -173,8 +173,8 @@ impl<'a> Backend<'a> {
                 assert!(x == 0 || x == 1, "unsupported literal {} for Bool", x);
                 self.instr(instr::ldsbit(0, dest, Imm::from_u32(x as u32)));
             },
-            GateKind::Input(inp) => {
-                let x = inp.val
+            GateKind::Secret(s) => {
+                let x = s.val
                     .expect("NYI: generation of SCALE output without witness values");
                 assert!(x == 0 || x == 1, "unsupported literal {} for Bool", x);
                 self.instr(instr::ldsbit(0, dest, Imm::from_u32(x as u32)));
@@ -222,8 +222,8 @@ impl<'a> Backend<'a> {
                 self.instr(instr::ldsint(0, dest, Imm::from_u32(x as u32)));
                 dest.pack()
             },
-            GateKind::Input(inp) => {
-                let x = inp.val
+            GateKind::Secret(s) => {
+                let x = s.val
                     .expect("NYI: generation of SCALE output without witness values");
                 let dest = self.fresh::<RegSecretRegint>();
                 assert!(x <= u32::MAX as u64, "literal {} out of range for", x);

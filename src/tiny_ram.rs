@@ -1,4 +1,4 @@
-use crate::ir::typed::{Builder, TWire, Repr, Lit, Input, Mux};
+use crate::ir::typed::{Builder, TWire, Repr, Lit, Secret, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -158,19 +158,19 @@ impl<'a> Lit<'a> for RamState {
     }
 }
 
-impl<'a> Input<'a> for RamState {
-    fn input(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+impl<'a> Secret<'a> for RamState {
+    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
         if let Some(a) = a {
             RamStateRepr {
-                pc: bld.input(Some(a.pc)),
-                regs: *bld.input(Some(a.regs)),
-                flag: bld.input(Some(a.flag)),
+                pc: bld.secret(Some(a.pc)),
+                regs: *bld.secret(Some(a.regs)),
+                flag: bld.secret(Some(a.flag)),
             }
         } else {
             RamStateRepr {
-                pc: bld.input(None),
-                regs: *bld.input::<[u64; RAM_REGS]>(None),
-                flag: bld.input(None),
+                pc: bld.secret(None),
+                regs: *bld.secret::<[u64; RAM_REGS]>(None),
+                flag: bld.secret(None),
             }
         }
     }
