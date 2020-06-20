@@ -14,3 +14,4 @@ scale = ["scale_isa"]
 scale_isa = { optional = true, path = "../dialogue/scale_isa" }
 zkinterface = { optional = true, version = "1.0.6" }
 bumpalo = "3.4"
+colored = "1.9.3"
