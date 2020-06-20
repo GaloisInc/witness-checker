@@ -1,6 +1,7 @@
 mod debug;
 
 use std::fmt;
+use colored::Colorize;
 
 // TODO: Use actual types.
 type OpCode = usize;
@@ -12,24 +13,34 @@ pub struct WirePack(u64);
 
 pub struct Backend {
     free_var_id: u64,
+
+    cost: usize,
+    last_printed_cost: usize,
 }
 
 impl Backend {
-    pub fn new() -> Backend { Backend { free_var_id: 1 } }
+    pub fn new() -> Backend { Backend { free_var_id: 1, cost: 0, last_printed_cost: 0 } }
 
     pub fn allocate(&mut self) -> WirePack {
         let new_id = self.free_var_id;
         self.free_var_id += 1;
+        self.cost += 1 + 16; // Word size, boolean-ness.
         return WirePack(new_id);
+    }
+
+    pub fn print_cost(&mut self) {
+        println!("{}", format!("Cost of the above: {}", self.cost - self.last_printed_cost).italic());
+        self.last_printed_cost = self.cost;
     }
 }
 
-// Low-level execution units.
+// Core execution units.
 impl Backend {
     // new wire = operation(v0 v1 v2)
     pub fn push_operation(&mut self, opcode: OpCode, regval0: WirePack, regval1: WirePack, regval2: WirePack) -> WirePack {
         // TODO: use the implementation for the given opcode.
         let regout = self.allocate();
+        self.cost += 30;
         println!("{:?}\t= operation_{}( {:?}, {:?}, {:?})", regout, opcode, regval0, regval1, regval2);
         return regout;
     }
@@ -38,6 +49,7 @@ impl Backend {
     pub fn push_demux(&mut self, inputs: &[WirePack], index: WirePack) -> WirePack {
         // TODO: use secret index.
         let regout = self.allocate();
+        self.cost += 1 + inputs.len();
         println!("{:?}\t= demux selects {:?} from {:?}", regout, index, inputs);
         return regout;
     }
@@ -49,6 +61,7 @@ impl Backend {
             // TODO: condition on secret index.
             regs[i] = self.allocate();
         }
+        self.cost += 1 + regs.len();
         println!("regs[{:?}]\t= {:?} in new registers {:?}", index, new_value, regs);
     }
 }
@@ -68,7 +81,7 @@ pub struct SecretInstr<'a> {
     reglabel2: WirePack,
 }
 
-// High-level CPU components. Compose and connect low-level components.
+// CPU components. Compose and connect core components.
 impl Backend {
     pub fn push_instr(&mut self, regs: &mut [WirePack], instr: &FixedInstr) {
         println!("instruction operation_{}( {}, {}, {} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
@@ -79,6 +92,7 @@ impl Backend {
             regs[instr.reglabel2]);
         regs[instr.reglabel0] = result;
         println!("registers[{}]\t= {:?}", instr.reglabel0, result);
+        self.print_cost();
     }
 
     pub fn push_secret_instr(&mut self, regvals: &mut [WirePack], instr: &SecretInstr) {
@@ -87,16 +101,19 @@ impl Backend {
         let regval0 = self.push_demux(regvals, instr.reglabel0);
         let regval1 = self.push_demux(regvals, instr.reglabel1);
         let regval2 = self.push_demux(regvals, instr.reglabel2);
+        self.print_cost();
 
         println!("// Execute all possible operations.");
         let possible_results = instr.possible_opcodes.iter().map(|op|
             self.push_operation(*op, regval0, regval1, regval2)
         ).collect::<Vec<WirePack>>();
+        self.print_cost();
 
         println!("// Pick the result of the actual operation.");
         let result = self.push_demux(&possible_results, instr.opcode);
 
         self.push_update(regvals, instr.reglabel0, result);
+        self.print_cost();
     }
 }
 
@@ -107,7 +124,10 @@ fn test_zkif_backend() {
     for reg in regs.iter_mut() {
         *reg = back.allocate();
     }
-    println!("Initial registers: {:?}\n", regs);
+
+    println!("Initial registers: {:?}", regs);
+    back.print_cost();
+    println!();
 
     {
         let instr = FixedInstr {
@@ -120,7 +140,7 @@ fn test_zkif_backend() {
         println!();
     }
 
-    let possible_ops = vec![0, 1];
+    let possible_ops = (0..8).collect::<Vec<OpCode>>();
     {
         let sec_instr = SecretInstr {
             possible_opcodes: &possible_ops,
