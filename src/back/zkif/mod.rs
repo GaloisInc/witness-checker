@@ -2,13 +2,17 @@ mod debug;
 
 use std::fmt;
 use colored::Colorize;
+use std::collections::HashMap;
 
 // TODO: Use actual types.
 type OpCode = usize;
 type RegLabel = usize;
 
+type WireId = u64;
+type WireValue = [u64; 4];
+
 #[derive(Copy, Clone)]
-pub struct WirePack(u64);
+pub struct WirePack(WireId);
 
 
 pub struct Backend {
@@ -117,9 +121,51 @@ impl Backend {
     }
 }
 
+pub struct Memory {
+    ops: Vec<MemOp>,
+    values: HashMap<WireValue, WireValue>,
+    finished: bool,
+}
+
+enum MemOp {
+    Store { addr: WirePack, content: WirePack },
+    Load { addr: WirePack, content: WirePack },
+}
+
+impl Memory {
+    pub fn new() -> Memory {
+        Memory { ops: vec![], values: HashMap::new(), finished: false }
+    }
+    pub fn finish(mut self, back: &mut Backend) {
+        // TODO: store/load consistency check.
+        self.finished = true;
+    }
+
+    pub fn store(&mut self, addr: WirePack, content: WirePack) {
+        self.ops.push(MemOp::Store { addr, content });
+        self.values.insert([0, 0, 0, 0], [0, 0, 0, 0]);
+    }
+
+    pub fn load(&mut self, back: &mut Backend, addr: WirePack) -> WirePack {
+        let content = back.allocate();
+        self.ops.push(MemOp::Load { addr, content });
+        // TODO: copy values[addr] into the new wire.
+        return content;
+    }
+}
+
+impl Drop for Memory {
+    fn drop(&mut self) {
+        if !self.finished {
+            panic!("Memory.finish() must be called.");
+        }
+    }
+}
+
 #[test]
 fn test_zkif_backend() {
     let mut back = Backend::new();
+    let mut mem = Memory::new();
     let mut regs = vec![WirePack(0); 4];
     for reg in regs.iter_mut() {
         *reg = back.allocate();
@@ -163,6 +209,8 @@ fn test_zkif_backend() {
         back.push_secret_instr(&mut regs, &sec_instr);
         println!();
     }
+
+    mem.finish(&mut back);
 }
 
 
