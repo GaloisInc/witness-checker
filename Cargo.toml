@@ -7,9 +7,10 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["scale"]
+default = ["scale", "zkinterface"]
 scale = ["scale_isa"]
 
 [dependencies]
 scale_isa = { optional = true, path = "../dialogue/scale_isa" }
+zkinterface = { optional = true, version = "1.0.6" }
 bumpalo = "3.4"
