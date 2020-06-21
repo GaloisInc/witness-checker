@@ -1,3 +1,5 @@
+use super::backend::WireId;
+
 use std::fmt;
 use colored::Colorize;
 
@@ -11,5 +13,12 @@ pub fn write_wire_name(i: usize, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "&{}-{}", DEBUG_NAMES[(i / max) % max].chars().rev().collect::<String>(), DEBUG_NAMES[i % max])
     } else {
         write!(f, "&{}", DEBUG_NAMES[i % max].blue())
+    }
+}
+
+impl fmt::Debug for WireId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write_wire_name(self.0, f)
+        //write!(f, "&{:3}", self.0.to_string().blue())
     }
 }
