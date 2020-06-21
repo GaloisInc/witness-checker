@@ -36,27 +36,22 @@ impl Backend {
     }
 
     pub fn print_cost(&mut self) {
-        println!("{}", format!("Cost of the above: {}", self.cost - self.last_printed_cost).italic());
+        //println!("{}", format!("Cost of the above: {}", self.cost - self.last_printed_cost).yellow().italic());
         self.last_printed_cost = self.cost;
     }
-}
-
-pub fn is_alu(opcode: OpLabel) -> bool {
-    return opcode <= 12;
 }
 
 // Core execution units.
 impl Backend {
     // result, flag = operation(arg0 arg1 arg2)
-    pub fn push_operation(&mut self, opcode: OpLabel, regval0: WireId, regval1: WireId, regval2: WireId, pc: WireId, flag: WireId) -> (WireId, WireId, WireId) {
-        let is_alu = false; // TODO
-        if is_alu {
-            let (res, new_flag) = self.push_alu_op(opcode, regval0, regval1, regval2);
-            let new_pc = pc; // TODO: pc+1
-            return (res, new_flag, new_pc);
+    pub fn push_operation(&mut self, opcode: OpLabel, regval0: WireId, regval1: WireId, regval2: WireId, flag: WireId, pc: WireId) -> (WireId, WireId, WireId) {
+        if is_alu(opcode) {
+            let (new_regval0, new_flag) = self.push_alu_op(opcode, regval0, regval1, regval2);
+            let next_pc = pc; // TODO: pc+1
+            return (new_regval0, new_flag, next_pc);
         } else {
-            let new_pc = self.push_flow_op(opcode, pc, flag);
-            return (regval0, flag, new_pc);
+            let jump_pc = self.push_flow_op(opcode, flag, pc, regval2);
+            return (regval0, flag, jump_pc);
         }
     }
 
@@ -65,15 +60,15 @@ impl Backend {
         let new_reg = self.new_wire();
         let new_flag = self.new_wire();
         self.cost += 30;
-        println!("{:?}\t= operation_{}( {:?}, {:?}, {:?})", (new_reg, new_flag), opcode, regval0, regval1, regval2);
+        println!("{:?}\t= alu_op_{}( {:?}, {:?}, {:?})", (new_reg, new_flag), opcode, regval0, regval1, regval2);
         return (new_reg, new_flag);
     }
 
-    pub fn push_flow_op(&mut self, opcode: OpLabel, pc: WireId, flag: WireId) -> WireId {
+    pub fn push_flow_op(&mut self, opcode: OpLabel, flag: WireId, pc: WireId, regval: WireId) -> WireId {
         // TODO: use the implementation for the given opcode.
         let new_pc = self.new_wire();
         self.cost += 4;
-        println!("{:?}\t= flow_op_{}( {:?}, {:?} )", new_pc, opcode, pc, flag);
+        println!("{:?}\t= flow_op_{}( {:?}, {:?}, {:?} )", new_pc, opcode, pc, flag, regval);
         return new_pc;
     }
 
@@ -86,13 +81,19 @@ impl Backend {
         return regout;
     }
 
-    // new wire pair = input_pairs[index]
-    pub fn push_demux_pair(&mut self, inputs: &[(WireId, WireId)], index: WireId) -> (WireId, WireId) {
+    // new tuple = input_tuples[index]
+    pub fn push_demux_tuple(&mut self, inputs: &[(WireId, WireId, WireId)], index: WireId) -> (WireId, WireId, WireId) {
         // TODO: use secret index.
-        let regout = (self.new_wire(), self.new_wire());
+        let regout = (self.new_wire(), self.new_wire(), self.new_wire());
         self.cost += 1 + inputs.len();
         println!("{:?}\t= demux selects {:?} from {:?}", regout, index, inputs);
         return regout;
+    }
+
+    pub fn push_decode_op_type(&mut self, opcode: WireId) -> (WireId) {
+        // TODO: decode.
+        let is_alu = self.new_wire();
+        return is_alu;
     }
 
     // regs[index] = new wire equal to new_value.
@@ -107,6 +108,13 @@ impl Backend {
     }
 }
 
+pub fn is_alu(op: OpLabel) -> bool {
+    return op <= 2;
+}
+
+const num_ops: usize = 4;
+
+
 pub struct FixedInstr {
     oplabel: OpLabel,
     reglabel0: RegLabel,
@@ -115,7 +123,7 @@ pub struct FixedInstr {
 }
 
 pub struct SecretInstr<'a> {
-    possible_opcodes: &'a [OpLabel],
+    possible_operations: &'a [OpLabel],
     opcode: WireId,
     reglabel0: WireId,
     reglabel1: WireId,
@@ -124,19 +132,27 @@ pub struct SecretInstr<'a> {
 
 // CPU components. Compose and connect core components.
 impl Backend {
-    pub fn push_instr(&mut self, regs: &mut [WireId], instr: &FixedInstr) {
-        println!("instruction operation_{}( {}, {}, {} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
-        let (result, _flag) = self.push_alu_op(
+    pub fn push_fixed_instr(&mut self, regs: &mut [WireId], flag: &mut WireId, pc: &mut WireId, instr: &FixedInstr) {
+        println!("fixed instruction op_{}( reg_{}, reg_{}, reg_{} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
+
+        let (new_reg0, new_flag, new_pc) = self.push_operation(
             instr.oplabel,
             regs[instr.reglabel0],
             regs[instr.reglabel1],
-            regs[instr.reglabel2]);
-        regs[instr.reglabel0] = result;
-        println!("registers[{}]\t= {:?}", instr.reglabel0, result);
+            regs[instr.reglabel2],
+            *flag, *pc,
+        );
+
+        regs[instr.reglabel0] = new_reg0;
+        *flag = new_flag;
+        *pc = new_pc;
+
+        println!("registers[{}]\t= {:?}", instr.reglabel0, new_reg0);
+        println!("pc = {:?}, flag = {:?}", pc, flag);
         self.print_cost();
     }
 
-    pub fn push_secret_instr(&mut self, regvals: &mut [WireId], instr: &SecretInstr) {
+    pub fn push_secret_instr(&mut self, regvals: &mut [WireId], flag: &mut WireId, pc: &mut WireId, instr: &SecretInstr) {
         println!("secret instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
         println!("// Pick the register inputs from all possible registers.");
         let regval0 = self.push_demux(regvals, instr.reglabel0);
@@ -145,15 +161,17 @@ impl Backend {
         self.print_cost();
 
         println!("// Execute all possible operations.");
-        let possible_results = instr.possible_opcodes.iter().map(|op|
-            self.push_alu_op(*op, regval0, regval1, regval2)
-        ).collect::<Vec<(WireId, WireId)>>();
+        let possible_results = instr.possible_operations.iter().map(|op|
+            self.push_operation(*op, regval0, regval1, regval2, *flag, *pc)
+        ).collect::<Vec<(WireId, WireId, WireId)>>();
         self.print_cost();
 
         println!("// Pick the result of the actual operation.");
-        let result = self.push_demux_pair(&possible_results, instr.opcode);
-
+        let result = self.push_demux_tuple(&possible_results, instr.opcode);
         self.push_update(regvals, instr.reglabel0, result.0);
+        *flag = result.1;
+        *pc = result.2;
+        println!("pc = {:?}, flag = {:?}", pc, flag);
         self.print_cost();
     }
 }
@@ -244,6 +262,8 @@ fn test_zkif_backend() {
     for reg in regs.iter_mut() {
         *reg = back.new_wire();
     }
+    let mut flag = back.new_wire();
+    let mut pc = back.new_wire();
 
     println!("Initial registers: {:?}", regs);
     back.print_cost();
@@ -256,31 +276,31 @@ fn test_zkif_backend() {
             reglabel1: 1,
             reglabel2: 2,
         };
-        back.push_instr(&mut regs, &instr);
+        back.push_fixed_instr(&mut regs, &mut flag, &mut pc, &instr);
         println!();
     }
 
-    let possible_ops = (0..8).collect::<Vec<OpLabel>>();
+    let possible_operations = (0..num_ops).collect::<Vec<OpLabel>>();
     {
         let sec_instr = SecretInstr {
-            possible_opcodes: &possible_ops,
+            possible_operations: &possible_operations,
             opcode: back.new_wire(),
             reglabel0: back.new_wire(),
             reglabel1: back.new_wire(),
             reglabel2: back.new_wire(),
         };
-        back.push_secret_instr(&mut regs, &sec_instr);
+        back.push_secret_instr(&mut regs, &mut flag, &mut pc, &sec_instr);
         println!();
     }
     {
         let sec_instr = SecretInstr {
-            possible_opcodes: &possible_ops,
+            possible_operations: &possible_operations,
             opcode: back.new_wire(),
             reglabel0: back.new_wire(),
             reglabel1: back.new_wire(),
             reglabel2: back.new_wire(),
         };
-        back.push_secret_instr(&mut regs, &sec_instr);
+        back.push_secret_instr(&mut regs, &mut flag, &mut pc, &sec_instr);
         println!();
     }
 
@@ -291,5 +311,6 @@ fn test_zkif_backend() {
 impl fmt::Debug for WireId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         debug::write_wire_name(self.0, f)
+        //write!(f, "&{:3}", self.0.to_string().blue())
     }
 }
