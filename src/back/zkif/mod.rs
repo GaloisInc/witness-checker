@@ -35,6 +35,8 @@ impl Backend {
         return WireId(self.wire_reprs.len() - 1);
     }
 
+    pub fn true_wire(&self) -> WireId { WireId(0) }
+
     pub fn print_cost(&mut self) {
         //println!("{}", format!("Cost of the above: {}", self.cost - self.last_printed_cost).yellow().italic());
         self.last_printed_cost = self.cost;
@@ -122,11 +124,29 @@ pub struct FixedInstr {
     reglabel2: RegLabel,
 }
 
+impl FixedInstr {
+    pub fn encode_instr(&self) -> PackedValue {
+        [0, 0, 0, 0]
+    }
+}
+
 pub struct SecretInstr {
     opcode: WireId,
     reglabel0: WireId,
     reglabel1: WireId,
     reglabel2: WireId,
+}
+
+impl SecretInstr {
+    pub fn decode_instr(back: &mut Backend, packed: WireId) -> SecretInstr {
+        // TODO: actual decoding.
+        SecretInstr {
+            opcode: back.new_wire(),
+            reglabel0: back.new_wire(),
+            reglabel1: back.new_wire(),
+            reglabel2: back.new_wire(),
+        }
+    }
 }
 
 pub struct TransitionCapabilities {
@@ -262,8 +282,8 @@ pub struct Memory {
 }
 
 enum MemOp {
-    Store { addr: WireId, content: WireId },
-    Load { addr: WireId, content: WireId },
+    Store { condition: WireId, address: WireId, content: WireId },
+    Load { condition: WireId, address: WireId, content: WireId },
 }
 
 type PackedValue = [u64; 4];
@@ -277,14 +297,17 @@ impl Memory {
         self.finished = true;
     }
 
-    pub fn store(&mut self, addr: WireId, content: WireId) {
-        self.ops.push(MemOp::Store { addr, content });
-        self.values.insert([0, 0, 0, 0], [0, 0, 0, 0]);
+    pub fn store(&mut self, condition: WireId, address: WireId, content: WireId) {
+        self.ops.push(MemOp::Store { condition, address, content });
+        // TODO: conditionally store the content.
+        if false {
+            self.values.insert([0, 0, 0, 0], [0, 0, 0, 0]);
+        }
     }
 
-    pub fn load(&mut self, back: &mut Backend, addr: WireId) -> WireId {
+    pub fn load(&mut self, back: &mut Backend, condition: WireId, address: WireId) -> WireId {
         let content = back.new_wire();
-        self.ops.push(MemOp::Load { addr, content });
+        self.ops.push(MemOp::Load { condition, address, content });
         // TODO: copy values[addr] into the new wire.
         return content;
     }
@@ -303,6 +326,7 @@ fn test_zkif_backend() {
     let mut back = Backend::new();
     let mut state = MachineState::new(&mut back);
     let mut mem = Memory::new();
+    let true_wire = back.true_wire();
 
     println!("Initial state: {:#?}", state);
     back.print_cost();
@@ -324,24 +348,12 @@ fn test_zkif_backend() {
         possible_flow_ops: (0..2).collect::<Vec<OpLabel>>(),
     };
 
-    {
-        let instr = SecretInstr {
-            opcode: back.new_wire(),
-            reglabel0: back.new_wire(),
-            reglabel1: back.new_wire(),
-            reglabel2: back.new_wire(),
-        };
+    for _ in 0..2 {
+        let instr_in_pc = mem.load(&mut back, true_wire, state.pc);
+        let instr = SecretInstr::decode_instr(&mut back, instr_in_pc);
+
         state.push_secret_instr(&mut back, &spec, &instr);
-        println!();
-    }
-    {
-        let instr = SecretInstr {
-            opcode: back.new_wire(),
-            reglabel0: back.new_wire(),
-            reglabel1: back.new_wire(),
-            reglabel2: back.new_wire(),
-        };
-        state.push_secret_instr(&mut back, &spec, &instr);
+
         println!();
     }
 
