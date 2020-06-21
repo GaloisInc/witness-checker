@@ -5,7 +5,7 @@ use colored::Colorize;
 use std::collections::HashMap;
 
 // TODO: Use actual types.
-type OpCode = usize;
+type OpLabel = usize;
 type RegLabel = usize;
 
 #[derive(Copy, Clone)]
@@ -30,7 +30,7 @@ pub struct Backend {
 impl Backend {
     pub fn new() -> Backend { Backend { free_zid: 1, wire_reprs: vec![], cost: 0, last_printed_cost: 0 } }
 
-    pub fn allocate(&mut self) -> WireId {
+    pub fn new_wire(&mut self) -> WireId {
         self.wire_reprs.push(WireRepr { packed_zid: None, bit_zids: vec![] });
         return WireId(self.wire_reprs.len() - 1);
     }
@@ -41,21 +41,55 @@ impl Backend {
     }
 }
 
+pub fn is_alu(opcode: OpLabel) -> bool {
+    return opcode <= 12;
+}
+
 // Core execution units.
 impl Backend {
-    // new wire = operation(v0 v1 v2)
-    pub fn push_operation(&mut self, opcode: OpCode, regval0: WireId, regval1: WireId, regval2: WireId) -> WireId {
+    // result, flag = operation(arg0 arg1 arg2)
+    pub fn push_operation(&mut self, opcode: OpLabel, regval0: WireId, regval1: WireId, regval2: WireId, pc: WireId, flag: WireId) -> (WireId, WireId, WireId) {
+        let is_alu = false; // TODO
+        if is_alu {
+            let (res, new_flag) = self.push_alu_op(opcode, regval0, regval1, regval2);
+            let new_pc = pc; // TODO: pc+1
+            return (res, new_flag, new_pc);
+        } else {
+            let new_pc = self.push_flow_op(opcode, pc, flag);
+            return (regval0, flag, new_pc);
+        }
+    }
+
+    pub fn push_alu_op(&mut self, opcode: OpLabel, regval0: WireId, regval1: WireId, regval2: WireId) -> (WireId, WireId) {
         // TODO: use the implementation for the given opcode.
-        let regout = self.allocate();
+        let new_reg = self.new_wire();
+        let new_flag = self.new_wire();
         self.cost += 30;
-        println!("{:?}\t= operation_{}( {:?}, {:?}, {:?})", regout, opcode, regval0, regval1, regval2);
-        return regout;
+        println!("{:?}\t= operation_{}( {:?}, {:?}, {:?})", (new_reg, new_flag), opcode, regval0, regval1, regval2);
+        return (new_reg, new_flag);
+    }
+
+    pub fn push_flow_op(&mut self, opcode: OpLabel, pc: WireId, flag: WireId) -> WireId {
+        // TODO: use the implementation for the given opcode.
+        let new_pc = self.new_wire();
+        self.cost += 4;
+        println!("{:?}\t= flow_op_{}( {:?}, {:?} )", new_pc, opcode, pc, flag);
+        return new_pc;
     }
 
     // new wire = inputs[index]
     pub fn push_demux(&mut self, inputs: &[WireId], index: WireId) -> WireId {
         // TODO: use secret index.
-        let regout = self.allocate();
+        let regout = self.new_wire();
+        self.cost += 1 + inputs.len();
+        println!("{:?}\t= demux selects {:?} from {:?}", regout, index, inputs);
+        return regout;
+    }
+
+    // new wire pair = input_pairs[index]
+    pub fn push_demux_pair(&mut self, inputs: &[(WireId, WireId)], index: WireId) -> (WireId, WireId) {
+        // TODO: use secret index.
+        let regout = (self.new_wire(), self.new_wire());
         self.cost += 1 + inputs.len();
         println!("{:?}\t= demux selects {:?} from {:?}", regout, index, inputs);
         return regout;
@@ -66,7 +100,7 @@ impl Backend {
     pub fn push_update(&mut self, regs: &mut [WireId], index: WireId, new_value: WireId) {
         for i in 0..regs.len() {
             // TODO: condition on secret index.
-            regs[i] = self.allocate();
+            regs[i] = self.new_wire();
         }
         self.cost += 1 + regs.len();
         println!("regs[{:?}]\t= {:?} in new registers {:?}", index, new_value, regs);
@@ -74,14 +108,14 @@ impl Backend {
 }
 
 pub struct FixedInstr {
-    opcode: OpCode,
+    oplabel: OpLabel,
     reglabel0: RegLabel,
     reglabel1: RegLabel,
     reglabel2: RegLabel,
 }
 
 pub struct SecretInstr<'a> {
-    possible_opcodes: &'a [OpCode],
+    possible_opcodes: &'a [OpLabel],
     opcode: WireId,
     reglabel0: WireId,
     reglabel1: WireId,
@@ -91,9 +125,9 @@ pub struct SecretInstr<'a> {
 // CPU components. Compose and connect core components.
 impl Backend {
     pub fn push_instr(&mut self, regs: &mut [WireId], instr: &FixedInstr) {
-        println!("instruction operation_{}( {}, {}, {} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
-        let result = self.push_operation(
-            instr.opcode,
+        println!("instruction operation_{}( {}, {}, {} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
+        let (result, _flag) = self.push_alu_op(
+            instr.oplabel,
             regs[instr.reglabel0],
             regs[instr.reglabel1],
             regs[instr.reglabel2]);
@@ -112,14 +146,14 @@ impl Backend {
 
         println!("// Execute all possible operations.");
         let possible_results = instr.possible_opcodes.iter().map(|op|
-            self.push_operation(*op, regval0, regval1, regval2)
-        ).collect::<Vec<WireId>>();
+            self.push_alu_op(*op, regval0, regval1, regval2)
+        ).collect::<Vec<(WireId, WireId)>>();
         self.print_cost();
 
         println!("// Pick the result of the actual operation.");
-        let result = self.push_demux(&possible_results, instr.opcode);
+        let result = self.push_demux_pair(&possible_results, instr.opcode);
 
-        self.push_update(regvals, instr.reglabel0, result);
+        self.push_update(regvals, instr.reglabel0, result.0);
         self.print_cost();
     }
 }
@@ -187,7 +221,7 @@ impl Memory {
     }
 
     pub fn load(&mut self, back: &mut Backend, addr: WireId) -> WireId {
-        let content = back.allocate();
+        let content = back.new_wire();
         self.ops.push(MemOp::Load { addr, content });
         // TODO: copy values[addr] into the new wire.
         return content;
@@ -208,7 +242,7 @@ fn test_zkif_backend() {
     let mut mem = Memory::new();
     let mut regs = vec![WireId(0); 4];
     for reg in regs.iter_mut() {
-        *reg = back.allocate();
+        *reg = back.new_wire();
     }
 
     println!("Initial registers: {:?}", regs);
@@ -217,7 +251,7 @@ fn test_zkif_backend() {
 
     {
         let instr = FixedInstr {
-            opcode: 0,
+            oplabel: 0,
             reglabel0: 0,
             reglabel1: 1,
             reglabel2: 2,
@@ -226,14 +260,14 @@ fn test_zkif_backend() {
         println!();
     }
 
-    let possible_ops = (0..8).collect::<Vec<OpCode>>();
+    let possible_ops = (0..8).collect::<Vec<OpLabel>>();
     {
         let sec_instr = SecretInstr {
             possible_opcodes: &possible_ops,
-            opcode: back.allocate(),
-            reglabel0: back.allocate(),
-            reglabel1: back.allocate(),
-            reglabel2: back.allocate(),
+            opcode: back.new_wire(),
+            reglabel0: back.new_wire(),
+            reglabel1: back.new_wire(),
+            reglabel2: back.new_wire(),
         };
         back.push_secret_instr(&mut regs, &sec_instr);
         println!();
@@ -241,10 +275,10 @@ fn test_zkif_backend() {
     {
         let sec_instr = SecretInstr {
             possible_opcodes: &possible_ops,
-            opcode: back.allocate(),
-            reglabel0: back.allocate(),
-            reglabel1: back.allocate(),
-            reglabel2: back.allocate(),
+            opcode: back.new_wire(),
+            reglabel0: back.new_wire(),
+            reglabel1: back.new_wire(),
+            reglabel2: back.new_wire(),
         };
         back.push_secret_instr(&mut regs, &sec_instr);
         println!();
