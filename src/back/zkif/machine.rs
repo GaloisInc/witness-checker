@@ -3,6 +3,7 @@ use super::mem::PackedValue;
 
 type RegLabel = usize;
 
+// A publicly-known instruction (fixed operation and register labels).
 pub struct FixedInstr {
     pub oplabel: OpLabel,
     pub reglabel0: RegLabel,
@@ -11,11 +12,14 @@ pub struct FixedInstr {
 }
 
 impl FixedInstr {
+    // Encode the instruction so it can be stored in memory,
+    // and decoded by SecretInstr.decode_instr().
     pub fn encode_instr(&self) -> PackedValue {
         [0, 0, 0, 0]
     }
 }
 
+// An instruction with secret operation and register labels.
 pub struct SecretInstr {
     opcode: WireId,
     reglabel0: WireId,
@@ -24,6 +28,8 @@ pub struct SecretInstr {
 }
 
 impl SecretInstr {
+    // Decode a secret instruction from a wire
+    // holding a value from FixedInstr.encode_instr().
     pub fn decode_instr(back: &mut Backend, packed: WireId) -> SecretInstr {
         // TODO: actual decoding.
         SecretInstr {
@@ -35,6 +41,8 @@ impl SecretInstr {
     }
 }
 
+// A description of what a secret execution step may do.
+// The more capabilities, the more expensive.
 pub struct StepCapabilities {
     pub possible_alu_ops: Vec<OpLabel>,
     pub possible_flow_ops: Vec<OpLabel>,
@@ -134,6 +142,8 @@ impl MachineState {
         let result = back.push_muxer(&[alu_result, flow_result], is_flow);
         let new_flag = back.push_muxer(&[alu_flag, flow_flag], is_flow);
         let new_pc = back.push_muxer(&[alu_pc, flow_pc], is_flow);
+
+        // TODO: assert that the opcode is one of the possible opcodes.
 
         println!("// Write the new state.");
         back.push_demuxer(&mut self.registers, instr.reglabel0, result);
