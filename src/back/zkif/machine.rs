@@ -88,7 +88,7 @@ impl MachineState {
         }
     }
 
-    pub fn push_static_instr(&mut self, back: &mut Backend, instr: &StaticInstr) {
+    pub fn push_static_instr(&mut self, back: &mut Backend, mem: &mut Memory, instr: &StaticInstr) {
         println!("static instruction op_{}( reg_{}, reg_{}, {:?} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
         let arg2 = match instr.reglabel2 {
@@ -96,34 +96,47 @@ impl MachineState {
             RegOrValue::Val(value) => back.wire_constant(value),
         };
 
-        let (new_reg0, new_flag, new_pc) = if Self::is_flow(instr.oplabel) {
-            // Flow instructions update pc and copy the rest.
-            let jump_pc = back.push_flow_op(
-                instr.oplabel,
-                self.flag,
-                self.pc,
-                arg2);
-            (self.registers[instr.reglabel0], self.flag, jump_pc)
-        } else {
-            // ALU instructions update a register, the flag, and increment pc.
-            let (new_reg0, new_flag) = back.push_alu_op(
-                instr.oplabel,
-                self.registers[instr.reglabel0],
-                self.registers[instr.reglabel1],
-                arg2);
-            let next_pc = back.new_wire(); // TODO: pc+1
-            (new_reg0, new_flag, next_pc)
+        match Self::get_op_type(instr.oplabel) {
+            0 => {
+                // ALU instructions update a register, the flag, and increment pc.
+                let (new_reg0, new_flag) = back.push_alu_op(
+                    instr.oplabel,
+                    self.registers[instr.reglabel0],
+                    self.registers[instr.reglabel1],
+                    arg2);
+                self.registers[instr.reglabel0] = new_reg0;
+                self.flag = new_flag;
+                self.pc = back.new_wire(); // TODO: pc+1
+            }
+            1 => {
+                // Flow instructions update pc and copy the rest.
+                let jump_pc = back.push_flow_op(
+                    instr.oplabel,
+                    self.flag,
+                    self.pc,
+                    arg2);
+                self.pc = jump_pc;
+            }
+            _ => {
+                // Memory instructions.
+                // TODO: actual opcodes.
+                let true_wire = back.wire_one();
+                if instr.oplabel == 6 {
+                    mem.store(back, true_wire, arg2, self.registers[instr.reglabel0]);
+                }
+                if instr.oplabel == 7 {
+                    let new_reg0 = mem.load(back, true_wire, arg2);
+                    self.registers[instr.reglabel0] = new_reg0;
+                }
+                self.pc = back.new_wire(); // TODO: pc+1
+            }
         };
-        // TODO: mem store and load.
 
-        self.registers[instr.reglabel0] = new_reg0;
-        self.flag = new_flag;
-        self.pc = new_pc;
-
-        println!("registers[{}]\t= {:?}", instr.reglabel0, new_reg0);
-        println!("pc = {:?}, flag = {:?}", new_pc, new_flag);
+        println!("registers[{}]\t= {:?}", instr.reglabel0, self.registers[instr.reglabel0]);
+        println!("pc = {:?}, flag = {:?}", self.pc, self.flag);
         back.cost_est.print_cost();
     }
+
 
     pub fn push_dynamic_instr(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities, instr: &DynInstr) {
         println!("dynamic instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
@@ -193,6 +206,10 @@ impl MachineState {
 
     // Helpers.
 
+    pub fn get_op_type(op: OpLabel) -> usize {
+        if op < 3 { 0 } else if op < 5 { 1 } else { 2 } // TODO: use actual codes.
+    }
+
     pub fn push_opcode_type(back: &mut Backend, opcode: WireId) -> WireId {
         let _ = back.represent_as_one_hot(opcode);
         // TODO: decode "is alu", "is flow", "is mem".
@@ -212,9 +229,5 @@ impl MachineState {
         // TODO: decode "is load"
         back.cost_est.cost += 1;
         back.new_wire()
-    }
-
-    pub fn is_flow(op: OpLabel) -> bool {
-        return op > 2; // TODO.
     }
 }

@@ -22,7 +22,7 @@ fn test_zkif_backend() {
             reglabel1: 1,
             reglabel2: RegOrValue::Val([2, 3, 4, 5]),
         };
-        state.push_static_instr(&mut back, &instr);
+        state.push_static_instr(&mut back, &mut mem, &instr);
         println!();
     }
 
