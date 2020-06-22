@@ -22,7 +22,7 @@ impl Memory {
         self.finished = true;
     }
 
-    pub fn store(&mut self, condition: WireId, address: WireId, content: WireId) {
+    pub fn store(&mut self, _back: &mut Backend, condition: WireId, address: WireId, content: WireId) {
         self.ops.push(MemOp::Store { condition, address, content });
         // TODO: conditionally store the content.
         if false {
