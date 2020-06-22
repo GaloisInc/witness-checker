@@ -1,6 +1,8 @@
 use super::backend::{Backend, WireId, OpLabel};
 use super::mem::PackedValue;
 use crate::back::zkif::mem::Memory;
+use super::debug::comment;
+
 
 type RegLabel = usize;
 
@@ -110,35 +112,35 @@ impl MachineState {
     pub fn push_secret_instr(&mut self, back: &mut Backend, capab: &StepCapabilities, instr: &SecretInstr) {
         println!("secret instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
-        println!("// Pick the register inputs from all possible registers.");
+        comment("// Pick the register inputs from all possible registers.");
         let arg0 = back.push_muxer(&self.registers, instr.reglabel0);
         let arg1 = back.push_muxer(&self.registers, instr.reglabel1);
         let arg2 = back.push_muxer(&self.registers, instr.reglabel2);
         back.cost_est.print_cost();
 
-        println!("// Execute all possible ALU operations.");
+        comment("// Execute all possible ALU operations.");
         let possible_alu_results = capab.possible_alu_ops.iter().map(|op|
             back.push_alu_op(*op, arg0, arg1, arg2)
         ).collect::<Vec<(WireId, WireId)>>();
         back.cost_est.print_cost();
 
-        println!("// Pick the result of the actual ALU operation.");
+        comment("// Pick the result of the actual ALU operation.");
         let (alu_result, alu_flag) = back.push_muxer_pair(&possible_alu_results, instr.opcode);
         let alu_pc = back.new_wire(); // Increment PC. TODO: pc+1
 
-        println!("// Execute all possible FLOW operations.");
+        comment("// Execute all possible FLOW operations.");
         let possible_flow_pcs = capab.possible_flow_ops.iter().map(|op|
             back.push_flow_op(*op, self.flag, self.pc, arg2)
         ).collect::<Vec<WireId>>();
         back.cost_est.print_cost();
 
-        println!("// Pick the PC after the actual FLOW operation.");
+        comment("// Pick the PC after the actual FLOW operation.");
         let flow_pc = back.push_muxer(&possible_flow_pcs, instr.opcode);
         let flow_result = arg0; // Copy.
         let flow_flag = self.flag; // Copy.
         // TODO: deal with the offset of flow opcodes rather than index in the muxer above.
 
-        println!("// Pick the state after either the ALU or FLOW operation.");
+        comment("// Pick the state after either the ALU or FLOW operation.");
         let is_flow = Self::push_opcode_is_flow(back, instr.opcode);
         let result = back.push_muxer(&[alu_result, flow_result], is_flow);
         let new_flag = back.push_muxer(&[alu_flag, flow_flag], is_flow);
@@ -146,7 +148,7 @@ impl MachineState {
 
         // TODO: assert that the opcode is one of the possible opcodes.
 
-        println!("// Write the new state.");
+        comment("// Write the new state.");
         back.push_demuxer(&mut self.registers, instr.reglabel0, result);
         self.flag = new_flag;
         self.pc = new_pc;

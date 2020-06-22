@@ -13,3 +13,7 @@ pub fn write_wire_name(i: usize, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "&{}", DEBUG_NAMES[i % max].blue())
     }
 }
+
+pub fn comment(msg: &str) {
+    println!("{}", msg.purple());
+}
