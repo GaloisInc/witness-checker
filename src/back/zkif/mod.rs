@@ -11,11 +11,9 @@ fn test_zkif_backend() {
     let mut mem = mem::Memory::new();
     let wire_true = back.wire_one();
 
-    println!("Initial state: {:#?}", state);
-    back.cost_est.print_cost();
-    println!();
+    println!("\nInitial state: {:#?}\n", state);
 
-    {
+    for _ in 0..2 {
         let instr = machine::FixedInstr {
             oplabel: 0,
             reglabel0: 0,

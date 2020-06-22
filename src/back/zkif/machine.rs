@@ -165,7 +165,10 @@ impl MachineState {
     }
 
     pub fn push_opcode_is_flow(back: &mut Backend, opcode: WireId) -> WireId {
-        // TODO: decode.
+        let _ = back.represent_as_one_hot(opcode);
+        // TODO: call decoder gadget.
+        back.cost_est.cost += 2;
+
         let is_flow = back.new_wire();
         return is_flow;
     }
