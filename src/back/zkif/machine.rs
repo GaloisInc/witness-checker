@@ -43,8 +43,8 @@ pub struct StepCapabilities {
 impl StepCapabilities {
     pub fn new() -> StepCapabilities {
         StepCapabilities {
-            possible_alu_ops: (0..2).collect::<Vec<OpLabel>>(),
-            possible_flow_ops: (0..2).collect::<Vec<OpLabel>>(),
+            possible_alu_ops: (0..12).collect::<Vec<OpLabel>>(),
+            possible_flow_ops: (0..4).collect::<Vec<OpLabel>>(),
         }
     }
 }
@@ -95,53 +95,59 @@ impl MachineState {
 
         println!("registers[{}]\t= {:?}", instr.reglabel0, new_reg0);
         println!("pc = {:?}, flag = {:?}", new_pc, new_flag);
-        back.print_cost();
+        back.cost_est.print_cost();
     }
 
     pub fn push_secret_instr(&mut self, back: &mut Backend, capab: &StepCapabilities, instr: &SecretInstr) {
         println!("secret instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
         println!("// Pick the register inputs from all possible registers.");
-        let arg0 = back.push_demux(&self.registers, instr.reglabel0);
-        let arg1 = back.push_demux(&self.registers, instr.reglabel1);
-        let arg2 = back.push_demux(&self.registers, instr.reglabel2);
-        back.print_cost();
+        let arg0 = back.push_muxer(&self.registers, instr.reglabel0);
+        let arg1 = back.push_muxer(&self.registers, instr.reglabel1);
+        let arg2 = back.push_muxer(&self.registers, instr.reglabel2);
+        back.cost_est.print_cost();
 
         println!("// Execute all possible ALU operations.");
         let possible_alu_results = capab.possible_alu_ops.iter().map(|op|
             back.push_alu_op(*op, arg0, arg1, arg2)
         ).collect::<Vec<(WireId, WireId)>>();
-        back.print_cost();
+        back.cost_est.print_cost();
 
         println!("// Pick the result of the actual ALU operation.");
-        let (alu_result, alu_flag) = back.push_demux_tuple(&possible_alu_results, instr.opcode);
+        let (alu_result, alu_flag) = back.push_muxer_pair(&possible_alu_results, instr.opcode);
         let alu_pc = back.new_wire(); // Increment PC. TODO: pc+1
 
         println!("// Execute all possible FLOW operations.");
         let possible_flow_pcs = capab.possible_flow_ops.iter().map(|op|
             back.push_flow_op(*op, self.flag, self.pc, arg2)
         ).collect::<Vec<WireId>>();
-        back.print_cost();
+        back.cost_est.print_cost();
 
         println!("// Pick the PC after the actual FLOW operation.");
-        let flow_pc = back.push_demux(&possible_flow_pcs, instr.opcode);
+        let flow_pc = back.push_muxer(&possible_flow_pcs, instr.opcode);
         let flow_result = arg0; // Copy.
         let flow_flag = self.flag; // Copy.
-        // TODO: deal with the offset of flow opcodes rather than index in the demux above.
+        // TODO: deal with the offset of flow opcodes rather than index in the muxer above.
 
         println!("// Pick the state after either the ALU or FLOW operation.");
-        let is_flow = back.push_decode_op_type(instr.opcode);
-        let result = back.push_demux(&[alu_result, flow_result], is_flow);
-        let new_flag = back.push_demux(&[alu_flag, flow_flag], is_flow);
-        let new_pc = back.push_demux(&[alu_pc, flow_pc], is_flow);
+        let is_flow = self.push_opcode_is_flow(back, instr.opcode);
+        let result = back.push_muxer(&[alu_result, flow_result], is_flow);
+        let new_flag = back.push_muxer(&[alu_flag, flow_flag], is_flow);
+        let new_pc = back.push_muxer(&[alu_pc, flow_pc], is_flow);
 
         println!("// Write the new state.");
-        back.push_update(&mut self.registers, instr.reglabel0, result);
+        back.push_demuxer(&mut self.registers, instr.reglabel0, result);
         self.flag = new_flag;
         self.pc = new_pc;
 
         println!("pc = {:?}, flag = {:?}", new_pc, new_flag);
-        back.print_cost();
+        back.cost_est.print_cost();
+    }
+
+    pub fn push_opcode_is_flow(&self, back: &mut Backend, opcode: WireId) -> WireId {
+        // TODO: decode.
+        let is_flow = back.new_wire();
+        return is_flow;
     }
 }
 

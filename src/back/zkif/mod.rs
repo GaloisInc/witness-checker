@@ -9,10 +9,10 @@ fn test_zkif_backend() {
     let mut back = backend::Backend::new();
     let mut state = machine::MachineState::new(&mut back);
     let mut mem = mem::Memory::new();
-    let true_wire = back.true_wire();
+    let wire_true = back.wire_one();
 
     println!("Initial state: {:#?}", state);
-    back.print_cost();
+    back.cost_est.print_cost();
     println!();
 
     {
@@ -30,7 +30,7 @@ fn test_zkif_backend() {
     let capab = machine::StepCapabilities::new();
 
     for _ in 0..2 {
-        let instr_in_pc = mem.load(&mut back, true_wire, state.pc);
+        let instr_in_pc = mem.load(&mut back, wire_true, state.pc);
         let instr = machine::SecretInstr::decode_instr(&mut back, instr_in_pc);
 
         state.push_secret_instr(&mut back, &capab, &instr);
