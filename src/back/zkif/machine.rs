@@ -12,10 +12,10 @@ pub enum RegOrValue {
 
 // A publicly-known instruction (fixed operation and register labels).
 pub struct StaticInstr {
-    pub oplabel: OpLabel,
-    pub reglabel0: RegLabel,
-    pub reglabel1: RegLabel,
-    pub reglabel2: RegOrValue,
+    pub op_label: OpLabel,
+    pub reg_label0: RegLabel,
+    pub reg_label1: RegLabel,
+    pub reg_label2: RegOrValue,
 }
 
 impl StaticInstr {
@@ -27,12 +27,13 @@ impl StaticInstr {
 }
 
 // An instruction with secret operation and register labels.
+#[derive(Debug)]
 pub struct DynInstr {
-    opcode: WireId,
-    reglabel0: WireId,
-    reglabel1: WireId,
-    reglabel2: WireId,
-    reg2_immediate: WireId,
+    op_label: WireId,
+    reg_label0: WireId,
+    reg_label1: WireId,
+    reg_label2: WireId,
+    label2_immediate: WireId,
 }
 
 impl DynInstr {
@@ -40,13 +41,16 @@ impl DynInstr {
     // holding a value from FixedInstr.encode_instr().
     pub fn decode_instr(back: &mut Backend, capab: &StepCapabilities, packed: WireId) -> DynInstr {
         // TODO: actual decoding and validation.
-        DynInstr {
-            opcode: back.new_wire(),
-            reglabel0: back.new_wire(),
-            reglabel1: back.new_wire(),
-            reglabel2: back.new_wire(),
-            reg2_immediate: back.new_wire(),
-        }
+        let instr = DynInstr {
+            op_label: back.new_wire(),
+            reg_label0: back.new_wire(),
+            reg_label1: back.new_wire(),
+            reg_label2: back.new_wire(),
+            label2_immediate: back.new_wire(),
+        };
+
+        println!("{:?}\t= decode_instr( {:?} )", instr, packed);
+        instr
     }
 }
 
@@ -89,29 +93,29 @@ impl MachineState {
     }
 
     pub fn push_static_instr(&mut self, back: &mut Backend, mem: &mut Memory, instr: &StaticInstr) {
-        println!("static instruction op_{}( reg_{}, reg_{}, {:?} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
+        println!("static instruction op_{}( reg_{}, reg_{}, {:?} )", instr.op_label, instr.reg_label0, instr.reg_label1, instr.reg_label2);
 
-        let arg2 = match instr.reglabel2 {
+        let arg2 = match instr.reg_label2 {
             RegOrValue::Reg(label) => self.registers[label],
             RegOrValue::Val(value) => back.wire_constant(value),
         };
 
-        match Self::get_op_type(instr.oplabel) {
+        match Self::get_op_type(instr.op_label) {
             0 => {
                 // ALU instructions update a register, the flag, and increment pc.
                 let (new_reg0, new_flag) = back.push_alu_op(
-                    instr.oplabel,
-                    self.registers[instr.reglabel0],
-                    self.registers[instr.reglabel1],
+                    instr.op_label,
+                    self.registers[instr.reg_label0],
+                    self.registers[instr.reg_label1],
                     arg2);
-                self.registers[instr.reglabel0] = new_reg0;
+                self.registers[instr.reg_label0] = new_reg0;
                 self.flag = new_flag;
                 self.pc = back.new_wire(); // TODO: pc+1
             }
             1 => {
                 // Flow instructions update pc and copy the rest.
                 let jump_pc = back.push_flow_op(
-                    instr.oplabel,
+                    instr.op_label,
                     self.flag,
                     self.pc,
                     arg2);
@@ -120,33 +124,38 @@ impl MachineState {
             _ => {
                 // Memory instructions.
                 // TODO: actual opcodes.
-                let true_wire = back.wire_one();
-                if instr.oplabel == 6 {
-                    mem.store(back, true_wire, arg2, self.registers[instr.reglabel0]);
+                if instr.op_label == 6 {
+                    let true_wire = back.wire_one();
+                    mem.store(back, true_wire, arg2, self.registers[instr.reg_label0]);
                 }
-                if instr.oplabel == 7 {
-                    let new_reg0 = mem.load(back, true_wire, arg2);
-                    self.registers[instr.reglabel0] = new_reg0;
+                if instr.op_label == 7 {
+                    let new_reg0 = mem.load(back, arg2);
+                    self.registers[instr.reg_label0] = new_reg0;
                 }
                 self.pc = back.new_wire(); // TODO: pc+1
             }
         };
 
-        println!("registers[{}]\t= {:?}", instr.reglabel0, self.registers[instr.reglabel0]);
+        println!("registers[{}]\t= {:?}", instr.reg_label0, self.registers[instr.reg_label0]);
         println!("pc = {:?}, flag = {:?}", self.pc, self.flag);
         back.cost_est.print_cost();
     }
 
 
     pub fn push_dynamic_instr(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities, instr: &DynInstr) {
-        println!("dynamic instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
+        //println!("dynamic instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
         comment("// Pick the register inputs from all possible registers.");
-        let arg0 = back.push_muxer(&self.registers, instr.reglabel0);
-        let arg1 = back.push_muxer(&self.registers, instr.reglabel1);
-        let arg2_reg = back.push_muxer(&self.registers, instr.reglabel2);
-        let arg2 = back.push_muxer(&[arg2_reg, instr.reglabel2], instr.reg2_immediate);
+        let arg0 = back.push_muxer(&self.registers, instr.reg_label0);
+        let arg1 = back.push_muxer(&self.registers, instr.reg_label1);
+        let arg2_from_reg = back.push_muxer(&self.registers, instr.reg_label2);
+        let arg2 = back.push_muxer(&[arg2_from_reg, instr.reg_label2], instr.label2_immediate);
         back.cost_est.print_cost();
+
+        // Default results when not updated.
+        let copy_arg0 = arg0;
+        let copy_flag = self.flag;
+        let next_pc = back.new_wire(); // Increment PC. TODO: pc+1
 
         comment("// Execute all possible ALU operations.");
         let possible_alu_results = capab.possible_alu_ops.iter().map(|op|
@@ -154,42 +163,41 @@ impl MachineState {
         ).collect::<Vec<(WireId, WireId)>>();
 
         comment("// Pick the result of the actual ALU operation.");
-        let (alu_result, alu_flag) = back.push_muxer_pair(&possible_alu_results, instr.opcode);
+        let (alu_result, alu_flag) = back.push_muxer_pair(&possible_alu_results, instr.op_label);
         back.cost_est.print_cost();
 
         comment("// Execute all possible FLOW operations.");
-        let next_pc = back.new_wire(); // Increment PC. TODO: pc+1
         let possible_flow_pcs = capab.possible_flow_ops.iter().map(|op|
             back.push_flow_op(*op, self.flag, self.pc, arg2)
         ).collect::<Vec<WireId>>();
 
         comment("// Pick the PC after the actual FLOW operation.");
-        let flow_pc = back.push_muxer(&possible_flow_pcs, instr.opcode);
+        let flow_pc = back.push_muxer(&possible_flow_pcs, instr.op_label);
         // TODO: deal with the offset of flow opcodes rather than index in the muxer above.
         back.cost_est.print_cost();
 
-        comment("// Execute possible MEM load and store operations.");
+        comment("// Execute possible MEM store and load operations.");
+        let is_store = Self::push_is_mem_store(back, instr.op_label);
         if capab.possible_mem_store {
-            let is_store = Self::push_is_mem_store(back, instr.opcode);
             mem.store(back, is_store, arg2, arg0);
         }
-        if capab.possible_mem_load {
-            let is_load = Self::push_is_mem_load(back, instr.opcode);
-            mem.load(back, is_load, arg2);
-        }
+        let mem_result = if capab.possible_mem_load {
+            let loaded = mem.load(back, arg2);
+            back.push_muxer(&[loaded, copy_arg0], is_store)
+        } else {
+            copy_arg0
+        };
         back.cost_est.print_cost();
 
         comment("// Pick the state after either the ALU or FLOW or MEM operation.");
-        let op_type = Self::push_opcode_type(back, instr.opcode);
-        let copy_arg0 = arg0;
-        let copy_flag = self.flag;
+        let op_type = Self::push_opcode_type(back, instr.op_label);
 
-        let result = back.push_muxer(&[alu_result, copy_arg0, copy_arg0], op_type);
+        let result = back.push_muxer(&[alu_result, copy_arg0, mem_result], op_type);
         let new_flag = back.push_muxer(&[alu_flag, copy_flag, copy_flag], op_type);
         let new_pc = back.push_muxer(&[next_pc, flow_pc, next_pc], op_type);
 
         comment("// Write the new state.");
-        back.push_demuxer(&mut self.registers, instr.reglabel0, result);
+        back.push_demuxer(&mut self.registers, instr.reg_label0, result);
         self.flag = new_flag;
         self.pc = new_pc;
 
@@ -198,36 +206,34 @@ impl MachineState {
     }
 
     pub fn push_dynamic_instr_at_pc(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities) {
-        let wire_true = back.wire_one();
-        let instr_at_pc = mem.load(back, wire_true, self.pc);
+        comment("// Fetch and decode a dynamic instruction at pc.");
+        let instr_at_pc = mem.load(back, self.pc);
         let instr = DynInstr::decode_instr(back, capab, instr_at_pc);
+        back.cost_est.print_cost();
         self.push_dynamic_instr(back, mem, capab, &instr);
     }
 
     // Helpers.
 
     pub fn get_op_type(op: OpLabel) -> usize {
-        if op < 3 { 0 } else if op < 5 { 1 } else { 2 } // TODO: use actual codes.
+        if op < 12 { 0 } else if op < 12 + 4 { 1 } else { 2 } // TODO: use actual codes.
     }
 
     pub fn push_opcode_type(back: &mut Backend, opcode: WireId) -> WireId {
         let _ = back.represent_as_one_hot(opcode);
         // TODO: decode "is alu", "is flow", "is mem".
         back.cost_est.cost += 2;
-        back.new_wire()
+        let op_type = back.new_wire();
+        println!("{:?}\t= opcode_type( {:?} )", op_type, opcode);
+        op_type
     }
 
     pub fn push_is_mem_store(back: &mut Backend, opcode: WireId) -> WireId {
         let _ = back.represent_as_one_hot(opcode);
         // TODO: decode "is store"
         back.cost_est.cost += 1;
-        back.new_wire()
-    }
-
-    pub fn push_is_mem_load(back: &mut Backend, opcode: WireId) -> WireId {
-        let _ = back.represent_as_one_hot(opcode);
-        // TODO: decode "is load"
-        back.cost_est.cost += 1;
-        back.new_wire()
+        let is_store = back.new_wire();
+        println!("{:?}\t= is_mem_store( {:?} )", is_store, opcode);
+        is_store
     }
 }

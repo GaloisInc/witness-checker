@@ -10,31 +10,47 @@ pub struct Memory {
 
 enum MemOp {
     Store { condition: WireId, address: WireId, content: WireId },
-    Load { condition: WireId, address: WireId, content: WireId },
+    Load { address: WireId, content: WireId },
 }
 
 impl Memory {
     pub fn new() -> Memory {
         Memory { ops: vec![], values: HashMap::new(), finished: false }
     }
+
     pub fn finish(mut self, back: &mut Backend) {
         // TODO: store/load consistency check.
         self.finished = true;
+        back.cost_est.cost += self.ops.len() * 300;
     }
 
-    pub fn store(&mut self, _back: &mut Backend, condition: WireId, address: WireId, content: WireId) {
+    pub fn store(&mut self, back: &mut Backend, condition: WireId, address: WireId, content: WireId) {
+        let _ = back.represent_as_field(condition);
+        let _ = back.represent_as_bits(address);
+        let _ = back.represent_as_field(content);
+
         self.ops.push(MemOp::Store { condition, address, content });
+
         // TODO: conditionally store the content.
         if false {
             self.values.insert([0, 0, 0, 0], [0, 0, 0, 0]);
         }
+
+        println!("memory[{:?}]\t= {:?}\t{}", address, content,
+                 if condition == back.wire_one() { "".to_string() } else { format!("( if {:?} )", condition) });
     }
 
-    pub fn load(&mut self, back: &mut Backend, condition: WireId, address: WireId) -> WireId {
+    pub fn load(&mut self, back: &mut Backend, address: WireId) -> WireId {
         let content = back.new_wire();
-        self.ops.push(MemOp::Load { condition, address, content });
+
+        let _ = back.represent_as_bits(address);
+        let _ = back.represent_as_field(content);
+
+        self.ops.push(MemOp::Load { address, content });
+
         // TODO: copy values[addr] into the new wire.
-        return content;
+        println!("{:?}\t= memory[{:?}]", content, address);
+        content
     }
 }
 

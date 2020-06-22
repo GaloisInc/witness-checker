@@ -4,7 +4,7 @@ use std::fmt;
 pub type OpLabel = usize;
 
 // WireId is an handle to reference a wire in the backend.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub struct WireId(usize); // or wid.
 
 type ZkifId = u64; // or zid.

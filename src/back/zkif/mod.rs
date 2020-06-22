@@ -11,16 +11,15 @@ fn test_zkif_backend() {
     let mut back = backend::Backend::new();
     let mut state = machine::MachineState::new(&mut back);
     let mut mem = mem::Memory::new();
-    let wire_true = back.wire_one();
 
     println!("\nInitial state: {:#?}\n", state);
 
     for _ in 0..2 {
         let instr = machine::StaticInstr {
-            oplabel: 0,
-            reglabel0: 0,
-            reglabel1: 1,
-            reglabel2: RegOrValue::Val([2, 3, 4, 5]),
+            op_label: 0,
+            reg_label0: 0,
+            reg_label1: 1,
+            reg_label2: RegOrValue::Val([2, 3, 4, 5]),
         };
         state.push_static_instr(&mut back, &mut mem, &instr);
         println!();
@@ -35,5 +34,7 @@ fn test_zkif_backend() {
         println!();
     }
 
+    println!("// Final memory consistency check.");
     mem.finish(&mut back);
+    back.cost_est.print_cost();
 }

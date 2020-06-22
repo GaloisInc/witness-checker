@@ -10,7 +10,7 @@ pub fn write_wire_name(i: usize, f: &mut fmt::Formatter) -> fmt::Result {
     if i >= max {
         write!(f, "&{}-{}", DEBUG_NAMES[(i / max) % max].chars().rev().collect::<String>(), DEBUG_NAMES[i % max])
     } else {
-        write!(f, "&{}", DEBUG_NAMES[i % max].blue())
+        write!(f, "&{}", DEBUG_NAMES[101 * i % max].blue())
     }
 }
 
