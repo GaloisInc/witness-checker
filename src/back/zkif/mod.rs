@@ -30,10 +30,7 @@ fn test_zkif_backend() {
     let capab = machine::StepCapabilities::new();
 
     for _ in 0..2 {
-        let instr_in_pc = mem.load(&mut back, wire_true, state.pc);
-        let instr = machine::SecretInstr::decode_instr(&mut back, instr_in_pc);
-
-        state.push_secret_instr(&mut back, &capab, &instr);
+        state.push_secret_instr_at_pc(&mut back, &mut mem, &capab);
 
         println!();
     }

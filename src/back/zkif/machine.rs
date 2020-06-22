@@ -1,5 +1,6 @@
 use super::backend::{Backend, WireId, OpLabel};
 use super::mem::PackedValue;
+use crate::back::zkif::mem::Memory;
 
 type RegLabel = usize;
 
@@ -78,7 +79,7 @@ impl MachineState {
     pub fn push_fixed_instr(&mut self, back: &mut Backend, instr: &FixedInstr) {
         println!("fixed instruction op_{}( reg_{}, reg_{}, reg_{} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
-        let (new_reg0, new_flag, new_pc) = if is_flow(instr.oplabel) {
+        let (new_reg0, new_flag, new_pc) = if Self::is_flow(instr.oplabel) {
             // Flow instructions update pc and copy the rest.
             let jump_pc = back.push_flow_op(
                 instr.oplabel,
@@ -138,7 +139,7 @@ impl MachineState {
         // TODO: deal with the offset of flow opcodes rather than index in the muxer above.
 
         println!("// Pick the state after either the ALU or FLOW operation.");
-        let is_flow = self.push_opcode_is_flow(back, instr.opcode);
+        let is_flow = Self::push_opcode_is_flow(back, instr.opcode);
         let result = back.push_muxer(&[alu_result, flow_result], is_flow);
         let new_flag = back.push_muxer(&[alu_flag, flow_flag], is_flow);
         let new_pc = back.push_muxer(&[alu_pc, flow_pc], is_flow);
@@ -154,13 +155,20 @@ impl MachineState {
         back.cost_est.print_cost();
     }
 
-    pub fn push_opcode_is_flow(&self, back: &mut Backend, opcode: WireId) -> WireId {
+    pub fn push_secret_instr_at_pc(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities) {
+        let wire_true = back.wire_one();
+        let instr_at_pc = mem.load(back, wire_true, self.pc);
+        let instr = SecretInstr::decode_instr(back, instr_at_pc);
+        self.push_secret_instr(back, capab, &instr);
+    }
+
+    pub fn push_opcode_is_flow(back: &mut Backend, opcode: WireId) -> WireId {
         // TODO: decode.
         let is_flow = back.new_wire();
         return is_flow;
     }
-}
 
-pub fn is_flow(op: OpLabel) -> bool {
-    return op > 2;
+    pub fn is_flow(op: OpLabel) -> bool {
+        return op > 2; // TODO.
+    }
 }
