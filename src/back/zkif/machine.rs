@@ -99,6 +99,7 @@ impl MachineState {
             RegOrValue::Reg(label) => self.registers[label],
             RegOrValue::Val(value) => back.wire_constant(value),
         };
+        let next_pc = back.new_wire(); // TODO: pc+1
 
         match Self::get_op_type(instr.op_label) {
             0 => {
@@ -110,14 +111,14 @@ impl MachineState {
                     arg2);
                 self.registers[instr.reg_label0] = new_reg0;
                 self.flag = new_flag;
-                self.pc = back.new_wire(); // TODO: pc+1
+                self.pc = next_pc;
             }
             1 => {
                 // Flow instructions update pc and copy the rest.
                 let jump_pc = back.push_flow_op(
                     instr.op_label,
                     self.flag,
-                    self.pc,
+                    next_pc,
                     arg2);
                 self.pc = jump_pc;
             }
@@ -132,7 +133,7 @@ impl MachineState {
                     let new_reg0 = mem.load(back, arg2);
                     self.registers[instr.reg_label0] = new_reg0;
                 }
-                self.pc = back.new_wire(); // TODO: pc+1
+                self.pc = next_pc;
             }
         };
 
@@ -150,25 +151,25 @@ impl MachineState {
         let arg1 = back.push_muxer(&self.registers, instr.reg_label1);
         let arg2_from_reg = back.push_muxer(&self.registers, instr.reg_label2);
         let arg2 = back.push_muxer(&[arg2_from_reg, instr.reg_label2], instr.label2_immediate);
-        back.cost_est.print_cost();
 
         // Default results when not updated.
         let copy_arg0 = arg0;
         let copy_flag = self.flag;
-        let next_pc = back.new_wire(); // Increment PC. TODO: pc+1
+        let next_pc = Self::push_increment_pc(back, self.pc);
+        back.cost_est.print_cost();
 
         comment("// Execute all possible ALU operations.");
         let possible_alu_results = capab.possible_alu_ops.iter().map(|op|
             back.push_alu_op(*op, arg0, arg1, arg2)
         ).collect::<Vec<(WireId, WireId)>>();
 
-        comment("// Pick the result of the actual ALU operation.");
+        comment("// Pick the (result, flag) of the actual ALU operation.");
         let (alu_result, alu_flag) = back.push_muxer_pair(&possible_alu_results, instr.op_label);
         back.cost_est.print_cost();
 
         comment("// Execute all possible FLOW operations.");
         let possible_flow_pcs = capab.possible_flow_ops.iter().map(|op|
-            back.push_flow_op(*op, self.flag, self.pc, arg2)
+            back.push_flow_op(*op, self.flag, next_pc, arg2)
         ).collect::<Vec<WireId>>();
 
         comment("// Pick the PC after the actual FLOW operation.");
@@ -189,7 +190,7 @@ impl MachineState {
         };
         back.cost_est.print_cost();
 
-        comment("// Pick the state after either the ALU or FLOW or MEM operation.");
+        comment("// Pick the (result, flag, pc) after either the ALU or FLOW or MEM operation.");
         let op_type = Self::push_opcode_type(back, instr.op_label);
 
         let result = back.push_muxer(&[alu_result, copy_arg0, mem_result], op_type);
@@ -235,5 +236,14 @@ impl MachineState {
         let is_store = back.new_wire();
         println!("{:?}\t= is_mem_store( {:?} )", is_store, opcode);
         is_store
+    }
+
+    pub fn push_increment_pc(back: &mut Backend, pc: WireId) -> WireId {
+        let _ = back.represent_as_field(pc);
+        // TODO: pc + 1.
+        back.cost_est.cost += 1;
+        let next_pc = back.new_wire();
+        println!("{:?}\t= increment_pc {:?}", next_pc, pc);
+        next_pc
     }
 }
