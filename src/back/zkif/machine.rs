@@ -1,20 +1,24 @@
-use super::backend::{Backend, WireId, OpLabel};
-use super::mem::PackedValue;
+use super::backend::{Backend, WireId, OpLabel, PackedValue};
 use crate::back::zkif::mem::Memory;
 use super::debug::comment;
 
-
 type RegLabel = usize;
 
+#[derive(Debug)]
+pub enum RegOrValue {
+    Reg(RegLabel),
+    Val(PackedValue),
+}
+
 // A publicly-known instruction (fixed operation and register labels).
-pub struct FixedInstr {
+pub struct StaticInstr {
     pub oplabel: OpLabel,
     pub reglabel0: RegLabel,
     pub reglabel1: RegLabel,
-    pub reglabel2: RegLabel,
+    pub reglabel2: RegOrValue,
 }
 
-impl FixedInstr {
+impl StaticInstr {
     // Encode the instruction so it can be stored in memory,
     // and decoded by SecretInstr.decode_instr().
     pub fn encode_instr(&self) -> PackedValue {
@@ -23,28 +27,30 @@ impl FixedInstr {
 }
 
 // An instruction with secret operation and register labels.
-pub struct SecretInstr {
+pub struct DynInstr {
     opcode: WireId,
     reglabel0: WireId,
     reglabel1: WireId,
     reglabel2: WireId,
+    reg2_immediate: WireId,
 }
 
-impl SecretInstr {
+impl DynInstr {
     // Decode a secret instruction from a wire
     // holding a value from FixedInstr.encode_instr().
-    pub fn decode_instr(back: &mut Backend, packed: WireId) -> SecretInstr {
-        // TODO: actual decoding.
-        SecretInstr {
+    pub fn decode_instr(back: &mut Backend, packed: WireId) -> DynInstr {
+        // TODO: actual decoding and validation.
+        DynInstr {
             opcode: back.new_wire(),
             reglabel0: back.new_wire(),
             reglabel1: back.new_wire(),
             reglabel2: back.new_wire(),
+            reg2_immediate: back.new_wire(),
         }
     }
 }
 
-// A description of what a secret execution step may do.
+// A description of what a dynamic execution step may do.
 // The more capabilities, the more expensive.
 pub struct StepCapabilities {
     pub possible_alu_ops: Vec<OpLabel>,
@@ -78,8 +84,13 @@ impl MachineState {
         }
     }
 
-    pub fn push_fixed_instr(&mut self, back: &mut Backend, instr: &FixedInstr) {
-        println!("fixed instruction op_{}( reg_{}, reg_{}, reg_{} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
+    pub fn push_static_instr(&mut self, back: &mut Backend, instr: &StaticInstr) {
+        println!("static instruction op_{}( reg_{}, reg_{}, {:?} )", instr.oplabel, instr.reglabel0, instr.reglabel1, instr.reglabel2);
+
+        let arg2 = match instr.reglabel2 {
+            RegOrValue::Reg(label) => self.registers[label],
+            RegOrValue::Val(value) => back.wire_constant(value),
+        };
 
         let (new_reg0, new_flag, new_pc) = if Self::is_flow(instr.oplabel) {
             // Flow instructions update pc and copy the rest.
@@ -87,7 +98,7 @@ impl MachineState {
                 instr.oplabel,
                 self.flag,
                 self.pc,
-                self.registers[instr.reglabel2]);
+                arg2);
             (self.registers[instr.reglabel0], self.flag, jump_pc)
         } else {
             // ALU instructions update a register, the flag, and increment pc.
@@ -95,7 +106,7 @@ impl MachineState {
                 instr.oplabel,
                 self.registers[instr.reglabel0],
                 self.registers[instr.reglabel1],
-                self.registers[instr.reglabel2]);
+                arg2);
             let next_pc = back.new_wire(); // TODO: pc+1
             (new_reg0, new_flag, next_pc)
         };
@@ -109,13 +120,14 @@ impl MachineState {
         back.cost_est.print_cost();
     }
 
-    pub fn push_secret_instr(&mut self, back: &mut Backend, capab: &StepCapabilities, instr: &SecretInstr) {
-        println!("secret instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
+    pub fn push_dynamic_instr(&mut self, back: &mut Backend, capab: &StepCapabilities, instr: &DynInstr) {
+        println!("dynamic instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
         comment("// Pick the register inputs from all possible registers.");
         let arg0 = back.push_muxer(&self.registers, instr.reglabel0);
         let arg1 = back.push_muxer(&self.registers, instr.reglabel1);
-        let arg2 = back.push_muxer(&self.registers, instr.reglabel2);
+        let arg2_reg = back.push_muxer(&self.registers, instr.reglabel2);
+        let arg2 = back.push_muxer(&[arg2_reg, instr.reglabel2], instr.reg2_immediate);
         back.cost_est.print_cost();
 
         comment("// Execute all possible ALU operations.");
@@ -157,11 +169,11 @@ impl MachineState {
         back.cost_est.print_cost();
     }
 
-    pub fn push_secret_instr_at_pc(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities) {
+    pub fn push_dynamic_instr_at_pc(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities) {
         let wire_true = back.wire_one();
         let instr_at_pc = mem.load(back, wire_true, self.pc);
-        let instr = SecretInstr::decode_instr(back, instr_at_pc);
-        self.push_secret_instr(back, capab, &instr);
+        let instr = DynInstr::decode_instr(back, instr_at_pc);
+        self.push_dynamic_instr(back, capab, &instr);
     }
 
     pub fn push_opcode_is_flow(back: &mut Backend, opcode: WireId) -> WireId {

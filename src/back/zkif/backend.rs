@@ -9,6 +9,8 @@ pub struct WireId(usize); // or wid.
 
 type ZkifId = u64; // or zid.
 
+pub type PackedValue = [u64; 4];
+
 // WireRepr holds one or several equivalent representations of a wire.
 struct WireRepr {
     packed_zid: Option<ZkifId>,
@@ -46,6 +48,8 @@ impl Backend {
     }
 
     pub fn wire_one(&self) -> WireId { WireId(0) }
+
+    pub fn wire_constant(&self, value: PackedValue) -> WireId { WireId(0) } // TODO: represent constants.
 }
 
 
@@ -84,6 +88,7 @@ impl Backend {
 
     // Select one of multiple inputs at a secret index:
     //   new wire = inputs[index]
+    // Or 0 if out-of-range.
     pub fn push_muxer(&mut self, inputs: &[WireId], index: WireId) -> WireId {
         for w in inputs {
             let _ = self.represent_as_field(*w);

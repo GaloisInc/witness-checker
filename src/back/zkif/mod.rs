@@ -1,3 +1,5 @@
+use crate::back::zkif::machine::RegOrValue;
+
 mod backend;
 mod machine;
 mod mem;
@@ -14,25 +16,24 @@ fn test_zkif_backend() {
     println!("\nInitial state: {:#?}\n", state);
 
     for _ in 0..2 {
-        let instr = machine::FixedInstr {
+        let instr = machine::StaticInstr {
             oplabel: 0,
             reglabel0: 0,
             reglabel1: 1,
-            reglabel2: 2,
+            reglabel2: RegOrValue::Val([2, 3, 4, 5]),
         };
-        state.push_fixed_instr(&mut back, &instr);
+        state.push_static_instr(&mut back, &instr);
         println!();
     }
 
-    // A description of what a secret step may do.
+    // A description of what a dynamic step may do.
     let capab = machine::StepCapabilities::new();
 
     for _ in 0..2 {
-        state.push_secret_instr_at_pc(&mut back, &mut mem, &capab);
+        state.push_dynamic_instr_at_pc(&mut back, &mut mem, &capab);
 
         println!();
     }
 
     mem.finish(&mut back);
 }
-

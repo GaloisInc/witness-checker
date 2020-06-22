@@ -1,4 +1,4 @@
-use super::backend::{Backend, WireId};
+use super::backend::{Backend, WireId, PackedValue};
 
 use std::collections::HashMap;
 
@@ -12,8 +12,6 @@ enum MemOp {
     Store { condition: WireId, address: WireId, content: WireId },
     Load { condition: WireId, address: WireId, content: WireId },
 }
-
-pub type PackedValue = [u64; 4];
 
 impl Memory {
     pub fn new() -> Memory {
