@@ -12,6 +12,6 @@ scale = ["scale_isa"]
 
 [dependencies]
 scale_isa = { optional = true, path = "../dialogue/scale_isa" }
-zkinterface = { optional = true, version = "1.0.6" }
+zkinterface = { optional = true, version = "1.1.1" }
 bumpalo = "3.4"
 colored = "1.9.3"
