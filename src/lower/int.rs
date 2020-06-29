@@ -2,7 +2,7 @@ use crate::ir::circuit::{Circuit, Wire, GateKind, CmpOp};
 
 // TODO: mod -> div + sub
 
-pub fn compare_to_zero<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn compare_to_zero<'a>(c: &Circuit<'a>, _old: GateKind, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
         if a.ty.kind.is_integer() {
             let zero = c.lit(a.ty, 0);
@@ -19,7 +19,7 @@ pub fn compare_to_zero<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Wire<'a> {
     c.gate(gk)
 }
 
-pub fn mux<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn mux<'a>(c: &Circuit<'a>, _old: GateKind, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Mux(cond, t, e) = gk {
         if t.ty.kind.is_integer() {
             let mask = c.neg(c.cast(cond, t.ty));

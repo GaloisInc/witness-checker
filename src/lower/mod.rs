@@ -11,7 +11,7 @@ struct RunPass<'a, 'old, 'new, F> {
 }
 
 impl<'a, 'old, 'new, F> RunPass<'a, 'old, 'new, F>
-where F: FnMut(&Circuit<'new>, GateKind<'new>) -> Wire<'new> {
+where F: FnMut(&Circuit<'new>, GateKind<'old>, GateKind<'new>) -> Wire<'new> {
     fn wire(&mut self, old_wire: Wire<'old>) -> Wire<'new> {
         if let Some(&new_wire) = self.m.get(&old_wire) {
             return new_wire;
@@ -29,7 +29,7 @@ where F: FnMut(&Circuit<'new>, GateKind<'new>) -> Wire<'new> {
             GateKind::Mux(c, t, e) => GateKind::Mux(self.wire(c), self.wire(t), self.wire(e)),
             GateKind::Cast(w, ty) => GateKind::Cast(self.wire(w), ty),
         };
-        let new_wire = (self.f)(self.c, new_gate_kind);
+        let new_wire = (self.f)(self.c, old_gate.kind, new_gate_kind);
         self.m.insert(old_wire, new_wire);
         new_wire
     }
@@ -38,7 +38,7 @@ where F: FnMut(&Circuit<'new>, GateKind<'new>) -> Wire<'new> {
 pub fn run_pass<'old, 'new>(
     c: &Circuit<'new>,
     wire: Vec<Wire<'old>>,
-    f: impl FnMut(&Circuit<'new>, GateKind<'new>) -> Wire<'new>,
+    f: impl FnMut(&Circuit<'new>, GateKind<'old>, GateKind<'new>) -> Wire<'new>,
 ) -> Vec<Wire<'new>> {
     let mut rp = RunPass { c, f, m: HashMap::new() };
     wire.into_iter().map(|w| rp.wire(w)).collect()
