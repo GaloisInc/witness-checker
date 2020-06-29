@@ -272,6 +272,17 @@ pub enum TyKind {
     Uint(IntSize),
 }
 
+impl IntSize {
+    pub fn bits(self) -> u8 {
+        match self {
+            IntSize::I8 => 8,
+            IntSize::I16 => 16,
+            IntSize::I32 => 32,
+            IntSize::I64 => 64,
+        }
+    }
+}
+
 impl TyKind {
     pub const I8: TyKind = TyKind::Int(IntSize::I8);
     pub const I16: TyKind = TyKind::Int(IntSize::I16);
@@ -287,6 +298,14 @@ impl TyKind {
             TyKind::Bool => false,
             TyKind::Int(_) => true,
             TyKind::Uint(_) => true,
+        }
+    }
+
+    pub fn integer_size(&self) -> IntSize {
+        match *self {
+            TyKind::Bool => panic!("Bool has no IntSize"),
+            TyKind::Int(sz) => sz,
+            TyKind::Uint(sz) => sz,
         }
     }
 }
