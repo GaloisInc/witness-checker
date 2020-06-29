@@ -42,20 +42,19 @@ impl<'a> Circuit<'a> {
         }
     }
 
-    pub fn gate(&self, gate: Gate<'a>) -> Wire<'a> {
-        Wire(self.intern(gate))
-    }
-
-    fn mk_gate(&self, ty: Ty, kind: GateKind<'a>) -> Wire<'a> {
-        Wire(self.intern(Gate { ty, kind }))
+    pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
+        Wire(self.intern(Gate {
+            ty: kind.ty(),
+            kind,
+        }))
     }
 
     pub fn lit(&self, ty: Ty, val: u64) -> Wire<'a> {
-        self.mk_gate(ty, GateKind::Lit(val))
+        self.gate(GateKind::Lit(val, ty))
     }
 
     pub fn secret(&self, secret: Secret<'a>) -> Wire<'a> {
-        self.mk_gate(secret.ty, GateKind::Secret(secret))
+        self.gate(GateKind::Secret(secret))
     }
 
     /// Add a new secret value to the witness, and return a `Wire` that carries that value.
@@ -68,7 +67,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
-        self.mk_gate(arg.ty, GateKind::Unary(op, arg))
+        self.gate(GateKind::Unary(op, arg))
     }
 
     pub fn neg(&self, arg: Wire<'a>) -> Wire<'a> {
@@ -84,10 +83,7 @@ impl<'a> Circuit<'a> {
             a.ty.kind == b.ty.kind,
             "type mismatch for {:?}: {:?} != {:?}", op, a.ty.kind, b.ty.kind,
         );
-        self.mk_gate(
-            Ty::new(a.ty.kind),
-            GateKind::Binary(op, a, b),
-        )
+        self.gate(GateKind::Binary(op, a, b))
     }
 
     pub fn add(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -124,10 +120,7 @@ impl<'a> Circuit<'a> {
 
     pub fn shift(&self, op: ShiftOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
         assert!(b.ty.kind == TyKind::Uint(IntSize::I8));
-        self.mk_gate(
-            Ty::new(a.ty.kind),
-            GateKind::Shift(op, a, b),
-        )
+        self.gate(GateKind::Shift(op, a, b))
     }
 
     pub fn shl(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -140,10 +133,7 @@ impl<'a> Circuit<'a> {
 
     pub fn compare(&self, op: CmpOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
         assert!(a.ty.kind == b.ty.kind);
-        self.mk_gate(
-            Ty::new(TyKind::Bool),
-            GateKind::Compare(op, a, b),
-        )
+        self.gate(GateKind::Compare(op, a, b))
     }
 
     pub fn eq(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -172,17 +162,11 @@ impl<'a> Circuit<'a> {
 
     pub fn mux(&self, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
         assert!(t.ty.kind == e.ty.kind);
-        self.mk_gate(
-            Ty::new(t.ty.kind),
-            GateKind::Mux(c, t, e),
-        )
+        self.gate(GateKind::Mux(c, t, e))
     }
 
-    pub fn cast(&self, w: Wire<'a>, ty: TyKind) -> Wire<'a> {
-        self.mk_gate(
-            Ty::new(ty),
-            GateKind::Cast(w, ty),
-        )
+    pub fn cast(&self, w: Wire<'a>, ty: Ty) -> Wire<'a> {
+        self.gate(GateKind::Cast(w, ty))
     }
 
 
@@ -213,7 +197,7 @@ impl<'a> Circuit<'a> {
 
                     stack.push(Entry::Yield(w));
                     match w.kind {
-                        GateKind::Lit(_) => {}
+                        GateKind::Lit(_, _) => {}
                         GateKind::Secret(_) => {}
                         GateKind::Unary(_, a) => {
                             stack.push(Entry::Expand(a));
@@ -320,6 +304,9 @@ impl Ty {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
+    /// Cached output type of this gate.  Computed when the `Gate` is created.  The result is
+    /// stored here so that `GateKind::ty` runs in constant time, rather than potentially having
+    /// recurse over the entire depth of the circuit.
     pub ty: Ty,
     pub kind: GateKind<'a>,
 }
@@ -327,7 +314,7 @@ pub struct Gate<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum GateKind<'a> {
     /// A literal/constant value.
-    Lit(u64),
+    Lit(u64, Ty),
     /// Retrieve a secret value from the witness.
     Secret(Secret<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
@@ -341,7 +328,22 @@ pub enum GateKind<'a> {
     /// `Mux(cond, then_, else)`: depending on `cond`, select either `then_` or `else`.
     Mux(Wire<'a>, Wire<'a>, Wire<'a>),
     /// Convert a value to a different type.
-    Cast(Wire<'a>, TyKind),
+    Cast(Wire<'a>, Ty),
+}
+
+impl<'a> GateKind<'a> {
+    pub fn ty(&self) -> Ty {
+        match *self {
+            GateKind::Lit(_, ty) => ty,
+            GateKind::Secret(s) => s.ty,
+            GateKind::Unary(_, w) => w.ty,
+            GateKind::Binary(_, w, _) => w.ty,
+            GateKind::Shift(_, w, _) => w.ty,
+            GateKind::Compare(_, _, _) => Ty::new(TyKind::Bool),
+            GateKind::Mux(_, w, _) => w.ty,
+            GateKind::Cast(_, ty) => ty,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

@@ -161,7 +161,7 @@ impl<'a> Backend<'a> {
 
     fn lit(&self, wire: Wire<'a>) -> Option<u64> {
         match wire.kind {
-            GateKind::Lit(x) => Some(x),
+            GateKind::Lit(x, _) => Some(x),
             _ => None,
         }
     }
@@ -169,7 +169,7 @@ impl<'a> Backend<'a> {
     fn gate_bool(&mut self, gate: &Gate<'a>) -> Operand {
         let dest = self.fresh::<RegSecretBit>();
         match gate.kind {
-            GateKind::Lit(x) => {
+            GateKind::Lit(x, _) => {
                 assert!(x == 0 || x == 1, "unsupported literal {} for Bool", x);
                 self.instr(instr::ldsbit(0, dest, Imm::from_u32(x as u32)));
             },
@@ -216,7 +216,7 @@ impl<'a> Backend<'a> {
 
     fn gate_u64(&mut self, gate: &Gate<'a>) -> Operand {
         match gate.kind {
-            GateKind::Lit(x) => {
+            GateKind::Lit(x, _) => {
                 let dest = self.fresh::<RegSecretRegint>();
                 assert!(x <= u32::MAX as u64, "literal {} out of range for", x);
                 self.instr(instr::ldsint(0, dest, Imm::from_u32(x as u32)));
