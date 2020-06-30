@@ -1,4 +1,4 @@
-use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, CmpOp};
+use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
 
 // TODO: mod -> div + sub
 
@@ -97,5 +97,88 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: GateKind, gk: GateKind<'a>) -> Wir
             },
         }
     }
+    c.gate(gk)
+}
+
+/// Convert all `Int`s to `Uint`s.
+pub fn int_to_uint<'a>(c: &Circuit<'a>, old: GateKind, gk: GateKind<'a>) -> Wire<'a> {
+    if let TyKind::Int(sz) = old.ty().kind {
+        let new_ty = Ty::new(TyKind::Uint(sz));
+        match gk {
+            GateKind::Lit(x, _ty) => {
+                return c.lit(new_ty, x);
+            },
+            GateKind::Secret(s) => {
+                return c.new_secret(new_ty, s.val);
+            },
+            GateKind::Unary(_op, _a) => {},
+            GateKind::Binary(op, a, b) => match op {
+                // Note `Mul` returns only the lower half of the output, which is unaffected by
+                // signedness of the inputs.
+                BinOp::Add | BinOp::Sub | BinOp::Mul |
+                BinOp::And | BinOp::Or | BinOp::Xor => {},
+                BinOp::Div | BinOp::Mod => {
+                    let a_neg = c.lt(a, c.lit(new_ty, 0));
+                    let b_neg = c.lt(b, c.lit(new_ty, 0));
+                    let a_abs = c.mux(a_neg, c.neg(a), a);
+                    let b_abs = c.mux(b_neg, c.neg(b), b);
+                    let r_abs = c.binary(op, a_abs, b_abs);
+                    let r_neg = c.xor(a_neg, b_neg);
+                    return c.mux(r_neg, c.neg(r_abs), r_abs);
+                },
+            },
+            GateKind::Shift(op, a, b) => match op {
+                ShiftOp::Shr => {
+                    // Example: start with 0b10101010, shifting right by 2.
+                    // - The logical shift result, 0b00101010, is missing the high 1 bits that
+                    //   would be produced by sign extension.
+                    // - Mask out the shifted sign bit, producing 0b00100000.  Negate: 0b11100000.
+                    //   This fills in the missing high bits, but only when the sign bit is 1.
+                    let sign_mask = c.lit(new_ty, 1 << (sz.bits() - 1));
+                    let sign = c.and(a, sign_mask);
+                    let sign_fill = c.neg(c.shr(sign, b));
+                    return c.or(c.shr(a, b), sign_fill);
+                },
+                ShiftOp::Shl => {},
+            },
+            GateKind::Compare(op, a, b) => match op {
+                CmpOp::Eq | CmpOp::Ne => {},
+                CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge => {
+                    // Shift everything up by 2^(n-1). For 8-bit values, this maps  0..128 to
+                    // 128..256 and maps -128..0 (= 128..256) to 0..128, so comparisons work.  The
+                    // mapping amounts to just flipping the sign bit.
+                    let sign_mask = c.lit(new_ty, 1 << (sz.bits() - 1));
+                    return c.compare(op, c.xor(a, sign_mask), c.xor(b, sign_mask));
+                },
+            },
+            GateKind::Mux(_, _, _) => {},
+            // Casts *to* Int types don't need special handling in general.  Casts *from* Int types
+            // do, and are handled below.
+            GateKind::Cast(_, _) => {},
+        }
+    }
+
+    // Special handling for widening casts from Int types.  We look at `old` instead of `gk` here
+    // because `gk`'s input wire has already been changed to an unsigned type.
+    if let GateKind::Cast(w, old_dest_ty) = old {
+        if let TyKind::Int(src_sz) = w.ty.kind {
+            if old_dest_ty.kind.is_integer() {
+                let dest_sz = old_dest_ty.kind.integer_size();
+                if dest_sz.bits() > src_sz.bits() {
+                    let new_dest_ty = Ty::new(TyKind::Uint(dest_sz));
+                    let cast = match gk {
+                        GateKind::Cast(w, _ty) => c.cast(w, new_dest_ty),
+                        _ => unreachable!(),
+                    };
+
+                    let sign_mask = c.lit(new_dest_ty, 1 << (src_sz.bits() - 1));
+                    let sign = c.and(cast, sign_mask);
+                    let sign_fill = c.neg(sign);
+                    return c.or(cast, sign_fill);
+                }
+            }
+        }
+    }
+
     c.gate(gk)
 }
