@@ -5,6 +5,9 @@ mod machine;
 mod mem;
 mod debug;
 
+#[cfg(feature = "libsnark")]
+mod gadgetlib;
+
 
 #[test]
 fn test_zkif_backend() {

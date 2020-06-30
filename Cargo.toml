@@ -9,9 +9,11 @@ edition = "2018"
 [features]
 default = ["scale", "zkinterface"]
 scale = ["scale_isa"]
+libsnark = ["zkinterface", "zkinterface-libsnark"]
 
 [dependencies]
 scale_isa = { optional = true, path = "../dialogue/scale_isa" }
-zkinterface = { optional = true, version = "1.1.1" }
+zkinterface = { optional = true, version = "1.1.2" }
+zkinterface-libsnark = { optional = true, version = "1.1.2" }
 bumpalo = "3.4"
 colored = "1.9.3"
