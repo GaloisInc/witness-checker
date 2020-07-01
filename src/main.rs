@@ -29,7 +29,7 @@ fn check_step<'a>(
 
     let mut cases = Vec::new();
     let mut add_case = |op, result| {
-        let op_match = b.eq(b.lit(op as u64), instr.opcode);
+        let op_match = b.eq(b.lit(op as u8), instr.opcode);
         cases.push(TWire::<(_, _)>::new((op_match, result)));
     };
 
@@ -126,6 +126,7 @@ fn main() -> io::Result<()> {
     let c = b.finish();
 
     let ok = ok.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
+    let ok = run_pass(&c, ok, lower::int::extend_to_64);
     let ok = run_pass(&c, ok, lower::int::mux);
     let ok = run_pass(&c, ok, lower::int::compare_to_zero);
     let ok = run_pass(&c, ok, lower::bool_::mux);

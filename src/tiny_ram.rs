@@ -5,7 +5,7 @@ use crate::ir::typed::{Builder, TWire, Repr, Lit, Secret, Mux};
 /// instructions from secret indices, which results in a secret instruction.
 #[derive(Clone, Copy)]
 pub struct RamInstr {
-    pub opcode: u64,
+    pub opcode: u8,
     pub dest: u64,
     pub op1: u64,
     pub op2: u64,
@@ -23,7 +23,7 @@ impl RamInstr {
         imm: bool,
     ) -> RamInstr {
         RamInstr {
-            opcode: opcode as u64,
+            opcode: opcode as u8,
             dest: dest as u64,
             op1: op1 as u64,
             op2: op2 as u64,
@@ -66,7 +66,7 @@ impl RamInstr {
 
 #[derive(Clone, Copy)]
 pub struct RamInstrRepr<'a> {
-    pub opcode: TWire<'a, u64>,
+    pub opcode: TWire<'a, u8>,
     pub dest: TWire<'a, u64>,
     pub op1: TWire<'a, u64>,
     pub op2: TWire<'a, u64>,
@@ -92,6 +92,7 @@ impl<'a> Lit<'a> for RamInstr {
 impl<'a, C: Repr<'a>> Mux<'a, C, RamInstr> for RamInstr
 where
     C::Repr: Clone,
+    u8: Mux<'a, C, u8, Output = u8>,
     u64: Mux<'a, C, u64, Output = u64>,
     bool: Mux<'a, C, bool, Output = bool>,
 {
