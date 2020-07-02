@@ -19,19 +19,26 @@ use bumpalo::Bump;
 /// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a> {
     arena: &'a Bump,
-    intern: RefCell<HashSet<&'a Gate<'a>>>,
+    // TODO: clean up interning
+    // Currently it's possible to get two distinct interned pointers for the same value (e.g.,
+    // `ty1` and `ty2` where `ty1 != ty2` but `*ty1 == *ty2`) by creating two different `Circuit`s
+    // backed by the same arena.  We should have a combined structure that owns both the arena and
+    // the interning tables, though that might require a bit of unsafe code.
+    intern_gate: RefCell<HashSet<&'a Gate<'a>>>,
+    intern_ty: RefCell<HashSet<&'a TyKind>>,
 }
 
 impl<'a> Circuit<'a> {
     pub fn new(arena: &'a Bump) -> Circuit<'a> {
         Circuit {
             arena,
-            intern: RefCell::new(HashSet::new()),
+            intern_gate: RefCell::new(HashSet::new()),
+            intern_ty: RefCell::new(HashSet::new()),
         }
     }
 
-    pub fn intern(&self, gate: Gate<'a>) -> &'a Gate<'a> {
-        let mut intern = self.intern.borrow_mut();
+    fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {
+        let mut intern = self.intern_gate.borrow_mut();
         match intern.get(&gate) {
             Some(x) => x,
             None => {
@@ -42,14 +49,30 @@ impl<'a> Circuit<'a> {
         }
     }
 
+    fn intern_ty(&self, ty: TyKind) -> &'a TyKind {
+        let mut intern = self.intern_ty.borrow_mut();
+        match intern.get(&ty) {
+            Some(x) => x,
+            None => {
+                let ty = self.arena.alloc(ty);
+                intern.insert(ty);
+                ty
+            },
+        }
+    }
+
     pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
-        Wire(self.intern(Gate {
-            ty: kind.ty(),
+        Wire(self.intern_gate(Gate {
+            ty: kind.ty(self),
             kind,
         }))
     }
 
-    pub fn lit(&self, ty: Ty, val: u64) -> Wire<'a> {
+    pub fn ty(&self, kind: TyKind) -> Ty<'a> {
+        Ty(self.intern_ty(kind))
+    }
+
+    pub fn lit(&self, ty: Ty<'a>, val: u64) -> Wire<'a> {
         self.gate(GateKind::Lit(val, ty))
     }
 
@@ -61,7 +84,7 @@ impl<'a> Circuit<'a> {
     ///
     /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
     /// prover) is generating the circuit.
-    pub fn new_secret(&self, ty: Ty, val: Option<u64>) -> Wire<'a> {
+    pub fn new_secret(&self, ty: Ty<'a>, val: Option<u64>) -> Wire<'a> {
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
         self.secret(secret)
     }
@@ -80,8 +103,8 @@ impl<'a> Circuit<'a> {
 
     pub fn binary(&self, op: BinOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
         assert!(
-            a.ty.kind == b.ty.kind,
-            "type mismatch for {:?}: {:?} != {:?}", op, a.ty.kind, b.ty.kind,
+            a.ty == b.ty,
+            "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
         );
         self.gate(GateKind::Binary(op, a, b))
     }
@@ -119,7 +142,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn shift(&self, op: ShiftOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(b.ty.kind == TyKind::Uint(IntSize::I8));
+        assert!(*b.ty == TyKind::Uint(IntSize::I8));
         self.gate(GateKind::Shift(op, a, b))
     }
 
@@ -132,7 +155,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn compare(&self, op: CmpOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(a.ty.kind == b.ty.kind);
+        assert!(a.ty == b.ty);
         self.gate(GateKind::Compare(op, a, b))
     }
 
@@ -161,11 +184,11 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn mux(&self, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
-        assert!(t.ty.kind == e.ty.kind);
+        assert!(t.ty == e.ty);
         self.gate(GateKind::Mux(c, t, e))
     }
 
-    pub fn cast(&self, w: Wire<'a>, ty: Ty) -> Wire<'a> {
+    pub fn cast(&self, w: Wire<'a>, ty: Ty<'a>) -> Wire<'a> {
         self.gate(GateKind::Cast(w, ty))
     }
 
@@ -310,30 +333,20 @@ impl TyKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub struct Ty {
-    pub kind: TyKind,
-}
-
-impl Ty {
-    pub fn new(kind: TyKind) -> Ty {
-        Ty { kind }
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
     /// Cached output type of this gate.  Computed when the `Gate` is created.  The result is
     /// stored here so that `GateKind::ty` runs in constant time, rather than potentially having
     /// recurse over the entire depth of the circuit.
-    pub ty: Ty,
+    pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum GateKind<'a> {
     /// A literal/constant value.
-    Lit(u64, Ty),
+    Lit(u64, Ty<'a>),
     /// Retrieve a secret value from the witness.
     Secret(Secret<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
@@ -347,18 +360,18 @@ pub enum GateKind<'a> {
     /// `Mux(cond, then_, else)`: depending on `cond`, select either `then_` or `else`.
     Mux(Wire<'a>, Wire<'a>, Wire<'a>),
     /// Convert a value to a different type.
-    Cast(Wire<'a>, Ty),
+    Cast(Wire<'a>, Ty<'a>),
 }
 
 impl<'a> GateKind<'a> {
-    pub fn ty(&self) -> Ty {
+    pub fn ty(&self, c: &Circuit<'a>) -> Ty<'a> {
         match *self {
             GateKind::Lit(_, ty) => ty,
             GateKind::Secret(s) => s.ty,
             GateKind::Unary(_, w) => w.ty,
             GateKind::Binary(_, w, _) => w.ty,
             GateKind::Shift(_, w, _) => w.ty,
-            GateKind::Compare(_, _, _) => Ty::new(TyKind::Bool),
+            GateKind::Compare(_, _, _) => c.ty(TyKind::Bool),
             GateKind::Mux(_, w, _) => w.ty,
             GateKind::Cast(_, ty) => ty,
         }
@@ -451,11 +464,17 @@ impl<'a> fmt::Debug for Wire<'a> {
 declare_interned_pointer! {
     /// A secret input value, part of the witness.
     #[derive(Debug)]
-    pub struct Secret<'a> => SecretData;
+    pub struct Secret<'a> => SecretData<'a>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub struct SecretData {
-    pub ty: Ty,
+pub struct SecretData<'a> {
+    pub ty: Ty<'a>,
     pub val: Option<u64>,
 }
+
+declare_interned_pointer! {
+    #[derive(Debug)]
+    pub struct Ty<'a> => TyKind;
+}
+

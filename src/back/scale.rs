@@ -99,11 +99,11 @@ impl<'a> Backend<'a> {
         let gate = &*wire;
 
         let gate_ty = match gate.kind {
-            GateKind::Compare(_, a, _) => a.ty.kind,
-            _ => gate.ty.kind
+            GateKind::Compare(_, a, _) => a.ty,
+            _ => gate.ty
         };
 
-        let operand = match gate_ty {
+        let operand = match *gate_ty {
             TyKind::Bool => self.gate_bool(gate),
             TyKind::U64 => self.gate_u64(gate),
             k => unimplemented!("TyKind {:?}", k),
@@ -202,12 +202,12 @@ impl<'a> Backend<'a> {
             GateKind::Mux(_, _, _) => unimplemented!("Mux on Bool"),
             GateKind::Cast(a_wire, _) => {
                 let a = self.wire(a_wire);
-                match a_wire.ty.kind {
+                match *a_wire.ty {
                     TyKind::Bool => return a,
                     TyKind::U64 => {
                         self.instr(instr::bitsint(0, dest, a.unpack(), Imm::new(0)));
                     },
-                    _ => unimplemented!("cast to Bool from {:?}", a_wire.ty.kind),
+                    _ => unimplemented!("cast to Bool from {:?}", a_wire.ty),
                 }
             },
         }
@@ -287,14 +287,14 @@ impl<'a> Backend<'a> {
             GateKind::Cast(a_wire, _) => {
                 let dest = self.fresh::<RegSecretRegint>();
                 let a = self.wire(a_wire);
-                match a_wire.ty.kind {
+                match *a_wire.ty {
                     TyKind::Bool => {
                         let zero = self.fresh::<RegSecretRegint>();
                         self.instr(instr::ldsint(0, zero, Imm::new(0)));
                         self.instr(instr::sintsbit(0, dest, zero, a.unpack(), Imm::new(0)));
                     },
                     TyKind::U64 => return a,
-                    _ => unimplemented!("cast to U64 from {:?}", a_wire.ty.kind),
+                    _ => unimplemented!("cast to U64 from {:?}", a_wire.ty),
                 }
                 dest.pack()
             },

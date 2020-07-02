@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use bumpalo::Bump;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
+use crate::ir::circuit::{Circuit, Wire, TyKind};
 
 
 pub struct Builder<'a> {
@@ -211,13 +211,13 @@ impl<'a> Repr<'a> for bool {
 
 impl<'a> Lit<'a> for bool {
     fn lit(bld: &Builder<'a>, x: bool) -> Wire<'a> {
-        bld.c.lit(Ty::new(TyKind::Bool), x as u64)
+        bld.c.lit(bld.c.ty(TyKind::Bool), x as u64)
     }
 }
 
 impl<'a> Secret<'a> for bool {
     fn secret(bld: &Builder<'a>, x: Option<bool>) -> Wire<'a> {
-        bld.c.new_secret(Ty::new(TyKind::Bool), x.map(|x| x as u64))
+        bld.c.new_secret(bld.c.ty(TyKind::Bool), x.map(|x| x as u64))
     }
 }
 
@@ -247,13 +247,13 @@ macro_rules! integer_impls {
 
         impl<'a> Lit<'a> for $T {
             fn lit(bld: &Builder<'a>, x: $T) -> Wire<'a> {
-                bld.c.lit(Ty::new(TyKind::$K), x as u64)
+                bld.c.lit(bld.c.ty(TyKind::$K), x as u64)
             }
         }
 
         impl<'a> Secret<'a> for $T {
             fn secret(bld: &Builder<'a>, x: Option<$T>) -> Wire<'a> {
-                bld.c.new_secret(Ty::new(TyKind::$K), x.map(|x| x as u64))
+                bld.c.new_secret(bld.c.ty(TyKind::$K), x.map(|x| x as u64))
             }
         }
 
