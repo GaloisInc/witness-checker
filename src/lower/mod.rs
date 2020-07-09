@@ -48,12 +48,15 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
             return new_ty;
         }
 
-        let new_ty_kind = match *old_ty {
-            TyKind::Bool => TyKind::Bool,
-            TyKind::Uint(sz) => TyKind::Uint(sz),
-            TyKind::Int(sz) => TyKind::Int(sz),
+        let new_ty = match *old_ty {
+            TyKind::Bool => self.c.ty(TyKind::Bool),
+            TyKind::Uint(sz) => self.c.ty(TyKind::Uint(sz)),
+            TyKind::Int(sz) => self.c.ty(TyKind::Int(sz)),
+            TyKind::Bundle(tys) => {
+                let new_tys = tys.iter().cloned().map(|ty| self.ty(ty)).collect::<Vec<_>>();
+                self.c.ty_bundle(&new_tys)
+            },
         };
-        let new_ty = self.c.ty(new_ty_kind);
         self.ty_m.insert(old_ty, new_ty);
         new_ty
     }

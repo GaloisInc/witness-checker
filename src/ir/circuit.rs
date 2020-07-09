@@ -25,7 +25,8 @@ pub struct Circuit<'a> {
     // backed by the same arena.  We should have a combined structure that owns both the arena and
     // the interning tables, though that might require a bit of unsafe code.
     intern_gate: RefCell<HashSet<&'a Gate<'a>>>,
-    intern_ty: RefCell<HashSet<&'a TyKind>>,
+    intern_ty: RefCell<HashSet<&'a TyKind<'a>>>,
+    intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
 }
 
 impl<'a> Circuit<'a> {
@@ -34,6 +35,7 @@ impl<'a> Circuit<'a> {
             arena,
             intern_gate: RefCell::new(HashSet::new()),
             intern_ty: RefCell::new(HashSet::new()),
+            intern_ty_list: RefCell::new(HashSet::new()),
         }
     }
 
@@ -49,7 +51,7 @@ impl<'a> Circuit<'a> {
         }
     }
 
-    fn intern_ty(&self, ty: TyKind) -> &'a TyKind {
+    fn intern_ty(&self, ty: TyKind<'a>) -> &'a TyKind<'a> {
         let mut intern = self.intern_ty.borrow_mut();
         match intern.get(&ty) {
             Some(x) => x,
@@ -61,6 +63,18 @@ impl<'a> Circuit<'a> {
         }
     }
 
+    fn intern_ty_list(&self, ty_list: &[Ty<'a>]) -> &'a [Ty<'a>] {
+        let mut intern = self.intern_ty_list.borrow_mut();
+        match intern.get(ty_list) {
+            Some(&x) => x,
+            None => {
+                let ty_list = self.arena.alloc_slice_copy(ty_list);
+                intern.insert(ty_list);
+                ty_list
+            },
+        }
+    }
+
     pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
@@ -68,8 +82,12 @@ impl<'a> Circuit<'a> {
         }))
     }
 
-    pub fn ty(&self, kind: TyKind) -> Ty<'a> {
+    pub fn ty(&self, kind: TyKind<'a>) -> Ty<'a> {
         Ty(self.intern_ty(kind))
+    }
+
+    pub fn ty_bundle(&self, tys: &[Ty<'a>]) -> Ty<'a> {
+        self.ty(TyKind::Bundle(self.intern_ty_list(tys)))
     }
 
     pub fn lit(&self, ty: Ty<'a>, val: u64) -> Wire<'a> {
@@ -289,10 +307,11 @@ pub enum IntSize {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum TyKind {
+pub enum TyKind<'a> {
     Bool,
     Int(IntSize),
     Uint(IntSize),
+    Bundle(&'a [Ty<'a>]),
 }
 
 impl IntSize {
@@ -306,21 +325,22 @@ impl IntSize {
     }
 }
 
-impl TyKind {
-    pub const I8: TyKind = TyKind::Int(IntSize::I8);
-    pub const I16: TyKind = TyKind::Int(IntSize::I16);
-    pub const I32: TyKind = TyKind::Int(IntSize::I32);
-    pub const I64: TyKind = TyKind::Int(IntSize::I64);
-    pub const U8: TyKind = TyKind::Uint(IntSize::I8);
-    pub const U16: TyKind = TyKind::Uint(IntSize::I16);
-    pub const U32: TyKind = TyKind::Uint(IntSize::I32);
-    pub const U64: TyKind = TyKind::Uint(IntSize::I64);
+impl TyKind<'_> {
+    pub const I8: TyKind<'static> = TyKind::Int(IntSize::I8);
+    pub const I16: TyKind<'static> = TyKind::Int(IntSize::I16);
+    pub const I32: TyKind<'static> = TyKind::Int(IntSize::I32);
+    pub const I64: TyKind<'static> = TyKind::Int(IntSize::I64);
+    pub const U8: TyKind<'static> = TyKind::Uint(IntSize::I8);
+    pub const U16: TyKind<'static> = TyKind::Uint(IntSize::I16);
+    pub const U32: TyKind<'static> = TyKind::Uint(IntSize::I32);
+    pub const U64: TyKind<'static> = TyKind::Uint(IntSize::I64);
 
     pub fn is_integer(&self) -> bool {
         match *self {
             TyKind::Bool => false,
             TyKind::Int(_) => true,
             TyKind::Uint(_) => true,
+            TyKind::Bundle(_) => false,
         }
     }
 
@@ -329,6 +349,7 @@ impl TyKind {
             TyKind::Bool => panic!("Bool has no IntSize"),
             TyKind::Int(sz) => sz,
             TyKind::Uint(sz) => sz,
+            TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
         }
     }
 }
@@ -475,6 +496,6 @@ pub struct SecretData<'a> {
 
 declare_interned_pointer! {
     #[derive(Debug)]
-    pub struct Ty<'a> => TyKind;
+    pub struct Ty<'a> => TyKind<'a>;
 }
 
