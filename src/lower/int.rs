@@ -155,6 +155,8 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
             // Casts *to* Int types don't need special handling in general.  Casts *from* Int types
             // do, and are handled below.
             GateKind::Cast(_, _) => {},
+            GateKind::Pack(_) => {},
+            GateKind::Extract(_, _) => {},
         }
     }
 

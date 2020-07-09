@@ -26,6 +26,7 @@ pub struct Circuit<'a> {
     // the interning tables, though that might require a bit of unsafe code.
     intern_gate: RefCell<HashSet<&'a Gate<'a>>>,
     intern_ty: RefCell<HashSet<&'a TyKind<'a>>>,
+    intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
 }
 
@@ -35,6 +36,7 @@ impl<'a> Circuit<'a> {
             arena,
             intern_gate: RefCell::new(HashSet::new()),
             intern_ty: RefCell::new(HashSet::new()),
+            intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
         }
     }
@@ -59,6 +61,18 @@ impl<'a> Circuit<'a> {
                 let ty = self.arena.alloc(ty);
                 intern.insert(ty);
                 ty
+            },
+        }
+    }
+
+    fn intern_wire_list(&self, wire_list: &[Wire<'a>]) -> &'a [Wire<'a>] {
+        let mut intern = self.intern_wire_list.borrow_mut();
+        match intern.get(wire_list) {
+            Some(&x) => x,
+            None => {
+                let wire_list = self.arena.alloc_slice_copy(wire_list);
+                intern.insert(wire_list);
+                wire_list
             },
         }
     }
@@ -104,6 +118,17 @@ impl<'a> Circuit<'a> {
                     "type mismatch for mux: {:?} != {:?}", c.ty, e.ty,
                 );
             },
+            GateKind::Extract(w, i) => match *w.ty {
+                TyKind::Bundle(tys) => {
+                    if i >= tys.len() {
+                        panic!(
+                            "index out of range for extract: {} >= {} ({:?})",
+                            i, tys.len(), tys,
+                        );
+                    }
+                },
+                _ => panic!("bad input type for extract: {:?} (expected Bundle)", w.ty),
+            },
             _ => {},
         }
 
@@ -119,6 +144,12 @@ impl<'a> Circuit<'a> {
 
     pub fn ty_bundle(&self, tys: &[Ty<'a>]) -> Ty<'a> {
         self.ty(TyKind::Bundle(self.intern_ty_list(tys)))
+    }
+
+    pub fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
+    where I: IntoIterator<Item = Ty<'a>> {
+        let tys = it.into_iter().collect::<Vec<_>>();
+        self.ty_bundle(&tys)
     }
 
     pub fn lit(&self, ty: Ty<'a>, val: u64) -> Wire<'a> {
@@ -234,6 +265,21 @@ impl<'a> Circuit<'a> {
         self.gate(GateKind::Cast(w, ty))
     }
 
+    pub fn pack(&self, ws: &[Wire<'a>]) -> Wire<'a> {
+        let ws = self.intern_wire_list(ws);
+        self.gate(GateKind::Pack(ws))
+    }
+
+    pub fn pack_iter<I>(&self, it: I) -> Wire<'a>
+    where I: IntoIterator<Item = Wire<'a>> {
+        let ws = it.into_iter().collect::<Vec<_>>();
+        self.pack(&ws)
+    }
+
+    pub fn extract(&self, w: Wire<'a>, i: usize) -> Wire<'a> {
+        self.gate(GateKind::Extract(w, i))
+    }
+
 
     pub fn walk_wires<I, F>(&self, wires: I, mut f: F)
     where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Wire<'a>) {
@@ -285,6 +331,12 @@ impl<'a> Circuit<'a> {
                             stack.push(Entry::Expand(c));
                         },
                         GateKind::Cast(w, _) => {
+                            stack.push(Entry::Expand(w));
+                        },
+                        GateKind::Pack(ws) => {
+                            stack.extend(ws.iter().map(|&w| Entry::Expand(w)));
+                        },
+                        GateKind::Extract(w, _) => {
                             stack.push(Entry::Expand(w));
                         },
                     }
@@ -406,6 +458,10 @@ pub enum GateKind<'a> {
     Mux(Wire<'a>, Wire<'a>, Wire<'a>),
     /// Convert a value to a different type.
     Cast(Wire<'a>, Ty<'a>),
+    /// Pack several values into a bundle.
+    Pack(&'a [Wire<'a>]),
+    /// Extract one value from a bundle.
+    Extract(Wire<'a>, usize),
 }
 
 impl<'a> GateKind<'a> {
@@ -419,6 +475,11 @@ impl<'a> GateKind<'a> {
             GateKind::Compare(_, _, _) => c.ty(TyKind::Bool),
             GateKind::Mux(_, w, _) => w.ty,
             GateKind::Cast(_, ty) => ty,
+            GateKind::Pack(ws) => c.ty_bundle_iter(ws.iter().map(|&w| w.ty)),
+            GateKind::Extract(w, i) => match *w.ty {
+                TyKind::Bundle(tys) => tys[i],
+                _ => panic!("invalid wire type {:?} in Extract", w.ty),
+            },
         }
     }
 }

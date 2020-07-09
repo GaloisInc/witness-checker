@@ -37,6 +37,8 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
             GateKind::Compare(op, a, b) => GateKind::Compare(op, self.wire(a), self.wire(b)),
             GateKind::Mux(c, t, e) => GateKind::Mux(self.wire(c), self.wire(t), self.wire(e)),
             GateKind::Cast(w, ty) => GateKind::Cast(self.wire(w), self.ty(ty)),
+            GateKind::Pack(ws) => self.c.pack_iter(ws.iter().map(|&w| self.wire(w))).kind,
+            GateKind::Extract(w, i) => GateKind::Extract(self.wire(w), i),
         };
         let new_wire = (self.f)(self.c, old_wire, new_gate_kind);
         self.m.insert(old_wire, new_wire);
@@ -52,10 +54,8 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
             TyKind::Bool => self.c.ty(TyKind::Bool),
             TyKind::Uint(sz) => self.c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => self.c.ty(TyKind::Int(sz)),
-            TyKind::Bundle(tys) => {
-                let new_tys = tys.iter().cloned().map(|ty| self.ty(ty)).collect::<Vec<_>>();
-                self.c.ty_bundle(&new_tys)
-            },
+            TyKind::Bundle(tys) =>
+                self.c.ty_bundle_iter(tys.iter().map(|&ty| self.ty(ty))),
         };
         self.ty_m.insert(old_ty, new_ty);
         new_ty

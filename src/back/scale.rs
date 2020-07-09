@@ -210,6 +210,8 @@ impl<'a> Backend<'a> {
                     _ => unimplemented!("cast to Bool from {:?}", a_wire.ty),
                 }
             },
+            GateKind::Pack(..) => panic!("SCALE backend does not support Pack"),
+            GateKind::Extract(..) => panic!("SCALE backend does not support Extract"),
         }
         dest.pack()
     }
@@ -298,6 +300,8 @@ impl<'a> Backend<'a> {
                 }
                 dest.pack()
             },
+            GateKind::Pack(..) => panic!("SCALE backend does not support Pack"),
+            GateKind::Extract(..) => panic!("SCALE backend does not support Extract"),
         }
     }
 }
