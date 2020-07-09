@@ -76,6 +76,37 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
+        // Forbid constructing gates that violate type-safety invariants.
+        match kind {
+            GateKind::Binary(op, a, b) => {
+                assert!(
+                    a.ty == b.ty,
+                    "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
+                );
+            },
+            GateKind::Shift(op, _, b) => match *b.ty {
+                TyKind::Uint(_) => {},
+                _ => panic!("{:?} shift amount must be a Uint, not {:?}", op, b.ty),
+            },
+            GateKind::Compare(op, a, b) => {
+                assert!(
+                    a.ty == b.ty,
+                    "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
+                );
+            },
+            GateKind::Mux(c, t, e) => {
+                assert!(
+                    *c.ty == TyKind::Bool,
+                    "mux condition must be Bool, not {:?}", c.ty,
+                );
+                assert!(
+                    t.ty == e.ty,
+                    "type mismatch for mux: {:?} != {:?}", c.ty, e.ty,
+                );
+            },
+            _ => {},
+        }
+
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
@@ -120,10 +151,6 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn binary(&self, op: BinOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(
-            a.ty == b.ty,
-            "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
-        );
         self.gate(GateKind::Binary(op, a, b))
     }
 
@@ -160,7 +187,6 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn shift(&self, op: ShiftOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(*b.ty == TyKind::Uint(IntSize::I8));
         self.gate(GateKind::Shift(op, a, b))
     }
 
@@ -173,7 +199,6 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn compare(&self, op: CmpOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(a.ty == b.ty);
         self.gate(GateKind::Compare(op, a, b))
     }
 
@@ -202,7 +227,6 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn mux(&self, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
-        assert!(t.ty == e.ty);
         self.gate(GateKind::Mux(c, t, e))
     }
 
