@@ -5,13 +5,20 @@ mod machine;
 mod mem;
 mod debug;
 
-#[cfg(feature = "libsnark")]
-mod gadgetlib;
+//#[cfg(feature = "libsnark")]
 
+use zkinterface::{
+    statement::{StatementBuilder, FileStore},
+    Result,
+};
 
 #[test]
-fn test_zkif_backend() {
-    let mut back = backend::Backend::new();
+fn test_zkif_backend() -> Result<()> {
+    let out_path = "local/test_statement_public_";
+    let store = FileStore::new(out_path, true, false, true)?;
+    let stmt = StatementBuilder::new(store);
+
+    let mut back = backend::Backend::new(stmt);
     let mut state = machine::MachineState::new(&mut back);
     let mut mem = mem::Memory::new();
 
@@ -40,4 +47,7 @@ fn test_zkif_backend() {
     println!("// Final memory consistency check.");
     mem.finish(&mut back);
     back.cost_est.print_cost();
+
+    println!("Written {}*.zkif", out_path);
+    Ok(())
 }

@@ -1,4 +1,10 @@
 use std::fmt;
+use zkinterface::{
+    owned::{circuit::CircuitOwned, variables::VariablesOwned, keyvalue::KeyValueOwned, command::CommandOwned},
+    statement::{StatementBuilder, FileStore},
+    Result,
+};
+use zkinterface_libsnark::gadgetlib::call_gadget_cb;
 
 // TODO: Use types and opcodes from the rest of the package.
 pub type OpLabel = usize;
@@ -24,32 +30,24 @@ struct WireRepr {
 // Access wire representations with get_repr_*.
 pub struct Backend {
     wire_reprs: Vec<WireRepr>,
-    free_zid: ZkifId,
+
+    pub stmt: StatementBuilder<FileStore>,
 
     pub cost_est: CostEstimator,
 }
 
 impl Backend {
-    pub fn new() -> Backend {
+    pub fn new(stmt: StatementBuilder<FileStore>) -> Backend {
         Backend {
             // Allocate the wire for constant one (zkif_id=0).
             wire_reprs: vec![WireRepr { packed_zid: Some(0), bit_zids: vec![], one_hot_zids: vec![] }],
-            free_zid: 1,
+            stmt,
             cost_est: CostEstimator {
                 cost: 0,
                 last_printed_cost: 0,
             },
         }
     }
-
-    pub fn new_wire(&mut self) -> WireId {
-        self.wire_reprs.push(WireRepr { packed_zid: None, bit_zids: vec![], one_hot_zids: vec![] });
-        WireId(self.wire_reprs.len() - 1)
-    }
-
-    pub fn wire_one(&self) -> WireId { WireId(0) }
-
-    pub fn wire_constant(&self, value: PackedValue) -> WireId { WireId(0) } // TODO: represent constants.
 }
 
 
@@ -58,14 +56,35 @@ impl Backend {
     // Add a stateless Arithmetic & Logic Unit:
     //   new result and flag = operation( arg0, arg1, arg2 )
     pub fn push_alu_op(&mut self, opcode: OpLabel, arg0: WireId, arg1: WireId, arg2: WireId) -> (WireId, WireId) {
-        let _ = self.represent_as_bits(arg0);
-        let _ = self.represent_as_bits(arg1);
-        let _ = self.represent_as_bits(arg2);
+        // TODO: use represent_as_bits instead.
+        let arg0_var = self.represent_as_field(arg0);
+        let arg1_var = self.represent_as_field(arg1);
+        let arg2_var = self.represent_as_field(arg2);
+        let flag = 0; // Flag unused.
 
-        // TODO: call the gadget for the given opcode using the wire representations.
+        // Call the gadget for the given opcode using the wire representations.
+        let input_vars = VariablesOwned {
+            variable_ids: vec![arg0_var, arg1_var, arg2_var, flag],
+            values: None,
+        };
+        let gadget_input = CircuitOwned {
+            connections: input_vars.clone(),
+            free_variable_id: self.stmt.vars.free_variable_id,
+            field_maximum: None,
+            configuration: Some(vec![
+                KeyValueOwned {
+                    key: "function".to_string(),
+                    text: Some("tinyram.and".to_string()),
+                    data: None,
+                    number: 0,
+                }]),
+        };
+        let command = CommandOwned { constraints_generation: true, witness_generation: false };
+        let gadget_response = call_gadget_cb(&mut self.stmt, &gadget_input, &command).unwrap();
+
         self.cost_est.cost += 30;
-        let new_res = self.new_wire();
-        let new_flag = self.new_wire();
+        let new_res = self.new_wire_from_packed(gadget_response.connections.variable_ids[0]);
+        let new_flag = self.new_wire_from_packed(gadget_response.connections.variable_ids[1]);
 
         println!("{:?}\t= alu_op_{}( {:?}, {:?}, {:?})", (new_res, new_flag), opcode, arg0, arg1, arg2);
         return (new_res, new_flag);
@@ -144,14 +163,27 @@ impl Backend {
 
 // Wire representations in zkInterface.
 impl Backend {
+    pub fn wire_one(&self) -> WireId { WireId(0) }
+
+    pub fn wire_constant(&self, value: PackedValue) -> WireId { WireId(0) } // TODO: represent constants.
+
+    pub fn new_wire(&mut self) -> WireId {
+        self.wire_reprs.push(WireRepr { packed_zid: None, bit_zids: vec![], one_hot_zids: vec![] });
+        WireId(self.wire_reprs.len() - 1)
+    }
+
+    pub fn new_wire_from_packed(&mut self, zid: ZkifId) -> WireId {
+        self.wire_reprs.push(WireRepr { packed_zid: Some(zid), bit_zids: vec![], one_hot_zids: vec![] });
+        WireId(self.wire_reprs.len() - 1)
+    }
+
     pub fn represent_as_field(&mut self, wid: WireId) -> ZkifId {
         let wire = &mut self.wire_reprs[wid.0];
         match wire.packed_zid {
             Some(zid) => zid,
             None => {
                 // Allocate a field variable.
-                let zid = self.free_zid;
-                self.free_zid += 1;
+                let zid = self.stmt.vars.allocate();
                 wire.packed_zid = Some(zid);
                 self.cost_est.cost += 1 + 16; // Word size, boolean-ness.
                 // TODO: if other representations exists, enforce equality.
@@ -161,16 +193,13 @@ impl Backend {
     }
 
     pub fn represent_as_bits(&mut self, wid: WireId) -> &[ZkifId] {
-        let width = 16;
+        let num_bits = 16;
         let wire = &mut self.wire_reprs[wid.0];
         if wire.bit_zids.len() == 0 {
             // Allocate bit variables.
-            wire.bit_zids.resize(width, 0);
-            for bit_i in 0..width {
-                wire.bit_zids[bit_i] = self.free_zid + bit_i as u64;
-            }
-            self.free_zid += width as u64;
-            self.cost_est.cost += 1 + width;
+            wire.bit_zids = self.stmt.vars.allocate_many(num_bits);
+
+            self.cost_est.cost += 1 + num_bits;
             // TODO: enforce boolean-ness.
             // TODO: if other representations exists, enforce equality.
         }
@@ -178,16 +207,13 @@ impl Backend {
     }
 
     pub fn represent_as_one_hot(&mut self, wid: WireId) -> &[ZkifId] {
-        let width = 32;
+        let num_values = 32;
         let wire = &mut self.wire_reprs[wid.0];
         if wire.one_hot_zids.len() == 0 {
             // Allocate one-hot variables.
-            wire.one_hot_zids.resize(width, 0);
-            for bit_i in 0..width {
-                wire.one_hot_zids[bit_i] = self.free_zid + bit_i as u64;
-            }
-            self.free_zid += width as u64;
-            self.cost_est.cost += 1 + width;
+            wire.one_hot_zids = self.stmt.vars.allocate_many(num_values);
+
+            self.cost_est.cost += 1 + num_values;
             // TODO: enforce one-hot-ness.
             // TODO: if other representations exists, enforce equality.
         }
