@@ -156,7 +156,12 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
             // do, and are handled below.
             GateKind::Cast(_, _) => {},
             GateKind::Pack(_) => {},
+            // `Extract`'s input should already have had its output types changed.
             GateKind::Extract(_, _) => {},
+            // TODO: need a way to handle gadgets whose output type is fixed or set internally.
+            // (Gadgets whose output type matches an input should work fine, as all inputs have
+            // already been changed to `Uint`.)
+            GateKind::Gadget(_, _) => {},
         }
     }
 

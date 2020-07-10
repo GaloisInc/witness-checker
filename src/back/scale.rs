@@ -212,6 +212,7 @@ impl<'a> Backend<'a> {
             },
             GateKind::Pack(..) => panic!("SCALE backend does not support Pack"),
             GateKind::Extract(..) => panic!("SCALE backend does not support Extract"),
+            GateKind::Gadget(..) => panic!("SCALE backend does not support Gadget"),
         }
         dest.pack()
     }
@@ -302,6 +303,7 @@ impl<'a> Backend<'a> {
             },
             GateKind::Pack(..) => panic!("SCALE backend does not support Pack"),
             GateKind::Extract(..) => panic!("SCALE backend does not support Extract"),
+            GateKind::Gadget(..) => panic!("SCALE backend does not support Gadget"),
         }
     }
 }

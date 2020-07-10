@@ -40,6 +40,10 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
             GateKind::Cast(w, ty) => GateKind::Cast(self.wire(w), self.ty(ty)),
             GateKind::Pack(ws) => self.c.pack_iter(ws.iter().map(|&w| self.wire(w))).kind,
             GateKind::Extract(w, i) => GateKind::Extract(self.wire(w), i),
+            GateKind::Gadget(g, ws) => {
+                let g = g.transfer(self.c);
+                self.c.gadget_iter(g, ws.iter().map(|&w| self.wire(w))).kind
+            },
         };
         let new_wire = (self.f)(self.c, old_wire, new_gate_kind);
         self.m.insert(old_wire, new_wire);

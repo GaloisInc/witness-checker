@@ -1,5 +1,6 @@
+use std::any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::fmt;
 use std::ops::Deref;
@@ -28,6 +29,7 @@ pub struct Circuit<'a> {
     intern_ty: RefCell<HashSet<&'a TyKind<'a>>>,
     intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
+    intern_gadget_kind: RefCell<HashMap<String, &'a dyn GadgetKind<'a>>>,
 }
 
 impl<'a> Circuit<'a> {
@@ -38,6 +40,7 @@ impl<'a> Circuit<'a> {
             intern_ty: RefCell::new(HashSet::new()),
             intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
+            intern_gadget_kind: RefCell::new(HashMap::new()),
         }
     }
 
@@ -89,6 +92,32 @@ impl<'a> Circuit<'a> {
         }
     }
 
+    /// Intern a gadget kind so it can be used to construct `Gadget` gates.  It's legal to intern
+    /// the same `GadgetKind` more than once, so this can be used inside stateless lowering passes
+    /// (among other things).
+    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
+        let mut intern = self.intern_gadget_kind.borrow_mut();
+        match intern.get(g.name()) {
+            Some(&x) => {
+                // Check that the interned gadget has the same concrete type as `g`.  If not, then
+                // the user has accidentally defined two different gadgets with the same name.
+                // Note that if `G` contains data (is non-zero-sized), it may still be possible to
+                // have multiple distinct gadget kinds that are not caught by this check.
+                assert!(
+                    g.type_name() == x.type_name(),
+                    "defined multiple distinct gadgets named {:?}: {:?} != {:?}",
+                    g.name(), g.type_name(), x.type_name(),
+                );
+                GadgetKindRef(x)
+            },
+            None => {
+                let g = self.arena.alloc(g);
+                intern.insert(g.name().to_owned(), g);
+                GadgetKindRef(g)
+            },
+        }
+    }
+
     pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         // Forbid constructing gates that violate type-safety invariants.
         match kind {
@@ -129,6 +158,7 @@ impl<'a> Circuit<'a> {
                 },
                 _ => panic!("bad input type for extract: {:?} (expected Bundle)", w.ty),
             },
+            // GateKind::Gadget typechecking happens in the call to `kind.ty`
             _ => {},
         }
 
@@ -280,6 +310,17 @@ impl<'a> Circuit<'a> {
         self.gate(GateKind::Extract(w, i))
     }
 
+    pub fn gadget(&self, kind: GadgetKindRef<'a>, args: &[Wire<'a>]) -> Wire<'a> {
+        let args = self.intern_wire_list(args);
+        self.gate(GateKind::Gadget(kind, args))
+    }
+
+    pub fn gadget_iter<I>(&self, kind: GadgetKindRef<'a>, it: I) -> Wire<'a>
+    where I: IntoIterator<Item = Wire<'a>> {
+        let args = it.into_iter().collect::<Vec<_>>();
+        self.gadget(kind, &args)
+    }
+
 
     pub fn walk_wires<I, F>(&self, wires: I, mut f: F)
     where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Wire<'a>) {
@@ -334,10 +375,13 @@ impl<'a> Circuit<'a> {
                             stack.push(Entry::Expand(w));
                         },
                         GateKind::Pack(ws) => {
-                            stack.extend(ws.iter().map(|&w| Entry::Expand(w)));
+                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
                         },
                         GateKind::Extract(w, _) => {
                             stack.push(Entry::Expand(w));
+                        },
+                        GateKind::Gadget(_, ws) => {
+                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
                         },
                     }
                 },
@@ -462,6 +506,9 @@ pub enum GateKind<'a> {
     Pack(&'a [Wire<'a>]),
     /// Extract one value from a bundle.
     Extract(Wire<'a>, usize),
+    /// A custom gadget.
+    // TODO: move fields to a struct (this variant is 5 words long)
+    Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
 }
 
 impl<'a> GateKind<'a> {
@@ -479,6 +526,10 @@ impl<'a> GateKind<'a> {
             GateKind::Extract(w, i) => match *w.ty {
                 TyKind::Bundle(tys) => tys[i],
                 _ => panic!("invalid wire type {:?} in Extract", w.ty),
+            },
+            GateKind::Gadget(k, ws) => {
+                let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
+                k.typecheck(&tys)
             },
         }
     }
@@ -584,3 +635,47 @@ declare_interned_pointer! {
     pub struct Ty<'a> => TyKind<'a>;
 }
 
+
+/// Defines a kind of gadget.  Instances of a gadget can be added to a `Circuit` using
+/// `define_gadget_kind` and the `Circuit::gadget` constructor.
+pub trait GadgetKind<'a>: 'a {
+    /// The name of this kind of gadget.  This must be unique among all gadget kinds, as it's used
+    /// by backends to recognize supported gadgets.
+    fn name(&self) -> &str;
+
+    /// Validate the argument types for an instance of this kind of gadget.  Returns the output
+    /// type of a gadget.
+    fn typecheck(&self, arg_tys: &[Ty<'a>]) -> Ty<'a>;
+
+    /// Decompose this gadget into primitive gates.  This may be called if the backend doesn't
+    /// support this gadget.
+    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a>;
+
+    /// Returns `std::any::type_name::<Self>()`.  Should not be implemented manually.  This is used
+    /// only for debugging, to check for accidental collisions between `name()`s of distinct
+    /// `GadgetKind`s.
+    fn type_name(&self) -> &'static str {
+        any::type_name::<Self>()
+    }
+
+    /// Intern this `GadgetKind` into a new `Circuit`.  This should usually be implemented as
+    ///
+    ///     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    ///         c.intern_gadget_kind(self.clone())
+    ///     }
+    ///
+    /// However, this can't be provided automatically because it requires `Self: Clone + 'static`.
+    /// The `Clone` bound implies `Sized`, which would make this trait non-object-safe, and
+    /// `'static` means the `GadgetKind` can't contain any `Ty<'a>` values.
+    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b>;
+}
+
+declare_interned_pointer! {
+    pub struct GadgetKindRef<'a> => dyn GadgetKind<'a>;
+}
+
+impl<'a> fmt::Debug for GadgetKindRef<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "GadgetKindRef({})", self.name())
+    }
+}
