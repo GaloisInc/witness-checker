@@ -5,17 +5,16 @@ mod machine;
 mod mem;
 mod debug;
 
-//#[cfg(feature = "libsnark")]
-
 use zkinterface::{
-    statement::{StatementBuilder, FileStore},
+    statement::{StatementBuilder, Store, FileStore},
     Result,
+    CircuitOwned, VariablesOwned, KeyValueOwned,
 };
 
 #[test]
 fn test_zkif_backend() -> Result<()> {
-    let out_path = "local/test_statement_public_";
-    let store = FileStore::new(out_path, true, false, true)?;
+    let out_path = "local/test_statement";
+    let store = FileStore::new(out_path, true, true, true)?;
     let stmt = StatementBuilder::new(store);
 
     let mut back = backend::Backend::new(stmt);
@@ -29,7 +28,7 @@ fn test_zkif_backend() -> Result<()> {
             op_label: 0,
             reg_label0: 0,
             reg_label1: 1,
-            reg_label2: RegOrValue::Val([2, 3, 4, 5]),
+            reg_label2: RegOrValue::Reg(2),
         };
         state.push_static_instr(&mut back, &mut mem, &instr);
         println!();
@@ -48,6 +47,23 @@ fn test_zkif_backend() -> Result<()> {
     mem.finish(&mut back);
     back.cost_est.print_cost();
 
-    println!("Written {}*.zkif", out_path);
+    let main = CircuitOwned {
+        connections: VariablesOwned {
+            variable_ids: vec![],
+            values: Some(vec![]),
+        },
+        free_variable_id: back.stmt.vars.free_variable_id,
+        field_maximum: None,
+        configuration: Some(vec![
+            KeyValueOwned {
+                key: "function".to_string(),
+                text: Some("main.test_statement".to_string()),
+                data: None,
+                number: 0,
+            }]),
+    };
+    back.stmt.store.push_main(&main)?;
+
+    println!("Written {}/*.zkif", out_path);
     Ok(())
 }

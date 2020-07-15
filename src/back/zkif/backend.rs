@@ -1,7 +1,7 @@
 use std::fmt;
 use zkinterface::{
     owned::{circuit::CircuitOwned, variables::VariablesOwned, keyvalue::KeyValueOwned, command::CommandOwned},
-    statement::{StatementBuilder, FileStore},
+    statement::{StatementBuilder, Store, FileStore},
     Result,
 };
 use zkinterface_libsnark::gadgetlib::call_gadget_cb;
@@ -79,7 +79,7 @@ impl Backend {
                     number: 0,
                 }]),
         };
-        let command = CommandOwned { constraints_generation: true, witness_generation: false };
+        let command = CommandOwned { constraints_generation: true, witness_generation: true };
         let gadget_response = call_gadget_cb(&mut self.stmt, &gadget_input, &command).unwrap();
 
         self.cost_est.cost += 30;
