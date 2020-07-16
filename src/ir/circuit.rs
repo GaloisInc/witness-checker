@@ -529,7 +529,7 @@ impl<'a> GateKind<'a> {
             },
             GateKind::Gadget(k, ws) => {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
-                k.typecheck(&tys)
+                k.typecheck(c, &tys)
             },
         }
     }
@@ -643,9 +643,20 @@ pub trait GadgetKind<'a>: 'a {
     /// by backends to recognize supported gadgets.
     fn name(&self) -> &str;
 
+    /// Intern this `GadgetKind` into a new `Circuit`.  This should usually be implemented as
+    ///
+    ///     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    ///         c.intern_gadget_kind(self.clone())
+    ///     }
+    ///
+    /// However, this can't be provided automatically because it requires `Self: Clone + 'static`.
+    /// The `Clone` bound implies `Sized`, which would make this trait non-object-safe, and
+    /// `'static` means the `GadgetKind` can't contain any `Ty<'a>` values.
+    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b>;
+
     /// Validate the argument types for an instance of this kind of gadget.  Returns the output
     /// type of a gadget.
-    fn typecheck(&self, arg_tys: &[Ty<'a>]) -> Ty<'a>;
+    fn typecheck(&self, c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a>;
 
     /// Decompose this gadget into primitive gates.  This may be called if the backend doesn't
     /// support this gadget.
@@ -657,17 +668,6 @@ pub trait GadgetKind<'a>: 'a {
     fn type_name(&self) -> &'static str {
         any::type_name::<Self>()
     }
-
-    /// Intern this `GadgetKind` into a new `Circuit`.  This should usually be implemented as
-    ///
-    ///     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
-    ///         c.intern_gadget_kind(self.clone())
-    ///     }
-    ///
-    /// However, this can't be provided automatically because it requires `Self: Clone + 'static`.
-    /// The `Clone` bound implies `Sized`, which would make this trait non-object-safe, and
-    /// `'static` means the `GadgetKind` can't contain any `Ty<'a>` values.
-    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b>;
 }
 
 declare_interned_pointer! {
