@@ -5,6 +5,7 @@ use bumpalo::Bump;
 
 use cheesecloth::back;
 use cheesecloth::ir::typed::{Builder, TWire};
+use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::parse;
 use cheesecloth::tiny_ram::{RamInstr, RamState, Opcode};
@@ -28,35 +29,39 @@ fn check_step<'a>(
     let instr = b.index(prog, s1.pc, |b, i| b.lit(i as u64));
 
     let mut cases = Vec::new();
-    let mut add_case = |op, result| {
+    let mut add_case = |op, result, flag| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
-        cases.push(TWire::<(_, _)>::new((op_match, result)));
+        let result_flag = TWire::<(_, _)>::new((result, flag));
+        cases.push(TWire::<(_, _)>::new((op_match, result_flag)));
     };
 
     {
         let result = operand_value(b, s1, instr.op1, instr.imm);
-        add_case(Opcode::Mov, result);
+        add_case(Opcode::Mov, result, s1.flag);
     }
 
     {
         let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
         let y = operand_value(b, s1, instr.op2, instr.imm);
-        add_case(Opcode::Add, b.add(x, y));
+        let (result, overflow) = b.add_with_overflow(x, y);
+        add_case(Opcode::Add, result, overflow);
     }
 
     {
         let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
         let y = operand_value(b, s1, instr.op2, instr.imm);
-        add_case(Opcode::Sub, b.sub(x, y));
+        let (result, overflow) = b.sub_with_overflow(x, y);
+        add_case(Opcode::Sub, result, overflow);
     }
 
     {
         let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
         let y = operand_value(b, s1, instr.op2, instr.imm);
-        add_case(Opcode::Mull, b.mul(x, y));
+        let (low, high) = *b.wide_mul(x, y);
+        add_case(Opcode::Mull, low, b.ne(high, b.lit(0)));
     }
 
-    let result = b.mux_multi(&cases, b.lit(0));
+    let (result, expect_flag) = *b.mux_multi(&cases, b.lit((0, false)));
 
     let mut ok = Vec::new();
     for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
@@ -65,6 +70,7 @@ fn check_step<'a>(
         let new_ok = b.eq(v_new, expect_new);
         ok.push(new_ok);
     }
+    ok.push(b.eq(s2.flag, expect_flag));
     ok
 }
 
@@ -126,6 +132,11 @@ fn main() -> io::Result<()> {
     let c = b.finish();
 
     let ok = ok.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
+    // TODO: need a better way to handle passes that must be run to fixpoint
+    let ok = run_pass(&c, ok, lower::gadget::decompose_all_gadgets);
+    let ok = run_pass(&c, ok, lower::gadget::decompose_all_gadgets);
+    let ok = run_pass(&c, ok, lower::bundle::unbundle_mux);
+    let ok = run_pass(&c, ok, lower::bundle::simplify);
     let ok = run_pass(&c, ok, lower::int::extend_to_64);
     let ok = run_pass(&c, ok, lower::int::mux);
     let ok = run_pass(&c, ok, lower::int::compare_to_zero);

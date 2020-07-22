@@ -1,4 +1,5 @@
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, GadgetKind, GadgetKindRef};
+use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
 
 /// Add two unsigned integers and check for overflow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -148,7 +149,7 @@ impl<'a> GadgetKind<'a> for WideMul {
         let carry2 = c.extract(sum2_carry2, 1);
 
         let c0 = sum2;
-        let carry = c.add(carry1, carry2);
+        let carry = c.add(c.cast(carry1, ty), c.cast(carry2, ty));
 
         // Compute the high output, c1 = a1 * b1 + a0 * b1 >> (N/2) + a1 * b0 >> (N/2) + carry.
         let a0b1_high = if signed {
