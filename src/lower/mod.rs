@@ -4,6 +4,7 @@ use crate::ir::circuit::{Circuit, Wire, GateKind, Ty, TyKind};
 pub mod bool_;
 pub mod int;
 pub mod bundle;
+pub mod gadget;
 
 struct RunPass<'a, 'old, 'new, F> {
     c: &'a Circuit<'new>,
