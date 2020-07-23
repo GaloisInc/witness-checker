@@ -297,3 +297,17 @@ impl<'a> WideMulTrait<'a> for u64 {
         (TWire::new(c.extract(out, 0)), TWire::new(c.extract(out, 1)))
     }
 }
+
+impl<'a> WideMulTrait<'a> for i64 {
+    type Output = (u64, i64);
+    fn wide_mul(
+        bld: &Builder<'a>,
+        a: Wire<'a>,
+        b: Wire<'a>,
+    ) -> (TWire<'a, u64>, TWire<'a, i64>) {
+        let c = bld.circuit();
+        let g = c.intern_gadget_kind(WideMul);
+        let out = c.gadget(g, &[a, b]);
+        (TWire::new(c.extract(out, 0)), TWire::new(c.extract(out, 1)))
+    }
+}

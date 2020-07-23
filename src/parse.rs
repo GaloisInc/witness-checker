@@ -5,10 +5,36 @@ pub fn parse_instr(s: &str) -> RamInstr {
     let words = s.split(" ").collect::<Vec<_>>();
     assert!(words.len() == 5);
     let opcode = match words[0] {
-        "mov" => Opcode::Mov,
+        "and" => Opcode::And,
+        "or" => Opcode::Or,
+        "xor" => Opcode::Xor,
+        "not" => Opcode::Not,
         "add" => Opcode::Add,
         "sub" => Opcode::Sub,
         "mull" => Opcode::Mull,
+        "umulh" => Opcode::Umulh,
+        "smulh" => Opcode::Smulh,
+        "udiv" => Opcode::Udiv,
+        "umod" => Opcode::Umod,
+        "shl" => Opcode::Shl,
+        "shr" => Opcode::Shr,
+
+        "cmpe" => Opcode::Cmpe,
+        "cmpa" => Opcode::Cmpa,
+        "cmpae" => Opcode::Cmpae,
+        "cmpg" => Opcode::Cmpg,
+        "cmpge" => Opcode::Cmpge,
+
+        "mov" => Opcode::Mov,
+        "cmov" => Opcode::Cmov,
+
+        "jmp" => Opcode::Jmp,
+        "cjmp" => Opcode::Cjmp,
+        "cnjmp" => Opcode::Cnjmp,
+
+        "store" => Opcode::Store,
+        "load" => Opcode::Load,
+
         o => panic!("unknown opcode {}", o),
     };
     let dest = u32::from_str(words[1]).unwrap();

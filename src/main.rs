@@ -8,7 +8,7 @@ use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::parse;
-use cheesecloth::tiny_ram::{RamInstr, RamState, Opcode};
+use cheesecloth::tiny_ram::{RamInstr, RamState, Opcode, REG_NONE, REG_PC};
 
 fn operand_value<'a>(
     b: &Builder<'a>,
@@ -29,47 +29,154 @@ fn check_step<'a>(
     let instr = b.index(prog, s1.pc, |b, i| b.lit(i as u64));
 
     let mut cases = Vec::new();
-    let mut add_case = |op, result, flag| {
+    let mut add_case = |op, result, dest, flag| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
-        let result_flag = TWire::<(_, _)>::new((result, flag));
-        cases.push(TWire::<(_, _)>::new((op_match, result_flag)));
+        let parts = TWire::<(_, _, _)>::new((result, dest, flag));
+        cases.push(TWire::<(_, _)>::new((op_match, parts)));
     };
 
+    let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
+    let y = operand_value(b, s1, instr.op2, instr.imm);
+
     {
-        let result = operand_value(b, s1, instr.op1, instr.imm);
-        add_case(Opcode::Mov, result, s1.flag);
+        let result = b.and(x, y);
+        add_case(Opcode::And, result, instr.dest, b.eq(result, b.lit(0)));
     }
 
     {
-        let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
-        let y = operand_value(b, s1, instr.op2, instr.imm);
+        let result = b.or(x, y);
+        add_case(Opcode::Or, result, instr.dest, b.eq(result, b.lit(0)));
+    }
+
+    {
+        let result = b.xor(x, y);
+        add_case(Opcode::Xor, result, instr.dest, b.eq(result, b.lit(0)));
+    }
+
+    {
+        let result = b.not(y);
+        add_case(Opcode::Not, result, instr.dest, b.eq(result, b.lit(0)));
+    }
+
+    {
         let (result, overflow) = b.add_with_overflow(x, y);
-        add_case(Opcode::Add, result, overflow);
+        add_case(Opcode::Add, result, instr.dest, overflow);
     }
 
     {
-        let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
-        let y = operand_value(b, s1, instr.op2, instr.imm);
         let (result, overflow) = b.sub_with_overflow(x, y);
-        add_case(Opcode::Sub, result, overflow);
+        add_case(Opcode::Sub, result, instr.dest, overflow);
     }
 
     {
-        let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
-        let y = operand_value(b, s1, instr.op2, instr.imm);
         let (low, high) = *b.wide_mul(x, y);
-        add_case(Opcode::Mull, low, b.ne(high, b.lit(0)));
+        add_case(Opcode::Mull, low, instr.dest, b.ne(high, b.lit(0)));
     }
 
-    let (result, expect_flag) = *b.mux_multi(&cases, b.lit((0, false)));
+    {
+        let (_, high) = *b.wide_mul(x, y);
+        add_case(Opcode::Umulh, high, instr.dest, b.ne(high, b.lit(0)));
+    }
+
+    {
+        let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        // TODO: not sure this gives the right overflow value - what if high = -1?
+        add_case(Opcode::Smulh, b.cast::<_, u64>(high_s), instr.dest, b.ne(high_s, b.lit(0)));
+    }
+
+    {
+        let result = b.div(x, y);
+        add_case(Opcode::Udiv, result, instr.dest, b.eq(y, b.lit(0)));
+    }
+
+    /* TODO
+    {
+        let result = b.mod_(x, y);
+        add_case(Opcode::Umod, result, instr.dest, b.eq(y, b.lit(0)));
+    }
+    */
+
+    /* TODO
+    {
+        let result = b.shl(x, b.cast::<_, u8>(y));
+        add_case(Opcode::Shl, result, instr.dest, b.ne(b.and(y, b.lit(1 << 63)), b.lit(0)));
+    }
+
+    {
+        let result = b.shr(x, b.cast::<_, u8>(y));
+        add_case(Opcode::Shr, result, instr.dest, b.ne(b.and(y, b.lit(1)), b.lit(0)));
+    }
+    */
+
+
+    {
+        let flag = b.eq(x, y);
+        add_case(Opcode::Cmpe, b.lit(0), b.lit(REG_NONE), flag);
+    }
+
+    {
+        let flag = b.gt(x, y);
+        add_case(Opcode::Cmpa, b.lit(0), b.lit(REG_NONE), flag);
+    }
+
+    {
+        let flag = b.ge(x, y);
+        add_case(Opcode::Cmpae, b.lit(0), b.lit(REG_NONE), flag);
+    }
+
+    {
+        let flag = b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        add_case(Opcode::Cmpg, b.lit(0), b.lit(REG_NONE), flag);
+    }
+
+    {
+        let flag = b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        add_case(Opcode::Cmpge, b.lit(0), b.lit(REG_NONE), flag);
+    }
+
+
+    {
+        add_case(Opcode::Mov, y, instr.dest, s1.flag);
+    }
+
+    {
+        let dest = b.mux(s1.flag, instr.dest, b.lit(REG_NONE));
+        add_case(Opcode::Cmov, y, dest, s1.flag);
+    }
+
+
+    {
+        add_case(Opcode::Jmp, y, b.lit(REG_PC), s1.flag);
+    }
+
+    {
+        let dest = b.mux(s1.flag, b.lit(REG_PC), b.lit(REG_NONE));
+        add_case(Opcode::Cjmp, y, dest, s1.flag);
+    }
+
+    {
+        let dest = b.mux(s1.flag, b.lit(REG_NONE), b.lit(REG_PC));
+        add_case(Opcode::Cnjmp, y, dest, s1.flag);
+    }
+
+    // TODO: Load
+    // TODO: Store
+
+
+    let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
 
     let mut ok = Vec::new();
     for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
-        let is_dest = b.eq(b.lit(i as u64), instr.dest);
+        let is_dest = b.eq(b.lit(i as u64), dest);
         let expect_new = b.mux(is_dest, result, v_old);
         let new_ok = b.eq(v_new, expect_new);
         ok.push(new_ok);
     }
+
+    let pc_is_dest = b.eq(b.lit(REG_PC), dest);
+    let expect_pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
+    ok.push(b.eq(s2.pc, expect_pc));
+
     ok.push(b.eq(s2.flag, expect_flag));
     ok
 }
@@ -138,6 +245,8 @@ fn main() -> io::Result<()> {
     let ok = run_pass(&c, ok, lower::bundle::unbundle_mux);
     let ok = run_pass(&c, ok, lower::bundle::simplify);
     let ok = run_pass(&c, ok, lower::int::extend_to_64);
+    let ok = run_pass(&c, ok, lower::int::int_to_uint);
+    let ok = run_pass(&c, ok, lower::int::reduce_lit_32);
     let ok = run_pass(&c, ok, lower::int::mux);
     let ok = run_pass(&c, ok, lower::int::compare_to_zero);
     let ok = run_pass(&c, ok, lower::bool_::mux);

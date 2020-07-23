@@ -64,6 +64,9 @@ impl RamInstr {
     }
 }
 
+pub const REG_NONE: u64 = 1000;
+pub const REG_PC: u64 = 1001;
+
 #[derive(Clone, Copy)]
 pub struct RamInstrRepr<'a> {
     pub opcode: TWire<'a, u8>,
@@ -208,8 +211,33 @@ macro_rules! mk_opcode {
 }
 
 mk_opcode! {
-    Mov,
+    And,
+    Or,
+    Xor,
+    Not,
     Add,
     Sub,
     Mull,
+    Umulh,
+    Smulh,
+    Udiv,
+    Umod,
+    Shl,
+    Shr,
+
+    Cmpe,
+    Cmpa,
+    Cmpae,
+    Cmpg,
+    Cmpge,
+
+    Mov,
+    Cmov,
+
+    Jmp,
+    Cjmp,
+    Cnjmp,
+
+    Store,
+    Load,
 }
