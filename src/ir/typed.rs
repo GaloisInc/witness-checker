@@ -190,6 +190,24 @@ impl<'a> Builder<'a> {
 }
 
 
+pub trait Cast<'a, Target = Self>
+where Self: Repr<'a>, Target: Repr<'a> {
+    fn cast(
+        bld: &Builder<'a>,
+        x: Self::Repr,
+    ) -> Target::Repr;
+}
+
+impl<'a> Builder<'a> {
+    pub fn cast<T: Cast<'a, U>, U: Repr<'a>>(
+        &self,
+        x: TWire<'a, T>,
+    ) -> TWire<'a, U> {
+        TWire::new(<T as Cast<U>>::cast(self, x.repr))
+    }
+}
+
+
 macro_rules! primitive_unary_impl {
     ($Op:ident :: $op:ident ($T:ty)) => {
         impl<'a> $Op<'a> for $T {
@@ -246,6 +264,16 @@ impl<'a> Mux<'a, bool> for bool {
     }
 }
 
+macro_rules! integer_cast_impl {
+    ($T:ty, $U:ty, $K:ident) => {
+        impl<'a> Cast<'a, $U> for $T {
+            fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+                bld.c.cast(x, bld.c.ty(TyKind::$K))
+            }
+        }
+    };
+}
+
 macro_rules! integer_impls {
     ($T:ty, $K:ident) => {
         impl<'a> Repr<'a> for $T {
@@ -290,6 +318,14 @@ macro_rules! integer_impls {
             }
         }
 
+        integer_cast_impl!($T, i8, I8);
+        integer_cast_impl!($T, i16, I16);
+        integer_cast_impl!($T, i32, I32);
+        integer_cast_impl!($T, i64, I64);
+        integer_cast_impl!($T, u8, U8);
+        integer_cast_impl!($T, u16, U16);
+        integer_cast_impl!($T, u32, U32);
+        integer_cast_impl!($T, u64, U64);
     };
 }
 
