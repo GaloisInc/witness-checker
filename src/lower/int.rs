@@ -195,3 +195,37 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
 
     c.gate(gk)
 }
+
+
+/// Replace literals wider than 32 bits with combinations of multiple 32-bit literals.
+pub fn reduce_lit_32<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+    if let GateKind::Lit(x, ty) = gk {
+        if x >> 32 != 0 {
+            if let Some(w) = make_shifted_lit(c, x, ty) {
+                return w;
+            }
+            if let Some(w) = make_shifted_lit(c, !x, ty) {
+                return c.not(w);
+            }
+            return make_split_lit(c, x, ty);
+        }
+    }
+    c.gate(gk)
+}
+
+fn make_shifted_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Option<Wire<'a>> {
+    let shift = x.trailing_zeros();
+    let y = x >> shift;
+    if y >> 32 != 0 {
+        // Too wide
+        return None;
+    }
+    Some(c.shl(c.lit(ty, y), c.lit(c.ty(TyKind::U8), shift as u64)))
+}
+
+fn make_split_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Wire<'a> {
+    c.or(
+        c.shl(c.lit(ty, x >> 32), c.lit(c.ty(TyKind::U8), 32)),
+        c.lit(ty, x & ((1 << 32) - 1)),
+    )
+}

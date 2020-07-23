@@ -221,7 +221,7 @@ impl<'a> Backend<'a> {
         match gate.kind {
             GateKind::Lit(x, _) => {
                 let dest = self.fresh::<RegSecretRegint>();
-                assert!(x <= u32::MAX as u64, "literal {} out of range for", x);
+                assert!(x <= u32::MAX as u64, "literal {} out of range for u64", x);
                 self.instr(instr::ldsint(0, dest, Imm::from_u32(x as u32)));
                 dest.pack()
             },
