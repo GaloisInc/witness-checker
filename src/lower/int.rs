@@ -229,3 +229,16 @@ fn make_split_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Wire<'a> {
         c.lit(ty, x & ((1 << 32) - 1)),
     )
 }
+
+
+/// Replace `Mod` gates with a circuit using `Div`, `Mul`, and `Sub`.
+pub fn mod_to_div<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+    if let GateKind::Binary(BinOp::Mod, x, y) = gk {
+        return c.sub(
+            x,
+            c.mul(c.div(x, y), y),
+        );
+    }
+    c.gate(gk)
+}
+

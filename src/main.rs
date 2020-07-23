@@ -89,12 +89,10 @@ fn check_step<'a>(
         add_case(Opcode::Udiv, result, instr.dest, b.eq(y, b.lit(0)));
     }
 
-    /* TODO
     {
         let result = b.mod_(x, y);
         add_case(Opcode::Umod, result, instr.dest, b.eq(y, b.lit(0)));
     }
-    */
 
     /* TODO
     {
@@ -244,6 +242,7 @@ fn main() -> io::Result<()> {
     let ok = run_pass(&c, ok, lower::gadget::decompose_all_gadgets);
     let ok = run_pass(&c, ok, lower::bundle::unbundle_mux);
     let ok = run_pass(&c, ok, lower::bundle::simplify);
+    let ok = run_pass(&c, ok, lower::int::mod_to_div);
     let ok = run_pass(&c, ok, lower::int::extend_to_64);
     let ok = run_pass(&c, ok, lower::int::int_to_uint);
     let ok = run_pass(&c, ok, lower::int::reduce_lit_32);
