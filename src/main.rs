@@ -94,7 +94,6 @@ fn check_step<'a>(
         add_case(Opcode::Umod, result, instr.dest, b.eq(y, b.lit(0)));
     }
 
-    /* TODO
     {
         let result = b.shl(x, b.cast::<_, u8>(y));
         add_case(Opcode::Shl, result, instr.dest, b.ne(b.and(y, b.lit(1 << 63)), b.lit(0)));
@@ -104,7 +103,6 @@ fn check_step<'a>(
         let result = b.shr(x, b.cast::<_, u8>(y));
         add_case(Opcode::Shr, result, instr.dest, b.ne(b.and(y, b.lit(1)), b.lit(0)));
     }
-    */
 
 
     {
@@ -243,6 +241,7 @@ fn main() -> io::Result<()> {
     let ok = run_pass(&c, ok, lower::bundle::unbundle_mux);
     let ok = run_pass(&c, ok, lower::bundle::simplify);
     let ok = run_pass(&c, ok, lower::int::mod_to_div);
+    let ok = run_pass(&c, ok, lower::int::non_constant_shift);
     let ok = run_pass(&c, ok, lower::int::extend_to_64);
     let ok = run_pass(&c, ok, lower::int::int_to_uint);
     let ok = run_pass(&c, ok, lower::int::reduce_lit_32);

@@ -231,7 +231,8 @@ fn make_split_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Wire<'a> {
 }
 
 
-/// Replace `Mod` gates with a circuit using `Div`, `Mul`, and `Sub`.
+/// Replace `Mod` gates with a circuit using `Div`, `Mul`, and `Sub`.  Useful for SCALE, which does
+/// not support `Mod`.
 pub fn mod_to_div<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Binary(BinOp::Mod, x, y) = gk {
         return c.sub(
@@ -242,3 +243,35 @@ pub fn mod_to_div<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a>
     c.gate(gk)
 }
 
+
+/// Replace any shift by a non-constant with a series of shifts by constants.  Useful for SCALE,
+/// which supports only constant shifts.
+pub fn non_constant_shift<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+    if let GateKind::Shift(op, x, amt) = gk {
+        // Shifts by a constant are allowed.
+        if let GateKind::Lit(_, _) = amt.kind {
+            return c.gate(gk);
+        }
+
+        // The width of the input `x`.
+        let width = x.ty.integer_size().bits();
+        // The number of bits in the shift amount, or the base-2 log of `width`.
+        let bits = width.trailing_zeros();
+        assert!(1 << bits == width);
+        let ty_u8 = c.ty(TyKind::U8);
+        let mut y = x;
+        for i in 0 .. bits {
+            // If bit `i` is set, then shift by `1 << i`.
+            let amt_bit = c.lit(ty_u8, 1 << i);
+            let bit_set = c.ne(c.lit(ty_u8, 0), c.and(amt, amt_bit));
+            y = c.mux(bit_set, c.shift(op, y, amt_bit), y);
+        }
+        // If bits beyond `level` are set, then shift by `1 << level`.
+        let width_val = c.lit(ty_u8, width as u64);
+        let overflowed = c.ge(amt, width_val);
+        y = c.mux(overflowed, c.shift(op, y, width_val), y);
+
+        return y;
+    }
+    c.gate(gk)
+}
