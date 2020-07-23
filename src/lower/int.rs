@@ -102,6 +102,32 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
 
 /// Convert all `Int`s to `Uint`s.
 pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+    // Special handling for casts to and from Int types.  We look at `old` instead of `gk` here
+    // because `gk`'s input wire has already been changed to an unsigned type.
+    if let GateKind::Cast(old_w, old_dest_ty) = old.kind {
+        // Casts from signed types require a sign extension.
+        if let TyKind::Int(src_sz) = *old_w.ty {
+            if old_dest_ty.is_integer() {
+                let dest_sz = old_dest_ty.integer_size();
+                if dest_sz.bits() > src_sz.bits() {
+                    let new_dest_ty = c.ty(TyKind::Uint(dest_sz));
+                    let cast = match gk {
+                        GateKind::Cast(w, _ty) => c.cast(w, new_dest_ty),
+                        _ => unreachable!(),
+                    };
+
+                    let sign_mask = c.lit(new_dest_ty, 1 << (src_sz.bits() - 1));
+                    let sign = c.and(cast, sign_mask);
+                    let sign_fill = c.neg(sign);
+                    return c.or(cast, sign_fill);
+                }
+            }
+        }
+
+        // Casts from unsigned to signed only require a change to the destination type.  This case
+        // is handled below.
+    }
+
     if let TyKind::Int(sz) = *old.ty {
         let new_ty = c.ty(TyKind::Uint(sz));
         match gk {
@@ -152,9 +178,11 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
                 },
             },
             GateKind::Mux(_, _, _) => {},
-            // Casts *to* Int types don't need special handling in general.  Casts *from* Int types
-            // do, and are handled below.
-            GateKind::Cast(_, _) => {},
+            // This covers only the case of casts *to* signed types.  Casts *from* signed types are
+            // handled in the special case above.
+            GateKind::Cast(w, _) => {
+                return c.cast(w, new_ty);
+            },
             GateKind::Pack(_) => {},
             // `Extract`'s input should already have had its output types changed.
             GateKind::Extract(_, _) => {},
@@ -162,28 +190,6 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
             // (Gadgets whose output type matches an input should work fine, as all inputs have
             // already been changed to `Uint`.)
             GateKind::Gadget(_, _) => {},
-        }
-    }
-
-    // Special handling for widening casts from Int types.  We look at `old` instead of `gk` here
-    // because `gk`'s input wire has already been changed to an unsigned type.
-    if let GateKind::Cast(w, old_dest_ty) = old.kind {
-        if let TyKind::Int(src_sz) = *w.ty {
-            if old_dest_ty.is_integer() {
-                let dest_sz = old_dest_ty.integer_size();
-                if dest_sz.bits() > src_sz.bits() {
-                    let new_dest_ty = c.ty(TyKind::Uint(dest_sz));
-                    let cast = match gk {
-                        GateKind::Cast(w, _ty) => c.cast(w, new_dest_ty),
-                        _ => unreachable!(),
-                    };
-
-                    let sign_mask = c.lit(new_dest_ty, 1 << (src_sz.bits() - 1));
-                    let sign = c.and(cast, sign_mask);
-                    let sign_fill = c.neg(sign);
-                    return c.or(cast, sign_fill);
-                }
-            }
         }
     }
 
