@@ -91,6 +91,7 @@ impl<'a> GadgetKind<'a> for WideMul {
             TyKind::Int(sz) => (sz, true),
             _ => unreachable!(),
         };
+        let uty = c.ty(TyKind::Uint(sz));
 
         // Build a signed or unsigned `N x N -> 2N` multiplier, given only an `N x N -> N` multiply
         // gate (like the one SCALE provides).
@@ -131,8 +132,8 @@ impl<'a> GadgetKind<'a> for WideMul {
         let sum1_carry1 = c.gadget(
             g_add_with_overflow,
             &[
-                c.shl(c.mul(a0, b1), half_n),
-                c.shl(c.mul(a1, b0), half_n),
+                c.shl(c.cast(c.mul(a0, b1), uty), half_n),
+                c.shl(c.cast(c.mul(a1, b0), uty), half_n),
             ],
         );
         let sum1 = c.extract(sum1_carry1, 0);
@@ -142,7 +143,7 @@ impl<'a> GadgetKind<'a> for WideMul {
             g_add_with_overflow,
             &[
                 sum1,
-                c.mul(a0, b0),
+                c.cast(c.mul(a0, b0), uty),
             ],
         );
         let sum2 = c.extract(sum2_carry2, 0);
