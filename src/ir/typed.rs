@@ -587,4 +587,25 @@ impl<'a> Builder<'a> {
         }
         val
     }
+
+    /// Output a `val` from `vals` on which `check(val)` outputs `true`.  If all checks output
+    /// false (or `vals` is empty), then this function outputs `default` instead.
+    pub fn select<C, A>(
+        &self,
+        vals: &[TWire<'a, A>],
+        default: TWire<'a, A>,
+        mut check: impl FnMut(&TWire<'a, A>) -> TWire<'a, C>,
+    ) -> TWire<'a, A>
+    where
+        C: Repr<'a>,
+        A: Mux<'a, C, A, Output = A>,
+        A::Repr: Clone,
+    {
+        let mut acc = default;
+        for val in vals {
+            let cond = check(val);
+            acc = self.mux(cond, val.clone(), acc);
+        }
+        acc
+    }
 }

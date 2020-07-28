@@ -241,3 +241,79 @@ mk_opcode! {
     Store,
     Load,
 }
+
+
+#[derive(Clone, Copy, Default)]
+pub struct MemPort {
+    pub cycle: u64,
+    pub addr: u64,
+    pub value: u64,
+    pub write: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct MemPortRepr<'a> {
+    pub cycle: TWire<'a, u64>,
+    pub addr: TWire<'a, u64>,
+    pub value: TWire<'a, u64>,
+    pub write: TWire<'a, bool>,
+}
+
+impl<'a> Repr<'a> for MemPort {
+    type Repr = MemPortRepr<'a>;
+}
+
+impl<'a> Lit<'a> for MemPort {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        MemPortRepr {
+            cycle: bld.lit(a.cycle),
+            addr: bld.lit(a.addr),
+            value: bld.lit(a.value),
+            write: bld.lit(a.write),
+        }
+    }
+}
+
+impl<'a> Secret<'a> for MemPort {
+    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+        if let Some(a) = a {
+            MemPortRepr {
+                cycle: bld.secret(Some(a.cycle)),
+                addr: bld.secret(Some(a.addr)),
+                value: bld.secret(Some(a.value)),
+                write: bld.secret(Some(a.write)),
+            }
+        } else {
+            MemPortRepr {
+                cycle: bld.secret(None),
+                addr: bld.secret(None),
+                value: bld.secret(None),
+                write: bld.secret(None),
+            }
+        }
+    }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, MemPort> for MemPort
+where
+    C::Repr: Clone,
+    u64: Mux<'a, C, u64, Output = u64>,
+    bool: Mux<'a, C, bool, Output = bool>,
+{
+    type Output = MemPort;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: MemPortRepr<'a>,
+        e: MemPortRepr<'a>,
+    ) -> MemPortRepr<'a> {
+        let c: TWire<C> = TWire::new(c);
+        MemPortRepr {
+            cycle: bld.mux(c.clone(), t.cycle, e.cycle),
+            addr: bld.mux(c.clone(), t.addr, e.addr),
+            value: bld.mux(c.clone(), t.value, e.value),
+            write: bld.mux(c.clone(), t.write, e.write),
+        }
+    }
+}

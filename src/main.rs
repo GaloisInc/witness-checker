@@ -8,7 +8,7 @@ use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::parse;
-use cheesecloth::tiny_ram::{RamInstr, RamState, Opcode, REG_NONE, REG_PC};
+use cheesecloth::tiny_ram::{RamInstr, RamState, MemPort, Opcode, REG_NONE, REG_PC};
 
 fn operand_value<'a>(
     b: &Builder<'a>,
@@ -22,7 +22,9 @@ fn operand_value<'a>(
 
 fn check_step<'a>(
     b: &Builder<'a>,
+    cycle: u64,
     prog: &[TWire<'a, RamInstr>],
+    mem_ports: &[TWire<'a, MemPort>],
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) -> Vec<TWire<'a, bool>> {
@@ -37,6 +39,12 @@ fn check_step<'a>(
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
     let y = operand_value(b, s1, instr.op2, instr.imm);
+
+    let mem_port = b.select(
+        mem_ports,
+        b.lit(MemPort::default()),
+        |port| b.eq(port.cycle, b.lit(cycle)),
+    );
 
     {
         let result = b.and(x, y);
@@ -155,9 +163,14 @@ fn check_step<'a>(
         add_case(Opcode::Cnjmp, y, dest, s1.flag);
     }
 
-    // TODO: Load
-    // TODO: Store
+    {
+        let result = mem_port.value;
+        add_case(Opcode::Load, result, instr.dest, s1.flag);
+    }
 
+    {
+        add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE), s1.flag);
+    }
 
     let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
 
@@ -174,6 +187,27 @@ fn check_step<'a>(
     ok.push(b.eq(s2.pc, expect_pc));
 
     ok.push(b.eq(s2.flag, expect_flag));
+
+
+    // If the instruction is a store or a load, we need additional checks to make sure the fields
+    // of `mem_port` match the instruction operands.
+    let is_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
+    let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
+    let is_mem = b.or(is_load, is_store);
+
+    // TODO: shouldn't need an extra `eq` here
+    let cycle_ok = b.eq(mem_port.cycle, b.lit(cycle));
+    let addr_ok = b.eq(mem_port.addr, y);
+    let load_value_ok = b.eq(mem_port.value, result);
+    let store_value_ok = b.eq(mem_port.value, x);
+    let store_ok = b.eq(mem_port.write, is_store);
+    ok.push(b.mux(is_mem, cycle_ok, b.lit(true)));
+    ok.push(b.mux(is_mem, addr_ok, b.lit(true)));
+    ok.push(b.mux(is_load, load_value_ok, b.lit(true)));
+    ok.push(b.mux(is_store, store_value_ok, b.lit(true)));
+    ok.push(b.mux(is_mem, store_ok, b.lit(true)));
+
+
     ok
 }
 
@@ -225,8 +259,8 @@ fn main() -> io::Result<()> {
 
     ok.append(&mut check_first(&b, &prog, trace.first().unwrap()));
 
-    for (s1, s2) in trace.iter().zip(trace.iter().skip(1)) {
-        ok.append(&mut check_step(&b, &prog, s1, s2));
+    for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
+        ok.append(&mut check_step(&b, i as u64, &prog, &[], s1, s2));
     }
 
     ok.append(&mut check_last(&b, &prog, trace.last().unwrap()));
