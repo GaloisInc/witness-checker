@@ -214,6 +214,11 @@ pub fn reduce_lit_32<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<
 }
 
 fn make_shifted_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Option<Wire<'a>> {
+    // When `x == 0`, `x.trailing_zeros()` returns 64, and shifting by 64 triggers an overflow.
+    if x == 0 {
+        return Some(c.lit(ty, 0));
+    }
+
     let shift = x.trailing_zeros();
     let y = x >> shift;
     if y >> 32 != 0 {

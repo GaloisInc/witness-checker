@@ -22,7 +22,7 @@ fn operand_value<'a>(
 
 fn check_step<'a>(
     b: &Builder<'a>,
-    cycle: u64,
+    cycle: u32,
     prog: &[TWire<'a, RamInstr>],
     mem_ports: &[TWire<'a, MemPort>],
     s1: &TWire<'a, RamState>,
@@ -40,6 +40,10 @@ fn check_step<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
+    let has_mem_port = mem_ports.iter().fold(
+        b.lit(false),
+        |acc, port| b.or(acc, b.eq(port.cycle, b.lit(cycle))),
+    );
     let mem_port = b.select(
         mem_ports,
         b.lit(MemPort::default()),
@@ -207,6 +211,10 @@ fn check_step<'a>(
     ok.push(b.mux(is_store, store_value_ok, b.lit(true)));
     ok.push(b.mux(is_mem, store_ok, b.lit(true)));
 
+    // Non-memory ops must not use a memory port.  This prevents a malicious prover from
+    // introducing fake stores on non-store instructions.
+    ok.push(b.eq(has_mem_port, is_mem));
+
 
     ok
 }
@@ -254,16 +262,35 @@ fn main() -> io::Result<()> {
         trace.push(b.secret(Some(parse::parse_state(line))));
     }
 
+    let mut mem_ports = Vec::new();
+    for _ in 1 .. trace.len() {
+        mem_ports.push(b.secret(Some(MemPort {
+            cycle: !0,
+            .. MemPort::default()
+        })));
+    }
+
     // Generate IR code to check the trace
     let mut ok = Vec::new();
 
     ok.append(&mut check_first(&b, &prog, trace.first().unwrap()));
 
     for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
-        ok.append(&mut check_step(&b, i as u64, &prog, &[], s1, s2));
+        let port = &mem_ports[i];
+        ok.append(&mut check_step(&b, i as u32, &prog, &[port.clone()], s1, s2));
     }
 
     ok.append(&mut check_last(&b, &prog, trace.last().unwrap()));
+
+    // Check the memory ports
+    for (i, port) in mem_ports.iter().enumerate() {
+        // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
+        // in its corresponding cycle, or it isn't used at all.
+        ok.push(b.or(
+            b.eq(port.cycle, b.lit(i as u32)),
+            b.eq(port.cycle, b.lit(!0_u32)),
+        ));
+    }
 
     // Lower IR code
     let c = b.finish();

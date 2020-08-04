@@ -245,7 +245,7 @@ mk_opcode! {
 
 #[derive(Clone, Copy, Default)]
 pub struct MemPort {
-    pub cycle: u64,
+    pub cycle: u32,
     pub addr: u64,
     pub value: u64,
     pub write: bool,
@@ -253,7 +253,7 @@ pub struct MemPort {
 
 #[derive(Clone, Copy)]
 pub struct MemPortRepr<'a> {
-    pub cycle: TWire<'a, u64>,
+    pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
     pub write: TWire<'a, bool>,
@@ -297,6 +297,7 @@ impl<'a> Secret<'a> for MemPort {
 impl<'a, C: Repr<'a>> Mux<'a, C, MemPort> for MemPort
 where
     C::Repr: Clone,
+    u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
     bool: Mux<'a, C, bool, Output = bool>,
 {
