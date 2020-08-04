@@ -8,6 +8,7 @@ use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::parse;
+use cheesecloth::sort;
 use cheesecloth::tiny_ram::{RamInstr, RamState, MemPort, Opcode, REG_NONE, REG_PC};
 
 fn operand_value<'a>(
@@ -243,6 +244,34 @@ fn check_last<'a>(
     vec![pc_ok, r0_ok]
 }
 
+fn check_first_mem<'a>(
+    b: &Builder<'a>,
+    port: &TWire<'a, MemPort>,
+) -> Vec<TWire<'a, bool>> {
+    // If the first memory port is active, then it must be a write, since there are no previous
+    // writes to read from.
+    let active = b.ne(port.cycle, b.lit(!0));
+    vec![b.mux(active, port.write, b.lit(true))]
+}
+
+fn check_mem<'a>(
+    b: &Builder<'a>,
+    port1: &TWire<'a, MemPort>,
+    port2: &TWire<'a, MemPort>,
+) -> Vec<TWire<'a, bool>> {
+    let active = b.and(b.ne(port1.cycle, b.lit(!0)), b.ne(port2.cycle, b.lit(!0)));
+
+    let val_ok = b.mux(
+        b.not(port2.write),
+        // If `port2` is a read, then `port1` must be a write with the same address and value.
+        b.and(b.eq(port1.addr, port2.addr), b.eq(port1.value, port2.value)),
+        // Otherwise, `port2` is unconstrained.
+        b.lit(true),
+    );
+
+    vec![b.mux(active, val_ok, b.lit(true))]
+}
+
 fn main() -> io::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     assert!(args.len() == 3, "usage: {} PROGRAM TRACE", args.get(0).map_or("witness-checker", |x| x));
@@ -290,6 +319,19 @@ fn main() -> io::Result<()> {
             b.eq(port.cycle, b.lit(i as u32)),
             b.eq(port.cycle, b.lit(!0_u32)),
         ));
+    }
+
+    // Check memory consistency
+    let mut sorted_mem = mem_ports.clone();
+    sort::sort(&b, &mut sorted_mem, &mut |x, y| {
+        b.or(
+            b.lt(x.addr, y.addr),
+            b.and(b.eq(x.addr, y.addr), b.lt(x.cycle, y.cycle)),
+        )
+    });
+    ok.append(&mut check_first_mem(&b, &sorted_mem[0]));
+    for (port1, port2) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)) {
+        ok.append(&mut check_mem(&b, port1, port2));
     }
 
     // Lower IR code
