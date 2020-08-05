@@ -1,4 +1,5 @@
 use super::backend::{Backend, WireId, OpLabel, PackedValue};
+use super::gadgetlib::{push_alu_op, push_flow_op, push_muxer, push_muxer_pair, push_demuxer};
 use crate::back::zkif::mem::Memory;
 use super::debug::comment;
 
@@ -104,7 +105,8 @@ impl MachineState {
         match Self::get_op_type(instr.op_label) {
             0 => {
                 // ALU instructions update a register, the flag, and increment pc.
-                let (new_reg0, new_flag) = back.push_alu_op(
+                let (new_reg0, new_flag) = push_alu_op(
+                    back,
                     instr.op_label,
                     self.registers[instr.reg_label0],
                     self.registers[instr.reg_label1],
@@ -115,7 +117,8 @@ impl MachineState {
             }
             1 => {
                 // Flow instructions update pc and copy the rest.
-                let jump_pc = back.push_flow_op(
+                let jump_pc = push_flow_op(
+                    back,
                     instr.op_label,
                     self.flag,
                     next_pc,
@@ -147,10 +150,10 @@ impl MachineState {
         //println!("dynamic instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
         comment("// Pick the register inputs from all possible registers.");
-        let arg0 = back.push_muxer(&self.registers, instr.reg_label0);
-        let arg1 = back.push_muxer(&self.registers, instr.reg_label1);
-        let arg2_from_reg = back.push_muxer(&self.registers, instr.reg_label2);
-        let arg2 = back.push_muxer(&[arg2_from_reg, instr.reg_label2], instr.label2_immediate);
+        let arg0 = push_muxer(back, &self.registers, instr.reg_label0);
+        let arg1 = push_muxer(back, &self.registers, instr.reg_label1);
+        let arg2_from_reg = push_muxer(back, &self.registers, instr.reg_label2);
+        let arg2 = push_muxer(back, &[arg2_from_reg, instr.reg_label2], instr.label2_immediate);
 
         // Default results when not updated.
         let copy_arg0 = arg0;
@@ -160,20 +163,20 @@ impl MachineState {
 
         comment("// Execute all possible ALU operations.");
         let possible_alu_results = capab.possible_alu_ops.iter().map(|op|
-            back.push_alu_op(*op, arg0, arg1, arg2)
+            push_alu_op(back, *op, arg0, arg1, arg2)
         ).collect::<Vec<(WireId, WireId)>>();
 
         comment("// Pick the (result, flag) of the actual ALU operation.");
-        let (alu_result, alu_flag) = back.push_muxer_pair(&possible_alu_results, instr.op_label);
+        let (alu_result, alu_flag) = push_muxer_pair(back, &possible_alu_results, instr.op_label);
         back.cost_est.print_cost();
 
         comment("// Execute all possible FLOW operations.");
         let possible_flow_pcs = capab.possible_flow_ops.iter().map(|op|
-            back.push_flow_op(*op, self.flag, next_pc, arg2)
+            push_flow_op(back, *op, self.flag, next_pc, arg2)
         ).collect::<Vec<WireId>>();
 
         comment("// Pick the PC after the actual FLOW operation.");
-        let flow_pc = back.push_muxer(&possible_flow_pcs, instr.op_label);
+        let flow_pc = push_muxer(back, &possible_flow_pcs, instr.op_label);
         // TODO: deal with the offset of flow opcodes rather than index in the muxer above.
         back.cost_est.print_cost();
 
@@ -184,7 +187,7 @@ impl MachineState {
         }
         let mem_result = if capab.possible_mem_load {
             let loaded = mem.load(back, arg2);
-            back.push_muxer(&[loaded, copy_arg0], is_store)
+            push_muxer(back, &[loaded, copy_arg0], is_store)
         } else {
             copy_arg0
         };
@@ -193,12 +196,12 @@ impl MachineState {
         comment("// Pick the (result, flag, pc) after either the ALU or FLOW or MEM operation.");
         let op_type = Self::push_opcode_type(back, instr.op_label);
 
-        let result = back.push_muxer(&[alu_result, copy_arg0, mem_result], op_type);
-        let new_flag = back.push_muxer(&[alu_flag, copy_flag, copy_flag], op_type);
-        let new_pc = back.push_muxer(&[next_pc, flow_pc, next_pc], op_type);
+        let result = push_muxer(back, &[alu_result, copy_arg0, mem_result], op_type);
+        let new_flag = push_muxer(back, &[alu_flag, copy_flag, copy_flag], op_type);
+        let new_pc = push_muxer(back, &[next_pc, flow_pc, next_pc], op_type);
 
         comment("// Write the new state.");
-        back.push_demuxer(&mut self.registers, instr.reg_label0, result);
+        push_demuxer(back, &mut self.registers, instr.reg_label0, result);
         self.flag = new_flag;
         self.pc = new_pc;
 
