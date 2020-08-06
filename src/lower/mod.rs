@@ -5,6 +5,7 @@ pub mod bool_;
 pub mod int;
 pub mod bundle;
 pub mod gadget;
+pub mod const_fold;
 
 struct RunPass<'a, 'old, 'new, F> {
     c: &'a Circuit<'new>,
