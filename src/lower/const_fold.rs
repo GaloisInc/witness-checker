@@ -1,8 +1,8 @@
 use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp};
 
-fn get_const<'a>(w: Wire<'a>) -> Option<(u64, Ty<'a>)> {
+fn get_const<'a>(w: Wire<'a>) -> Option<u64> {
     match w.kind {
-        GateKind::Lit(val, ty) => Some((val, ty)),
+        GateKind::Lit(val, _) => Some(val),
         _ => None,
     }
 }
@@ -24,22 +24,24 @@ fn sign_extend(ty: Ty, val: u64) -> Option<i64> {
     Some(((val << shift) as i64) >> shift)
 }
 
-fn try_const_fold<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<(u64, Ty<'a>)> {
+fn try_const_fold<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<u64> {
     match gk {
         // `Lit` is already a constant - no need for more folding.
         GateKind::Lit(..) => None,
         GateKind::Secret(..) => None,
         GateKind::Unary(op, a) => {
-            let (a_val, ty) = get_const(a)?;
+            let a_val = get_const(a)?;
+            let ty = a.ty;
             let val = match op {
                 UnOp::Not => !a_val,
                 UnOp::Neg => sign_extend(ty, a_val)?.wrapping_neg() as u64,
             };
-            Some((val & value_mask(ty)?, ty))
+            Some(val & value_mask(ty)?)
         },
         GateKind::Binary(op, a, b) => {
-            let (a_val, ty) = get_const(a)?;
-            let (b_val, _) = get_const(b)?;
+            let a_val = get_const(a)?;
+            let b_val = get_const(b)?;
+            let ty = a.ty;
             let val = match (op, *ty) {
                 (BinOp::Add, _) => a_val.wrapping_add(b_val),
                 (BinOp::Sub, _) => a_val.wrapping_sub(b_val),
@@ -56,11 +58,12 @@ fn try_const_fold<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<(u64, Ty<'a>)
                 (BinOp::Or, _) => a_val | b_val,
                 (BinOp::Xor, _) => a_val ^ b_val,
             };
-            Some((val & value_mask(ty)?, ty))
+            Some(val & value_mask(ty)?)
         },
         GateKind::Shift(op, a, b) => {
-            let (a_val, ty) = get_const(a)?;
-            let (b_val, _) = get_const(b)?;
+            let a_val = get_const(a)?;
+            let b_val = get_const(b)?;
+            let ty = a.ty;
             let val = match (op, *ty) {
                 (ShiftOp::Shl, _) => a_val << b_val,
                 (ShiftOp::Shr, TyKind::Uint(_)) => a_val >> b_val,
@@ -68,11 +71,12 @@ fn try_const_fold<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<(u64, Ty<'a>)
                     (sign_extend(ty, a_val)? >> b_val) as u64,
                 (ShiftOp::Shr, _) => return None,
             };
-            Some((val & value_mask(ty)?, ty))
+            Some(val & value_mask(ty)?)
         },
         GateKind::Compare(op, a, b) => {
-            let (a_val, ty) = get_const(a)?;
-            let (b_val, _) = get_const(b)?;
+            let a_val = get_const(a)?;
+            let b_val = get_const(b)?;
+            let ty = a.ty;
             let val: bool = match (op, *ty) {
                 (CmpOp::Eq, _) => (a_val & value_mask(ty)?) == (b_val & value_mask(ty)?),
                 (CmpOp::Ne, _) => (a_val & value_mask(ty)?) != (b_val & value_mask(ty)?),
@@ -85,22 +89,22 @@ fn try_const_fold<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<(u64, Ty<'a>)
                 (CmpOp::Ge, TyKind::Int(_)) => sign_extend(ty, a_val)? >= sign_extend(ty, b_val)?,
                 (CmpOp::Ge, _) => a_val >= b_val,
             };
-            Some((val as u64, c.ty(TyKind::Bool)))
+            Some(val as u64)
         },
         GateKind::Mux(c, t, e) => {
-            let (c_val, _) = get_const(c)?;
-            let (t_val, ty) = get_const(t)?;
-            let (e_val, _) = get_const(e)?;
+            let c_val = get_const(c)?;
+            let t_val = get_const(t)?;
+            let e_val = get_const(e)?;
             let val = if c_val != 0 { t_val } else { e_val };
-            Some((val, ty))
+            Some(val)
         },
         GateKind::Cast(a, new_ty) => {
-            let (a_val, ty) = get_const(a)?;
-            let val = match *ty {
-                TyKind::Int(_) => sign_extend(ty, a_val)? as u64,
+            let a_val = get_const(a)?;
+            let val = match *a.ty {
+                TyKind::Int(_) => sign_extend(a.ty, a_val)? as u64,
                 _ => a_val,
             };
-            Some((val & value_mask(new_ty)?, new_ty))
+            Some(val & value_mask(new_ty)?)
         },
         GateKind::Pack(_) => None,
         GateKind::Extract(w, i) => {
@@ -130,7 +134,7 @@ fn try_const_fold<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<(u64, Ty<'a>)
 
 pub fn const_fold<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     match try_const_fold(c, gk) {
-        Some((val, ty)) => c.lit(ty, val),
+        Some(val) => c.lit(gk.ty(c), val),
         None => c.gate(gk),
     }
 }
