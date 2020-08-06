@@ -2,15 +2,15 @@ use std::cell::RefCell;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
+use std::path::Path;
 use bumpalo::Bump;
 
 use cheesecloth::back;
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
-use cheesecloth::parse;
 use cheesecloth::sort;
-use cheesecloth::tiny_ram::{RamInstr, RamState, MemPort, Opcode, REG_NONE, REG_PC};
+use cheesecloth::tiny_ram::{Execution, RamInstr, RamState, MemPort, Opcode, REG_NONE, REG_PC};
 
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
@@ -307,7 +307,7 @@ fn check_last<'a>(
     s: &TWire<'a, RamState>,
 ) {
     cx.assert(b.eq(s.pc, b.lit(prog.len() as u64)));
-    cx.bug_if(b.ne(s.regs[0], b.lit(0)));
+    cx.assert(b.eq(s.regs[0], b.lit(0)));
 }
 
 fn check_first_mem<'a>(
@@ -350,22 +350,28 @@ fn check_mem<'a>(
 
 fn main() -> io::Result<()> {
     let args = env::args().collect::<Vec<_>>();
-    assert!(args.len() == 3, "usage: {} PROGRAM TRACE", args.get(0).map_or("witness-checker", |x| x));
+    assert!(args.len() == 2, "usage: {} WITNESS", args.get(0).map_or("witness-checker", |x| x));
     let arena = Bump::new();
     let b = Builder::new(&arena);
     let cx = Context::new();
 
     // Load the program and trace from files
+    let content = fs::read(&args[1]).unwrap();
+    let exec: Execution = match Path::new(&args[1]).extension().and_then(|os| os.to_str()) {
+        Some("yaml") => serde_yaml::from_slice(&content).unwrap(),
+        Some("cbor") => serde_cbor::from_slice(&content).unwrap(),
+        Some("json") => serde_json::from_slice(&content).unwrap(),
+        _ => serde_cbor::from_slice(&content).unwrap(),
+    };
+
     let mut prog = Vec::new();
-    let prog_str = fs::read_to_string(&args[1]).unwrap();
-    for line in prog_str.lines() {
-        prog.push(b.lit(parse::parse_instr(line)));
+    for instr in exec.program {
+        prog.push(b.lit(instr));
     }
 
     let mut trace = Vec::new();
-    let trace_str = fs::read_to_string(&args[2]).unwrap();
-    for line in trace_str.lines() {
-        trace.push(b.secret(Some(parse::parse_state(line))));
+    for state in exec.trace {
+        trace.push(RamState::secret_with_value(&b, state));
     }
 
     let mut mem_ports = Vec::new();

@@ -1,9 +1,14 @@
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::fmt;
+use serde::de::{self, Deserializer, SeqAccess, Visitor};
+use serde::Deserialize;
 use crate::ir::typed::{Builder, TWire, Repr, Lit, Secret, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u64,
@@ -119,32 +124,27 @@ where
 }
 
 
-pub const RAM_REGS: usize = 16;
-
+#[derive(Clone, Debug)]
 pub struct RamState {
     pub pc: u64,
-    pub regs: [u64; RAM_REGS],
+    pub regs: Vec<u64>,
     pub flag: bool,
 }
 
 impl RamState {
-    pub fn new(pc: u32, regs: [u32; RAM_REGS], flag: bool) -> RamState {
-        let mut state_regs = [0; RAM_REGS];
-        for i in 0 .. RAM_REGS {
-            state_regs[i] = regs[i] as u64;
-        }
+    pub fn new(pc: u32, regs: Vec<u32>, flag: bool) -> RamState {
         RamState {
             pc: pc as u64,
-            regs: state_regs,
+            regs: regs.into_iter().map(|x| x as u64).collect(),
             flag,
         }
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
-    pub regs: [TWire<'a, u64>; RAM_REGS],
+    pub regs: Vec<TWire<'a, u64>>,
     pub flag: TWire<'a, bool>,
 }
 
@@ -156,47 +156,44 @@ impl<'a> Lit<'a> for RamState {
     fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
         RamStateRepr {
             pc: bld.lit(a.pc),
-            regs: *bld.lit(a.regs),
+            regs: bld.lit(a.regs).repr,
             flag: bld.lit(a.flag),
         }
     }
 }
 
-impl<'a> Secret<'a> for RamState {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            RamStateRepr {
-                pc: bld.secret(Some(a.pc)),
-                regs: *bld.secret(Some(a.regs)),
-                flag: bld.secret(Some(a.flag)),
-            }
-        } else {
-            RamStateRepr {
-                pc: bld.secret(None),
-                regs: *bld.secret::<[u64; RAM_REGS]>(None),
-                flag: bld.secret(None),
-            }
-        }
+impl RamState {
+    pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
+        TWire::new(RamStateRepr {
+            pc: bld.secret(Some(a.pc)),
+            regs: a.regs.iter().map(|&x| bld.secret(Some(x))).collect(),
+            flag: bld.secret(Some(a.flag)),
+        })
+    }
+
+    pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
+        TWire::new(RamStateRepr {
+            pc: bld.secret(None),
+            regs: (0 .. len).map(|_| bld.secret(None)).collect(),
+            flag: bld.secret(None),
+        })
     }
 }
 
 
 macro_rules! mk_opcode {
-    ($($Variant:ident,)*) => {
+    ($($Variant:ident = $value:expr,)*) => {
         #[repr(u8)]
         pub enum Opcode {
-            $($Variant,)*
+            $($Variant = $value,)*
         }
 
         impl Opcode {
             pub fn from_raw(x: u8) -> Opcode {
-                #![allow(unused)]   // Final write to `y` is never read
-                let mut y = x;
-                $(
-                    if y == 0 { return Opcode::$Variant; }
-                    y -= 1;
-                )*
-                panic!("bad value {} for Opcode", x)
+                match x {
+                    $($value => Opcode::$Variant,)*
+                    _ => panic!("bad value {} for Opcode", x),
+                }
             }
 
             pub fn count() -> usize {
@@ -211,35 +208,35 @@ macro_rules! mk_opcode {
 }
 
 mk_opcode! {
-    And,
-    Or,
-    Xor,
-    Not,
-    Add,
-    Sub,
-    Mull,
-    Umulh,
-    Smulh,
-    Udiv,
-    Umod,
-    Shl,
-    Shr,
+    And = 0,
+    Or = 1,
+    Xor = 2,
+    Not = 3,
+    Add = 4,
+    Sub = 5,
+    Mull = 6,
+    Umulh = 7,
+    Smulh = 8,
+    Udiv = 9,
+    Umod = 10,
+    Shl = 11,
+    Shr = 12,
 
-    Cmpe,
-    Cmpa,
-    Cmpae,
-    Cmpg,
-    Cmpge,
+    Cmpe = 13,
+    Cmpa = 14,
+    Cmpae = 15,
+    Cmpg = 16,
+    Cmpge = 17,
 
-    Mov,
-    Cmov,
+    Mov = 18,
+    Cmov = 19,
 
-    Jmp,
-    Cjmp,
-    Cnjmp,
+    Jmp = 20,
+    Cjmp = 21,
+    Cnjmp = 22,
 
-    Store,
-    Load,
+    Store = 23,
+    Load = 24,
 }
 
 
@@ -315,6 +312,207 @@ where
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
             write: bld.mux(c.clone(), t.write, e.write),
+        }
+    }
+}
+
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Execution {
+    pub program: Vec<RamInstr>,
+    #[serde(default)]
+    pub init_mem: Vec<u64>,
+    pub params: Params,
+    pub trace: Vec<RamState>,
+    #[serde(default)]
+    pub advice: HashMap<u64, Vec<Advice>>,
+}
+
+impl Execution {
+    pub fn validate(self) -> Result<Self, String> {
+        let params = &self.params;
+        if self.trace.len() > params.trace_len {
+            return Err(format!(
+                "`trace` contains more than `trace_len` states: {} > {}",
+                self.trace.len(), params.trace_len,
+            ));
+        }
+
+        for (i, s) in self.trace.iter().enumerate() {
+            if s.regs.len() != params.num_regs {
+                return Err(format!(
+                    "`trace[{}]` should have {} register values (`num_regs`), not {}",
+                    i, params.num_regs, s.regs.len(),
+                ));
+            }
+        }
+
+        for &i in self.advice.keys() {
+            let i = usize::try_from(i)
+                .map_err(|e| format!("advice key {} out of range: {}", i, e))?;
+            if i >= self.params.trace_len {
+                return Err(format!(
+                    "`advice` key out of range: the index is {} but `trace_len` is {}",
+                    i, self.params.trace_len,
+                ));
+            }
+        }
+
+        Ok(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Params {
+    pub num_regs: usize,
+    pub trace_len: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum Advice {
+    Load { addr: u64, value: u64 },
+    Store { addr: u64, value: u64 },
+    Stutter,
+}
+
+
+impl<'de> Deserialize<'de> for RamInstr {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_tuple(5, RamInstrVisitor)
+    }
+}
+
+struct RamInstrVisitor;
+impl<'de> Visitor<'de> for RamInstrVisitor {
+    type Value = RamInstr;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a sequence of 5 values")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<RamInstr, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 5);
+        let x = RamInstr {
+            opcode: seq.next_element()?,
+            dest: seq.next_element()?,
+            op1: seq.next_element()?,
+            imm: seq.next_element()?,
+            op2: seq.next_element()?,
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+
+impl<'de> Deserialize<'de> for RamState {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_tuple(3, RamStateVisitor)
+    }
+}
+
+struct RamStateVisitor;
+impl<'de> Visitor<'de> for RamStateVisitor {
+    type Value = RamState;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a sequence of 3 values")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<RamState, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 3);
+        let x = RamState {
+            pc: seq.next_element()?,
+            regs: seq.next_element()?,
+            flag: seq.next_element()?,
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+
+impl<'de> Deserialize<'de> for Advice {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_seq(AdviceVisitor)
+    }
+}
+
+struct AdviceVisitor;
+impl<'de> Visitor<'de> for AdviceVisitor {
+    type Value = Advice;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "an advice object")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Advice, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 1);
+        let x = match seq.next_element()? {
+            0 => {
+                seq.expect += 2;
+                Advice::Load {
+                    addr: seq.next_element()?,
+                    value: seq.next_element()?,
+                }
+            },
+            1 => {
+                seq.expect += 2;
+                Advice::Store {
+                    addr: seq.next_element()?,
+                    value: seq.next_element()?,
+                }
+            },
+            2 => {
+                Advice::Stutter
+            },
+            kind => return Err(de::Error::custom(
+                format_args!("unknown advice kind {}", kind),
+            )),
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+
+struct CountedSeqAccess<A> {
+    seq: A,
+    expect: usize,
+    seen: usize,
+}
+
+impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
+    fn new(seq: A, expect: usize) -> CountedSeqAccess<A> {
+        CountedSeqAccess { seq, expect, seen: 0 }
+    }
+
+    fn next_element<T: Deserialize<'de>>(&mut self) -> Result<T, A::Error> {
+        assert!(self.seen < self.expect);
+        match self.seq.next_element::<T>()? {
+            Some(x) => {
+                self.seen += 1;
+                Ok(x)
+            },
+            None => {
+                return Err(de::Error::invalid_length(
+                    self.seen, 
+                    &(&format!("a sequence of length {}", self.expect) as &str),
+                ));
+            },
+        }
+    }
+
+    fn finish(mut self) -> Result<(), A::Error> {
+        match self.seq.next_element::<()>() {
+            Ok(None) => Ok(()),
+            // A parse error indicates there was some data left to parse - there shouldn't be.
+            Ok(Some(_)) | Err(_) => {
+                return Err(de::Error::invalid_length(
+                    self.seen + 1,
+                    &(&format!("a sequence of length {}", self.expect) as &str),
+                ));
+            },
         }
     }
 }

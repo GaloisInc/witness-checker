@@ -9,3 +9,7 @@ edition = "2018"
 [dependencies]
 scale_isa = { path = "../dialogue/scale_isa" }
 bumpalo = "3.4"
+serde = { version = "1", features = ["derive"] }
+serde_cbor = "0.10"
+serde_json = "1"
+serde_yaml = "0.8"
