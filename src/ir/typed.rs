@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use bumpalo::Bump;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
+use crate::ir::circuit::{Circuit, Wire, TyKind};
 
 
 pub struct Builder<'a> {
@@ -9,8 +9,8 @@ pub struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    pub fn new(arena: &'a Bump, input_tys: Vec<TyKind>) -> Builder<'a> {
-        Builder { c: Circuit::new(arena, input_tys) }
+    pub fn new(arena: &'a Bump) -> Builder<'a> {
+        Builder { c: Circuit::new(arena) }
     }
 
     pub fn circuit(&self) -> &Circuit<'a> {
@@ -22,6 +22,13 @@ impl<'a> Builder<'a> {
     }
 }
 
+pub trait AsBuilder<'a> {
+    fn as_builder(&self) -> &Builder<'a>;
+}
+
+impl<'a> AsBuilder<'a> for Builder<'a> {
+    fn as_builder(&self) -> &Builder<'a> { self }
+}
 
 /// Typed wire, which carries a a representation of `T`.  This is useful for distinguishing wires
 /// with different high-level types, even when they share a low-level representation.
@@ -70,9 +77,18 @@ where Self: Repr<'a> {
     fn lit(bld: &Builder<'a>, x: Self) -> Self::Repr;
 }
 
+pub trait Secret<'a>
+where Self: Repr<'a> + Sized {
+    fn secret(bld: &Builder<'a>, x: Option<Self>) -> Self::Repr;
+}
+
 impl<'a> Builder<'a> {
     pub fn lit<T: Lit<'a>>(&self, x: T) -> TWire<'a, T> {
         TWire::new(Lit::lit(self, x))
+    }
+
+    pub fn secret<T: Secret<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
+        TWire::new(Secret::secret(self, x))
     }
 }
 
@@ -175,6 +191,24 @@ impl<'a> Builder<'a> {
 }
 
 
+pub trait Cast<'a, Target = Self>
+where Self: Repr<'a>, Target: Repr<'a> {
+    fn cast(
+        bld: &Builder<'a>,
+        x: Self::Repr,
+    ) -> Target::Repr;
+}
+
+impl<'a> Builder<'a> {
+    pub fn cast<T: Cast<'a, U>, U: Repr<'a>>(
+        &self,
+        x: TWire<'a, T>,
+    ) -> TWire<'a, U> {
+        TWire::new(<T as Cast<U>>::cast(self, x.repr))
+    }
+}
+
+
 macro_rules! primitive_unary_impl {
     ($Op:ident :: $op:ident ($T:ty)) => {
         impl<'a> $Op<'a> for $T {
@@ -203,7 +237,13 @@ impl<'a> Repr<'a> for bool {
 
 impl<'a> Lit<'a> for bool {
     fn lit(bld: &Builder<'a>, x: bool) -> Wire<'a> {
-        bld.c.lit(Ty::new(TyKind::Bool), x as u64)
+        bld.c.lit(bld.c.ty(TyKind::Bool), x as u64)
+    }
+}
+
+impl<'a> Secret<'a> for bool {
+    fn secret(bld: &Builder<'a>, x: Option<bool>) -> Wire<'a> {
+        bld.c.new_secret(bld.c.ty(TyKind::Bool), x.map(|x| x as u64))
     }
 }
 
@@ -225,6 +265,16 @@ impl<'a> Mux<'a, bool> for bool {
     }
 }
 
+macro_rules! integer_cast_impl {
+    ($T:ty, $U:ty, $K:ident) => {
+        impl<'a> Cast<'a, $U> for $T {
+            fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+                bld.c.cast(x, bld.c.ty(TyKind::$K))
+            }
+        }
+    };
+}
+
 macro_rules! integer_impls {
     ($T:ty, $K:ident) => {
         impl<'a> Repr<'a> for $T {
@@ -233,7 +283,13 @@ macro_rules! integer_impls {
 
         impl<'a> Lit<'a> for $T {
             fn lit(bld: &Builder<'a>, x: $T) -> Wire<'a> {
-                bld.c.lit(Ty::new(TyKind::$K), x as u64)
+                bld.c.lit(bld.c.ty(TyKind::$K), x as u64)
+            }
+        }
+
+        impl<'a> Secret<'a> for $T {
+            fn secret(bld: &Builder<'a>, x: Option<$T>) -> Wire<'a> {
+                bld.c.new_secret(bld.c.ty(TyKind::$K), x.map(|x| x as u64))
             }
         }
 
@@ -263,6 +319,14 @@ macro_rules! integer_impls {
             }
         }
 
+        integer_cast_impl!($T, i8, I8);
+        integer_cast_impl!($T, i16, I16);
+        integer_cast_impl!($T, i32, I32);
+        integer_cast_impl!($T, i64, I64);
+        integer_cast_impl!($T, u8, U8);
+        integer_cast_impl!($T, u16, U16);
+        integer_cast_impl!($T, u32, U32);
+        integer_cast_impl!($T, u64, U64);
     };
 }
 
@@ -288,6 +352,18 @@ macro_rules! tuple_impl {
                 #![allow(unused)]       // `bld` in the zero-element case
                 let ($($A,)*) = x;
                 ($(bld.lit($A),)*)
+            }
+        }
+
+        impl<'a, $($A: Secret<'a>,)*> Secret<'a> for ($($A,)*) {
+            fn secret(bld: &Builder<'a>, x: Option<Self>) -> Self::Repr {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                #![allow(unused)]       // `bld` in the zero-element case
+                if let Some(($($A,)*)) = x {
+                    ($(bld.secret(Some($A)),)*)
+                } else {
+                    ($(bld.secret::<$A>(None),)*)
+                }
             }
         }
 
@@ -358,6 +434,33 @@ macro_rules! array_impls {
                 }
             }
 
+            impl<'a, A: Secret<'a>> Secret<'a> for [A; $n] {
+                fn secret(bld: &Builder<'a>, a: Option<[A; $n]>) -> [TWire<'a, A>; $n] {
+                    // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
+                    // to implement without unnecessary allocation.
+                    unsafe {
+                        let mut o = MaybeUninit::uninit();
+
+                        if let Some(a) = a {
+                            let a = MaybeUninit::new(a);
+                            for i in 0 .. $n {
+                                let a_val = (a.as_ptr() as *const A).add(i).read();
+                                // If this panics, the remaining elements of `a` and `b` will leak.
+                                let o_val = bld.secret(Some(a_val));
+                                (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
+                            }
+                        } else {
+                            for i in 0 .. $n {
+                                let o_val = bld.secret::<A>(None);
+                                (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
+                            }
+                        }
+
+                        o.assume_init()
+                    }
+                }
+            }
+
             impl<'a, C, A, B> Mux<'a, C, [B; $n]> for [A; $n]
             where
                 C: Repr<'a>,
@@ -417,6 +520,9 @@ impl<'a, A: Lit<'a>> Lit<'a> for Vec<A> {
         a.into_iter().map(|x| bld.lit(x)).collect()
     }
 }
+
+// No `impl Secret for Vec<A>`, since we can't determine how many wires to create in the case where
+// the value is unknown.
 
 impl<'a, C, A, B> Mux<'a, C, Vec<B>> for Vec<A>
 where
@@ -481,5 +587,26 @@ impl<'a> Builder<'a> {
             val = self.mux(eq, x.clone(), val);
         }
         val
+    }
+
+    /// Output a `val` from `vals` on which `check(val)` outputs `true`.  If all checks output
+    /// false (or `vals` is empty), then this function outputs `default` instead.
+    pub fn select<C, A>(
+        &self,
+        vals: &[TWire<'a, A>],
+        default: TWire<'a, A>,
+        mut check: impl FnMut(&TWire<'a, A>) -> TWire<'a, C>,
+    ) -> TWire<'a, A>
+    where
+        C: Repr<'a>,
+        A: Mux<'a, C, A, Output = A>,
+        A::Repr: Clone,
+    {
+        let mut acc = default;
+        for val in vals {
+            let cond = check(val);
+            acc = self.mux(cond, val.clone(), acc);
+        }
+        acc
     }
 }

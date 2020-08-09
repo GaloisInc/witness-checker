@@ -1,0 +1,16 @@
+program:
+  - [6, 2, 0, false, 0]   # mull r2, r0, r0
+  - [6, 1, 0, true, 3]    # mull r1, r0, 3
+  - [4, 0, 1, false, 2]   # add r0, r1, r2
+  - [5, 0, 0, true, 10]   # sub r0, r0, 10
+
+params:
+  num_regs: 3
+  trace_len: 5
+
+trace:
+  - [0, [2, 0, 0], false]
+  - [1, [2, 0, 4], false]
+  - [2, [2, 6, 4], false]
+  - [3, [10, 6, 4], false]
+  - [4, [0, 6, 4], false]

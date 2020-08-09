@@ -1,27 +1,51 @@
+use std::any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::fmt;
 use std::ops::Deref;
 use bumpalo::Bump;
 
+/// A high-level arithmetic/boolean circuit.
+///
+/// This circuit representation has no notion of a "public wire" - all wires carry secret values.
+/// This works because we provide no "open" or "reveal" operation.  The only way to produce a
+/// public/cleartext value is with `GateKind::Lit`, which contains a compile-time constant, so any
+/// operations over literals can be computed entirely at compile time.
+///
+/// If a witness is available, the `Circuit` includes its values.  This allows circuit
+/// transformations to make corresponding changes to the witness if necessary.  The full witness is
+/// not represented explicitly, but the individual values are accessible through the
+/// `GateKind::Secret` gates present in the circuit.  Use the `walk_witness` function to obtain the
+/// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a> {
     arena: &'a Bump,
-    intern: RefCell<HashSet<&'a Gate<'a>>>,
-    input_tys: Vec<TyKind>,
+    // TODO: clean up interning
+    // Currently it's possible to get two distinct interned pointers for the same value (e.g.,
+    // `ty1` and `ty2` where `ty1 != ty2` but `*ty1 == *ty2`) by creating two different `Circuit`s
+    // backed by the same arena.  We should have a combined structure that owns both the arena and
+    // the interning tables, though that might require a bit of unsafe code.
+    intern_gate: RefCell<HashSet<&'a Gate<'a>>>,
+    intern_ty: RefCell<HashSet<&'a TyKind<'a>>>,
+    intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
+    intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
+    intern_gadget_kind: RefCell<HashMap<String, &'a dyn GadgetKind<'a>>>,
 }
 
 impl<'a> Circuit<'a> {
-    pub fn new(arena: &'a Bump, input_tys: Vec<TyKind>) -> Circuit<'a> {
+    pub fn new(arena: &'a Bump) -> Circuit<'a> {
         Circuit {
             arena,
-            intern: RefCell::new(HashSet::new()),
-            input_tys,
+            intern_gate: RefCell::new(HashSet::new()),
+            intern_ty: RefCell::new(HashSet::new()),
+            intern_wire_list: RefCell::new(HashSet::new()),
+            intern_ty_list: RefCell::new(HashSet::new()),
+            intern_gadget_kind: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn intern(&self, gate: Gate<'a>) -> &'a Gate<'a> {
-        let mut intern = self.intern.borrow_mut();
+    fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {
+        let mut intern = self.intern_gate.borrow_mut();
         match intern.get(&gate) {
             Some(x) => x,
             None => {
@@ -32,24 +56,151 @@ impl<'a> Circuit<'a> {
         }
     }
 
-    pub fn gate(&self, gate: Gate<'a>) -> Wire<'a> {
-        Wire(self.intern(gate))
+    fn intern_ty(&self, ty: TyKind<'a>) -> &'a TyKind<'a> {
+        let mut intern = self.intern_ty.borrow_mut();
+        match intern.get(&ty) {
+            Some(x) => x,
+            None => {
+                let ty = self.arena.alloc(ty);
+                intern.insert(ty);
+                ty
+            },
+        }
     }
 
-    fn mk_gate(&self, ty: Ty, kind: GateKind<'a>) -> Wire<'a> {
-        Wire(self.intern(Gate { ty, kind }))
+    fn intern_wire_list(&self, wire_list: &[Wire<'a>]) -> &'a [Wire<'a>] {
+        let mut intern = self.intern_wire_list.borrow_mut();
+        match intern.get(wire_list) {
+            Some(&x) => x,
+            None => {
+                let wire_list = self.arena.alloc_slice_copy(wire_list);
+                intern.insert(wire_list);
+                wire_list
+            },
+        }
     }
 
-    pub fn lit(&self, ty: Ty, val: u64) -> Wire<'a> {
-        self.mk_gate(ty, GateKind::Lit(val))
+    fn intern_ty_list(&self, ty_list: &[Ty<'a>]) -> &'a [Ty<'a>] {
+        let mut intern = self.intern_ty_list.borrow_mut();
+        match intern.get(ty_list) {
+            Some(&x) => x,
+            None => {
+                let ty_list = self.arena.alloc_slice_copy(ty_list);
+                intern.insert(ty_list);
+                ty_list
+            },
+        }
     }
 
-    pub fn input(&self, idx: usize) -> Wire<'a> {
-        self.mk_gate(Ty::new(self.input_tys[idx]), GateKind::Input(idx))
+    /// Intern a gadget kind so it can be used to construct `Gadget` gates.  It's legal to intern
+    /// the same `GadgetKind` more than once, so this can be used inside stateless lowering passes
+    /// (among other things).
+    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
+        let mut intern = self.intern_gadget_kind.borrow_mut();
+        match intern.get(g.name()) {
+            Some(&x) => {
+                // Check that the interned gadget has the same concrete type as `g`.  If not, then
+                // the user has accidentally defined two different gadgets with the same name.
+                // Note that if `G` contains data (is non-zero-sized), it may still be possible to
+                // have multiple distinct gadget kinds that are not caught by this check.
+                assert!(
+                    g.type_name() == x.type_name(),
+                    "defined multiple distinct gadgets named {:?}: {:?} != {:?}",
+                    g.name(), g.type_name(), x.type_name(),
+                );
+                GadgetKindRef(x)
+            },
+            None => {
+                let g = self.arena.alloc(g);
+                intern.insert(g.name().to_owned(), g);
+                GadgetKindRef(g)
+            },
+        }
+    }
+
+    pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
+        // Forbid constructing gates that violate type-safety invariants.
+        match kind {
+            GateKind::Binary(op, a, b) => {
+                assert!(
+                    a.ty == b.ty,
+                    "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
+                );
+            },
+            GateKind::Shift(op, _, b) => match *b.ty {
+                TyKind::Uint(_) => {},
+                _ => panic!("{:?} shift amount must be a Uint, not {:?}", op, b.ty),
+            },
+            GateKind::Compare(op, a, b) => {
+                assert!(
+                    a.ty == b.ty,
+                    "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
+                );
+            },
+            GateKind::Mux(c, t, e) => {
+                assert!(
+                    *c.ty == TyKind::Bool,
+                    "mux condition must be Bool, not {:?}", c.ty,
+                );
+                assert!(
+                    t.ty == e.ty,
+                    "type mismatch for mux: {:?} != {:?}", c.ty, e.ty,
+                );
+            },
+            GateKind::Extract(w, i) => match *w.ty {
+                TyKind::Bundle(tys) => {
+                    if i >= tys.len() {
+                        panic!(
+                            "index out of range for extract: {} >= {} ({:?})",
+                            i, tys.len(), tys,
+                        );
+                    }
+                },
+                _ => panic!("bad input type for extract: {:?} (expected Bundle)", w.ty),
+            },
+            // GateKind::Gadget typechecking happens in the call to `kind.ty`
+            _ => {},
+        }
+
+        Wire(self.intern_gate(Gate {
+            ty: kind.ty(self),
+            kind,
+        }))
+    }
+
+    pub fn ty(&self, kind: TyKind<'a>) -> Ty<'a> {
+        Ty(self.intern_ty(kind))
+    }
+
+    pub fn ty_bundle(&self, tys: &[Ty<'a>]) -> Ty<'a> {
+        self.ty(TyKind::Bundle(self.intern_ty_list(tys)))
+    }
+
+    pub fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
+    where I: IntoIterator<Item = Ty<'a>> {
+        let tys = it.into_iter().collect::<Vec<_>>();
+        self.ty_bundle(&tys)
+    }
+
+    pub fn lit(&self, ty: Ty<'a>, val: u64) -> Wire<'a> {
+        self.gate(GateKind::Lit(val, ty))
+    }
+
+    pub fn secret(&self, secret: Secret<'a>) -> Wire<'a> {
+        self.gate(GateKind::Secret(secret))
+    }
+
+    /// Add a new secret value to the witness, and return a `Wire` that carries that value.
+    ///
+    /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
+    /// prover) is generating the circuit.
+    pub fn new_secret(&self, ty: Ty<'a>, val: Option<u64>) -> Wire<'a> {
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        self.secret(secret)
     }
 
     pub fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
-        self.mk_gate(arg.ty, GateKind::Unary(op, arg))
+        self.gate(GateKind::Unary(op, arg))
     }
 
     pub fn neg(&self, arg: Wire<'a>) -> Wire<'a> {
@@ -61,14 +212,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn binary(&self, op: BinOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(
-            a.ty.kind == b.ty.kind,
-            "type mismatch for {:?}: {:?} != {:?}", op, a.ty.kind, b.ty.kind,
-        );
-        self.mk_gate(
-            Ty::new(a.ty.kind),
-            GateKind::Binary(op, a, b),
-        )
+        self.gate(GateKind::Binary(op, a, b))
     }
 
     pub fn add(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -104,11 +248,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn shift(&self, op: ShiftOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(b.ty.kind == TyKind::Uint(IntSize::I8));
-        self.mk_gate(
-            Ty::new(a.ty.kind),
-            GateKind::Shift(op, a, b),
-        )
+        self.gate(GateKind::Shift(op, a, b))
     }
 
     pub fn shl(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -120,11 +260,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn compare(&self, op: CmpOp, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-        assert!(a.ty.kind == b.ty.kind);
-        self.mk_gate(
-            Ty::new(TyKind::Bool),
-            GateKind::Compare(op, a, b),
-        )
+        self.gate(GateKind::Compare(op, a, b))
     }
 
     pub fn eq(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -152,18 +288,133 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn mux(&self, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
-        assert!(t.ty.kind == e.ty.kind);
-        self.mk_gate(
-            Ty::new(t.ty.kind),
-            GateKind::Mux(c, t, e),
-        )
+        self.gate(GateKind::Mux(c, t, e))
     }
 
-    pub fn cast(&self, w: Wire<'a>, ty: TyKind) -> Wire<'a> {
-        self.mk_gate(
-            Ty::new(ty),
-            GateKind::Cast(w, ty),
-        )
+    pub fn cast(&self, w: Wire<'a>, ty: Ty<'a>) -> Wire<'a> {
+        self.gate(GateKind::Cast(w, ty))
+    }
+
+    pub fn pack(&self, ws: &[Wire<'a>]) -> Wire<'a> {
+        let ws = self.intern_wire_list(ws);
+        self.gate(GateKind::Pack(ws))
+    }
+
+    pub fn pack_iter<I>(&self, it: I) -> Wire<'a>
+    where I: IntoIterator<Item = Wire<'a>> {
+        let ws = it.into_iter().collect::<Vec<_>>();
+        self.pack(&ws)
+    }
+
+    pub fn extract(&self, w: Wire<'a>, i: usize) -> Wire<'a> {
+        self.gate(GateKind::Extract(w, i))
+    }
+
+    pub fn gadget(&self, kind: GadgetKindRef<'a>, args: &[Wire<'a>]) -> Wire<'a> {
+        let args = self.intern_wire_list(args);
+        self.gate(GateKind::Gadget(kind, args))
+    }
+
+    pub fn gadget_iter<I>(&self, kind: GadgetKindRef<'a>, it: I) -> Wire<'a>
+    where I: IntoIterator<Item = Wire<'a>> {
+        let args = it.into_iter().collect::<Vec<_>>();
+        self.gadget(kind, &args)
+    }
+
+
+    pub fn walk_wires<I, F>(&self, wires: I, mut f: F)
+    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Wire<'a>) {
+        // This is a depth-first postorder traversal.  Since it's postorder, we need to distinguish
+        // the first visit to a given node (when it gets expanded and its children are pushed)
+        // from the second (when the node itself is yielded to the callback).
+        enum Entry<'a> {
+            Expand(Wire<'a>),
+            Yield(Wire<'a>),
+        }
+
+        let mut stack = wires.into_iter().map(Entry::Expand).collect::<Vec<_>>();
+        stack.reverse();
+
+        // Wires that have already been yielded.  We avoid processing the same wire twice.
+        let mut yielded = HashSet::new();
+
+        while let Some(entry) = stack.pop() {
+            match entry {
+                Entry::Expand(w) => {
+                    // It's possible for a yielded wire to appear in an `Expand` entry, as a wire
+                    // may have multiple parents.  We ignore these entries to avoid duplicate work.
+                    if yielded.contains(&w) {
+                        continue;
+                    }
+
+                    stack.push(Entry::Yield(w));
+                    match w.kind {
+                        GateKind::Lit(_, _) => {}
+                        GateKind::Secret(_) => {}
+                        GateKind::Unary(_, a) => {
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Binary(_, a, b) => {
+                            stack.push(Entry::Expand(b));
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Shift(_, a, b) => {
+                            stack.push(Entry::Expand(b));
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Compare(_, a, b) => {
+                            stack.push(Entry::Expand(b));
+                            stack.push(Entry::Expand(a));
+                        },
+                        GateKind::Mux(c, t, e) => {
+                            stack.push(Entry::Expand(e));
+                            stack.push(Entry::Expand(t));
+                            stack.push(Entry::Expand(c));
+                        },
+                        GateKind::Cast(w, _) => {
+                            stack.push(Entry::Expand(w));
+                        },
+                        GateKind::Pack(ws) => {
+                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
+                        },
+                        GateKind::Extract(w, _) => {
+                            stack.push(Entry::Expand(w));
+                        },
+                        GateKind::Gadget(_, ws) => {
+                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
+                        },
+                    }
+                },
+
+                Entry::Yield(w) => {
+                    let inserted = yielded.insert(w);
+                    // It's not possible for a yielded wire to appear in a `Yield` entry.  This
+                    // would imply that there were once two different `Yield` entries for the same
+                    // wire in the stack.  But `Yield` entries correspond to the direct ancestors
+                    // of the current node, so two `Yield` entries would imply that the wire is its
+                    // own ancestor (a cycle in the circuit).  Cycles are impossible to construct,
+                    // since gates are read-only after construction.
+                    assert!(inserted);
+
+                    f(w);
+                },
+            }
+        }
+    }
+
+    /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
+    /// once, in some deterministic order (assuming `wires` itself is deterministic).
+    pub fn walk_witness<I, F>(&self, wires: I, mut f: F)
+    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Secret<'a>) {
+        // In the normal case where every gate is interned properly, we should visit each distinct
+        // `GateKind::Secret` only once, and see each `Secret` only once.  However, this can go
+        // wrong if there are multiple `Circuit`s using the same arena but different `intern`
+        // tables, and wires from one `Circuit` are referenced in another.  Currently we don't
+        // defend against this misuse.
+        self.walk_wires(wires, |w| match w.kind {
+            GateKind::Secret(s) => f(s),
+            _ => {},
+        });
     }
 }
 
@@ -176,54 +427,69 @@ pub enum IntSize {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum TyKind {
+pub enum TyKind<'a> {
     Bool,
     Int(IntSize),
     Uint(IntSize),
+    Bundle(&'a [Ty<'a>]),
 }
 
-impl TyKind {
-    pub const I8: TyKind = TyKind::Int(IntSize::I8);
-    pub const I16: TyKind = TyKind::Int(IntSize::I16);
-    pub const I32: TyKind = TyKind::Int(IntSize::I32);
-    pub const I64: TyKind = TyKind::Int(IntSize::I64);
-    pub const U8: TyKind = TyKind::Uint(IntSize::I8);
-    pub const U16: TyKind = TyKind::Uint(IntSize::I16);
-    pub const U32: TyKind = TyKind::Uint(IntSize::I32);
-    pub const U64: TyKind = TyKind::Uint(IntSize::I64);
+impl IntSize {
+    pub fn bits(self) -> u8 {
+        match self {
+            IntSize::I8 => 8,
+            IntSize::I16 => 16,
+            IntSize::I32 => 32,
+            IntSize::I64 => 64,
+        }
+    }
+}
+
+impl TyKind<'_> {
+    pub const I8: TyKind<'static> = TyKind::Int(IntSize::I8);
+    pub const I16: TyKind<'static> = TyKind::Int(IntSize::I16);
+    pub const I32: TyKind<'static> = TyKind::Int(IntSize::I32);
+    pub const I64: TyKind<'static> = TyKind::Int(IntSize::I64);
+    pub const U8: TyKind<'static> = TyKind::Uint(IntSize::I8);
+    pub const U16: TyKind<'static> = TyKind::Uint(IntSize::I16);
+    pub const U32: TyKind<'static> = TyKind::Uint(IntSize::I32);
+    pub const U64: TyKind<'static> = TyKind::Uint(IntSize::I64);
 
     pub fn is_integer(&self) -> bool {
         match *self {
             TyKind::Bool => false,
             TyKind::Int(_) => true,
             TyKind::Uint(_) => true,
+            TyKind::Bundle(_) => false,
+        }
+    }
+
+    pub fn integer_size(&self) -> IntSize {
+        match *self {
+            TyKind::Bool => panic!("Bool has no IntSize"),
+            TyKind::Int(sz) => sz,
+            TyKind::Uint(sz) => sz,
+            TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
         }
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub struct Ty {
-    pub kind: TyKind,
-}
-
-impl Ty {
-    pub fn new(kind: TyKind) -> Ty {
-        Ty { kind }
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
-    pub ty: Ty,
+    /// Cached output type of this gate.  Computed when the `Gate` is created.  The result is
+    /// stored here so that `GateKind::ty` runs in constant time, rather than potentially having
+    /// recurse over the entire depth of the circuit.
+    pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum GateKind<'a> {
     /// A literal/constant value.
-    Lit(u64),
-    /// Retrieve a secret input, given its index.
-    Input(usize),
+    Lit(u64, Ty<'a>),
+    /// Retrieve a secret value from the witness.
+    Secret(Secret<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
     Unary(UnOp, Wire<'a>),
     /// Compute a binary operation.  All `BinOp`s have type `T -> T -> T`
@@ -235,7 +501,38 @@ pub enum GateKind<'a> {
     /// `Mux(cond, then_, else)`: depending on `cond`, select either `then_` or `else`.
     Mux(Wire<'a>, Wire<'a>, Wire<'a>),
     /// Convert a value to a different type.
-    Cast(Wire<'a>, TyKind),
+    Cast(Wire<'a>, Ty<'a>),
+    /// Pack several values into a bundle.
+    Pack(&'a [Wire<'a>]),
+    /// Extract one value from a bundle.
+    Extract(Wire<'a>, usize),
+    /// A custom gadget.
+    // TODO: move fields to a struct (this variant is 5 words long)
+    Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
+}
+
+impl<'a> GateKind<'a> {
+    pub fn ty(&self, c: &Circuit<'a>) -> Ty<'a> {
+        match *self {
+            GateKind::Lit(_, ty) => ty,
+            GateKind::Secret(s) => s.ty,
+            GateKind::Unary(_, w) => w.ty,
+            GateKind::Binary(_, w, _) => w.ty,
+            GateKind::Shift(_, w, _) => w.ty,
+            GateKind::Compare(_, _, _) => c.ty(TyKind::Bool),
+            GateKind::Mux(_, w, _) => w.ty,
+            GateKind::Cast(_, ty) => ty,
+            GateKind::Pack(ws) => c.ty_bundle_iter(ws.iter().map(|&w| w.ty)),
+            GateKind::Extract(w, i) => match *w.ty {
+                TyKind::Bundle(tys) => tys[i],
+                _ => panic!("invalid wire type {:?} in Extract", w.ty),
+            },
+            GateKind::Gadget(k, ws) => {
+                let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
+                k.typecheck(c, &tys)
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -261,25 +558,44 @@ pub enum CmpOp {
 }
 
 
-#[derive(Clone, Copy)]
-pub struct Wire<'a>(&'a Gate<'a>);
+/// Declare a wrapper around an immutable reference, with `Eq` and `Hash` instances that compare by
+/// address instead of by value.
+macro_rules! declare_interned_pointer {
+    ($(#[$attr:meta])* $pub_:vis struct $Ptr:ident <$lt:lifetime> => $T:ty;) => {
+        $(#[$attr])*
+        #[derive(Clone, Copy)]
+        $pub_ struct $Ptr<$lt>(&$lt $T);
 
-impl<'a> PartialEq for Wire<'a> {
-    fn eq(&self, other: &Wire<'a>) -> bool {
-        self.0 as *const _ == other.0 as *const _
-    }
+        impl<$lt> PartialEq for $Ptr<$lt> {
+            fn eq(&self, other: &$Ptr<$lt>) -> bool {
+                self.0 as *const _ == other.0 as *const _
+            }
 
-    fn ne(&self, other: &Wire<'a>) -> bool {
-        self.0 as *const _ != other.0 as *const _
-    }
+            fn ne(&self, other: &$Ptr<$lt>) -> bool {
+                self.0 as *const _ != other.0 as *const _
+            }
+        }
+
+        impl Eq for $Ptr<'_> {}
+
+        impl<$lt> Hash for $Ptr<$lt> {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                (self.0 as *const $T).hash(state)
+            }
+        }
+
+        impl<$lt> Deref for $Ptr<$lt> {
+            type Target = $T;
+            fn deref(&self) -> &$T {
+                self.0
+            }
+        }
+    };
 }
 
-impl Eq for Wire<'_> {}
-
-impl<'a> Hash for Wire<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const Gate).hash(state)
-    }
+declare_interned_pointer! {
+    /// The output of a `Gate`, which carries a value during circuit evaluation.
+    pub struct Wire<'a> => Gate<'a>;
 }
 
 thread_local! {
@@ -302,9 +618,64 @@ impl<'a> fmt::Debug for Wire<'a> {
     }
 }
 
-impl<'a> Deref for Wire<'a> {
-    type Target = Gate<'a>;
-    fn deref(&self) -> &Gate<'a> {
-        self.0
+declare_interned_pointer! {
+    /// A secret input value, part of the witness.
+    #[derive(Debug)]
+    pub struct Secret<'a> => SecretData<'a>;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct SecretData<'a> {
+    pub ty: Ty<'a>,
+    pub val: Option<u64>,
+}
+
+declare_interned_pointer! {
+    #[derive(Debug)]
+    pub struct Ty<'a> => TyKind<'a>;
+}
+
+
+/// Defines a kind of gadget.  Instances of a gadget can be added to a `Circuit` using
+/// `define_gadget_kind` and the `Circuit::gadget` constructor.
+pub trait GadgetKind<'a>: 'a {
+    /// The name of this kind of gadget.  This must be unique among all gadget kinds, as it's used
+    /// by backends to recognize supported gadgets.
+    fn name(&self) -> &str;
+
+    /// Intern this `GadgetKind` into a new `Circuit`.  This should usually be implemented as
+    ///
+    ///     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    ///         c.intern_gadget_kind(self.clone())
+    ///     }
+    ///
+    /// However, this can't be provided automatically because it requires `Self: Clone + 'static`.
+    /// The `Clone` bound implies `Sized`, which would make this trait non-object-safe, and
+    /// `'static` means the `GadgetKind` can't contain any `Ty<'a>` values.
+    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b>;
+
+    /// Validate the argument types for an instance of this kind of gadget.  Returns the output
+    /// type of a gadget.
+    fn typecheck(&self, c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a>;
+
+    /// Decompose this gadget into primitive gates.  This may be called if the backend doesn't
+    /// support this gadget.
+    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a>;
+
+    /// Returns `std::any::type_name::<Self>()`.  Should not be implemented manually.  This is used
+    /// only for debugging, to check for accidental collisions between `name()`s of distinct
+    /// `GadgetKind`s.
+    fn type_name(&self) -> &'static str {
+        any::type_name::<Self>()
+    }
+}
+
+declare_interned_pointer! {
+    pub struct GadgetKindRef<'a> => dyn GadgetKind<'a>;
+}
+
+impl<'a> fmt::Debug for GadgetKindRef<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "GadgetKindRef({})", self.name())
     }
 }

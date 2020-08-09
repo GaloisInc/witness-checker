@@ -99,11 +99,11 @@ impl<'a> Backend<'a> {
         let gate = &*wire;
 
         let gate_ty = match gate.kind {
-            GateKind::Compare(_, a, _) => a.ty.kind,
-            _ => gate.ty.kind
+            GateKind::Compare(_, a, _) => a.ty,
+            _ => gate.ty
         };
 
-        let operand = match gate_ty {
+        let operand = match *gate_ty {
             TyKind::Bool => self.gate_bool(gate),
             TyKind::U64 => self.gate_u64(gate),
             k => unimplemented!("TyKind {:?}", k),
@@ -161,7 +161,7 @@ impl<'a> Backend<'a> {
 
     fn lit(&self, wire: Wire<'a>) -> Option<u64> {
         match wire.kind {
-            GateKind::Lit(x) => Some(x),
+            GateKind::Lit(x, _) => Some(x),
             _ => None,
         }
     }
@@ -169,11 +169,16 @@ impl<'a> Backend<'a> {
     fn gate_bool(&mut self, gate: &Gate<'a>) -> Operand {
         let dest = self.fresh::<RegSecretBit>();
         match gate.kind {
-            GateKind::Lit(x) => {
+            GateKind::Lit(x, _) => {
                 assert!(x == 0 || x == 1, "unsupported literal {} for Bool", x);
                 self.instr(instr::ldsbit(0, dest, Imm::from_u32(x as u32)));
             },
-            GateKind::Input(_) => todo!("GateKind::Input"),
+            GateKind::Secret(s) => {
+                let x = s.val
+                    .expect("NYI: generation of SCALE output without witness values");
+                assert!(x == 0 || x == 1, "unsupported literal {} for Bool", x);
+                self.instr(instr::ldsbit(0, dest, Imm::from_u32(x as u32)));
+            },
             GateKind::Unary(op, _a) => {
                 match op {
                     // `not(x)` should be lowered to `xor(x, 1)`.
@@ -197,27 +202,37 @@ impl<'a> Backend<'a> {
             GateKind::Mux(_, _, _) => unimplemented!("Mux on Bool"),
             GateKind::Cast(a_wire, _) => {
                 let a = self.wire(a_wire);
-                match a_wire.ty.kind {
+                match *a_wire.ty {
                     TyKind::Bool => return a,
                     TyKind::U64 => {
                         self.instr(instr::bitsint(0, dest, a.unpack(), Imm::new(0)));
                     },
-                    _ => unimplemented!("cast to Bool from {:?}", a_wire.ty.kind),
+                    _ => unimplemented!("cast to Bool from {:?}", a_wire.ty),
                 }
             },
+            GateKind::Pack(..) => panic!("SCALE backend does not support Pack"),
+            GateKind::Extract(..) => panic!("SCALE backend does not support Extract"),
+            GateKind::Gadget(..) => panic!("SCALE backend does not support Gadget"),
         }
         dest.pack()
     }
 
     fn gate_u64(&mut self, gate: &Gate<'a>) -> Operand {
         match gate.kind {
-            GateKind::Lit(x) => {
+            GateKind::Lit(x, _) => {
+                let dest = self.fresh::<RegSecretRegint>();
+                assert!(x <= u32::MAX as u64, "literal {} out of range for u64", x);
+                self.instr(instr::ldsint(0, dest, Imm::from_u32(x as u32)));
+                dest.pack()
+            },
+            GateKind::Secret(s) => {
+                let x = s.val
+                    .expect("NYI: generation of SCALE output without witness values");
                 let dest = self.fresh::<RegSecretRegint>();
                 assert!(x <= u32::MAX as u64, "literal {} out of range for", x);
                 self.instr(instr::ldsint(0, dest, Imm::from_u32(x as u32)));
                 dest.pack()
             },
-            GateKind::Input(_) => todo!("GateKind::Input"),
             GateKind::Unary(op, a) => {
                 let dest = self.fresh::<RegSecretRegint>();
                 let a = self.wire(a).unpack();
@@ -275,17 +290,20 @@ impl<'a> Backend<'a> {
             GateKind::Cast(a_wire, _) => {
                 let dest = self.fresh::<RegSecretRegint>();
                 let a = self.wire(a_wire);
-                match a_wire.ty.kind {
+                match *a_wire.ty {
                     TyKind::Bool => {
                         let zero = self.fresh::<RegSecretRegint>();
                         self.instr(instr::ldsint(0, zero, Imm::new(0)));
                         self.instr(instr::sintsbit(0, dest, zero, a.unpack(), Imm::new(0)));
                     },
                     TyKind::U64 => return a,
-                    _ => unimplemented!("cast to U64 from {:?}", a_wire.ty.kind),
+                    _ => unimplemented!("cast to U64 from {:?}", a_wire.ty),
                 }
                 dest.pack()
             },
+            GateKind::Pack(..) => panic!("SCALE backend does not support Pack"),
+            GateKind::Extract(..) => panic!("SCALE backend does not support Extract"),
+            GateKind::Gadget(..) => panic!("SCALE backend does not support Gadget"),
         }
     }
 }
