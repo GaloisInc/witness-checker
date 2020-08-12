@@ -1,13 +1,15 @@
 use std::cell::RefCell;
 use std::env;
-use std::fmt::Display;
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
 use std::path::Path;
 use bumpalo::Bump;
 
 use cheesecloth::back;
-use cheesecloth::ir::typed::{Builder, TWire};
+use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
+use cheesecloth::ir::circuit::{Circuit, Wire};
+use cheesecloth::ir::typed::{Builder, TWire, Repr};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
@@ -17,30 +19,78 @@ use cheesecloth::tiny_ram::{
 
 macro_rules! wire_assert {
     ($cx:expr, $cond:expr, $($args:tt)*) => {
-        $cx.assert($cond, format_args!($($args)*));
+        {
+            let cx = $cx;
+            let cond = $cond;
+            if cx.assert_triggered(cond) == Some(true) {
+                eprintln!("invalid trace: {}", format_args!($($args)*));
+            }
+            $cx.assert($cond);
+        }
     };
 }
 
 macro_rules! wire_bug_if {
     ($cx:expr, $cond:expr, $($args:tt)*) => {
-        $cx.bug_if($cond, format_args!($($args)*));
+        {
+            let cx = $cx;
+            let cond = $cond;
+            if cx.bug_triggered(cond) == Some(true) {
+                eprintln!("found bug: {}", format_args!($($args)*));
+            }
+            $cx.bug_if($cond);
+        }
     };
 }
 
+struct SecretValue<T>(Option<T>);
+
+impl<T> SecretValue<T> {
+    fn map<U, F: FnOnce(T) -> U>(self, f: F) -> SecretValue<U> {
+        SecretValue(self.0.map(f))
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for SecretValue<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some(ref x) => fmt::Display::fmt(x, fmt),
+            None => write!(fmt, "??"),
+        }
+    }
+}
+
+impl<T: fmt::LowerHex> fmt::LowerHex for SecretValue<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some(ref x) => fmt::LowerHex::fmt(x, fmt),
+            None => write!(fmt, "??"),
+        }
+    }
+}
+
+impl<T: fmt::UpperHex> fmt::UpperHex for SecretValue<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some(ref x) => fmt::UpperHex::fmt(x, fmt),
+            None => write!(fmt, "??"),
+        }
+    }
+}
+
+
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
-    assert_descs: RefCell<Vec<String>>,
     bugs: RefCell<Vec<TWire<'a, bool>>>,
-    bug_descs: RefCell<Vec<String>>,
+    eval: Option<RefCell<CachingEvaluator<'a, eval::RevealSecrets>>>,
 }
 
 impl<'a> Context<'a> {
-    fn new() -> Context<'a> {
+    fn new(c: &'a Circuit<'a>) -> Context<'a> {
         Context {
             asserts: RefCell::new(Vec::new()),
-            assert_descs: RefCell::new(Vec::new()),
             bugs: RefCell::new(Vec::new()),
-            bug_descs: RefCell::new(Vec::new()),
+            eval: Some(RefCell::new(CachingEvaluator::new(c))),
         }
     }
 
@@ -53,16 +103,14 @@ impl<'a> Context<'a> {
 
     /// Mark the execution as invalid if `cond` is false.  A failed assertion represents
     /// misbehavior on the part of the prover.
-    fn assert(&self, cond: TWire<'a, bool>, desc: impl Display) {
+    fn assert(&self, cond: TWire<'a, bool>) {
         self.asserts.borrow_mut().push(cond);
-        self.assert_descs.borrow_mut().push(desc.to_string());
     }
 
     /// Signal an error condition of `cond` is true.  This should be used for situations like
     /// buffer overflows, which indicate a bug in the subject program.
-    fn bug_if(&self, cond: TWire<'a, bool>, desc: impl Display) {
+    fn bug_if(&self, cond: TWire<'a, bool>) {
         self.bugs.borrow_mut().push(cond);
-        self.bug_descs.borrow_mut().push(desc.to_string());
     }
 
     fn when<R>(
@@ -73,6 +121,24 @@ impl<'a> Context<'a> {
     ) -> R {
         f(&ContextWhen { cx: self, b, path_cond })
     }
+
+    fn eval_u64(&self, w: Wire<'a>) -> Option<u64> {
+        let eval = self.eval.as_ref()?;
+        let x = eval.borrow_mut().eval_wire(w)?.as_single()?;
+        Some(x)
+    }
+
+    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        Some(self.eval_u64(cond.repr)? == 0)
+    }
+
+    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        Some(self.eval_u64(cond.repr)? != 0)
+    }
+
+    fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
+        SecretValue(self.eval_u64(w.repr))
+    }
 }
 
 struct ContextWhen<'a, 'b> {
@@ -82,14 +148,22 @@ struct ContextWhen<'a, 'b> {
 }
 
 impl<'a, 'b> ContextWhen<'a, 'b> {
-    fn assert(&self, cond: TWire<'a, bool>, desc: impl Display) {
+    fn assert_cond(&self, cond: TWire<'a, bool>) -> TWire<'a, bool> {
         // The assertion passes if either this `when` block is not taken, or `cond` is satisfied.
-        self.cx.assert(self.b.or(self.b.not(self.path_cond), cond), desc);
+        self.b.or(self.b.not(self.path_cond), cond)
     }
 
-    fn bug_if(&self, cond: TWire<'a, bool>, desc: impl Display) {
+    fn bug_cond(&self, cond: TWire<'a, bool>) -> TWire<'a, bool> {
         // The bug occurs if this `when` block is taken and `cond` is satisfied.
-        self.cx.bug_if(self.b.and(self.path_cond, cond), desc);
+        self.b.and(self.path_cond, cond)
+    }
+
+    fn assert(&self, cond: TWire<'a, bool>) {
+        self.cx.assert(self.assert_cond(cond));
+    }
+
+    fn bug_if(&self, cond: TWire<'a, bool>) {
+        self.cx.bug_if(self.bug_cond(cond));
     }
 
     fn when<R>(
@@ -99,6 +173,18 @@ impl<'a, 'b> ContextWhen<'a, 'b> {
         f: impl FnOnce(&ContextWhen<'a, '_>) -> R,
     ) -> R {
         self.cx.when(b, b.and(self.path_cond, path_cond), f)
+    }
+
+    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        self.cx.assert_triggered(self.assert_cond(cond))
+    }
+
+    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        self.cx.bug_triggered(self.bug_cond(cond))
+    }
+
+    fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
+        self.cx.eval(w)
     }
 }
 
@@ -382,8 +468,9 @@ fn main() -> io::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     assert!(args.len() == 2, "usage: {} WITNESS", args.get(0).map_or("witness-checker", |x| x));
     let arena = Bump::new();
-    let b = Builder::new(&arena);
-    let cx = Context::new();
+    let c = Circuit::new(&arena);
+    let b = Builder::new(&c);
+    let cx = Context::new(&c);
 
     // Load the program and trace from files
     let content = fs::read(&args[1]).unwrap();
@@ -443,7 +530,7 @@ fn main() -> io::Result<()> {
         // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
         // in its corresponding cycle, or it isn't used at all.
         wire_assert!(
-            cx,
+            &cx,
             b.or(
                 b.eq(port.cycle, b.lit(i as u32)),
                 b.eq(port.cycle, b.lit(!0_u32)),
@@ -466,8 +553,7 @@ fn main() -> io::Result<()> {
     }
 
     // Lower IR code
-    let c = b.finish();
-
+    drop(b);
     let (asserts, bugs) = cx.finish();
     let num_asserts = asserts.len();
     let flags = asserts.into_iter().chain(bugs.into_iter())

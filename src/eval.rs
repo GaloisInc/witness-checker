@@ -6,10 +6,26 @@ use crate::ir::circuit::{
 
 use self::Value::Single;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Value {
     Single(u64),
     Bundle(Vec<Value>),
+}
+
+impl Value {
+    pub fn as_single(&self) -> Option<u64> {
+        match *self {
+            Value::Single(x) => Some(x),
+            _ => None,
+        }
+    }
+
+    pub fn as_bundle(&self) -> Option<&[Value]> {
+        match *self {
+            Value::Bundle(ref vals) => Some(vals),
+            _ => None,
+        }
+    }
 }
 
 pub trait Evaluator<'a>: SecretEvaluator<'a> {
