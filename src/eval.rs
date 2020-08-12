@@ -123,6 +123,22 @@ fn sign_extend(ty: Ty, val: u64) -> Option<i64> {
     Some(((val << shift) as i64) >> shift)
 }
 
+fn safe_div(x: u64, y: u64) -> u64 {
+    if y == 0 { 0 } else { x / y }
+}
+
+fn safe_sdiv(x: i64, y: i64) -> i64 {
+    if y == 0 { 0 } else { x / y }
+}
+
+fn safe_mod(x: u64, y: u64) -> u64 {
+    if y == 0 { 0 } else { x % y }
+}
+
+fn safe_smod(x: i64, y: i64) -> i64 {
+    if y == 0 { 0 } else { x % y }
+}
+
 pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Value> {
     Some(match gk {
         GateKind::Lit(x, _) => Single(x),
@@ -147,13 +163,13 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Va
                 (BinOp::Add, _) => a_val.wrapping_add(b_val),
                 (BinOp::Sub, _) => a_val.wrapping_sub(b_val),
                 (BinOp::Mul, _) => a_val.wrapping_mul(b_val),
-                (BinOp::Div, TyKind::Uint(_)) => a_val / b_val,
+                (BinOp::Div, TyKind::Uint(_)) => safe_div(a_val, b_val),
                 (BinOp::Div, TyKind::Int(_)) =>
-                    (sign_extend(ty, a_val)? / sign_extend(ty, b_val)?) as u64,
+                    safe_sdiv(sign_extend(ty, a_val)?, sign_extend(ty, b_val)?) as u64,
                 (BinOp::Div, _) => return None,
-                (BinOp::Mod, TyKind::Uint(_)) => a_val % b_val,
+                (BinOp::Mod, TyKind::Uint(_)) => safe_mod(a_val, b_val),
                 (BinOp::Mod, TyKind::Int(_)) =>
-                    (sign_extend(ty, a_val)? % sign_extend(ty, b_val)?) as u64,
+                    safe_smod(sign_extend(ty, a_val)?, sign_extend(ty, b_val)?) as u64,
                 (BinOp::Mod, _) => return None,
                 (BinOp::And, _) => a_val & b_val,
                 (BinOp::Or, _) => a_val | b_val,
@@ -197,9 +213,8 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Va
 
         GateKind::Mux(c, x, y) => {
             let c_val = e.eval_single_wire(c)?;
-            let x_val = e.eval_wire(x)?;
-            let y_val = e.eval_wire(y)?;
-            if c_val != 0 { x_val } else { y_val }
+            // Avoid evaluating inputs that don't contribute to the output.
+            if c_val != 0 { e.eval_wire(x)? } else { e.eval_wire(y)? }
         },
 
         GateKind::Cast(a, new_ty) => {
