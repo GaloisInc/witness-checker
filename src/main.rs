@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::env;
+use std::fmt::Display;
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
 use std::path::Path;
@@ -14,16 +15,32 @@ use cheesecloth::tiny_ram::{
     Execution, RamInstr, RamState, MemPort, Opcode, Advice, REG_NONE, REG_PC,
 };
 
+macro_rules! wire_assert {
+    ($cx:expr, $cond:expr, $($args:tt)*) => {
+        $cx.assert($cond, format_args!($($args)*));
+    };
+}
+
+macro_rules! wire_bug_if {
+    ($cx:expr, $cond:expr, $($args:tt)*) => {
+        $cx.bug_if($cond, format_args!($($args)*));
+    };
+}
+
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
+    assert_descs: RefCell<Vec<String>>,
     bugs: RefCell<Vec<TWire<'a, bool>>>,
+    bug_descs: RefCell<Vec<String>>,
 }
 
 impl<'a> Context<'a> {
     fn new() -> Context<'a> {
         Context {
             asserts: RefCell::new(Vec::new()),
+            assert_descs: RefCell::new(Vec::new()),
             bugs: RefCell::new(Vec::new()),
+            bug_descs: RefCell::new(Vec::new()),
         }
     }
 
@@ -36,14 +53,16 @@ impl<'a> Context<'a> {
 
     /// Mark the execution as invalid if `cond` is false.  A failed assertion represents
     /// misbehavior on the part of the prover.
-    fn assert(&self, cond: TWire<'a, bool>) {
+    fn assert(&self, cond: TWire<'a, bool>, desc: impl Display) {
         self.asserts.borrow_mut().push(cond);
+        self.assert_descs.borrow_mut().push(desc.to_string());
     }
 
     /// Signal an error condition of `cond` is true.  This should be used for situations like
     /// buffer overflows, which indicate a bug in the subject program.
-    fn bug_if(&self, cond: TWire<'a, bool>) {
+    fn bug_if(&self, cond: TWire<'a, bool>, desc: impl Display) {
         self.bugs.borrow_mut().push(cond);
+        self.bug_descs.borrow_mut().push(desc.to_string());
     }
 
     fn when<R>(
@@ -63,14 +82,14 @@ struct ContextWhen<'a, 'b> {
 }
 
 impl<'a, 'b> ContextWhen<'a, 'b> {
-    fn assert(&self, cond: TWire<'a, bool>) {
+    fn assert(&self, cond: TWire<'a, bool>, desc: impl Display) {
         // The assertion passes if either this `when` block is not taken, or `cond` is satisfied.
-        self.cx.assert(self.b.or(self.b.not(self.path_cond), cond));
+        self.cx.assert(self.b.or(self.b.not(self.path_cond), cond), desc);
     }
 
-    fn bug_if(&self, cond: TWire<'a, bool>) {
+    fn bug_if(&self, cond: TWire<'a, bool>, desc: impl Display) {
         // The bug occurs if this `when` block is taken and `cond` is satisfied.
-        self.cx.bug_if(self.b.and(self.path_cond, cond));
+        self.cx.bug_if(self.b.and(self.path_cond, cond), desc);
     }
 
     fn when<R>(
@@ -261,14 +280,14 @@ fn check_step<'a>(
     for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
         let is_dest = b.eq(b.lit(i as u64), dest);
         let expect_new = b.mux(is_dest, result, v_old);
-        cx.assert(b.eq(v_new, expect_new));
+        wire_assert!(cx, b.eq(v_new, expect_new), "cycle {}: reg {} update", cycle, i);
     }
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let expect_pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
-    cx.assert(b.eq(s2.pc, expect_pc));
+    wire_assert!(cx, b.eq(s2.pc, expect_pc), "cycle {}: pc update", cycle);
 
-    cx.assert(b.eq(s2.flag, expect_flag));
+    wire_assert!(cx, b.eq(s2.flag, expect_flag), "cycle {}: flag update", cycle);
 
 
     // If the instruction is a store or a load, we need additional checks to make sure the fields
@@ -283,15 +302,15 @@ fn check_step<'a>(
     let load_value_ok = b.eq(mem_port.value, result);
     let store_value_ok = b.eq(mem_port.value, x);
     let store_ok = b.eq(mem_port.write, is_store);
-    cx.assert(b.mux(is_mem, cycle_ok, b.lit(true)));
-    cx.assert(b.mux(is_mem, addr_ok, b.lit(true)));
-    cx.assert(b.mux(is_load, load_value_ok, b.lit(true)));
-    cx.assert(b.mux(is_store, store_value_ok, b.lit(true)));
-    cx.assert(b.mux(is_mem, store_ok, b.lit(true)));
+    wire_assert!(cx, b.mux(is_mem, cycle_ok, b.lit(true)), "cycle {}: mem cycle", cycle);
+    wire_assert!(cx, b.mux(is_mem, addr_ok, b.lit(true)), "cycle {}: mem addr", cycle);
+    wire_assert!(cx, b.mux(is_load, load_value_ok, b.lit(true)), "cycle {}: mem load value", cycle);
+    wire_assert!(cx, b.mux(is_store, store_value_ok, b.lit(true)), "cycle {}: mem store value", cycle);
+    wire_assert!(cx, b.mux(is_mem, store_ok, b.lit(true)), "cycle {}: mem write", cycle);
 
     // Non-memory ops must not use a memory port.  This prevents a malicious prover from
     // introducing fake stores on non-store instructions.
-    cx.assert(b.eq(has_mem_port, is_mem));
+    wire_assert!(cx, b.eq(has_mem_port, is_mem), "cycle {}: mem port usage", cycle);
 }
 
 fn check_first<'a>(
@@ -300,11 +319,11 @@ fn check_first<'a>(
     _prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    cx.assert(b.eq(s.pc, b.lit(0)));
-    for &r in s.regs.iter().skip(1) {
-        cx.assert(b.eq(r, b.lit(0)));
+    wire_assert!(cx, b.eq(s.pc, b.lit(0)), "first: pc",);
+    for (i, &r) in s.regs.iter().enumerate().skip(1) {
+        wire_assert!(cx, b.eq(r, b.lit(0)), "first: register {}", i);
     }
-    cx.assert(b.not(s.flag));
+    wire_assert!(cx, b.not(s.flag), "first: flag");
 }
 
 fn check_last<'a>(
@@ -313,8 +332,8 @@ fn check_last<'a>(
     prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    cx.assert(b.eq(s.pc, b.lit(prog.len() as u64)));
-    cx.assert(b.eq(s.regs[0], b.lit(0)));
+    wire_assert!(cx, b.eq(s.pc, b.lit(prog.len() as u64)), "last: pc");
+    wire_assert!(cx, b.eq(s.regs[0], b.lit(0)), "last: r0");
 }
 
 fn check_first_mem<'a>(
@@ -325,7 +344,7 @@ fn check_first_mem<'a>(
     // If the first memory port is active, then it must be a write, since there are no previous
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(!0));
-    cx.bug_if(b.mux(active, b.not(port.write), b.lit(false)));
+    wire_bug_if!(cx, b.mux(active, b.not(port.write), b.lit(false)), "first_mem: bad read");
 }
 
 fn check_mem<'a>(
@@ -343,12 +362,16 @@ fn check_mem<'a>(
             // `port1` should be a read or write with the same address.  Otherwise, `port2` is a
             // read from uninitialized memory.
             let is_init = b.eq(port1.addr, port2.addr);
-            cx.bug_if(b.not(is_init));
+            wire_bug_if!(cx, b.not(is_init), "uninit read");
 
             // If this is a legal read, then it must return the same value as the previous
             // operation.  Otherwise, the prover is cheating by changing memory without a proper
             // write.
-            cx.when(b, is_init, |cx| cx.assert(b.eq(port1.value, port2.value)));
+            cx.when(b, is_init, |cx| wire_assert!(
+                cx,
+                b.eq(port1.value, port2.value),
+                "value changed unexpectedly",
+            ));
         });
 
         // If `port2` is a write, then its address and value are unconstrained.
@@ -419,10 +442,14 @@ fn main() -> io::Result<()> {
     for (i, port) in mem_ports.iter().enumerate() {
         // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
         // in its corresponding cycle, or it isn't used at all.
-        cx.assert(b.or(
-            b.eq(port.cycle, b.lit(i as u32)),
-            b.eq(port.cycle, b.lit(!0_u32)),
-        ));
+        wire_assert!(
+            cx,
+            b.or(
+                b.eq(port.cycle, b.lit(i as u32)),
+                b.eq(port.cycle, b.lit(!0_u32)),
+            ),
+            "memory port {} used on the wrong cycle", i,
+        );
     }
 
     // Check memory consistency
