@@ -15,6 +15,7 @@ use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{
     Execution, RamInstr, RamState, MemPort, Opcode, Advice, REG_NONE, REG_PC,
+    MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 
 macro_rules! wire_assert {
@@ -477,7 +478,7 @@ fn check_first_mem<'a>(
 ) {
     // If the first memory port is active, then it must be a write, since there are no previous
     // writes to read from.
-    let active = b.ne(port.cycle, b.lit(!0));
+    let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_bug_if!(
         cx, b.mux(active, b.not(port.write), b.lit(false)),
         "uninit read from {:x} on cycle {}",
@@ -485,20 +486,28 @@ fn check_first_mem<'a>(
     );
 }
 
+/// Check that memory operation `port2` can follow operation `port1`.
 fn check_mem<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     port1: &TWire<'a, MemPort>,
     port2: &TWire<'a, MemPort>,
 ) {
-    let active = b.and(b.ne(port1.cycle, b.lit(!0)), b.ne(port2.cycle, b.lit(!0)));
+    let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     cx.when(b, active, |cx| {
         cx.when(b, b.not(port2.write), |cx| {
             // `port2` is a read.
 
-            // `port1` should be a read or write with the same address.  Otherwise, `port2` is a
-            // read from uninitialized memory.
+            // `port1` should be an active read or write with the same address.  Otherwise, `port2`
+            // is a read from uninitialized memory.
+            let port1_active = b.ne(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
+            wire_bug_if!(
+                cx, b.not(port1_active),
+                "uninit read from {:x} on cycle {} (previous op was inactive)",
+                cx.eval(port2.addr), cx.eval(port2.cycle),
+            );
+
             let is_init = b.eq(port1.addr, port2.addr);
             wire_bug_if!(
                 cx, b.not(is_init),
@@ -552,7 +561,7 @@ fn main() -> io::Result<()> {
     let mut mem_ports = Vec::new();
     for _ in 1 .. trace.len() {
         mem_ports.push(b.secret(Some(MemPort {
-            cycle: !0,
+            cycle: MEM_PORT_UNUSED_CYCLE,
             .. MemPort::default()
         })));
     }
@@ -562,14 +571,22 @@ fn main() -> io::Result<()> {
                 Advice::MemOp { addr, value, write } => {
                     // It should be fine to replace the old `Secret` gates with new ones here.  The
                     // shape of the circuit will be the same either way.
-                    mem_ports[i as usize] = b.secret(Some(MemPort {
-                        cycle: i as u32,
+                    mem_ports[i as usize - 1] = b.secret(Some(MemPort {
+                        cycle: i as u32 - 1,
                         addr, value, write,
                     }));
                 },
                 Advice::Stutter => {},
             }
         }
+    }
+    for (i, &x) in exec.init_mem.iter().enumerate() {
+        mem_ports.push(b.secret(Some(MemPort {
+            cycle: MEM_PORT_PRELOAD_CYCLE,
+            addr: 2 + i as u64,
+            value: x,
+            write: true,
+        })));
     }
 
     // Generate IR code to check the trace
@@ -584,14 +601,14 @@ fn main() -> io::Result<()> {
     check_last(&cx, &b, &prog, trace.last().unwrap());
 
     // Check the memory ports
-    for (i, port) in mem_ports.iter().enumerate() {
+    for (i, port) in mem_ports.iter().enumerate().take(trace.len() - 1) {
         // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
         // in its corresponding cycle, or it isn't used at all.
         wire_assert!(
             &cx,
             b.or(
                 b.eq(port.cycle, b.lit(i as u32)),
-                b.eq(port.cycle, b.lit(!0_u32)),
+                b.eq(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
             ),
             "port {} is active on cycle {} (expected {})",
             i, cx.eval(port.cycle), i,
@@ -599,13 +616,27 @@ fn main() -> io::Result<()> {
     }
 
     // Check memory consistency
+
     let mut sorted_mem = mem_ports.clone();
     sort::sort(&b, &mut sorted_mem, &mut |x, y| {
+        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
+        // cycles.
+        let x_cyc = b.add(x.cycle, b.lit(1));
+        let y_cyc = b.add(y.cycle, b.lit(1));
         b.or(
             b.lt(x.addr, y.addr),
-            b.and(b.eq(x.addr, y.addr), b.lt(x.cycle, y.cycle)),
+            b.and(b.eq(x.addr, y.addr), b.lt(x_cyc, y_cyc)),
         )
     });
+    /*
+    for port in &sorted_mem {
+        eprintln!(
+            "mem op: {:5} {:x}, value {}, cycle {}",
+            cx.eval(port.write).map(|x| if x == 0 { "read" } else { "write" }),
+            cx.eval(port.addr), cx.eval(port.value), cx.eval(port.cycle),
+        );
+    }
+    */
     check_first_mem(&cx, &b, &sorted_mem[0]);
     for (port1, port2) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)) {
         check_mem(&cx, &b, port1, port2);

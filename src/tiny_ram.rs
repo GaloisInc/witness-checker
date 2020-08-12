@@ -250,6 +250,9 @@ mk_opcode! {
 }
 
 
+pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
+pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
+
 #[derive(Clone, Copy, Default)]
 pub struct MemPort {
     pub cycle: u32,
