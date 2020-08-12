@@ -394,10 +394,10 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
         let mut seq = CountedSeqAccess::new(seq, 5);
         let x = RamInstr {
             opcode: seq.next_element()?,
-            dest: seq.next_element()?,
-            op1: seq.next_element()?,
-            imm: seq.next_element()?,
-            op2: seq.next_element()?,
+            dest: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+            op1: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+            imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
+            op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
         };
         seq.finish()?;
         Ok(x)
