@@ -249,6 +249,11 @@ fn check_step<'a>(
         add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE), s1.flag);
     }
 
+    {
+        // TODO: dummy implementation of `Answer` as a no-op infinite loop
+        add_case(Opcode::Answer, s1.pc, b.lit(REG_PC), s1.flag);
+    }
+
     let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
 
     for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
