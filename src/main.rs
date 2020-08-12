@@ -478,7 +478,7 @@ fn main() -> io::Result<()> {
     let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
     let flags = run_pass(&c, flags, lower::bundle::unbundle_mux);
     let flags = run_pass(&c, flags, lower::bundle::simplify);
-    let flags = run_pass(&c, flags, lower::const_fold::const_fold);
+    let flags = run_pass(&c, flags, lower::const_fold::const_fold(&c));
     let flags = run_pass(&c, flags, lower::int::mod_to_div);
     let flags = run_pass(&c, flags, lower::int::non_constant_shift);
     let flags = run_pass(&c, flags, lower::int::extend_to_64);
