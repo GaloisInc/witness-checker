@@ -1,8 +1,8 @@
 program:
-  - [6, 2, 0, false, 0]   # mull r2, r0, r0
-  - [6, 1, 0, true, 3]    # mull r1, r0, 3
-  - [4, 0, 1, false, 2]   # add r0, r1, r2
-  - [5, 0, 0, true, 10]   # sub r0, r0, 10
+  - [mull, 2, 0, false, 0]    # mull r2, r0, r0
+  - [mull, 1, 0, true, 3]     # mull r1, r0, 3
+  - [add, 0, 1, false, 2]     # add r0, r1, r2
+  - [sub, 0, 0, true, 10]     # sub r0, r0, 10
 
 params:
   num_regs: 3
