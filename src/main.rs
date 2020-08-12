@@ -10,7 +10,9 @@ use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
-use cheesecloth::tiny_ram::{Execution, RamInstr, RamState, MemPort, Opcode, REG_NONE, REG_PC};
+use cheesecloth::tiny_ram::{
+    Execution, RamInstr, RamState, MemPort, Opcode, Advice, REG_NONE, REG_PC,
+};
 
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
@@ -385,6 +387,21 @@ fn main() -> io::Result<()> {
             cycle: !0,
             .. MemPort::default()
         })));
+    }
+    for (&i, advs) in &exec.advice {
+        for adv in advs {
+            match *adv {
+                Advice::MemOp { addr, value, write } => {
+                    // It should be fine to replace the old `Secret` gates with new ones here.  The
+                    // shape of the circuit will be the same either way.
+                    mem_ports[i as usize] = b.secret(Some(MemPort {
+                        cycle: i as u32,
+                        addr, value, write,
+                    }));
+                },
+                Advice::Stutter => {},
+            }
+        }
     }
 
     // Generate IR code to check the trace
