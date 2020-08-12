@@ -366,14 +366,26 @@ fn check_step<'a>(
     for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
         let is_dest = b.eq(b.lit(i as u64), dest);
         let expect_new = b.mux(is_dest, result, v_old);
-        wire_assert!(cx, b.eq(v_new, expect_new), "cycle {}: reg {} update", cycle, i);
+        wire_assert!(
+            cx, b.eq(v_new, expect_new),
+            "cycle {} sets reg {} to {} (expected {})",
+            cycle, i, cx.eval(v_new), cx.eval(expect_new),
+        );
     }
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let expect_pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
-    wire_assert!(cx, b.eq(s2.pc, expect_pc), "cycle {}: pc update", cycle);
+    wire_assert!(
+        cx, b.eq(s2.pc, expect_pc),
+        "cycle {} sets pc to {} (expected {})",
+        cycle, cx.eval(s2.pc), cx.eval(expect_pc),
+    );
 
-    wire_assert!(cx, b.eq(s2.flag, expect_flag), "cycle {}: flag update", cycle);
+    wire_assert!(
+        cx, b.eq(s2.flag, expect_flag),
+        "cycle {} sets flag to {} (expected {})",
+        cycle, cx.eval(s2.flag), cx.eval(expect_flag),
+    );
 
 
     // If the instruction is a store or a load, we need additional checks to make sure the fields
@@ -382,21 +394,37 @@ fn check_step<'a>(
     let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
     let is_mem = b.or(is_load, is_store);
 
-    // TODO: shouldn't need an extra `eq` here
-    let cycle_ok = b.eq(mem_port.cycle, b.lit(cycle));
-    let addr_ok = b.eq(mem_port.addr, y);
-    let load_value_ok = b.eq(mem_port.value, result);
-    let store_value_ok = b.eq(mem_port.value, x);
-    let store_ok = b.eq(mem_port.write, is_store);
-    wire_assert!(cx, b.mux(is_mem, cycle_ok, b.lit(true)), "cycle {}: mem cycle", cycle);
-    wire_assert!(cx, b.mux(is_mem, addr_ok, b.lit(true)), "cycle {}: mem addr", cycle);
-    wire_assert!(cx, b.mux(is_load, load_value_ok, b.lit(true)), "cycle {}: mem load value", cycle);
-    wire_assert!(cx, b.mux(is_store, store_value_ok, b.lit(true)), "cycle {}: mem store value", cycle);
-    wire_assert!(cx, b.mux(is_mem, store_ok, b.lit(true)), "cycle {}: mem write", cycle);
+    let expect_value = b.mux(is_store, x, result);
+    cx.when(b, is_mem, |cx| {
+        wire_assert!(
+            cx, b.eq(mem_port.cycle, b.lit(cycle)),
+            "cycle {}'s mem port has bad cycle number {}",
+            cycle, cx.eval(mem_port.cycle),
+        );
+        wire_assert!(
+            cx, b.eq(mem_port.addr, y),
+            "cycle {}'s mem port has address {} (expected {})",
+            cycle, cx.eval(mem_port.addr), cx.eval(y),
+        );
+        wire_assert!(
+            cx, b.eq(mem_port.write, is_store),
+            "cycle {}'s mem port has write flag {} (expected {})",
+            cycle, cx.eval(mem_port.write), cx.eval(is_store),
+        );
+        wire_assert!(
+            cx, b.eq(mem_port.value, expect_value),
+            "cycle {}'s mem port (load) has value {} (expected {})",
+            cycle, cx.eval(mem_port.value), cx.eval(expect_value),
+        );
+    });
 
     // Non-memory ops must not use a memory port.  This prevents a malicious prover from
     // introducing fake stores on non-store instructions.
-    wire_assert!(cx, b.eq(has_mem_port, is_mem), "cycle {}: mem port usage", cycle);
+    wire_assert!(
+        cx, b.eq(has_mem_port, is_mem),
+        "cycle {} mem port usage is {} (expected {})",
+        cycle, cx.eval(has_mem_port), cx.eval(is_mem),
+    );
 }
 
 fn check_first<'a>(
@@ -405,11 +433,23 @@ fn check_first<'a>(
     _prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    wire_assert!(cx, b.eq(s.pc, b.lit(0)), "first: pc",);
+    wire_assert!(
+        cx, b.eq(s.pc, b.lit(0)),
+        "initial pc is {} (expected {})",
+        cx.eval(s.pc), 0,
+    );
     for (i, &r) in s.regs.iter().enumerate().skip(1) {
-        wire_assert!(cx, b.eq(r, b.lit(0)), "first: register {}", i);
+        wire_assert!(
+            cx, b.eq(r, b.lit(0)),
+            "initial r{} has value {} (expected {})",
+            i, cx.eval(r), 0,
+        );
     }
-    wire_assert!(cx, b.not(s.flag), "first: flag");
+    wire_assert!(
+        cx, b.not(s.flag),
+        "initial flag is {} (expected {})",
+        cx.eval(s.flag), 0,
+    );
 }
 
 fn check_last<'a>(
@@ -418,8 +458,16 @@ fn check_last<'a>(
     prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    wire_assert!(cx, b.eq(s.pc, b.lit(prog.len() as u64)), "last: pc");
-    wire_assert!(cx, b.eq(s.regs[0], b.lit(0)), "last: r0");
+    wire_assert!(
+        cx, b.eq(s.pc, b.lit(prog.len() as u64)),
+        "final pc is {} (expected {})",
+        cx.eval(s.pc), prog.len(),
+    );
+    wire_assert!(
+        cx, b.eq(s.regs[0], b.lit(0)),
+        "final r0 is {} (expected {})",
+        cx.eval(s.regs[0]), 0,
+    );
 }
 
 fn check_first_mem<'a>(
@@ -430,7 +478,11 @@ fn check_first_mem<'a>(
     // If the first memory port is active, then it must be a write, since there are no previous
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(!0));
-    wire_bug_if!(cx, b.mux(active, b.not(port.write), b.lit(false)), "first_mem: bad read");
+    wire_bug_if!(
+        cx, b.mux(active, b.not(port.write), b.lit(false)),
+        "uninit read from {:x} on cycle {}",
+        cx.eval(port.addr), cx.eval(port.cycle),
+    );
 }
 
 fn check_mem<'a>(
@@ -448,7 +500,11 @@ fn check_mem<'a>(
             // `port1` should be a read or write with the same address.  Otherwise, `port2` is a
             // read from uninitialized memory.
             let is_init = b.eq(port1.addr, port2.addr);
-            wire_bug_if!(cx, b.not(is_init), "uninit read");
+            wire_bug_if!(
+                cx, b.not(is_init),
+                "uninit read from {:x} on cycle {} (previous op had address {:x})",
+                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port1.addr),
+            );
 
             // If this is a legal read, then it must return the same value as the previous
             // operation.  Otherwise, the prover is cheating by changing memory without a proper
@@ -456,7 +512,9 @@ fn check_mem<'a>(
             cx.when(b, is_init, |cx| wire_assert!(
                 cx,
                 b.eq(port1.value, port2.value),
-                "value changed unexpectedly",
+                "read from {:x} on cycle {} produced {} (expected {})",
+                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port2.value),
+                cx.eval(port1.value),
             ));
         });
 
@@ -535,7 +593,8 @@ fn main() -> io::Result<()> {
                 b.eq(port.cycle, b.lit(i as u32)),
                 b.eq(port.cycle, b.lit(!0_u32)),
             ),
-            "memory port {} used on the wrong cycle", i,
+            "port {} is active on cycle {} (expected {})",
+            i, cx.eval(port.cycle), i,
         );
     }
 
