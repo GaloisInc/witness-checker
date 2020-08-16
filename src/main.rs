@@ -443,7 +443,7 @@ fn main() -> io::Result<()> {
 
     // Print
     for wire in &flags {
-        println!("Wire {:?}", wire);
+        //println!("Wire {:?}", wire);
     }
 
 
