@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp};
 use crate::back::zkif::prototype_backend::{WireRepr, WireId};
 use zkinterface::statement::{StatementBuilder, FileStore};
+use zkinterface::{VariablesOwned, CircuitOwned, KeyValueOwned, CommandOwned};
+use zkinterface_libsnark::gadgetlib::call_gadget_cb;
 
 pub struct Backend<'a> {
     gadget_specs: HashMap<String, GadgetSpec>,
@@ -42,27 +44,39 @@ impl<'a> Backend<'a> {
         let gate: &Gate = &*wire;
         eprintln!("{:?}", gate);
         match gate.kind {
-            GateKind::Compare(op, a, b) => {
-                let (a_wid, b_wid) = (self.wire(a), self.wire(b));
 
-                match op {
-                    CmpOp::Eq => {
-                        let gadget_spec = self.gadget_specs.get("cmp").unwrap();
-                        assert_eq!(gadget_spec.inputs.len(), 2);
-                        assert_eq!(gadget_spec.outputs.len(), 1);
 
-                        let mut input_vars = Vec::<u64>::new();
+            GateKind::Gadget(gadget_kind, in_wires) => {
+                let wire_ids: Vec<WireId> = in_wires.iter().map(|w| self.wire(*w)).collect();
 
-                        self.wire_representer.push_zkif_vars(&mut input_vars, a_wid, &gadget_spec.inputs[0]);
-                        self.wire_representer.push_zkif_vars(&mut input_vars, b_wid, &gadget_spec.inputs[1]);
+                let gadget_spec = self.gadget_specs.get("cmp").unwrap();
 
-                        let result = self.wire_representer.wire_as_field(wid);
+                let mut input_vars = Vec::<u64>::new();
 
-                        eprintln!("{:?} := {:?} == {:?}", gate.ty, a.ty, b.ty);
-                        eprintln!("{:?} := {:?}", result, input_vars);
-                    }
-                    _ => unimplemented!("comparison ({:?}) on u64", op),
-                }
+                self.wire_representer.push_zkif_vars(&mut input_vars, wire_ids[0], &gadget_spec.inputs[0]);
+
+                eprintln!("{:?} (vars: {:?})", gate, input_vars);
+
+                let gadget_input = CircuitOwned {
+                    connections: VariablesOwned {
+                        variable_ids: input_vars,
+                        values: None,
+                    },
+                    free_variable_id: self.wire_representer.stmt.vars.free_variable_id,
+                    field_maximum: None,
+                    configuration: Some(vec![
+                        KeyValueOwned {
+                            key: "function".to_string(),
+                            text: Some("tinyram.and".to_string()),
+                            data: None,
+                            number: 0,
+                        }]),
+                };
+                let command = CommandOwned { constraints_generation: true, witness_generation: true };
+                let gadget_response = call_gadget_cb(&mut self.wire_representer.stmt, &gadget_input, &command).unwrap();
+
+                let res_zkids = gadget_response.connections.variable_ids;
+                self.wire_representer.wire_reprs[wid.0].packed_zid = Some(res_zkids[0]);
             }
             _ => {}
         };
@@ -72,17 +86,6 @@ impl<'a> Backend<'a> {
 
 
 
-
-    /*
-        if let Some(repr) = self.wire_reprs.get_mut(&wire) {
-            return repr;
-        }
-
-        let mut repr = ;
-
-        self.wire_reprs.insert(wire, repr);
-        self.wire_reprs.get_mut(&wire).unwrap()
-     */
 }
 
 struct WireRepresenter {
