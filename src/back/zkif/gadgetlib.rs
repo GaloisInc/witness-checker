@@ -7,11 +7,12 @@ use zkinterface::{
     Result,
 };
 use zkinterface_libsnark::gadgetlib::call_gadget_cb;
-use super::backend::{Backend, OpLabel, WireId};
+use super::prototype_backend::{PrototypeBackend, WireId};
+use crate::back::zkif::machine::OpLabel;
 
 // Add a stateless Arithmetic & Logic Unit:
 //   new result and flag = operation( arg0, arg1, arg2 )
-pub fn push_alu_op(back: &mut Backend, opcode: OpLabel, arg0: WireId, arg1: WireId, arg2: WireId) -> (WireId, WireId) {
+pub fn push_alu_op(back: &mut PrototypeBackend, opcode: OpLabel, arg0: WireId, arg1: WireId, arg2: WireId) -> (WireId, WireId) {
     // TODO: use represent_as_bits instead.
     let arg0_var = back.represent_as_field(arg0);
     let arg1_var = back.represent_as_field(arg1);
@@ -48,7 +49,7 @@ pub fn push_alu_op(back: &mut Backend, opcode: OpLabel, arg0: WireId, arg1: Wire
 
 // Add a stateless Flow Control Unit:
 //   new pc = operation( flag, pc, arg2 )
-pub fn push_flow_op(back: &mut Backend, opcode: OpLabel, flag: WireId, pc: WireId, arg2: WireId) -> WireId {
+pub fn push_flow_op(back: &mut PrototypeBackend, opcode: OpLabel, flag: WireId, pc: WireId, arg2: WireId) -> WireId {
     let _ = back.represent_as_field(flag);
     let _ = back.represent_as_field(pc);
     let _ = back.represent_as_field(arg2);
@@ -64,7 +65,7 @@ pub fn push_flow_op(back: &mut Backend, opcode: OpLabel, flag: WireId, pc: WireI
 // Select one of multiple inputs at a secret index:
 //   new wire = inputs[index]
 // Or 0 if out-of-range.
-pub fn push_muxer(back: &mut Backend, inputs: &[WireId], index: WireId) -> WireId {
+pub fn push_muxer(back: &mut PrototypeBackend, inputs: &[WireId], index: WireId) -> WireId {
     for w in inputs {
         let _ = back.represent_as_field(*w);
     }
@@ -80,7 +81,7 @@ pub fn push_muxer(back: &mut Backend, inputs: &[WireId], index: WireId) -> WireI
 
 // Like push_muxer for pairs of wires accessed with the same secret index:
 //   new wire tuple = input_tuples[index]
-pub fn push_muxer_pair(back: &mut Backend, inputs: &[(WireId, WireId)], index: WireId) -> (WireId, WireId) {
+pub fn push_muxer_pair(back: &mut PrototypeBackend, inputs: &[(WireId, WireId)], index: WireId) -> (WireId, WireId) {
     for (wa, wb) in inputs {
         let _ = back.represent_as_field(*wa);
         let _ = back.represent_as_field(*wb);
@@ -99,7 +100,7 @@ pub fn push_muxer_pair(back: &mut Backend, inputs: &[(WireId, WireId)], index: W
 //   registers[index] = new wire equal to new_value.
 // Unchanged registers are replaced by copies of their values:
 //   registers[i != index] = new wire equal to the old value.
-pub fn push_demuxer(back: &mut Backend, registers: &mut [WireId], index: WireId, new_value: WireId) {
+pub fn push_demuxer(back: &mut PrototypeBackend, registers: &mut [WireId], index: WireId, new_value: WireId) {
     for w in &registers[..] {
         let _ = back.represent_as_field(*w);
     }

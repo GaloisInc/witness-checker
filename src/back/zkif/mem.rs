@@ -1,4 +1,4 @@
-use super::backend::{Backend, WireId, PackedValue};
+use super::prototype_backend::{PrototypeBackend, WireId, PackedValue};
 
 use std::collections::HashMap;
 
@@ -18,13 +18,13 @@ impl Memory {
         Memory { ops: vec![], values: HashMap::new(), finished: false }
     }
 
-    pub fn finish(mut self, back: &mut Backend) {
+    pub fn finish(mut self, back: &mut PrototypeBackend) {
         // TODO: store/load consistency check.
         self.finished = true;
         back.cost_est.cost += self.ops.len() * 300;
     }
 
-    pub fn store(&mut self, back: &mut Backend, condition: WireId, address: WireId, content: WireId) {
+    pub fn store(&mut self, back: &mut PrototypeBackend, condition: WireId, address: WireId, content: WireId) {
         let _ = back.represent_as_field(condition);
         let _ = back.represent_as_bits(address);
         let _ = back.represent_as_field(content);
@@ -40,7 +40,7 @@ impl Memory {
                  if condition == back.wire_one() { "".to_string() } else { format!("( if {:?} )", condition) });
     }
 
-    pub fn load(&mut self, back: &mut Backend, address: WireId) -> WireId {
+    pub fn load(&mut self, back: &mut PrototypeBackend, address: WireId) -> WireId {
         let content = back.new_wire();
 
         let _ = back.represent_as_bits(address);

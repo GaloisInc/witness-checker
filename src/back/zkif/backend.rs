@@ -1,133 +1,82 @@
-use std::fmt;
-use zkinterface::{
-    owned::{circuit::CircuitOwned, variables::VariablesOwned, keyvalue::KeyValueOwned, command::CommandOwned},
-    statement::{StatementBuilder, Store, FileStore},
-    Result,
-};
-use zkinterface_libsnark::gadgetlib::call_gadget_cb;
+use std::collections::HashMap;
+use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp};
+use crate::back::zkif::prototype_backend::{WireRepr, WireId};
+use zkinterface::statement::{StatementBuilder, FileStore};
 
-// TODO: Use types and opcodes from the rest of the package.
-pub type OpLabel = usize;
-
-// WireId is an handle to reference a wire in the backend.
-#[derive(Copy, Clone, PartialEq)]
-pub struct WireId(usize); // or wid.
-
-type ZkifId = u64; // or zid.
-
-pub type PackedValue = [u64; 4];
-
-// WireRepr holds one or several equivalent representations of a wire.
-struct WireRepr {
-    packed_zid: Option<ZkifId>,
-    bit_zids: Vec<ZkifId>,
-    one_hot_zids: Vec<ZkifId>,
-}
-
-// Backend centralizes all wires, representations, and basic components.
-// Create new wires with new_wire.
-// Push components with push_*.
-// Access wire representations with get_repr_*.
-pub struct Backend {
+pub struct Backend<'a> {
+    wire_ids: HashMap<Wire<'a>, WireId>,
     wire_reprs: Vec<WireRepr>,
-
-    pub stmt: StatementBuilder<FileStore>,
-
-    pub cost_est: CostEstimator,
+    stmt: StatementBuilder<FileStore>,
 }
 
-impl Backend {
-    pub fn new(stmt: StatementBuilder<FileStore>) -> Backend {
+impl<'a> Backend<'a> {
+    pub fn new() -> Backend<'a> {
+        let out_path = "local/test_backend";
+        let store = FileStore::new(out_path, true, true, true).unwrap();
+        let stmt = StatementBuilder::new(store);
+
         Backend {
-            // Allocate the wire for constant one (zkif_id=0).
-            wire_reprs: vec![WireRepr { packed_zid: Some(0), bit_zids: vec![], one_hot_zids: vec![] }],
+            wire_ids: HashMap::new(),
+            wire_reprs: vec![],
             stmt,
-            cost_est: CostEstimator {
-                cost: 0,
-                last_printed_cost: 0,
-            },
         }
     }
-}
 
-
-// Wire representations in zkInterface.
-impl Backend {
-    pub fn wire_one(&self) -> WireId { WireId(0) }
-
-    pub fn wire_constant(&self, value: PackedValue) -> WireId { WireId(0) } // TODO: represent constants.
-
-    pub fn new_wire(&mut self) -> WireId {
-        self.wire_reprs.push(WireRepr { packed_zid: None, bit_zids: vec![], one_hot_zids: vec![] });
-        WireId(self.wire_reprs.len() - 1)
-    }
-
-    pub fn new_wire_from_packed(&mut self, zid: ZkifId) -> WireId {
-        self.wire_reprs.push(WireRepr { packed_zid: Some(zid), bit_zids: vec![], one_hot_zids: vec![] });
-        WireId(self.wire_reprs.len() - 1)
-    }
-
-    pub fn represent_as_field(&mut self, wid: WireId) -> ZkifId {
-        let wire = &mut self.wire_reprs[wid.0];
-        match wire.packed_zid {
+    pub fn wire_as_field(&mut self, wid: WireId) -> u64 {
+        let repr = &mut self.wire_reprs[wid.0];
+        match repr.packed_zid {
             Some(zid) => zid,
             None => {
                 // Allocate a field variable.
                 let zid = self.stmt.vars.allocate();
-                wire.packed_zid = Some(zid);
-                self.cost_est.cost += 1 + 16; // Word size, boolean-ness.
+                repr.packed_zid = Some(zid);
                 // TODO: if other representations exists, enforce equality.
                 zid
             }
         }
     }
 
-    pub fn represent_as_bits(&mut self, wid: WireId) -> &[ZkifId] {
-        let num_bits = 16;
-        let wire = &mut self.wire_reprs[wid.0];
-        if wire.bit_zids.len() == 0 {
-            // Allocate bit variables.
-            wire.bit_zids = self.stmt.vars.allocate_many(num_bits);
-
-            self.cost_est.cost += 1 + num_bits;
-            // TODO: enforce boolean-ness.
-            // TODO: if other representations exists, enforce equality.
+    pub fn wire(&mut self, wire: Wire<'a>) -> WireId {
+        if let Some(wid) = self.wire_ids.get(&wire) {
+            return *wid; // This Wire was already processed.
         }
-        return &wire.bit_zids;
+
+        self.wire_reprs.push(WireRepr { packed_zid: None, bit_zids: vec![], one_hot_zids: vec![] });
+        let wid = WireId(self.wire_reprs.len() - 1);
+        self.wire_ids.insert(wire, wid);
+
+        let gate: &Gate = &*wire;
+        eprintln!("{:?}", gate);
+        match gate.kind {
+            GateKind::Compare(op, a, b) => {
+                match op {
+                    CmpOp::Eq => {
+                        let aid = self.wire(a);
+                        let bid = self.wire(b);
+                        let af = self.wire_as_field(aid);
+                        let bf = self.wire_as_field(bid);
+                        let result = self.wire_as_field(wid);
+                        eprintln!("{:?} := (af {:?} == bf {:?})", result, af, bf);
+                    }
+                    _ => unimplemented!("comparison ({:?}) on u64", op),
+                }
+            }
+            _ => {}
+        };
+
+        wid
     }
 
-    pub fn represent_as_one_hot(&mut self, wid: WireId) -> &[ZkifId] {
-        let num_values = 32;
-        let wire = &mut self.wire_reprs[wid.0];
-        if wire.one_hot_zids.len() == 0 {
-            // Allocate one-hot variables.
-            wire.one_hot_zids = self.stmt.vars.allocate_many(num_values);
-
-            self.cost_est.cost += 1 + num_values;
-            // TODO: enforce one-hot-ness.
-            // TODO: if other representations exists, enforce equality.
+    /*
+        if let Some(repr) = self.wire_reprs.get_mut(&wire) {
+            return repr;
         }
-        return &wire.one_hot_zids;
-    }
-}
 
-pub struct CostEstimator {
-    pub cost: usize,
-    last_printed_cost: usize,
-}
+        let mut repr = ;
 
-impl CostEstimator {
-    pub fn print_cost(&mut self) {
-        use colored::Colorize;
-        println!("{}", format!("Cost of the above: {}", self.cost - self.last_printed_cost).yellow().italic());
-        self.last_printed_cost = self.cost;
-    }
-}
+        self.wire_reprs.insert(wire, repr);
+        self.wire_reprs.get_mut(&wire).unwrap()
 
 
-impl fmt::Debug for WireId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        super::debug::write_wire_name(self.0, f)
-        //write!(f, "&{:3}", self.0.to_string().blue())
-    }
+     */
 }

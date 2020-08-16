@@ -442,8 +442,22 @@ fn main() -> io::Result<()> {
     let flags = run_pass(&c, flags, lower::bool_::not_to_xor);
 
     // Print
-    for wire in ok {
+    for wire in &flags {
         println!("Wire {:?}", wire);
+    }
+
+
+    #[cfg(feature = "libsnark")] {
+        /*
+            - Compact all asserts into one.
+            - Init builder.
+            - Walk through gates.
+            - Cache wires.
+            - Maintain variable reprs of wires.
+            - Finish.
+         */
+        let mut backend = back::zkif::backend::Backend::new();
+        backend.wire(flags[0]);
     }
 
     #[cfg(feature = "scale")] {

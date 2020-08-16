@@ -1,9 +1,11 @@
-use super::backend::{Backend, WireId, OpLabel, PackedValue};
+use super::prototype_backend::{PrototypeBackend, WireId, PackedValue};
 use super::gadgetlib::{push_alu_op, push_flow_op, push_muxer, push_muxer_pair, push_demuxer};
 use crate::back::zkif::mem::Memory;
 use super::debug::comment;
 
-type RegLabel = usize;
+// TODO: Use types and opcodes from the rest of the package.
+pub type OpLabel = usize;
+pub type RegLabel = usize;
 
 #[derive(Debug)]
 pub enum RegOrValue {
@@ -40,7 +42,7 @@ pub struct DynInstr {
 impl DynInstr {
     // Decode a secret instruction from a wire
     // holding a value from FixedInstr.encode_instr().
-    pub fn decode_instr(back: &mut Backend, capab: &StepCapabilities, packed: WireId) -> DynInstr {
+    pub fn decode_instr(back: &mut PrototypeBackend, capab: &StepCapabilities, packed: WireId) -> DynInstr {
         // TODO: actual decoding and validation.
         let instr = DynInstr {
             op_label: back.new_wire(),
@@ -85,7 +87,7 @@ pub struct MachineState {
 }
 
 impl MachineState {
-    pub fn new(back: &mut Backend) -> MachineState {
+    pub fn new(back: &mut PrototypeBackend) -> MachineState {
         MachineState {
             registers: (0..4).map(|_| back.new_wire()).collect(),
             flag: back.new_wire(),
@@ -93,7 +95,7 @@ impl MachineState {
         }
     }
 
-    pub fn push_static_instr(&mut self, back: &mut Backend, mem: &mut Memory, instr: &StaticInstr) {
+    pub fn push_static_instr(&mut self, back: &mut PrototypeBackend, mem: &mut Memory, instr: &StaticInstr) {
         println!("static instruction op_{}( reg_{}, reg_{}, {:?} )", instr.op_label, instr.reg_label0, instr.reg_label1, instr.reg_label2);
 
         let arg2 = match instr.reg_label2 {
@@ -146,7 +148,7 @@ impl MachineState {
     }
 
 
-    pub fn push_dynamic_instr(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities, instr: &DynInstr) {
+    pub fn push_dynamic_instr(&mut self, back: &mut PrototypeBackend, mem: &mut Memory, capab: &StepCapabilities, instr: &DynInstr) {
         //println!("dynamic instruction {:?}( {:?}, {:?}, {:?} )", instr.opcode, instr.reglabel0, instr.reglabel1, instr.reglabel2);
 
         comment("// Pick the register inputs from all possible registers.");
@@ -209,7 +211,7 @@ impl MachineState {
         back.cost_est.print_cost();
     }
 
-    pub fn push_dynamic_instr_at_pc(&mut self, back: &mut Backend, mem: &mut Memory, capab: &StepCapabilities) {
+    pub fn push_dynamic_instr_at_pc(&mut self, back: &mut PrototypeBackend, mem: &mut Memory, capab: &StepCapabilities) {
         comment("// Fetch and decode a dynamic instruction at pc.");
         let instr_at_pc = mem.load(back, self.pc);
         let instr = DynInstr::decode_instr(back, capab, instr_at_pc);
@@ -223,7 +225,7 @@ impl MachineState {
         if op < 12 { 0 } else if op < 12 + 4 { 1 } else { 2 } // TODO: use actual codes.
     }
 
-    pub fn push_opcode_type(back: &mut Backend, opcode: WireId) -> WireId {
+    pub fn push_opcode_type(back: &mut PrototypeBackend, opcode: WireId) -> WireId {
         let _ = back.represent_as_one_hot(opcode);
         // TODO: decode "is alu", "is flow", "is mem".
         back.cost_est.cost += 2;
@@ -232,7 +234,7 @@ impl MachineState {
         op_type
     }
 
-    pub fn push_is_mem_store(back: &mut Backend, opcode: WireId) -> WireId {
+    pub fn push_is_mem_store(back: &mut PrototypeBackend, opcode: WireId) -> WireId {
         let _ = back.represent_as_one_hot(opcode);
         // TODO: decode "is store"
         back.cost_est.cost += 1;
@@ -241,7 +243,7 @@ impl MachineState {
         is_store
     }
 
-    pub fn push_increment_pc(back: &mut Backend, pc: WireId) -> WireId {
+    pub fn push_increment_pc(back: &mut PrototypeBackend, pc: WireId) -> WireId {
         let _ = back.represent_as_field(pc);
         // TODO: pc + 1.
         back.cost_est.cost += 1;

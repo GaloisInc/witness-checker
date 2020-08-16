@@ -1,6 +1,7 @@
 use crate::back::zkif::machine::RegOrValue;
 
-mod backend;
+pub mod backend;
+mod prototype_backend;
 mod gadgetlib;
 mod machine;
 mod mem;
@@ -18,7 +19,7 @@ fn test_zkif_backend() -> Result<()> {
     let store = FileStore::new(out_path, true, true, true)?;
     let stmt = StatementBuilder::new(store);
 
-    let mut back = backend::Backend::new(stmt);
+    let mut back = prototype_backend::PrototypeBackend::new(stmt);
     let mut state = machine::MachineState::new(&mut back);
     let mut mem = mem::Memory::new();
 
