@@ -1,6 +1,8 @@
 use crate::back::zkif::machine::RegOrValue;
 
 pub mod backend;
+mod gadget_specs;
+mod representer;
 mod prototype_backend;
 mod gadgetlib;
 mod machine;

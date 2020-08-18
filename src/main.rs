@@ -446,7 +446,6 @@ fn main() -> io::Result<()> {
         //println!("Wire {:?}", wire);
     }
 
-
     #[cfg(feature = "libsnark")] {
         /*
             - Compact all asserts into one.
@@ -457,7 +456,9 @@ fn main() -> io::Result<()> {
             - Finish.
          */
         let mut backend = back::zkif::backend::Backend::new();
-        backend.wire(flags[0]);
+        for flag in &flags {
+            backend.wire(*flag);
+        }
     }
 
     #[cfg(feature = "scale")] {

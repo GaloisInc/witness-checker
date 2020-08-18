@@ -15,6 +15,7 @@ libsnark = ["zkinterface", "zkinterface-libsnark"]
 scale_isa = { optional = true, path = "../dialogue/scale_isa" }
 zkinterface = { optional = true, version = "1.1.3" }
 zkinterface-libsnark = { optional = true, version = "1.1.3" }
+zkinterface_bellman = { path = "../../qedit/zkinterface-bellman" }
 bumpalo = "3.4"
 colored = "1.9.3"
 serde = { version = "1", features = ["derive"] }
