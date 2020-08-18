@@ -123,13 +123,13 @@ impl<'a> Backend<'a> {
                 self.wire(right)
             }
 
-            GateKind::Mux(a, b, c) => {
-                self.wire(a);
-                self.wire(b);
-                self.wire(c)
+            GateKind::Mux(cond, then_, else_) => {
+                self.wire(cond);
+                self.wire(then_);
+                self.wire(else_)
             }
 
-            GateKind::Cast(a, _) => {
+            GateKind::Cast(a, _ty) => {
                 self.wire(a)
             }
 
@@ -141,11 +141,11 @@ impl<'a> Backend<'a> {
                 self.wire(wires[0])
             }
 
-            GateKind::Extract(a, _) => {
+            GateKind::Extract(a, _index) => {
                 self.wire(a)
             }
 
-            GateKind::Gadget(gk, wires) => {
+            GateKind::Gadget(_gk, wires) => {
                 for w in wires {
                     self.wire(*w);
                 }

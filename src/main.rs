@@ -459,6 +459,7 @@ fn main() -> io::Result<()> {
         for flag in &flags {
             backend.wire(*flag);
         }
+        drop(backend);
     }
 
     #[cfg(feature = "scale")] {

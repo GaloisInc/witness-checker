@@ -1,10 +1,12 @@
-use zkinterface::statement::{StatementBuilder, FileStore};
+use zkinterface::statement::{StatementBuilder, FileStore, GadgetCallbacks};
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, Variable, Index, LinearCombination, SynthesisError},
     ff::ScalarEngine,
     sapling_crypto::circuit::boolean::{AllocatedBit, Boolean},
     pairing::bls12_381::Bls12,
 };
+use zkinterface::ConstraintSystemOwned;
+use zkinterface_bellman::export::to_zkif_constraint;
 
 // WireId is an handle to reference a wire in the backend.
 #[derive(Copy, Clone, PartialEq)]
@@ -24,6 +26,8 @@ pub struct WireRepr {
 pub struct WireRepresenter {
     stmt: StatementBuilder<FileStore>,
     pub wire_reprs: Vec<WireRepr>,
+
+    constraints: ConstraintSystemOwned,
 }
 
 impl WireRepresenter {
@@ -32,7 +36,11 @@ impl WireRepresenter {
         let store = FileStore::new(out_path, true, true, true).unwrap();
         let stmt = StatementBuilder::new(store);
 
-        WireRepresenter { stmt, wire_reprs: vec![] }
+        WireRepresenter {
+            stmt,
+            wire_reprs: vec![],
+            constraints: ConstraintSystemOwned { constraints: vec![] },
+        }
     }
 
     pub fn allocate_repr(&mut self) -> WireId {
@@ -40,7 +48,7 @@ impl WireRepresenter {
         WireId(self.wire_reprs.len() - 1)
     }
 
-    pub fn wire_as_field(&mut self, wid: WireId) -> ZkifId {
+    pub fn as_field(&mut self, wid: WireId) -> ZkifId {
         let repr = &mut self.wire_reprs[wid.0];
         match repr.packed_zid {
             Some(zid) => zid,
@@ -67,6 +75,14 @@ impl WireRepresenter {
                 Boolean::constant(false)
             }
         }
+    }
+}
+
+impl Drop for WireRepresenter {
+    fn drop(&mut self) {
+        let mut msg = Vec::<u8>::new();
+        self.constraints.write_into(&mut msg).unwrap();
+        self.stmt.receive_constraints(&msg).unwrap();
     }
 }
 
@@ -97,6 +113,13 @@ impl<E: ScalarEngine> ConstraintSystem<E> for WireRepresenter {
               LB: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
               LC: FnOnce(LinearCombination<E>) -> LinearCombination<E>
     {
+        let a = a(LinearCombination::zero());
+        let b = b(LinearCombination::zero());
+        let c = c(LinearCombination::zero());
+
+        let co = to_zkif_constraint(a, b, c);
+        self.constraints.constraints.push(co);
+
         eprintln!("Received a Bellman constraint: {}", annotation().into());
     }
 
