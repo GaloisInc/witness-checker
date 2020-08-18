@@ -455,7 +455,7 @@ fn main() -> io::Result<()> {
             - Maintain variable reprs of wires.
             - Finish.
          */
-        let mut backend = back::zkif::backend::Backend::new();
+        let mut backend = back::zkif::backend::Backend::new(true);
         for flag in &flags {
             backend.wire(*flag);
         }

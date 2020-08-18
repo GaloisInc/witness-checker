@@ -1,12 +1,13 @@
-use zkinterface::statement::{StatementBuilder, FileStore, GadgetCallbacks};
+use zkinterface::statement::{StatementBuilder, FileStore, GadgetCallbacks, Store};
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, Variable, Index, LinearCombination, SynthesisError},
     ff::ScalarEngine,
     sapling_crypto::circuit::boolean::{AllocatedBit, Boolean},
     pairing::bls12_381::Bls12,
 };
-use zkinterface::ConstraintSystemOwned;
+use zkinterface::{ConstraintSystemOwned, WitnessOwned, VariablesOwned, CircuitOwned, KeyValueOwned};
 use zkinterface_bellman::export::to_zkif_constraint;
+use zkinterface_bellman::ff::{PrimeField, PrimeFieldRepr, Field};
 
 // WireId is an handle to reference a wire in the backend.
 #[derive(Copy, Clone, PartialEq)]
@@ -28,18 +29,22 @@ pub struct WireRepresenter {
     pub wire_reprs: Vec<WireRepr>,
 
     constraints: ConstraintSystemOwned,
+    proving: bool,
+    witness: Vec<u8>,
 }
 
 impl WireRepresenter {
-    pub fn new() -> WireRepresenter {
+    pub fn new(proving: bool) -> WireRepresenter {
         let out_path = "local/test_backend";
-        let store = FileStore::new(out_path, true, true, true).unwrap();
+        let store = FileStore::new(out_path, true, true, false).unwrap();
         let stmt = StatementBuilder::new(store);
 
         WireRepresenter {
             stmt,
             wire_reprs: vec![],
             constraints: ConstraintSystemOwned { constraints: vec![] },
+            proving,
+            witness: vec![],
         }
     }
 
@@ -83,6 +88,42 @@ impl Drop for WireRepresenter {
         let mut msg = Vec::<u8>::new();
         self.constraints.write_into(&mut msg).unwrap();
         self.stmt.receive_constraints(&msg).unwrap();
+
+        if self.proving {
+            let variable_ids = (1..self.stmt.vars.free_variable_id).collect();
+            let wit = WitnessOwned {
+                assigned_variables: VariablesOwned {
+                    variable_ids,
+                    values: Some(self.witness.clone()),
+                }
+            };
+            eprintln!("free_id={} n_var={} n_bytes={}", self.stmt.vars.free_variable_id, wit.assigned_variables.variable_ids.len(), self.witness.len());
+            let mut msg = Vec::<u8>::new();
+            wit.write_into(&mut msg).unwrap();
+            self.stmt.receive_witness(&msg);
+        }
+
+        let mut field_maximum = Vec::<u8>::new();
+        let mut fr = <En as ScalarEngine>::Fr::one();
+        fr.negate();
+        fr.into_repr().write_le(&mut field_maximum).unwrap();
+
+        let statement = CircuitOwned {
+            connections: VariablesOwned {
+                variable_ids: vec![],
+                values: Some(vec![]),
+            },
+            free_variable_id: self.stmt.vars.free_variable_id,
+            field_maximum: Some(field_maximum),
+            configuration: Some(vec![
+                KeyValueOwned {
+                    key: "function".to_string(),
+                    text: Some("witness-checker.test.tinyram".to_string()),
+                    data: None,
+                    number: 0,
+                }]),
+        };
+        self.stmt.store.push_main(&statement).unwrap();
     }
 }
 
@@ -96,8 +137,13 @@ impl<E: ScalarEngine> ConstraintSystem<E> for WireRepresenter {
         where F: FnOnce() -> Result<E::Fr, SynthesisError>,
               A: FnOnce() -> AR, AR: Into<String>
     {
-        let zid = self.stmt.vars.allocate();
-        Ok(Variable::new_unchecked(Index::Aux(zid as usize)))
+        let zkid = self.stmt.vars.allocate();
+        if self.proving {
+            let fr = f()?;
+            fr.into_repr().write_le(&mut self.witness)?;
+            eprintln!("ALLOC zkid {} bytes={}", zkid, self.witness.len());
+        }
+        Ok(Variable::new_unchecked(Index::Aux(zkid as usize)))
     }
 
     fn alloc_input<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>

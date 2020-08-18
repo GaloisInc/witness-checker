@@ -19,11 +19,11 @@ pub struct Backend<'a> {
 }
 
 impl<'a> Backend<'a> {
-    pub fn new() -> Backend<'a> {
+    pub fn new(proving: bool) -> Backend<'a> {
         Backend {
             gadget_specs: GadgetSpec::make_specs(),
             wire_ids: HashMap::new(),
-            wire_representer: WireRepresenter::new(),
+            wire_representer: WireRepresenter::new(proving),
         }
     }
 
