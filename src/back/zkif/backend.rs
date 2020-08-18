@@ -59,10 +59,6 @@ impl<'a> Backend<'a> {
                 let wid = self.wire_representer.allocate_repr();
                 self.wire_representer.set_bellman_boolean(wid, b);
 
-                /* TODO: other types.
-                match *ty {
-                    TyKind::Bool => {}
-                };*/
                 eprintln!("{} = Secret boolean", wid.0);
                 wid
             }
@@ -71,15 +67,14 @@ impl<'a> Backend<'a> {
                 let aw = self.wire(arg);
                 let ab = self.wire_representer.as_bellman_boolean(aw);
 
-                let out_b = ab.not();
+                let out_b = match op {
+                    UnOp::Not => ab.not(),
+                    UnOp::Neg => ab,
+                };
 
                 let wid = self.wire_representer.allocate_repr();
                 self.wire_representer.set_bellman_boolean(wid, out_b);
 
-                /* TODO: other types and ops.
-                match *arg.ty
-                match op
-                 */
                 eprintln!("{} = {:?} {}", wid.0, op, aw.0);
                 wid
             }
@@ -91,10 +86,25 @@ impl<'a> Backend<'a> {
                 let lb = self.wire_representer.as_bellman_boolean(lw);
                 let rb = self.wire_representer.as_bellman_boolean(rw);
 
-                let out_b = Boolean::xor::<En, _>(
-                    &mut self.wire_representer,
-                    &lb, &rb,
-                ).unwrap();
+                let out_b = match op {
+                    BinOp::Xor | BinOp::Add | BinOp::Sub =>
+                        Boolean::xor::<En, _>(
+                            &mut self.wire_representer,
+                            &lb, &rb,
+                        ).unwrap(),
+
+                    BinOp::And | BinOp::Mul => Boolean::and::<En, _>(
+                        &mut self.wire_representer,
+                        &lb, &rb,
+                    ).unwrap(),
+
+                    BinOp::Or => Boolean::and::<En, _>(
+                        &mut self.wire_representer,
+                        &lb.not(), &rb.not(),
+                    ).unwrap().not(),
+
+                    BinOp::Div | BinOp::Mod => lb, // TODO: validate rb=1?
+                };
 
                 let wid = self.wire_representer.allocate_repr();
                 self.wire_representer.set_bellman_boolean(wid, out_b);
@@ -127,6 +137,7 @@ impl<'a> Backend<'a> {
                 for w in wires {
                     self.wire(*w);
                 }
+                assert_ne!(wires.len(), 0);
                 self.wire(wires[0])
             }
 
@@ -138,6 +149,7 @@ impl<'a> Backend<'a> {
                 for w in wires {
                     self.wire(*w);
                 }
+                assert_ne!(wires.len(), 0);
                 self.wire(wires[0])
             }
         };
