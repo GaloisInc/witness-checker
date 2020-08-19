@@ -6,7 +6,6 @@ use super::gadget_specs::GadgetSpec;
 
 use zkinterface::statement::{StatementBuilder, FileStore};
 use zkinterface::{VariablesOwned, CircuitOwned, KeyValueOwned, CommandOwned};
-use zkinterface_libsnark::gadgetlib::call_gadget_cb;
 use zkinterface_bellman::sapling_crypto::circuit::boolean::{AllocatedBit, Boolean};
 use zkinterface_bellman::pairing::bls12_381::Bls12;
 use crate::back::zkif::representer::{WireRepresenter, En};

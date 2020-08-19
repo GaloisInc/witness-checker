@@ -1,7 +1,10 @@
+use zkinterface::{Result, KeyValueOwned, CircuitOwned, VariablesOwned};
 use super::prototype_backend::{PrototypeBackend, WireId, PackedValue};
 use super::gadgetlib::{push_alu_op, push_flow_op, push_muxer, push_muxer_pair, push_demuxer};
 use crate::back::zkif::mem::Memory;
 use super::debug::comment;
+use zkinterface::statement::{FileStore, StatementBuilder, Store};
+use crate::back::zkif::prototype_backend;
 
 // TODO: Use types and opcodes from the rest of the package.
 pub type OpLabel = usize;
@@ -251,4 +254,62 @@ impl MachineState {
         println!("{:?}\t= increment_pc {:?}", next_pc, pc);
         next_pc
     }
+}
+
+
+#[test]
+fn test_zkif_machine() -> Result<()> {
+    let out_path = "local/test_statement";
+    let store = FileStore::new(out_path, true, true, true)?;
+    let stmt = StatementBuilder::new(store);
+
+    let mut back = prototype_backend::PrototypeBackend::new(stmt);
+    let mut state = MachineState::new(&mut back);
+    let mut mem = Memory::new();
+
+    println!("\nInitial state: {:#?}\n", state);
+
+    for _ in 0..2 {
+        let instr = StaticInstr {
+            op_label: 0,
+            reg_label0: 0,
+            reg_label1: 1,
+            reg_label2: RegOrValue::Reg(2),
+        };
+        state.push_static_instr(&mut back, &mut mem, &instr);
+        println!();
+    }
+
+    // A description of what a dynamic step may do.
+    let capab = StepCapabilities::new();
+
+    for _ in 0..2 {
+        state.push_dynamic_instr_at_pc(&mut back, &mut mem, &capab);
+
+        println!();
+    }
+
+    println!("// Final memory consistency check.");
+    mem.finish(&mut back);
+    back.cost_est.print_cost();
+
+    let main = CircuitOwned {
+        connections: VariablesOwned {
+            variable_ids: vec![],
+            values: Some(vec![]),
+        },
+        free_variable_id: back.stmt.vars.free_variable_id,
+        field_maximum: None,
+        configuration: Some(vec![
+            KeyValueOwned {
+                key: "function".to_string(),
+                text: Some("main.test_statement".to_string()),
+                data: None,
+                number: 0,
+            }]),
+    };
+    back.stmt.store.push_main(&main)?;
+
+    println!("Written {}/*.zkif", out_path);
+    Ok(())
 }

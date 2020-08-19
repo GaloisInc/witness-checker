@@ -446,7 +446,7 @@ fn main() -> io::Result<()> {
         //println!("Wire {:?}", wire);
     }
 
-    #[cfg(feature = "libsnark")] {
+    #[cfg(feature = "bellman")] {
         /*
             - Compact all asserts into one.
             - Init builder.

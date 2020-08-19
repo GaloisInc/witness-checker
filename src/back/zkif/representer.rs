@@ -100,7 +100,7 @@ impl Drop for WireRepresenter {
             eprintln!("free_id={} n_var={} n_bytes={}", self.stmt.vars.free_variable_id, wit.assigned_variables.variable_ids.len(), self.witness.len());
             let mut msg = Vec::<u8>::new();
             wit.write_into(&mut msg).unwrap();
-            self.stmt.receive_witness(&msg);
+            self.stmt.receive_witness(&msg).unwrap();
         }
 
         let mut field_maximum = Vec::<u8>::new();

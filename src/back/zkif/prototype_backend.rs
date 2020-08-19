@@ -4,7 +4,6 @@ use zkinterface::{
     statement::{StatementBuilder, Store, FileStore},
     Result,
 };
-use zkinterface_libsnark::gadgetlib::call_gadget_cb;
 
 // WireId is an handle to reference a wire in the backend.
 #[derive(Copy, Clone, PartialEq)]
