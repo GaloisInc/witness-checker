@@ -9,7 +9,14 @@ use zkinterface::{VariablesOwned, CircuitOwned, KeyValueOwned, CommandOwned};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::{AllocatedBit, Boolean};
 use zkinterface_bellman::pairing::bls12_381::Bls12;
 use crate::back::zkif::representer::{Representer, En};
+use std::path::Path;
 
+
+/// zkInterface backend based on Bellman.
+///
+/// - Walk through gates.
+/// - Allocate and retrieve representations of wires.
+/// - Write files.
 pub struct Backend<'a> {
     gadget_specs: HashMap<String, GadgetSpec>,
 
@@ -18,11 +25,11 @@ pub struct Backend<'a> {
 }
 
 impl<'a> Backend<'a> {
-    pub fn new(proving: bool) -> Backend<'a> {
+    pub fn new(workspace: impl AsRef<Path>, proving: bool) -> Backend<'a> {
         Backend {
             gadget_specs: GadgetSpec::make_specs(),
             wire_ids: HashMap::new(),
-            representer: Representer::new(proving),
+            representer: Representer::new(workspace, proving),
         }
     }
 

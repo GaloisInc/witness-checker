@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, remove_file};
 use std::io::{self, BufWriter};
 use std::path::Path;
 use bumpalo::Bump;
@@ -11,6 +11,7 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{Execution, RamInstr, RamState, MemPort, Opcode, REG_NONE, REG_PC};
+use zkinterface::Messages;
 
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
@@ -447,19 +448,33 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(feature = "bellman")] {
-        /*
-            - Compact all asserts into one.
-            - Init builder.
-            - Walk through gates.
-            - Cache wires.
-            - Maintain variable reprs of wires.
-            - Finish.
-         */
-        let mut backend = back::zkif::backend::Backend::new(true);
+        // Clean workspace.
+        let workspace = Path::new("local/test");
+        let files = vec![
+            workspace.join("main.zkif"),
+            workspace.join("constraints.zkif"),
+            workspace.join("witness.zkif"),
+        ];
+        for f in &files {
+            let _ = remove_file(f);
+        }
+
+        // Generate the circuit and witness.
+        let mut backend = back::zkif::backend::Backend::new(workspace, true);
         for flag in &flags {
             backend.wire(*flag);
         }
+        // Write files.
         drop(backend);
+
+        // Validate the circuit and witness.
+        let mut messages = Messages::new();
+        for f in &files {
+            messages.read_file(f).unwrap();
+        }
+        zkinterface_bellman::zkif_backend::validate(&messages, true).unwrap();
+
+        // TODO: Compact all output wires into an assertion.
     }
 
     #[cfg(feature = "scale")] {

@@ -8,6 +8,7 @@ use zkinterface_bellman::{
 use zkinterface::{ConstraintSystemOwned, WitnessOwned, VariablesOwned, CircuitOwned, KeyValueOwned};
 use zkinterface_bellman::export::to_zkif_constraint;
 use zkinterface_bellman::ff::{PrimeField, PrimeFieldRepr, Field};
+use std::path::Path;
 
 // WireId is an handle to reference a wire in the backend.
 #[derive(Copy, Clone, PartialEq)]
@@ -34,9 +35,8 @@ pub struct Representer {
 }
 
 impl Representer {
-    pub fn new(proving: bool) -> Representer {
-        let out_path = "local/test_backend";
-        let store = FileStore::new(out_path, true, true, false).unwrap();
+    pub fn new(workspace: impl AsRef<Path>, proving: bool) -> Representer {
+        let store = FileStore::new(workspace, true, true, false).unwrap();
         let stmt = StatementBuilder::new(store);
 
         Representer {
@@ -97,7 +97,6 @@ impl Drop for Representer {
                     values: Some(self.witness.clone()),
                 }
             };
-            eprintln!("free_id={} n_var={} n_bytes={}", self.stmt.vars.free_variable_id, wit.assigned_variables.variable_ids.len(), self.witness.len());
             let mut msg = Vec::<u8>::new();
             wit.write_into(&mut msg).unwrap();
             self.stmt.receive_witness(&msg).unwrap();
@@ -141,7 +140,6 @@ impl<E: ScalarEngine> ConstraintSystem<E> for Representer {
         if self.proving {
             let fr = f()?;
             fr.into_repr().write_le(&mut self.witness)?;
-            eprintln!("ALLOC zkid {} bytes={}", zkid, self.witness.len());
         }
         Ok(Variable::new_unchecked(Index::Aux(zkid as usize)))
     }
@@ -165,8 +163,6 @@ impl<E: ScalarEngine> ConstraintSystem<E> for Representer {
 
         let co = to_zkif_constraint(a, b, c);
         self.constraints.constraints.push(co);
-
-        eprintln!("Received a Bellman constraint: {}", annotation().into());
     }
 
     fn push_namespace<NR, N>(&mut self, name_fn: N) where NR: Into<String>, N: FnOnce() -> NR {}
