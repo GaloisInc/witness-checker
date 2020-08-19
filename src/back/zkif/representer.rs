@@ -24,7 +24,7 @@ pub struct WireRepr {
     pub bl_boolean: Option<Boolean>,
 }
 
-pub struct WireRepresenter {
+pub struct Representer {
     stmt: StatementBuilder<FileStore>,
     pub wire_reprs: Vec<WireRepr>,
 
@@ -33,13 +33,13 @@ pub struct WireRepresenter {
     witness: Vec<u8>,
 }
 
-impl WireRepresenter {
-    pub fn new(proving: bool) -> WireRepresenter {
+impl Representer {
+    pub fn new(proving: bool) -> Representer {
         let out_path = "local/test_backend";
         let store = FileStore::new(out_path, true, true, false).unwrap();
         let stmt = StatementBuilder::new(store);
 
-        WireRepresenter {
+        Representer {
             stmt,
             wire_reprs: vec![],
             constraints: ConstraintSystemOwned { constraints: vec![] },
@@ -83,7 +83,7 @@ impl WireRepresenter {
     }
 }
 
-impl Drop for WireRepresenter {
+impl Drop for Representer {
     fn drop(&mut self) {
         let mut msg = Vec::<u8>::new();
         self.constraints.write_into(&mut msg).unwrap();
@@ -130,7 +130,7 @@ impl Drop for WireRepresenter {
 // TODO: template with trait ScalarEngine.
 pub type En = Bls12;
 
-impl<E: ScalarEngine> ConstraintSystem<E> for WireRepresenter {
+impl<E: ScalarEngine> ConstraintSystem<E> for Representer {
     type Root = Self;
 
     fn alloc<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>
