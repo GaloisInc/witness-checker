@@ -472,7 +472,7 @@ fn main() -> io::Result<()> {
         for f in &files {
             messages.read_file(f).unwrap();
         }
-        zkinterface_bellman::zkif_backend::validate(&messages, true).unwrap();
+        zkinterface_bellman::zkif_backend::validate(&messages, false).unwrap();
 
         // TODO: Compact all output wires into an assertion.
     }

@@ -2,13 +2,22 @@ use zkinterface::statement::{StatementBuilder, FileStore, GadgetCallbacks, Store
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, Variable, Index, LinearCombination, SynthesisError},
     ff::ScalarEngine,
-    sapling_crypto::circuit::boolean::{AllocatedBit, Boolean},
+    sapling_crypto::circuit::{
+        boolean::{AllocatedBit, Boolean},
+        uint32::UInt32,
+    },
     pairing::bls12_381::Bls12,
 };
 use zkinterface::{ConstraintSystemOwned, WitnessOwned, VariablesOwned, CircuitOwned, KeyValueOwned};
 use zkinterface_bellman::export::to_zkif_constraint;
 use zkinterface_bellman::ff::{PrimeField, PrimeFieldRepr, Field};
 use std::path::Path;
+
+// TODO: template with trait ScalarEngine.
+pub type En = Bls12;
+pub type LC = LinearCombination<En>;
+pub type Fr = <En as ScalarEngine>::Fr;
+pub type FrRepr = <Fr as PrimeField>::Repr;
 
 // WireId is an handle to reference a wire in the backend.
 #[derive(Copy, Clone, PartialEq)]
@@ -19,10 +28,12 @@ pub type ZkifId = u64; // or zid.
 // WireRepr holds one or several equivalent representations of a wire.
 #[derive(Default)]
 pub struct WireRepr {
-    pub packed_zid: Option<ZkifId>,
-    pub bit_zids: Vec<ZkifId>,
-    pub one_hot_zids: Vec<ZkifId>,
     pub bl_boolean: Option<Boolean>,
+    pub bl_lc: Option<LC>,
+    pub bl_uint32: Option<UInt32>,
+    //pub packed_zid: Option<ZkifId>,
+    //pub bit_zids: Vec<ZkifId>,
+    //pub one_hot_zids: Vec<ZkifId>,
 }
 
 pub struct Representer {
@@ -53,7 +64,7 @@ impl Representer {
         WireId(self.wire_reprs.len() - 1)
     }
 
-    pub fn as_field(&mut self, wid: WireId) -> ZkifId {
+    /*pub fn as_field(&mut self, wid: WireId) -> ZkifId {
         let repr = &mut self.wire_reprs[wid.0];
         match repr.packed_zid {
             Some(zid) => zid,
@@ -65,10 +76,18 @@ impl Representer {
                 zid
             }
         }
-    }
+    }*/
 
     pub fn set_bellman_boolean(&mut self, wid: WireId, b: Boolean) {
         self.wire_reprs[wid.0].bl_boolean = Some(b);
+    }
+
+    pub fn set_bellman_lc(&mut self, wid: WireId, lc: LC) {
+        self.wire_reprs[wid.0].bl_lc = Some(lc);
+    }
+
+    pub fn set_bellman_uint32(&mut self, wid: WireId, u: UInt32) {
+        self.wire_reprs[wid.0].bl_uint32 = Some(u);
     }
 
     pub fn as_bellman_boolean(&mut self, wid: WireId) -> Boolean {
@@ -78,6 +97,28 @@ impl Representer {
             None => {
                 // TODO: convert from other repr.
                 Boolean::constant(false)
+            }
+        }
+    }
+
+    pub fn as_bellman_lc(&mut self, wid: WireId) -> LC {
+        let repr = &mut self.wire_reprs[wid.0];
+        match &repr.bl_lc {
+            Some(lc) => lc.clone(),
+            None => {
+                // TODO: convert from other repr.
+                LC::zero()
+            }
+        }
+    }
+
+    pub fn as_bellman_uint32(&mut self, wid: WireId) -> UInt32 {
+        let repr = &mut self.wire_reprs[wid.0];
+        match &repr.bl_uint32 {
+            Some(u) => u.clone(),
+            None => {
+                // TODO: convert from other repr.
+                UInt32::constant(0)
             }
         }
     }
@@ -102,9 +143,9 @@ impl Drop for Representer {
             self.stmt.receive_witness(&msg).unwrap();
         }
 
-        let mut field_maximum = Vec::<u8>::new();
         let mut fr = <En as ScalarEngine>::Fr::one();
         fr.negate();
+        let mut field_maximum = Vec::<u8>::new();
         fr.into_repr().write_le(&mut field_maximum).unwrap();
 
         let statement = CircuitOwned {
@@ -126,14 +167,11 @@ impl Drop for Representer {
     }
 }
 
-// TODO: template with trait ScalarEngine.
-pub type En = Bls12;
-
-impl<E: ScalarEngine> ConstraintSystem<E> for Representer {
+impl ConstraintSystem<En> for Representer {
     type Root = Self;
 
     fn alloc<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>
-        where F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        where F: FnOnce() -> Result<Fr, SynthesisError>,
               A: FnOnce() -> AR, AR: Into<String>
     {
         let zkid = self.stmt.vars.allocate();
@@ -145,17 +183,17 @@ impl<E: ScalarEngine> ConstraintSystem<E> for Representer {
     }
 
     fn alloc_input<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>
-        where F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        where F: FnOnce() -> Result<Fr, SynthesisError>,
               A: FnOnce() -> AR, AR: Into<String>
     {
-        ConstraintSystem::<E>::alloc(self, annotation, f)
+        ConstraintSystem::<En>::alloc(self, annotation, f)
     }
 
     fn enforce<A, AR, LA, LB, LC>(&mut self, annotation: A, a: LA, b: LB, c: LC)
         where A: FnOnce() -> AR, AR: Into<String>,
-              LA: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-              LB: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-              LC: FnOnce(LinearCombination<E>) -> LinearCombination<E>
+              LA: FnOnce(LinearCombination<En>) -> LinearCombination<En>,
+              LB: FnOnce(LinearCombination<En>) -> LinearCombination<En>,
+              LC: FnOnce(LinearCombination<En>) -> LinearCombination<En>
     {
         let a = a(LinearCombination::zero());
         let b = b(LinearCombination::zero());
