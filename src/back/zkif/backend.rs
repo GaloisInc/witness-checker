@@ -16,7 +16,6 @@ use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, Zk
 use std::path::Path;
 use std::ops::Sub;
 use crate::ir::circuit::IntSize::I64;
-use crate::back::zkif::num::boolean_lc;
 
 
 /// zkInterface backend based on Bellman.
@@ -203,36 +202,8 @@ impl<'a> Backend<'a> {
                     CmpOp::Eq => {
                         let ln = self.representer.as_bellman_num(lw);
                         let rn = self.representer.as_bellman_num(rw);
-
                         let diff = ln - &rn;
-
-                        let equal_value = diff.value.map(|d| d.is_zero());
-                        let equal = Boolean::from(
-                            AllocatedBit::alloc::<En, _>(&mut self.representer, equal_value).unwrap()
-                        );
-                        //let eq_lc = boolean_lc(&equal, Representer::one(), Fr::one());
-                        let ne = equal.not();
-                        let ne_lc = boolean_lc(&ne, Representer::one(), Fr::one());
-
-                        eprintln!("{} {} {:?}", equal_value.unwrap(), ne.get_value().unwrap(), diff.value.unwrap());
-
-                        self.representer.enforce(
-                            || "ne=0 => diff=0",
-                            |lc| lc + &diff.lc,
-                            |lc| lc + &ne_lc,
-                            |lc| lc + &diff.lc,
-                        );
-                        /*
-                        self.representer.enforce(
-                            || "diff=0 => ne=0",
-                            |lc| lc + &diff.lc,
-                            |lc| lc + &ne_lc,
-                            |lc| lc + &ne_lc,
-                        );
-                         */
-
-                        // TODO: should be doable in two constraints instead of three.
-                        equal
+                        diff.equals_zero(&mut self.representer)
                     }
                     _ => Boolean::constant(false)
                 };

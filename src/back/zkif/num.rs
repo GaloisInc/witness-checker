@@ -4,16 +4,17 @@ use zkinterface_bellman::{
 };
 use std::ops::{Add, Sub, Mul};
 use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, Variable};
-use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
+use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBit};
+use zkinterface_bellman::pairing::Engine;
 
 
 #[derive(Clone)]
-pub struct Num<E: ScalarEngine> {
+pub struct Num<E: Engine> {
     pub value: Option<E::Fr>,
     pub lc: LinearCombination<E>,
 }
 
-impl<E: ScalarEngine> Num<E> {
+impl<E: Engine> Num<E> {
     pub fn zero() -> Self {
         Num {
             value: Some(E::Fr::zero()),
@@ -29,7 +30,7 @@ impl<E: ScalarEngine> Num<E> {
             value: bool.get_value().map(|b|
                 if b { E::Fr::one() } else { E::Fr::zero() }
             ),
-            lc: boolean_lc(bool, CS::one(), E::Fr::one()),
+            lc: boolean_lc::<E, CS>(bool),
         }
     }
 
@@ -61,9 +62,45 @@ impl<E: ScalarEngine> Num<E> {
         self.lc = product_lc;
         self
     }
+
+    pub fn equals_zero<CS: ConstraintSystem<E>>(
+        &self,
+        cs: &mut CS,
+    ) -> Boolean {
+        let is_zero = {
+            let value = self.value.map(|val| val.is_zero());
+            Boolean::from(AllocatedBit::alloc::<E, &mut CS>(
+                cs, value).unwrap())
+        };
+        let is_zero_lc = boolean_lc::<E, CS>(&is_zero);
+
+        cs.enforce(
+            || "eq=1 => self=0",
+            |lc| lc + &self.lc,
+            |lc| lc + &is_zero_lc,
+            |lc| lc,
+        );
+
+        let self_inv = cs.alloc(
+            || "inv",
+            || Ok(
+                self.value.unwrap().inverse()
+                    .unwrap_or_else(|| E::Fr::zero())
+            ),
+        ).unwrap();
+        cs.enforce(
+            || "self=0 => eq=1",
+            |lc| lc + &self.lc,
+            |lc| lc + self_inv,
+            |lc| lc + CS::one() - &is_zero_lc,
+        );
+
+        // TODO: should be doable without the boolean constraint of AllocatedBit.
+        is_zero
+    }
 }
 
-impl<'a, E: ScalarEngine> Add<&'a Num<E>> for Num<E> {
+impl<'a, E: Engine> Add<&'a Num<E>> for Num<E> {
     type Output = Num<E>;
 
     fn add(mut self, other: &'a Num<E>) -> Num<E> {
@@ -81,7 +118,7 @@ impl<'a, E: ScalarEngine> Add<&'a Num<E>> for Num<E> {
     }
 }
 
-impl<'a, E: ScalarEngine> Sub<&'a Num<E>> for Num<E> {
+impl<'a, E: Engine> Sub<&'a Num<E>> for Num<E> {
     type Output = Num<E>;
 
     fn sub(mut self, other: &'a Num<E>) -> Num<E> {
@@ -100,26 +137,8 @@ impl<'a, E: ScalarEngine> Sub<&'a Num<E>> for Num<E> {
 }
 
 
-// Copy of Boolean::lc, but using ScalarEngine instead of Engine.
-pub fn boolean_lc<E: ScalarEngine>(
+pub fn boolean_lc<E: Engine, CS: ConstraintSystem<E>>(
     bool: &Boolean,
-    one: Variable,
-    coeff: E::Fr,
-) -> LinearCombination<E>
-{
-    match bool {
-        &Boolean::Constant(c) => {
-            if c {
-                LinearCombination::<E>::zero() + (coeff, one)
-            } else {
-                LinearCombination::<E>::zero()
-            }
-        }
-        &Boolean::Is(ref v) => {
-            LinearCombination::<E>::zero() + (coeff, v.get_variable())
-        }
-        &Boolean::Not(ref v) => {
-            LinearCombination::<E>::zero() + (coeff, one) - (coeff, v.get_variable())
-        }
-    }
+) -> LinearCombination<E> {
+    bool.lc(CS::one(), E::Fr::one())
 }
