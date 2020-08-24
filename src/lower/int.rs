@@ -1,4 +1,4 @@
-use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp, UnOp};
 
 // TODO: mod -> div + sub
 
@@ -38,7 +38,7 @@ fn maybe_sign_extend(x: u64, ty: Ty) -> u64 {
             // Sign-extend to 64 bits
             let y = y << (64 - sz.bits()) >> (64 - sz.bits());
             y as u64
-        },
+        }
         _ => panic!("expected Uint or Int, but got {:?}", ty),
     }
 }
@@ -62,14 +62,13 @@ fn normalize_64<'a>(c: &Circuit<'a>, w: Wire<'a>, ty: Ty) -> Wire<'a> {
         TyKind::Uint(_) => {
             let mask = !(!0_u64 << bits);
             c.and(w, c.lit(c.ty(TyKind::U64), mask))
-        },
+        }
         TyKind::Int(_) => {
             let shift_amount = c.lit(c.ty(TyKind::U8), 64 - bits as u64);
             c.shr(c.shl(w, shift_amount), shift_amount)
-        },
+        }
         _ => panic!("expected Uint or Int, but got {:?}", ty),
     }
-
 }
 
 /// Extend all integers to 64 bits.  That is, all `Uint`s will be extended to `U64`, and all `Int`s
@@ -79,22 +78,22 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
         match gk {
             GateKind::Lit(x, ty) => {
                 return c.lit(extend_integer_ty(c, ty), maybe_sign_extend(x, ty));
-            },
+            }
             GateKind::Secret(s) => {
                 let new_ty = extend_integer_ty(c, s.ty);
                 let new_val = s.val.map(|x| maybe_sign_extend(x, s.ty));
                 return c.new_secret(new_ty, new_val);
-            },
+            }
             GateKind::Cast(w, ty) => {
                 return normalize_64(c, w, ty);
-            },
+            }
             // Currently, we normalize (zero/sign-extending to fill the high bits) after every
             // operation.  We could instead let the high bits be arbitrary and normalize only when
             // needed: at comparisons, shifts, and outputs.  However, we don't currently have a
             // good way to tell if a gate will be used as an output.
             _ => {
                 return normalize_64(c, c.gate(gk), old.ty);
-            },
+            }
         }
     }
     c.gate(gk)
@@ -133,16 +132,16 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
         match gk {
             GateKind::Lit(x, _ty) => {
                 return c.lit(new_ty, x);
-            },
+            }
             GateKind::Secret(s) => {
                 return c.new_secret(new_ty, s.val);
-            },
-            GateKind::Unary(_op, _a) => {},
+            }
+            GateKind::Unary(_op, _a) => {}
             GateKind::Binary(op, a, b) => match op {
                 // Note `Mul` returns only the lower half of the output, which is unaffected by
                 // signedness of the inputs.
                 BinOp::Add | BinOp::Sub | BinOp::Mul |
-                BinOp::And | BinOp::Or | BinOp::Xor => {},
+                BinOp::And | BinOp::Or | BinOp::Xor => {}
                 BinOp::Div | BinOp::Mod => {
                     let a_neg = c.lt(a, c.lit(new_ty, 0));
                     let b_neg = c.lt(b, c.lit(new_ty, 0));
@@ -151,7 +150,7 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
                     let r_abs = c.binary(op, a_abs, b_abs);
                     let r_neg = c.xor(a_neg, b_neg);
                     return c.mux(r_neg, c.neg(r_abs), r_abs);
-                },
+                }
             },
             GateKind::Shift(op, a, b) => match op {
                 ShiftOp::Shr => {
@@ -164,32 +163,32 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
                     let sign = c.and(a, sign_mask);
                     let sign_fill = c.neg(c.shr(sign, b));
                     return c.or(c.shr(a, b), sign_fill);
-                },
-                ShiftOp::Shl => {},
+                }
+                ShiftOp::Shl => {}
             },
             GateKind::Compare(op, a, b) => match op {
-                CmpOp::Eq | CmpOp::Ne => {},
+                CmpOp::Eq | CmpOp::Ne => {}
                 CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge => {
                     // Shift everything up by 2^(n-1). For 8-bit values, this maps  0..128 to
                     // 128..256 and maps -128..0 (= 128..256) to 0..128, so comparisons work.  The
                     // mapping amounts to just flipping the sign bit.
                     let sign_mask = c.lit(new_ty, 1 << (sz.bits() - 1));
                     return c.compare(op, c.xor(a, sign_mask), c.xor(b, sign_mask));
-                },
+                }
             },
-            GateKind::Mux(_, _, _) => {},
+            GateKind::Mux(_, _, _) => {}
             // This covers only the case of casts *to* signed types.  Casts *from* signed types are
             // handled in the special case above.
             GateKind::Cast(w, _) => {
                 return c.cast(w, new_ty);
-            },
-            GateKind::Pack(_) => {},
+            }
+            GateKind::Pack(_) => {}
             // `Extract`'s input should already have had its output types changed.
-            GateKind::Extract(_, _) => {},
+            GateKind::Extract(_, _) => {}
             // TODO: need a way to handle gadgets whose output type is fixed or set internally.
             // (Gadgets whose output type matches an input should work fine, as all inputs have
             // already been changed to `Uint`.)
-            GateKind::Gadget(_, _) => {},
+            GateKind::Gadget(_, _) => {}
         }
     }
 
@@ -265,7 +264,7 @@ pub fn non_constant_shift<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> 
         assert!(1 << bits == width);
         let ty_u8 = c.ty(TyKind::U8);
         let mut y = x;
-        for i in 0 .. bits {
+        for i in 0..bits {
             // If bit `i` is set, then shift by `1 << i`.
             let amt_bit = c.lit(ty_u8, 1 << i);
             let bit_set = c.ne(c.lit(ty_u8, 0), c.and(amt, amt_bit));

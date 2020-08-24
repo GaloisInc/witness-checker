@@ -12,10 +12,12 @@ use zkinterface::{ConstraintSystemOwned, WitnessOwned, VariablesOwned, CircuitOw
 use zkinterface_bellman::export::to_zkif_constraint;
 use zkinterface_bellman::ff::{PrimeField, PrimeFieldRepr, Field};
 use std::path::Path;
+use super::num;
 
 // TODO: template with trait ScalarEngine.
 pub type En = Bls12;
 pub type LC = LinearCombination<En>;
+pub type Num = num::Num<En>;
 pub type Fr = <En as ScalarEngine>::Fr;
 pub type FrRepr = <Fr as PrimeField>::Repr;
 
@@ -29,7 +31,7 @@ pub type ZkifId = u64; // or zid.
 #[derive(Default)]
 pub struct WireRepr {
     pub bl_boolean: Option<Boolean>,
-    pub bl_lc: Option<LC>,
+    pub bl_lc: Option<Num>,
     pub bl_uint32: Option<UInt32>,
     //pub packed_zid: Option<ZkifId>,
     //pub bit_zids: Vec<ZkifId>,
@@ -82,7 +84,7 @@ impl Representer {
         self.wire_reprs[wid.0].bl_boolean = Some(b);
     }
 
-    pub fn set_bellman_lc(&mut self, wid: WireId, lc: LC) {
+    pub fn set_bellman_num(&mut self, wid: WireId, lc: Num) {
         self.wire_reprs[wid.0].bl_lc = Some(lc);
     }
 
@@ -101,13 +103,13 @@ impl Representer {
         }
     }
 
-    pub fn as_bellman_lc(&mut self, wid: WireId) -> LC {
+    pub fn as_bellman_num(&mut self, wid: WireId) -> Num {
         let repr = &mut self.wire_reprs[wid.0];
         match &repr.bl_lc {
             Some(lc) => lc.clone(),
             None => {
                 // TODO: convert from other repr.
-                LC::zero()
+                Num::zero()
             }
         }
     }

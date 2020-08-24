@@ -1,9 +1,11 @@
 pub mod backend;
-mod gadget_specs;
 mod representer;
-mod prototype_backend;
-mod mem;
-mod debug;
+mod num;
+
+//mod gadget_specs;
+//mod prototype_backend;
+//mod mem;
+//mod debug;
 
 #[cfg(feature = "libsnark")]
 mod gadgetlib;

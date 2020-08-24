@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty};
 
-use super::gadget_specs::GadgetSpec;
+//use super::gadget_specs::GadgetSpec;
 
 use zkinterface::statement::{StatementBuilder, FileStore};
 use zkinterface::{VariablesOwned, CircuitOwned, KeyValueOwned, CommandOwned};
@@ -11,10 +11,12 @@ use zkinterface_bellman::sapling_crypto::circuit::{
 };
 use zkinterface_bellman::ff::{Field, PrimeField};
 use zkinterface_bellman::pairing::bls12_381::Bls12;
-use zkinterface_bellman::bellman::{ConstraintSystem};
-use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, ZkifId};
+use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
+use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, ZkifId, Num};
 use std::path::Path;
 use std::ops::Sub;
+use crate::ir::circuit::IntSize::I64;
+use crate::back::zkif::num::boolean_lc;
 
 
 /// zkInterface backend based on Bellman.
@@ -23,7 +25,7 @@ use std::ops::Sub;
 /// - Allocate and retrieve representations of wires.
 /// - Write files.
 pub struct Backend<'a> {
-    gadget_specs: HashMap<String, GadgetSpec>,
+    //gadget_specs: HashMap<String, GadgetSpec>,
 
     wire_ids: HashMap<Wire<'a>, WireId>,
     representer: Representer,
@@ -32,7 +34,7 @@ pub struct Backend<'a> {
 impl<'a> Backend<'a> {
     pub fn new(workspace: impl AsRef<Path>, proving: bool) -> Backend<'a> {
         Backend {
-            gadget_specs: GadgetSpec::make_specs(),
+            //gadget_specs: GadgetSpec::make_specs(),
             wire_ids: HashMap::new(),
             representer: Representer::new(workspace, proving),
         }
@@ -44,7 +46,7 @@ impl<'a> Backend<'a> {
         }
 
         let gate: &Gate = &*wire;
-        eprintln!("{:?}", gate);
+        //eprintln!("{:?}", gate);
 
         let wid = match gate.kind {
             GateKind::Lit(val, ty) => {
@@ -57,9 +59,10 @@ impl<'a> Backend<'a> {
                     }
                     TyKind::Int(_) => {}
                     TyKind::Uint(_) => {
-                        let v = Fr::from_repr(FrRepr::from(val)).unwrap();
-                        let lc = LC::zero() + (v, Representer::one());
-                        self.representer.set_bellman_lc(wid, lc);
+                        let f = Fr::from_repr(FrRepr::from(val)).unwrap();
+                        let lc = LC::zero() + (f, Representer::one());
+                        let num = Num { value: Some(f), lc };
+                        self.representer.set_bellman_num(wid, num);
                     }
                     TyKind::Bundle(_) => {}
                 };
@@ -80,15 +83,17 @@ impl<'a> Backend<'a> {
                     }
                     TyKind::Int(_) => {}
                     TyKind::Uint(_) => {
+                        let value = secret.val.map(|val|
+                            Fr::from_repr(FrRepr::from(val)).unwrap());
+
                         let var = self.representer.alloc(
                             || "secret",
-                            || Ok(
-                                Fr::from_repr(FrRepr::from(
-                                    secret.val.unwrap())
-                                ).unwrap()),
+                            || value.ok_or(SynthesisError::AssignmentMissing),
                         ).unwrap();
+
                         let lc = LC::zero() + var;
-                        self.representer.set_bellman_lc(wid, lc);
+                        let num = Num { value, lc };
+                        self.representer.set_bellman_num(wid, num);
                     }
                     TyKind::Bundle(_) => {}
                 };
@@ -110,12 +115,14 @@ impl<'a> Backend<'a> {
                     }
                     TyKind::Int(_) => {}
                     TyKind::Uint(_) => {
-                        let lc = self.representer.as_bellman_lc(aw);
-                        let out_n = match op {
-                            UnOp::Neg => LC::zero() - &lc,
-                            UnOp::Not => lc, // TODO: what is not integer?
+                        let num = self.representer.as_bellman_num(aw);
+                        let out_num = match op {
+                            UnOp::Neg | UnOp::Not => {
+                                Num::zero() - &num
+                            }
+                            // TODO: NOT should be bitwise negation.
                         };
-                        self.representer.set_bellman_lc(wid, out_n);
+                        self.representer.set_bellman_num(wid, out_num);
                     }
                     TyKind::Bundle(_) => {}
                 };
@@ -156,33 +163,23 @@ impl<'a> Backend<'a> {
                     }
                     TyKind::Int(_) => {}
                     TyKind::Uint(_) => {
-                        let left = self.representer.as_bellman_lc(lw);
-                        let right = self.representer.as_bellman_lc(rw);
+                        let left = self.representer.as_bellman_num(lw);
+                        let right = self.representer.as_bellman_num(rw);
 
-                        let out_lc = match op {
-                            BinOp::Add => left + &right,
-                            BinOp::Sub => left - &right,
+                        let out_num = match op {
+                            BinOp::Add => {
+                                left + &right
+                            }
+                            BinOp::Sub => {
+                                left - &right
+                            }
                             BinOp::Mul => {
-                                let product = self.representer.alloc(
-                                    || "product",
-                                    || Ok(Fr::zero()),
-                                ).unwrap();
-                                let product_lc = LC::zero() + product;
-
-                                self.representer.enforce(
-                                    || "multiplication",
-                                    // TODO: calculate product and change to `left`
-                                    |_| LC::zero(),
-                                    |_| right,
-                                    |_| product_lc.clone(),
-                                );
-
-                                product_lc
+                                left.mul(&right, &mut self.representer)
                             }
                             _ => left, // TODO
                         };
 
-                        self.representer.set_bellman_lc(wid, out_lc);
+                        self.representer.set_bellman_num(wid, out_num);
                     }
                     TyKind::Bundle(_) => {}
                 }
@@ -196,18 +193,77 @@ impl<'a> Backend<'a> {
             }
 
             GateKind::Compare(op, left, right) => {
-                self.wire(left);
-                self.wire(right)
+                //eprintln!("{:?} {:?} {:?}", op, left.ty, right.ty);
+
+                let lw = self.wire(left);
+                let rw = self.wire(right);
+                let wid = self.representer.allocate_repr();
+
+                let yes = match op {
+                    CmpOp::Eq => {
+                        let ln = self.representer.as_bellman_num(lw);
+                        let rn = self.representer.as_bellman_num(rw);
+
+                        let diff = ln - &rn;
+
+                        let equal_value = diff.value.map(|d| d.is_zero());
+                        let equal = Boolean::from(
+                            AllocatedBit::alloc::<En, _>(&mut self.representer, equal_value).unwrap()
+                        );
+                        //let eq_lc = boolean_lc(&equal, Representer::one(), Fr::one());
+                        let ne = equal.not();
+                        let ne_lc = boolean_lc(&ne, Representer::one(), Fr::one());
+
+                        eprintln!("{} {} {:?}", equal_value.unwrap(), ne.get_value().unwrap(), diff.value.unwrap());
+
+                        self.representer.enforce(
+                            || "ne=0 => diff=0",
+                            |lc| lc + &diff.lc,
+                            |lc| lc + &ne_lc,
+                            |lc| lc + &diff.lc,
+                        );
+                        /*
+                        self.representer.enforce(
+                            || "diff=0 => ne=0",
+                            |lc| lc + &diff.lc,
+                            |lc| lc + &ne_lc,
+                            |lc| lc + &ne_lc,
+                        );
+                         */
+
+                        // TODO: should be doable in two constraints instead of three.
+                        equal
+                    }
+                    _ => Boolean::constant(false)
+                };
+
+                self.representer.set_bellman_boolean(wid, yes);
+                wid
             }
 
             GateKind::Mux(cond, then_, else_) => {
-                self.wire(cond);
-                self.wire(then_);
-                self.wire(else_)
+                unimplemented!("mux");
             }
 
-            GateKind::Cast(a, _ty) => {
-                self.wire(a)
+            GateKind::Cast(a, ty) => {
+                //eprintln!("CAST {:?} to {:?}", a.ty, ty);
+                let aw = self.wire(a);
+
+                match (*a.ty, *ty) {
+                    (TyKind::Bool, TyKind::Uint(_)) => {
+                        // TODO: move to the as_* methods.
+                        let bool = self.representer.as_bellman_boolean(aw);
+                        let num = Num::from_boolean(&bool, &mut self.representer);
+                        self.representer.set_bellman_num(aw, num);
+                        aw
+                    }
+
+                    (TyKind::Uint(_), TyKind::Bool) => {
+                        unimplemented!("Cannot cast integer to boolean");
+                    }
+
+                    _ => aw
+                }
             }
 
             GateKind::Pack(wires) => {
