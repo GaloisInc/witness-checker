@@ -447,7 +447,7 @@ impl<'de> Visitor<'de> for AdviceVisitor {
 
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Advice, A::Error> {
         let mut seq = CountedSeqAccess::new(seq, 1);
-        let x = match seq.next_element::<&str>()? {
+        let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
                 seq.expect += 3;
                 Advice::MemOp {
