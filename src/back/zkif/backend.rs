@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit};
+use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit, IntSize::I32};
 
 //use super::gadget_specs::GadgetSpec;
 
@@ -15,7 +15,6 @@ use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
 use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, Num, fr_from_unsigned};
 use std::path::Path;
 use std::ops::Sub;
-use crate::ir::circuit::IntSize::I64;
 use crate::back::zkif::representer::fr_from_signed;
 
 
@@ -86,7 +85,7 @@ impl<'a> Backend<'a> {
                         self.representer.set_bellman_boolean(wid, b);
                     }
 
-                    TyKind::Uint(_) | TyKind::Int(_) => { // TODO: Only 32 bits.
+                    TyKind::Uint(I32) | TyKind::Int(I32) => {
                         let value = secret.val.map(|val| {
                             match *secret.ty {
                                 TyKind::Int(_) => fr_from_signed(val as i64),
@@ -104,7 +103,6 @@ impl<'a> Backend<'a> {
                         self.representer.set_bellman_num(wid, num);
 
                         // Validate size as a side-effect.
-                        // TODO: actually support other bit sizes.
                         let _ = self.representer.as_bellman_uint32(wid);
                     }
 
@@ -127,15 +125,19 @@ impl<'a> Backend<'a> {
                         self.representer.set_bellman_boolean(wid, out_b);
                     }
 
-                    TyKind::Int(_) | TyKind::Uint(_) => {
-                        let num = self.representer.as_bellman_num(aw);
-                        let out_num = match op {
+                    TyKind::Int(I32) | TyKind::Uint(I32) => {
+                        match op {
                             UnOp::Neg => {
-                                Num::zero() - &num
+                                let num = self.representer.as_bellman_num(aw);
+                                let neg = Num::zero() - &num;
+                                self.representer.set_bellman_num(wid, neg);
                             }
-                            UnOp::Not => unimplemented!("Bitwise NOT on integer"),
+
+                            UnOp::Not => {
+                                let u = self.representer.as_bellman_uint32(aw);
+                                unimplemented!("Bitwise NOT on integer")
+                            }
                         };
-                        self.representer.set_bellman_num(wid, out_num);
                     }
 
                     _ => unimplemented!("Unary {:?} {:?}", op, arg.ty),
@@ -182,15 +184,13 @@ impl<'a> Backend<'a> {
                         let right = self.representer.as_bellman_num(rw);
 
                         let out_num = match op {
-                            BinOp::Add => {
-                                left + &right
-                            }
-                            BinOp::Sub => {
-                                left - &right
-                            }
-                            BinOp::Mul => {
-                                left.mul(&right, &mut self.representer)
-                            }
+                            BinOp::Add => left + &right,
+
+                            BinOp::Sub => left - &right,
+
+                            BinOp::Mul =>
+                                left.mul(&right, &mut self.representer),
+
                             _ => unimplemented!("Binary {:?} for {:?}", op, gate.ty),
                         };
 
@@ -205,12 +205,9 @@ impl<'a> Backend<'a> {
 
             GateKind::Shift(op, left, right) => {
                 match *left.ty {
-                    TyKind::Int(_) | TyKind::Uint(_) => {} // TODO: Only 32 bits.
+                    TyKind::Int(I32) | TyKind::Uint(I32) => {}
                     _ => unimplemented!("Shift for {:?}", left.ty),
                 };
-
-                let lw = self.wire(left);
-                let lu = self.representer.as_bellman_uint32(lw);
 
                 let amount = {
                     let amount = as_lit(right).unwrap_or_else(|| {
@@ -222,7 +219,11 @@ impl<'a> Backend<'a> {
                     }
                 };
 
+                let lw = self.wire(left);
+                let lu = self.representer.as_bellman_uint32(lw);
+
                 let shifted = lu.shr(amount as usize);
+
                 let wid = self.representer.allocate_repr();
                 self.representer.set_bellman_uint32(wid, shifted);
                 wid

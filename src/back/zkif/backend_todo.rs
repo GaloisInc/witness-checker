@@ -3,7 +3,7 @@ use crate::ir::circuit::IntSize::{I64, I32};
 
 pub fn ignore_gates_todo<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     match gk {
-        /*
+
         // Downgrade to 32 bits.
         GateKind::Lit(val, ty) => match *ty {
             TyKind::Int(I64) =>
@@ -25,7 +25,15 @@ pub fn ignore_gates_todo<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> W
                     secret.val.map(|val| val as u32 as u64)),
             _ => {}
         }
-        */
+
+        // Downgrade to 32 bits.
+        GateKind::Cast(arg, ty) => match *ty {
+            TyKind::Int(I64) =>
+                return c.cast(arg, c.ty(TyKind::Int(I32))),
+            TyKind::Uint(I64) =>
+                return c.cast(arg, c.ty(TyKind::Uint(I32))),
+            _ => {}
+        }
 
         GateKind::Unary(UnOp::Not, arg) => match *arg.ty {
             TyKind::Int(_) | TyKind::Uint(_) =>

@@ -84,8 +84,8 @@ impl Representer {
         self.wire_reprs[wid.0].bl_boolean = Some(b);
     }
 
-    pub fn set_bellman_num(&mut self, wid: WireId, lc: Num) {
-        self.wire_reprs[wid.0].bl_lc = Some(lc);
+    pub fn set_bellman_num(&mut self, wid: WireId, num: Num) {
+        self.wire_reprs[wid.0].bl_lc = Some(num);
     }
 
     pub fn set_bellman_uint32(&mut self, wid: WireId, u: UInt32) {
