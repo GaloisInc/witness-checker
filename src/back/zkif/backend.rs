@@ -12,7 +12,7 @@ use zkinterface_bellman::sapling_crypto::circuit::{
 use zkinterface_bellman::ff::{Field, PrimeField};
 use zkinterface_bellman::pairing::bls12_381::Bls12;
 use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
-use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, ZkifId, Num, fr_from_unsigned};
+use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, Num, fr_from_unsigned};
 use std::path::Path;
 use std::ops::Sub;
 use crate::ir::circuit::IntSize::I64;
@@ -58,9 +58,9 @@ impl<'a> Backend<'a> {
                         self.representer.set_bellman_boolean(wid, b);
                     }
 
-                    TyKind::Uint(I64) | TyKind::Int(I64) => {
+                    TyKind::Uint(_) | TyKind::Int(_) => {
                         let f = match *ty {
-                            TyKind::Int(I64) => fr_from_signed(val as i64),
+                            TyKind::Int(_) => fr_from_signed(val as i64),
                             _ => fr_from_unsigned(val),
                         };
                         let lc = LC::zero() + (f, Representer::one());
@@ -86,10 +86,10 @@ impl<'a> Backend<'a> {
                         self.representer.set_bellman_boolean(wid, b);
                     }
 
-                    TyKind::Uint(I64) | TyKind::Int(I64) => {
+                    TyKind::Uint(_) | TyKind::Int(_) => { // TODO: Only 32 bits.
                         let value = secret.val.map(|val| {
                             match *secret.ty {
-                                TyKind::Int(I64) => fr_from_signed(val as i64),
+                                TyKind::Int(_) => fr_from_signed(val as i64),
                                 _ => fr_from_unsigned(val),
                             }
                         });
@@ -102,6 +102,10 @@ impl<'a> Backend<'a> {
                         let lc = LC::zero() + var;
                         let num = Num { value, lc };
                         self.representer.set_bellman_num(wid, num);
+
+                        // Validate size as a side-effect.
+                        // TODO: actually support other bit sizes.
+                        let _ = self.representer.as_bellman_uint32(wid);
                     }
 
                     _ => unimplemented!("Secret {:?}", secret.ty),
@@ -123,7 +127,7 @@ impl<'a> Backend<'a> {
                         self.representer.set_bellman_boolean(wid, out_b);
                     }
 
-                    TyKind::Int(I64) | TyKind::Uint(I64) => {
+                    TyKind::Int(_) | TyKind::Uint(_) => {
                         let num = self.representer.as_bellman_num(aw);
                         let out_num = match op {
                             UnOp::Neg => {
@@ -173,7 +177,7 @@ impl<'a> Backend<'a> {
                         self.representer.set_bellman_boolean(wid, out_b);
                     }
 
-                    TyKind::Int(I64) | TyKind::Uint(I64) => {
+                    TyKind::Int(_) | TyKind::Uint(_) => {
                         let left = self.representer.as_bellman_num(lw);
                         let right = self.representer.as_bellman_num(rw);
 
@@ -199,8 +203,30 @@ impl<'a> Backend<'a> {
                 wid
             }
 
-            GateKind::Shift(op, left, right) =>
-                unimplemented!("SHIFT {:?} {:?}", left.ty, right.ty),
+            GateKind::Shift(op, left, right) => {
+                match *left.ty {
+                    TyKind::Int(_) | TyKind::Uint(_) => {} // TODO: Only 32 bits.
+                    _ => unimplemented!("Shift for {:?}", left.ty),
+                };
+
+                let lw = self.wire(left);
+                let lu = self.representer.as_bellman_uint32(lw);
+
+                let amount = {
+                    let amount = as_lit(right).unwrap_or_else(|| {
+                        panic!("only shifts by literals (not {:?}) are supported", right);
+                    }) as i64;
+                    match op {
+                        ShiftOp::Shl => -amount,
+                        ShiftOp::Shr => amount,
+                    }
+                };
+
+                let shifted = lu.shr(amount as usize);
+                let wid = self.representer.allocate_repr();
+                self.representer.set_bellman_uint32(wid, shifted);
+                wid
+            }
 
             GateKind::Compare(op, left, right) => {
                 let lw = self.wire(left);
@@ -263,5 +289,12 @@ impl<'a> Backend<'a> {
 
         self.wire_ids.insert(wire, wid);
         wid
+    }
+}
+
+fn as_lit(wire: Wire) -> Option<u64> {
+    match wire.kind {
+        GateKind::Lit(x, _) => Some(x),
+        _ => None,
     }
 }

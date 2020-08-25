@@ -25,7 +25,7 @@ pub type FrRepr = <Fr as PrimeField>::Repr;
 #[derive(Copy, Clone, PartialEq)]
 pub struct WireId(pub usize); // or wid.
 
-pub type ZkifId = u64; // or zid.
+//pub type ZkifId = u64; // or zid.
 
 // WireRepr holds one or several equivalent representations of a wire.
 #[derive(Default)]
