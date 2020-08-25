@@ -113,19 +113,24 @@ impl<'a> Backend<'a> {
 
             GateKind::Unary(op, arg) => {
                 let aw = self.wire(arg);
-                let wid = self.representer.allocate_repr();
 
                 match *gate.ty {
                     TyKind::Bool => {
-                        let ab = self.representer.as_bellman_boolean(aw);
-                        let out_b = match op {
-                            UnOp::Not => ab.not(),
-                            UnOp::Neg => ab,
-                        };
-                        self.representer.set_bellman_boolean(wid, out_b);
+                        match op {
+                            UnOp::Not => {
+                                let ab = self.representer.as_bellman_boolean(aw);
+                                let wid = self.representer.allocate_repr();
+                                self.representer.set_bellman_boolean(wid, ab.not());
+                                wid
+                            }
+
+                            UnOp::Neg => aw, // No op.
+                        }
                     }
 
                     TyKind::Int(I32) | TyKind::Uint(I32) => {
+                        let wid = self.representer.allocate_repr();
+
                         match op {
                             UnOp::Neg => {
                                 let num = self.representer.as_bellman_num(aw);
@@ -134,15 +139,21 @@ impl<'a> Backend<'a> {
                             }
 
                             UnOp::Not => {
-                                let u = self.representer.as_bellman_uint32(aw);
-                                unimplemented!("Bitwise NOT on integer")
+                                let int = self.representer.as_bellman_uint32(aw);
+                                let bits = int.into_bits();
+                                let negs: Vec<Boolean> = bits.iter().map(|bit|
+                                    bit.not()
+                                ).collect();
+                                let not = UInt32::from_bits(&negs);
+                                self.representer.set_bellman_uint32(wid, not);
                             }
-                        };
+                        }
+
+                        wid
                     }
 
                     _ => unimplemented!("Unary {:?} {:?}", op, arg.ty),
-                };
-                wid
+                }
             }
 
             GateKind::Binary(op, left, right) => {

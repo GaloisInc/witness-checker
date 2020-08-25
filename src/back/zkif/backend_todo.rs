@@ -35,12 +35,6 @@ pub fn ignore_gates_todo<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> W
             _ => {}
         }
 
-        GateKind::Unary(UnOp::Not, arg) => match *arg.ty {
-            TyKind::Int(_) | TyKind::Uint(_) =>
-                return c.gate(arg.kind),
-            _ => {}
-        }
-
         GateKind::Binary(op, arg, _) => match *arg.ty {
             TyKind::Bool => match op {
                 BinOp::Div | BinOp::Mod =>
