@@ -16,6 +16,7 @@ use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, Nu
 use std::path::Path;
 use std::ops::Sub;
 use crate::back::zkif::representer::fr_from_signed;
+use crate::back::zkif::int;
 
 
 /// zkInterface backend based on Bellman.
@@ -191,24 +192,52 @@ impl<'a> Backend<'a> {
                     }
 
                     TyKind::Int(_) | TyKind::Uint(_) => {
-                        let left = self.representer.as_bellman_num(lw);
-                        let right = self.representer.as_bellman_num(rw);
+                        match op {
+                            // Arithmetic ops work on number representations.
+                            BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                                let left = self.representer.as_bellman_num(lw);
+                                let right = self.representer.as_bellman_num(rw);
 
-                        let out_num = match op {
-                            BinOp::Add => left + &right,
+                                let out_num = match op {
+                                    BinOp::Add => left + &right,
 
-                            BinOp::Sub => left - &right,
+                                    BinOp::Sub => left - &right,
 
-                            BinOp::Mul =>
-                                left.mul(&right, &mut self.representer),
+                                    BinOp::Mul =>
+                                        left.mul(&right, &mut self.representer),
 
-                            _ => unimplemented!("Binary {:?} for {:?}", op, gate.ty),
-                        };
+                                    _ => unreachable!(),
+                                };
 
-                        self.representer.set_bellman_num(wid, out_num);
+                                self.representer.set_bellman_num(wid, out_num);
+                            }
+
+                            // Bitwise ops work on bit decompositions.
+                            BinOp::Xor | BinOp::And | BinOp::Or => {
+                                let lu = self.representer.as_bellman_uint32(lw);
+                                let ru = self.representer.as_bellman_uint32(rw);
+
+                                let out = match op {
+                                    BinOp::Xor =>
+                                        int::bitwise_xor(&mut self.representer, &lu, &ru),
+
+                                    BinOp::And =>
+                                        int::bitwise_and(&mut self.representer, &lu, &ru),
+
+                                    BinOp::Or =>
+                                        int::bitwise_or(&mut self.representer, &lu, &ru),
+
+                                    _ => unreachable!(),
+                                };
+
+                                self.representer.set_bellman_uint32(wid, out);
+                            }
+
+                            _ => unimplemented!("Binary {:?}", op),
+                        }
                     }
 
-                    _ => unimplemented!("Binary {:?} on a bundle", op),
+                    _ => unimplemented!("Binary {:?} on {:?}", op, gate.ty),
                 }
 
                 wid

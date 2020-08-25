@@ -43,7 +43,7 @@ pub fn ignore_gates_todo<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> W
             }
 
             TyKind::Int(_) | TyKind::Uint(_) => match op {
-                BinOp::Div | BinOp::Mod | BinOp::And | BinOp::Or | BinOp::Xor =>
+                BinOp::Div =>
                     return c.gate(arg.kind),
                 _ => {}
             }
