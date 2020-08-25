@@ -1,11 +1,12 @@
 use zkinterface_bellman::{
-    ff::{ScalarEngine, Field},
+    ff::{ScalarEngine, Field, PrimeField},
     bellman::LinearCombination,
 };
 use std::ops::{Add, Sub, Mul};
 use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, Variable};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBit};
 use zkinterface_bellman::pairing::Engine;
+use zkinterface_bellman::ff::PrimeFieldRepr;
 
 
 #[derive(Clone)]

@@ -448,6 +448,8 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(feature = "bellman")] {
+        let flags = run_pass(&c, flags, crate::back::zkif::backend_todo::ignore_gates_todo);
+
         // Clean workspace.
         let workspace = Path::new("local/test");
         let files = vec![

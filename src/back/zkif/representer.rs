@@ -213,3 +213,18 @@ impl ConstraintSystem<En> for Representer {
         self
     }
 }
+
+
+pub fn fr_from_unsigned(val: u64) -> Fr {
+    Fr::from_repr(FrRepr::from(val)).unwrap()
+}
+
+pub fn fr_from_signed(val: i64) -> Fr {
+    if val >= 0 {
+        fr_from_unsigned(val as u64)
+    } else {
+        let mut f = fr_from_unsigned((-val) as u64);
+        f.negate();
+        f
+    }
+}
