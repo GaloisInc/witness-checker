@@ -212,6 +212,28 @@ impl<'a> Backend<'a> {
                                 self.representer.set_bellman_num(wid, out_num);
                             }
 
+                            // Ops using both number and bits representations.
+                            BinOp::Div | BinOp::Mod => {
+                                let left_num = self.representer.as_bellman_num(lw);
+                                let left_int = self.representer.as_bellman_uint32(lw);
+                                let right_num = self.representer.as_bellman_num(rw);
+                                let right_int = self.representer.as_bellman_uint32(rw);
+
+                                let (quotient, rest) = int::div(
+                                    &mut self.representer,
+                                    &left_num, &left_int,
+                                    &right_num, &right_int,
+                                );
+
+                                let out = match op {
+                                    BinOp::Div => quotient,
+                                    BinOp::Mod => rest,
+                                    _ => unreachable!(),
+                                };
+
+                                self.representer.set_bellman_uint32(wid, out);
+                            }
+
                             // Bitwise ops work on bit decompositions.
                             BinOp::Xor | BinOp::And | BinOp::Or => {
                                 let lu = self.representer.as_bellman_uint32(lw);
@@ -232,8 +254,6 @@ impl<'a> Backend<'a> {
 
                                 self.representer.set_bellman_uint32(wid, out);
                             }
-
-                            _ => unimplemented!("Binary {:?}", op),
                         }
                     }
 
@@ -300,7 +320,7 @@ impl<'a> Backend<'a> {
                     (TyKind::Bool, TyKind::Uint(_)) => {
                         // TODO: move to the as_* methods.
                         let bool = self.representer.as_bellman_boolean(aw);
-                        let num = Num::from_boolean(&bool, &mut self.representer);
+                        let num = Num::from_boolean::<Representer>(&bool);
                         self.representer.set_bellman_num(aw, num);
                         aw
                     }

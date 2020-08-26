@@ -109,7 +109,7 @@ impl Representer {
             Some(lc) => lc.clone(),
             None => {
                 // TODO: convert from other repr.
-                Num::zero()
+                Num::from_boolean::<Self>(&Boolean::constant(true))
             }
         }
     }

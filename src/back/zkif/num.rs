@@ -7,6 +7,7 @@ use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, Variable};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBit};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeFieldRepr;
+use crate::back::zkif::representer::fr_from_unsigned;
 
 
 #[derive(Clone)]
@@ -23,9 +24,25 @@ impl<E: Engine> Num<E> {
         }
     }
 
+    pub fn alloc<CS: ConstraintSystem<E>>(
+        mut cs: CS,
+        value: Option<u32>,
+    ) -> Result<Self, SynthesisError>
+    {
+        let value = value.map(|val|
+            E::Fr::from_repr(<<E::Fr as PrimeField>::Repr as From<u64>>::
+            from(val as u64)).unwrap()
+        );
+        let var = cs.alloc(|| "num", ||
+            value.ok_or(SynthesisError::AssignmentMissing))?;
+        Ok(Num {
+            value,
+            lc: LinearCombination::zero() + var,
+        })
+    }
+
     pub fn from_boolean<CS: ConstraintSystem<E>>(
         bool: &Boolean,
-        cs: &CS,
     ) -> Self {
         Num {
             value: bool.get_value().map(|b|
