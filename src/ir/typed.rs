@@ -1,24 +1,19 @@
 use std::mem::MaybeUninit;
 use std::ops::Deref;
-use bumpalo::Bump;
 use crate::ir::circuit::{Circuit, Wire, TyKind};
 
 
 pub struct Builder<'a> {
-    c: Circuit<'a>,
+    c: &'a Circuit<'a>,
 }
 
 impl<'a> Builder<'a> {
-    pub fn new(arena: &'a Bump) -> Builder<'a> {
-        Builder { c: Circuit::new(arena) }
+    pub fn new(c: &'a Circuit<'a>) -> Builder<'a> {
+        Builder { c: c }
     }
 
     pub fn circuit(&self) -> &Circuit<'a> {
         &self.c
-    }
-
-    pub fn finish(self) -> Circuit<'a> {
-        self.c
     }
 }
 

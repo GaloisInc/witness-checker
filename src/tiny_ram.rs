@@ -124,7 +124,7 @@ where
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
@@ -189,11 +189,11 @@ macro_rules! mk_opcode {
         }
 
         impl Opcode {
-            pub fn from_raw(x: u8) -> Opcode {
-                match x {
+            pub fn from_raw(x: u8) -> Option<Opcode> {
+                Some(match x {
                     $($value => Opcode::$Variant,)*
-                    _ => panic!("bad value {} for Opcode", x),
-                }
+                    _ => return None,
+                })
             }
 
             pub fn count() -> usize {
@@ -201,7 +201,14 @@ macro_rules! mk_opcode {
             }
 
             pub fn iter() -> impl Iterator<Item = Opcode> {
-                (0 .. Self::count() as u8).map(Self::from_raw)
+                (0 .. Self::count() as u8).map(|i| Self::from_raw(i).unwrap())
+            }
+
+            pub fn from_str(s: &str) -> Option<Opcode> {
+                $( if s.eq_ignore_ascii_case(stringify!($Variant)) {
+                    return Some(Opcode::$Variant);
+                } )*
+                None
             }
         }
     };
@@ -237,8 +244,14 @@ mk_opcode! {
 
     Store = 23,
     Load = 24,
+
+    Read = 25,
+    Answer = 26,
 }
 
+
+pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
+pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
 #[derive(Clone, Copy, Default)]
 pub struct MemPort {
@@ -370,9 +383,22 @@ pub struct Params {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    Load { addr: u64, value: u64 },
-    Store { addr: u64, value: u64 },
+    MemOp { addr: u64, value: u64, write: bool },
     Stutter,
+}
+
+
+impl<'de> Deserialize<'de> for Opcode {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        match Opcode::from_str(&s) {
+            Some(x) => Ok(x),
+            None => Err(de::Error::invalid_value(
+                de::Unexpected::Str(&s),
+                &"a MicroRAM opcode mnemonic",
+            )),
+        }
+    }
 }
 
 
@@ -393,38 +419,11 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<RamInstr, A::Error> {
         let mut seq = CountedSeqAccess::new(seq, 5);
         let x = RamInstr {
-            opcode: seq.next_element()?,
-            dest: seq.next_element()?,
-            op1: seq.next_element()?,
-            imm: seq.next_element()?,
-            op2: seq.next_element()?,
-        };
-        seq.finish()?;
-        Ok(x)
-    }
-}
-
-
-impl<'de> Deserialize<'de> for RamState {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_tuple(3, RamStateVisitor)
-    }
-}
-
-struct RamStateVisitor;
-impl<'de> Visitor<'de> for RamStateVisitor {
-    type Value = RamState;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a sequence of 3 values")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<RamState, A::Error> {
-        let mut seq = CountedSeqAccess::new(seq, 3);
-        let x = RamState {
-            pc: seq.next_element()?,
-            regs: seq.next_element()?,
-            flag: seq.next_element()?,
+            opcode: seq.next_element::<Opcode>()? as u8,
+            dest: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+            op1: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+            imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
+            op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
         };
         seq.finish()?;
         Ok(x)
@@ -448,22 +447,16 @@ impl<'de> Visitor<'de> for AdviceVisitor {
 
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Advice, A::Error> {
         let mut seq = CountedSeqAccess::new(seq, 1);
-        let x = match seq.next_element()? {
-            0 => {
-                seq.expect += 2;
-                Advice::Load {
+        let x = match &seq.next_element::<String>()? as &str {
+            "MemOp" => {
+                seq.expect += 3;
+                Advice::MemOp {
                     addr: seq.next_element()?,
                     value: seq.next_element()?,
+                    write: seq.next_element()?,
                 }
             },
-            1 => {
-                seq.expect += 2;
-                Advice::Store {
-                    addr: seq.next_element()?,
-                    value: seq.next_element()?,
-                }
-            },
-            2 => {
+            "Stutter" => {
                 Advice::Stutter
             },
             kind => return Err(de::Error::custom(

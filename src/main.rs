@@ -1,28 +1,98 @@
 use std::cell::RefCell;
 use std::env;
 use std::fs::{self, File, remove_file};
+use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::Path;
 use bumpalo::Bump;
 
 use cheesecloth::back;
-use cheesecloth::ir::typed::{Builder, TWire};
+use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
+use cheesecloth::ir::circuit::{Circuit, Wire};
+use cheesecloth::ir::typed::{Builder, TWire, Repr};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
-use cheesecloth::tiny_ram::{Execution, RamInstr, RamState, MemPort, Opcode, REG_NONE, REG_PC};
+use cheesecloth::tiny_ram::{
+    Execution, RamInstr, RamState, MemPort, Opcode, Advice, REG_NONE, REG_PC,
+    MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
+};
 use zkinterface::Messages;
+
+macro_rules! wire_assert {
+    ($cx:expr, $cond:expr, $($args:tt)*) => {
+        {
+            let cx = $cx;
+            let cond = $cond;
+            if cx.assert_triggered(cond) == Some(true) {
+                eprintln!("invalid trace: {}", format_args!($($args)*));
+            }
+            $cx.assert($cond);
+        }
+    };
+}
+
+macro_rules! wire_bug_if {
+    ($cx:expr, $cond:expr, $($args:tt)*) => {
+        {
+            let cx = $cx;
+            let cond = $cond;
+            if cx.bug_triggered(cond) == Some(true) {
+                eprintln!("found bug: {}", format_args!($($args)*));
+            }
+            $cx.bug_if($cond);
+        }
+    };
+}
+
+struct SecretValue<T>(Option<T>);
+
+impl<T> SecretValue<T> {
+    fn map<U, F: FnOnce(T) -> U>(self, f: F) -> SecretValue<U> {
+        SecretValue(self.0.map(f))
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for SecretValue<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some(ref x) => fmt::Display::fmt(x, fmt),
+            None => write!(fmt, "??"),
+        }
+    }
+}
+
+impl<T: fmt::LowerHex> fmt::LowerHex for SecretValue<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some(ref x) => fmt::LowerHex::fmt(x, fmt),
+            None => write!(fmt, "??"),
+        }
+    }
+}
+
+impl<T: fmt::UpperHex> fmt::UpperHex for SecretValue<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some(ref x) => fmt::UpperHex::fmt(x, fmt),
+            None => write!(fmt, "??"),
+        }
+    }
+}
+
 
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
     bugs: RefCell<Vec<TWire<'a, bool>>>,
+    eval: Option<RefCell<CachingEvaluator<'a, eval::RevealSecrets>>>,
 }
 
 impl<'a> Context<'a> {
-    fn new() -> Context<'a> {
+    fn new(c: &'a Circuit<'a>) -> Context<'a> {
         Context {
             asserts: RefCell::new(Vec::new()),
             bugs: RefCell::new(Vec::new()),
+            eval: Some(RefCell::new(CachingEvaluator::new(c))),
         }
     }
 
@@ -53,6 +123,24 @@ impl<'a> Context<'a> {
     ) -> R {
         f(&ContextWhen { cx: self, b, path_cond })
     }
+
+    fn eval_u64(&self, w: Wire<'a>) -> Option<u64> {
+        let eval = self.eval.as_ref()?;
+        let x = eval.borrow_mut().eval_wire(w)?.as_single()?;
+        Some(x)
+    }
+
+    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        Some(self.eval_u64(cond.repr)? == 0)
+    }
+
+    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        Some(self.eval_u64(cond.repr)? != 0)
+    }
+
+    fn eval<T: Repr<'a, Repr=Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
+        SecretValue(self.eval_u64(w.repr))
+    }
 }
 
 struct ContextWhen<'a, 'b> {
@@ -62,14 +150,22 @@ struct ContextWhen<'a, 'b> {
 }
 
 impl<'a, 'b> ContextWhen<'a, 'b> {
-    fn assert(&self, cond: TWire<'a, bool>) {
+    fn assert_cond(&self, cond: TWire<'a, bool>) -> TWire<'a, bool> {
         // The assertion passes if either this `when` block is not taken, or `cond` is satisfied.
-        self.cx.assert(self.b.or(self.b.not(self.path_cond), cond));
+        self.b.or(self.b.not(self.path_cond), cond)
+    }
+
+    fn bug_cond(&self, cond: TWire<'a, bool>) -> TWire<'a, bool> {
+        // The bug occurs if this `when` block is taken and `cond` is satisfied.
+        self.b.and(self.path_cond, cond)
+    }
+
+    fn assert(&self, cond: TWire<'a, bool>) {
+        self.cx.assert(self.assert_cond(cond));
     }
 
     fn bug_if(&self, cond: TWire<'a, bool>) {
-        // The bug occurs if this `when` block is taken and `cond` is satisfied.
-        self.cx.bug_if(self.b.and(self.path_cond, cond));
+        self.cx.bug_if(self.bug_cond(cond));
     }
 
     fn when<R>(
@@ -79,6 +175,18 @@ impl<'a, 'b> ContextWhen<'a, 'b> {
         f: impl FnOnce(&ContextWhen<'a, '_>) -> R,
     ) -> R {
         self.cx.when(b, b.and(self.path_cond, path_cond), f)
+    }
+
+    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        self.cx.assert_triggered(self.assert_cond(cond))
+    }
+
+    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+        self.cx.bug_triggered(self.bug_cond(cond))
+    }
+
+    fn eval<T: Repr<'a, Repr=Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
+        self.cx.eval(w)
     }
 }
 
@@ -250,19 +358,36 @@ fn check_step<'a>(
         add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE), s1.flag);
     }
 
+    {
+        // TODO: dummy implementation of `Answer` as a no-op infinite loop
+        add_case(Opcode::Answer, s1.pc, b.lit(REG_PC), s1.flag);
+    }
+
     let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
 
     for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
         let is_dest = b.eq(b.lit(i as u64), dest);
         let expect_new = b.mux(is_dest, result, v_old);
-        cx.assert(b.eq(v_new, expect_new));
+        wire_assert!(
+            cx, b.eq(v_new, expect_new),
+            "cycle {} sets reg {} to {} (expected {})",
+            cycle, i, cx.eval(v_new), cx.eval(expect_new),
+        );
     }
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let expect_pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
-    cx.assert(b.eq(s2.pc, expect_pc));
+    wire_assert!(
+        cx, b.eq(s2.pc, expect_pc),
+        "cycle {} sets pc to {} (expected {})",
+        cycle, cx.eval(s2.pc), cx.eval(expect_pc),
+    );
 
-    cx.assert(b.eq(s2.flag, expect_flag));
+    wire_assert!(
+        cx, b.eq(s2.flag, expect_flag),
+        "cycle {} sets flag to {} (expected {})",
+        cycle, cx.eval(s2.flag), cx.eval(expect_flag),
+    );
 
 
     // If the instruction is a store or a load, we need additional checks to make sure the fields
@@ -271,21 +396,37 @@ fn check_step<'a>(
     let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
     let is_mem = b.or(is_load, is_store);
 
-    // TODO: shouldn't need an extra `eq` here
-    let cycle_ok = b.eq(mem_port.cycle, b.lit(cycle));
-    let addr_ok = b.eq(mem_port.addr, y);
-    let load_value_ok = b.eq(mem_port.value, result);
-    let store_value_ok = b.eq(mem_port.value, x);
-    let store_ok = b.eq(mem_port.write, is_store);
-    cx.assert(b.mux(is_mem, cycle_ok, b.lit(true)));
-    cx.assert(b.mux(is_mem, addr_ok, b.lit(true)));
-    cx.assert(b.mux(is_load, load_value_ok, b.lit(true)));
-    cx.assert(b.mux(is_store, store_value_ok, b.lit(true)));
-    cx.assert(b.mux(is_mem, store_ok, b.lit(true)));
+    let expect_value = b.mux(is_store, x, result);
+    cx.when(b, is_mem, |cx| {
+        wire_assert!(
+            cx, b.eq(mem_port.cycle, b.lit(cycle)),
+            "cycle {}'s mem port has bad cycle number {}",
+            cycle, cx.eval(mem_port.cycle),
+        );
+        wire_assert!(
+            cx, b.eq(mem_port.addr, y),
+            "cycle {}'s mem port has address {} (expected {})",
+            cycle, cx.eval(mem_port.addr), cx.eval(y),
+        );
+        wire_assert!(
+            cx, b.eq(mem_port.write, is_store),
+            "cycle {}'s mem port has write flag {} (expected {})",
+            cycle, cx.eval(mem_port.write), cx.eval(is_store),
+        );
+        wire_assert!(
+            cx, b.eq(mem_port.value, expect_value),
+            "cycle {}'s mem port (load) has value {} (expected {})",
+            cycle, cx.eval(mem_port.value), cx.eval(expect_value),
+        );
+    });
 
     // Non-memory ops must not use a memory port.  This prevents a malicious prover from
     // introducing fake stores on non-store instructions.
-    cx.assert(b.eq(has_mem_port, is_mem));
+    wire_assert!(
+        cx, b.eq(has_mem_port, is_mem),
+        "cycle {} mem port usage is {} (expected {})",
+        cycle, cx.eval(has_mem_port), cx.eval(is_mem),
+    );
 }
 
 fn check_first<'a>(
@@ -294,11 +435,23 @@ fn check_first<'a>(
     _prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    cx.assert(b.eq(s.pc, b.lit(0)));
-    for &r in s.regs.iter().skip(1) {
-        cx.assert(b.eq(r, b.lit(0)));
+    wire_assert!(
+        cx, b.eq(s.pc, b.lit(0)),
+        "initial pc is {} (expected {})",
+        cx.eval(s.pc), 0,
+    );
+    for (i, &r) in s.regs.iter().enumerate().skip(1) {
+        wire_assert!(
+            cx, b.eq(r, b.lit(0)),
+            "initial r{} has value {} (expected {})",
+            i, cx.eval(r), 0,
+        );
     }
-    cx.assert(b.not(s.flag));
+    wire_assert!(
+        cx, b.not(s.flag),
+        "initial flag is {} (expected {})",
+        cx.eval(s.flag), 0,
+    );
 }
 
 fn check_last<'a>(
@@ -307,8 +460,16 @@ fn check_last<'a>(
     prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    cx.assert(b.eq(s.pc, b.lit(prog.len() as u64)));
-    cx.assert(b.eq(s.regs[0], b.lit(0)));
+    wire_assert!(
+        cx, b.eq(s.pc, b.lit(prog.len() as u64)),
+        "final pc is {} (expected {})",
+        cx.eval(s.pc), prog.len(),
+    );
+    wire_assert!(
+        cx, b.eq(s.regs[0], b.lit(0)),
+        "final r0 is {} (expected {})",
+        cx.eval(s.regs[0]), 0,
+    );
 }
 
 fn check_first_mem<'a>(
@@ -318,31 +479,53 @@ fn check_first_mem<'a>(
 ) {
     // If the first memory port is active, then it must be a write, since there are no previous
     // writes to read from.
-    let active = b.ne(port.cycle, b.lit(!0));
-    cx.bug_if(b.mux(active, b.not(port.write), b.lit(false)));
+    let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
+    wire_bug_if!(
+        cx, b.mux(active, b.not(port.write), b.lit(false)),
+        "uninit read from {:x} on cycle {}",
+        cx.eval(port.addr), cx.eval(port.cycle),
+    );
 }
 
+/// Check that memory operation `port2` can follow operation `port1`.
 fn check_mem<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     port1: &TWire<'a, MemPort>,
     port2: &TWire<'a, MemPort>,
 ) {
-    let active = b.and(b.ne(port1.cycle, b.lit(!0)), b.ne(port2.cycle, b.lit(!0)));
+    let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     cx.when(b, active, |cx| {
         cx.when(b, b.not(port2.write), |cx| {
             // `port2` is a read.
 
-            // `port1` should be a read or write with the same address.  Otherwise, `port2` is a
-            // read from uninitialized memory.
+            // `port1` should be an active read or write with the same address.  Otherwise, `port2`
+            // is a read from uninitialized memory.
+            let port1_active = b.ne(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
+            wire_bug_if!(
+                cx, b.not(port1_active),
+                "uninit read from {:x} on cycle {} (previous op was inactive)",
+                cx.eval(port2.addr), cx.eval(port2.cycle),
+            );
+
             let is_init = b.eq(port1.addr, port2.addr);
-            cx.bug_if(b.not(is_init));
+            wire_bug_if!(
+                cx, b.not(is_init),
+                "uninit read from {:x} on cycle {} (previous op had address {:x})",
+                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port1.addr),
+            );
 
             // If this is a legal read, then it must return the same value as the previous
             // operation.  Otherwise, the prover is cheating by changing memory without a proper
             // write.
-            cx.when(b, is_init, |cx| cx.assert(b.eq(port1.value, port2.value)));
+            cx.when(b, is_init, |cx| wire_assert!(
+                cx,
+                b.eq(port1.value, port2.value),
+                "read from {:x} on cycle {} produced {} (expected {})",
+                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port2.value),
+                cx.eval(port1.value),
+            ));
         });
 
         // If `port2` is a write, then its address and value are unconstrained.
@@ -353,8 +536,9 @@ fn main() -> io::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     assert!(args.len() == 2, "usage: {} WITNESS", args.get(0).map_or("witness-checker", |x| x));
     let arena = Bump::new();
-    let b = Builder::new(&arena);
-    let cx = Context::new();
+    let c = Circuit::new(&arena);
+    let b = Builder::new(&c);
+    let cx = Context::new(&c);
 
     // Load the program and trace from files
     let content = fs::read(&args[1]).unwrap();
@@ -378,8 +562,33 @@ fn main() -> io::Result<()> {
     let mut mem_ports = Vec::new();
     for _ in 1..trace.len() {
         mem_ports.push(b.secret(Some(MemPort {
-            cycle: !0,
+            cycle: MEM_PORT_UNUSED_CYCLE,
             ..MemPort::default()
+        })));
+    }
+    for (&i, advs) in &exec.advice {
+        for adv in advs {
+            match *adv {
+                Advice::MemOp { addr, value, write } => {
+                    // It should be fine to replace the old `Secret` gates with new ones here.  The
+                    // shape of the circuit will be the same either way.
+                    mem_ports[i as usize - 1] = b.secret(Some(MemPort {
+                        cycle: i as u32 - 1,
+                        addr,
+                        value,
+                        write,
+                    }));
+                }
+                Advice::Stutter => {}
+            }
+        }
+    }
+    for (i, &x) in exec.init_mem.iter().enumerate() {
+        mem_ports.push(b.secret(Some(MemPort {
+            cycle: MEM_PORT_PRELOAD_CYCLE,
+            addr: 2 + i as u64,
+            value: x,
+            write: true,
         })));
     }
 
@@ -395,31 +604,49 @@ fn main() -> io::Result<()> {
     check_last(&cx, &b, &prog, trace.last().unwrap());
 
     // Check the memory ports
-    for (i, port) in mem_ports.iter().enumerate() {
+    for (i, port) in mem_ports.iter().enumerate().take(trace.len() - 1) {
         // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
         // in its corresponding cycle, or it isn't used at all.
-        cx.assert(b.or(
-            b.eq(port.cycle, b.lit(i as u32)),
-            b.eq(port.cycle, b.lit(!0_u32)),
-        ));
+        wire_assert!(
+            &cx,
+            b.or(
+                b.eq(port.cycle, b.lit(i as u32)),
+                b.eq(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
+            ),
+            "port {} is active on cycle {} (expected {})",
+            i, cx.eval(port.cycle), i,
+        );
     }
 
     // Check memory consistency
+
     let mut sorted_mem = mem_ports.clone();
     sort::sort(&b, &mut sorted_mem, &mut |x, y| {
+        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
+        // cycles.
+        let x_cyc = b.add(x.cycle, b.lit(1));
+        let y_cyc = b.add(y.cycle, b.lit(1));
         b.or(
             b.lt(x.addr, y.addr),
-            b.and(b.eq(x.addr, y.addr), b.lt(x.cycle, y.cycle)),
+            b.and(b.eq(x.addr, y.addr), b.lt(x_cyc, y_cyc)),
         )
     });
+    /*
+    for port in &sorted_mem {
+        eprintln!(
+            "mem op: {:5} {:x}, value {}, cycle {}",
+            cx.eval(port.write).map(|x| if x == 0 { "read" } else { "write" }),
+            cx.eval(port.addr), cx.eval(port.value), cx.eval(port.cycle),
+        );
+    }
+    */
     check_first_mem(&cx, &b, &sorted_mem[0]);
     for (port1, port2) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)) {
         check_mem(&cx, &b, port1, port2);
     }
 
     // Lower IR code
-    let c = b.finish();
-
+    drop(b);
     let (asserts, bugs) = cx.finish();
     let num_asserts = asserts.len();
     let flags = asserts.into_iter().chain(bugs.into_iter())
@@ -430,7 +657,7 @@ fn main() -> io::Result<()> {
     let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
     let flags = run_pass(&c, flags, lower::bundle::unbundle_mux);
     let flags = run_pass(&c, flags, lower::bundle::simplify);
-    let flags = run_pass(&c, flags, lower::const_fold::const_fold);
+    let flags = run_pass(&c, flags, lower::const_fold::const_fold(&c));
     let flags = run_pass(&c, flags, lower::int::mod_to_div);
     let flags = run_pass(&c, flags, lower::int::non_constant_shift);
     let flags = run_pass(&c, flags, lower::int::extend_to_64);
