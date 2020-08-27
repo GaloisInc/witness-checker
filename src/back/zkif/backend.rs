@@ -11,13 +11,14 @@ use zkinterface_bellman::sapling_crypto::circuit::{
 use zkinterface_bellman::ff::{Field, PrimeField};
 use zkinterface_bellman::pairing::bls12_381::Bls12;
 use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
-use crate::back::zkif::representer::{Representer, En, LC, Fr, FrRepr, WireId, Num, fr_from_unsigned};
+use crate::back::zkif::zkif_cs::{ZkifCS, En, LC, Fr, FrRepr, WireId, Num, fr_from_unsigned};
 use std::path::Path;
 use std::ops::Sub;
-use crate::back::zkif::representer::fr_from_signed;
+use crate::back::zkif::zkif_cs::fr_from_signed;
 use crate::back::zkif::int;
 use crate::back::zkif::uint32::UInt32;
 use crate::back::zkif::bit_width::BitWidth;
+use crate::back::zkif::representer::Representer;
 
 
 /// zkInterface backend based on Bellman.
@@ -26,10 +27,11 @@ use crate::back::zkif::bit_width::BitWidth;
 /// - Allocate and retrieve representations of wires.
 /// - Write files.
 pub struct Backend<'a> {
-    //gadget_specs: HashMap<String, GadgetSpec>,
-
     wire_ids: HashMap<Wire<'a>, WireId>,
     representer: Representer,
+    cs: ZkifCS,
+
+    //gadget_specs: HashMap<String, GadgetSpec>,
 }
 
 impl<'a> Backend<'a> {
@@ -37,7 +39,8 @@ impl<'a> Backend<'a> {
         Backend {
             //gadget_specs: GadgetSpec::make_specs(),
             wire_ids: HashMap::new(),
-            representer: Representer::new(workspace, proving),
+            representer: Representer::new(),
+            cs: ZkifCS::new(workspace, proving),
         }
     }
 
@@ -66,7 +69,7 @@ impl<'a> Backend<'a> {
                         };
                         let num = Num {
                             value: Some(f),
-                            lc: LC::zero() + (f.clone(), Representer::one()),
+                            lc: LC::zero() + (f.clone(), ZkifCS::one()),
                             bit_width: BitWidth::from(val),
                         };
                         self.representer.set_bellman_num(wid, num);
@@ -85,7 +88,7 @@ impl<'a> Backend<'a> {
                     TyKind::Bool => {
                         let val = secret.val.map(|v| v != 0);
                         let b = Boolean::from(
-                            AllocatedBit::alloc::<En, _>(&mut self.representer, val).unwrap()
+                            AllocatedBit::alloc::<En, _>(&mut self.cs, val).unwrap()
                         );
                         self.representer.set_bellman_boolean(wid, b);
                     }
@@ -98,7 +101,7 @@ impl<'a> Backend<'a> {
                             }
                         });
 
-                        let var = self.representer.alloc(
+                        let var = self.cs.alloc(
                             || "secret",
                             || value.ok_or(SynthesisError::AssignmentMissing),
                         ).unwrap();
@@ -178,17 +181,17 @@ impl<'a> Backend<'a> {
                         let out_b = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub =>
                                 Boolean::xor::<En, _>(
-                                    &mut self.representer,
+                                    &mut self.cs,
                                     &lb, &rb,
                                 ).unwrap(),
 
                             BinOp::And | BinOp::Mul => Boolean::and::<En, _>(
-                                &mut self.representer,
+                                &mut self.cs,
                                 &lb, &rb,
                             ).unwrap(),
 
                             BinOp::Or => Boolean::and::<En, _>(
-                                &mut self.representer,
+                                &mut self.cs,
                                 &lb.not(), &rb.not(),
                             ).unwrap().not(),
 
@@ -212,7 +215,7 @@ impl<'a> Backend<'a> {
                                     BinOp::Sub => left - &right,
 
                                     BinOp::Mul =>
-                                        left.mul(&right, &mut self.representer),
+                                        left.mul(&right, &mut self.cs),
 
                                     _ => unreachable!(),
                                 };
@@ -228,7 +231,7 @@ impl<'a> Backend<'a> {
                                 let right_int = self.representer.as_bellman_uint32(rw);
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int::div(
-                                    &mut self.representer,
+                                    &mut self.cs,
                                     &left_num, &left_int,
                                     &right_num, &right_int,
                                 );
@@ -250,13 +253,13 @@ impl<'a> Backend<'a> {
 
                                 let out = match op {
                                     BinOp::Xor =>
-                                        int::bitwise_xor(&mut self.representer, &lu, &ru),
+                                        int::bitwise_xor(&mut self.cs, &lu, &ru),
 
                                     BinOp::And =>
-                                        int::bitwise_and(&mut self.representer, &lu, &ru),
+                                        int::bitwise_and(&mut self.cs, &lu, &ru),
 
                                     BinOp::Or =>
-                                        int::bitwise_or(&mut self.representer, &lu, &ru),
+                                        int::bitwise_or(&mut self.cs, &lu, &ru),
 
                                     _ => unreachable!(),
                                 };
@@ -310,7 +313,7 @@ impl<'a> Backend<'a> {
                 let yes = match op {
                     CmpOp::Eq => {
                         let left = self.representer.as_bellman_num(lw);
-                        left.equals_zero(&mut self.representer)
+                        left.equals_zero(&mut self.cs)
                     }
 
                     CmpOp::Ge => {
@@ -337,7 +340,7 @@ impl<'a> Backend<'a> {
                     (TyKind::Bool, TyKind::Uint(_)) => {
                         // TODO: move to the as_* methods.
                         let bool = self.representer.as_bellman_boolean(aw);
-                        let num = Num::from_boolean::<Representer>(&bool);
+                        let num = Num::from_boolean::<ZkifCS>(&bool);
                         self.representer.set_bellman_num(aw, num);
                         aw
                     }

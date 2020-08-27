@@ -12,7 +12,7 @@ use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, Variable};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBit};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeFieldRepr;
-use crate::back::zkif::representer::fr_from_unsigned;
+use crate::back::zkif::zkif_cs::fr_from_unsigned;
 use crate::back::zkif::bit_width::BitWidth;
 
 

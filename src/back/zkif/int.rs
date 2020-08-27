@@ -2,7 +2,7 @@ use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeField;
 use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
-use crate::back::zkif::representer::{fr_from_unsigned};
+use crate::back::zkif::zkif_cs::{fr_from_unsigned};
 use crate::back::zkif::num::Num;
 use crate::back::zkif::uint32::UInt32;
 use crate::back::zkif::bit_width::BitWidth;
