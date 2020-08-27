@@ -664,7 +664,6 @@ fn main() -> io::Result<()> {
     let flags = run_pass(&c, flags, lower::int::int_to_uint);
     let flags = run_pass(&c, flags, lower::int::reduce_lit_32);
     let flags = run_pass(&c, flags, lower::int::mux);
-    let flags = run_pass(&c, flags, lower::int::compare_to_zero);
     let flags = run_pass(&c, flags, lower::bool_::mux);
     let flags = run_pass(&c, flags, lower::bool_::compare_to_logic);
     let flags = run_pass(&c, flags, lower::bool_::not_to_xor);
@@ -675,6 +674,7 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(feature = "bellman")] {
+        let flags = run_pass(&c, flags, lower::int::greater_or_equal_to_zero);
         let flags = run_pass(&c, flags, crate::back::zkif::backend_todo::ignore_gates_todo);
 
         // Clean workspace.
@@ -707,6 +707,8 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(feature = "scale")] {
+        let flags = run_pass(&c, flags, lower::int::compare_to_zero);
+
         // Generate SCALE
         let mut backend = back::scale::Backend::new();
 

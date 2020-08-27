@@ -45,9 +45,6 @@ pub fn ignore_gates_todo<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> W
             _ => {}
         }
 
-        GateKind::Compare(CmpOp::Lt, _, _) =>
-            return c.lit(c.ty(TyKind::Bool), 1),
-
         _ => {}
     }
 

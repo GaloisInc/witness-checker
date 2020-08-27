@@ -291,15 +291,24 @@ impl<'a> Backend<'a> {
 
             GateKind::Compare(op, left, right) => {
                 let lw = self.wire(left);
-                let rw = self.wire(right);
                 let wid = self.representer.allocate_repr();
+
+                assert!(
+                    as_lit(right) == Some(0),
+                    "only comparisons to zero (not {:?}) are supported", right,
+                );
 
                 let yes = match op {
                     CmpOp::Eq => {
-                        let ln = self.representer.as_bellman_num(lw);
-                        let rn = self.representer.as_bellman_num(rw);
-                        let diff = ln - &rn;
-                        diff.equals_zero(&mut self.representer)
+                        let left = self.representer.as_bellman_num(lw);
+                        left.equals_zero(&mut self.representer)
+                    }
+
+                    CmpOp::Ge => {
+                        // Interpret the most significant bit as "is negative".
+                        let int = self.representer.as_bellman_uint32(lw);
+                        let bits = int.into_bits();
+                        bits.last().unwrap().not()
                     }
 
                     _ => unimplemented!("CMP {:?} {:?}", op, left.ty),

@@ -19,6 +19,28 @@ pub fn compare_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wir
     c.gate(gk)
 }
 
+// TODO: Does this work on UInt?
+pub fn greater_or_equal_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+    if let GateKind::Compare(op, a, b) = gk {
+        if a.ty.is_integer() {
+            let zero = c.lit(a.ty, 0);
+            return match op {
+                CmpOp::Eq => c.eq(c.sub(a, b), zero),
+                CmpOp::Ne => c.not(c.eq(c.sub(a, b), zero)),
+                // Greater or equal: a - b >= 0.
+                CmpOp::Ge => c.ge(c.sub(a, b), zero),
+                // Lesser or equal: swap a and b.
+                CmpOp::Le => c.ge(c.sub(b, a), zero),
+                // Lesser than: not greater or equal.
+                CmpOp::Lt => c.not(c.ge(c.sub(a, b), zero)),
+                // Greater or equal: not lesser or equal.
+                CmpOp::Gt => c.not(c.ge(c.sub(b, a), zero)),
+            };
+        }
+    }
+    c.gate(gk)
+}
+
 pub fn mux<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Mux(cond, t, e) = gk {
         if t.ty.is_integer() {
