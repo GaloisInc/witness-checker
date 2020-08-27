@@ -67,7 +67,7 @@ impl<'a> Backend<'a> {
                         let num = Num {
                             value: Some(f),
                             lc: LC::zero() + (f.clone(), Representer::one()),
-                            bit_width: BitWidth::Max(64), // It is a literal.
+                            bit_width: BitWidth::from(val),
                         };
                         self.representer.set_bellman_num(wid, num);
                     }
@@ -103,15 +103,17 @@ impl<'a> Backend<'a> {
                             || value.ok_or(SynthesisError::AssignmentMissing),
                         ).unwrap();
 
+                        // Validate size as a side-effect.
+                        // TODO: convert from var.
+                        let int = UInt32::constant(0);
+
                         let num = Num {
                             value,
                             lc: LC::zero() + var,
-                            bit_width: BitWidth::Max(32), // Proven below.
+                            bit_width: BitWidth::from(&int),
                         };
                         self.representer.set_bellman_num(wid, num);
-
-                        // Validate size as a side-effect.
-                        let _ = self.representer.as_bellman_uint32(wid);
+                        self.representer.set_bellman_uint32(wid, int);
                     }
 
                     _ => unimplemented!("Secret {:?}", secret.ty),

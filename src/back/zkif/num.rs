@@ -54,7 +54,7 @@ impl<E: Engine> Num<E> {
                 if b { E::Fr::one() } else { E::Fr::zero() }
             ),
             lc: boolean_lc::<E, CS>(bool),
-            bit_width: BitWidth::Max(1), // Proven by construction of Boolean.
+            bit_width: BitWidth::from(bool),
         }
     }
 
