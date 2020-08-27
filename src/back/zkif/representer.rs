@@ -1,6 +1,23 @@
-use crate::back::zkif::zkif_cs::{WireRepr, WireId, Num, ZkifCS};
+use crate::back::zkif::zkif_cs::{Num, ZkifCS};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
 use crate::back::zkif::uint32::UInt32;
+
+
+// WireId is an handle to reference a wire in the backend.
+#[derive(Copy, Clone, PartialEq)]
+pub struct WireId(pub usize);
+
+// WireRepr holds one or several equivalent representations of a wire.
+#[derive(Default)]
+pub struct WireRepr {
+    pub bl_boolean: Option<Boolean>,
+    pub bl_num: Option<Num>,
+    pub bl_uint32: Option<UInt32>,
+    //pub packed_zid: Option<ZkifId>,
+    //pub bit_zids: Vec<ZkifId>,
+    //pub one_hot_zids: Vec<ZkifId>,
+}
+
 
 pub struct Representer {
     pub wire_reprs: Vec<WireRepr>,
@@ -34,25 +51,28 @@ impl Representer {
         match &repr.bl_boolean {
             Some(b) => b.clone(),
             None => {
+                panic!("Access to a wire that has no Boolean representation");
                 // TODO: convert from other repr.
-                Boolean::constant(false)
+                Boolean::constant(true)
             }
         }
     }
 
-    pub fn as_bellman_num(&mut self, wid: WireId) -> Num {
+    pub fn as_bellman_num(&mut self, wid: WireId, cs: &mut ZkifCS) -> Num {
         let repr = &mut self.wire_reprs[wid.0];
         match &repr.bl_num {
-            Some(lc) => lc.clone(),
+            Some(num) => num.clone(),
+
             None => {
-                // TODO: convert from other repr.
+                // Convert from another repr.
                 let num = {
-                    /*if let Some(ref int) = repr.bl_uint32 {
-                        int_into_num(self, int)
+                    if let Some(ref bool) = repr.bl_boolean {
+                        Num::from_boolean::<ZkifCS>(bool)
+                    } else if let Some(ref int) = repr.bl_uint32 {
+                        Num::from_int(cs, int)
                     } else {
-                        Num::from_boolean::<Self>(&Boolean::constant(true))
-                    }*/
-                    Num::from_boolean::<ZkifCS>(&Boolean::constant(true))
+                        panic!("Access to a wire that has no representation")
+                    }
                 };
                 repr.bl_num = Some(num.clone());
                 num
@@ -60,13 +80,24 @@ impl Representer {
         }
     }
 
-    pub fn as_bellman_uint32(&mut self, wid: WireId) -> UInt32 {
+    pub fn as_bellman_uint32(&mut self, wid: WireId, cs: &mut ZkifCS) -> UInt32 {
         let repr = &mut self.wire_reprs[wid.0];
         match &repr.bl_uint32 {
             Some(u) => u.clone(),
+
             None => {
-                // TODO: convert from other repr.
-                UInt32::constant(0)
+                // Convert from another repr.
+                let int = {
+                    if let Some(ref bool) = repr.bl_boolean {
+                        UInt32::from_boolean(bool)
+                    } else if let Some(ref num) = repr.bl_num {
+                        UInt32::from_num(cs, num)
+                    } else {
+                        panic!("Access to a wire that has no representation")
+                    }
+                };
+                repr.bl_uint32 = Some(int.clone());
+                int
             }
         }
     }

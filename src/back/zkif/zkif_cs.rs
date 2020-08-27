@@ -13,7 +13,6 @@ use zkinterface_bellman::export::to_zkif_constraint;
 use zkinterface_bellman::ff::{PrimeField, PrimeFieldRepr, Field};
 use std::path::Path;
 use super::num;
-use crate::back::zkif::int::int_into_num;
 
 // TODO: template with trait ScalarEngine.
 pub type En = Bls12;
@@ -22,22 +21,6 @@ pub type Num = num::Num<En>;
 pub type Fr = <En as ScalarEngine>::Fr;
 pub type FrRepr = <Fr as PrimeField>::Repr;
 
-// WireId is an handle to reference a wire in the backend.
-#[derive(Copy, Clone, PartialEq)]
-pub struct WireId(pub usize); // or wid.
-
-//pub type ZkifId = u64; // or zid.
-
-// WireRepr holds one or several equivalent representations of a wire.
-#[derive(Default)]
-pub struct WireRepr {
-    pub bl_boolean: Option<Boolean>,
-    pub bl_num: Option<Num>,
-    pub bl_uint32: Option<UInt32>,
-    //pub packed_zid: Option<ZkifId>,
-    //pub bit_zids: Vec<ZkifId>,
-    //pub one_hot_zids: Vec<ZkifId>,
-}
 
 pub struct ZkifCS {
     stmt: StatementBuilder<FileStore>,

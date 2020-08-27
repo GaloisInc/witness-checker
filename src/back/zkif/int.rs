@@ -68,35 +68,26 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
     denom_num: &Num<E>,
     denom_int: &UInt32,
 ) -> (/*quotient*/ Num<E>, UInt32, /*rest*/ Num<E>, UInt32) {
-    let (quot_val, rest_val) = match (&numer_num.value, &denom_num.value) {
-        (
-            Some(ref numer_val),
-            Some(ref denom_val)
-        ) => {
-            // TODO: use UInt32.value but it is private.
-            let numer = {
-                let repr = numer_val.into_repr();
-                let limbs = repr.as_ref();
-                limbs[0] as u32
-            };
-            let denom = {
-                let repr = denom_val.into_repr();
-                let limbs = repr.as_ref();
-                limbs[0] as u32
-            };
+    let (quot_val, rest_val) = match (numer_int.value, denom_int.value) {
+        (Some(numer), Some(denom)) => {
+            //assert_ne!(denom, 0, "Attempt to divide by zero");
+            let denom = if denom == 0 {
+                eprintln!("Warning: divide by zero");
+                1
+            } else { denom };
+
             let quot_val = numer / denom;
             let rest_val = numer % denom;
             (Some(quot_val), Some(rest_val))
         }
-
         _ => (None, None)
     };
 
     let quot_int = UInt32::alloc(&mut cs, quot_val).unwrap();
     let rest_int = UInt32::alloc(&mut cs, rest_val).unwrap();
 
-    let quot_num = int_into_num(&mut cs, &quot_int);
-    let rest_num = int_into_num(&mut cs, &rest_int);
+    let quot_num = Num::from_int(&mut cs, &quot_int);
+    let rest_num = Num::from_int(&mut cs, &rest_int);
 
     cs.enforce(
         || "division",
@@ -108,14 +99,4 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
     // TODO: verify that rest_int < denom_int.
 
     (quot_num, quot_int, rest_num, rest_int)
-}
-
-// TODO: check consistency between representations.
-pub fn int_into_num<E: Engine, CS: ConstraintSystem<E>>(
-    mut cs: CS,
-    int: &UInt32,
-) -> Num<E> {
-    let mut num = Num::alloc(&mut cs, int.value).unwrap();
-    num.bit_width = BitWidth::from(int);
-    num
 }

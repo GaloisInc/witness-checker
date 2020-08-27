@@ -14,6 +14,7 @@ use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeFieldRepr;
 use crate::back::zkif::zkif_cs::fr_from_unsigned;
 use crate::back::zkif::bit_width::BitWidth;
+use crate::back::zkif::uint32::UInt32;
 
 
 #[derive(Clone)]
@@ -51,6 +52,16 @@ impl<E: Engine> Num<E> {
         })
     }
 
+    // TODO: check consistency between representations.
+    pub fn from_int<CS: ConstraintSystem<E>>(
+        mut cs: CS,
+        int: &UInt32,
+    ) -> Num<E> {
+        let mut num = Num::alloc(&mut cs, int.value).unwrap();
+        num.bit_width = BitWidth::from(int);
+        num
+    }
+
     pub fn from_boolean<CS: ConstraintSystem<E>>(
         bool: &Boolean,
     ) -> Self {
@@ -64,12 +75,10 @@ impl<E: Engine> Num<E> {
     }
 
     /// Assert that no overflows could occur in computing this Num.
-    /// Supports signed integers (`width + 1` bits must fit into `capacity`).
     pub fn assert_no_overflow(&self) {
-        match self.bit_width {
-            BitWidth::Unknown => panic!("Number of unknown size may overflow."),
-            BitWidth::Max(w) => assert!((w as u32) < E::Fr::CAPACITY),
-        };
+        if !self.bit_width.fits_into(E::Fr::CAPACITY as usize) {
+            panic!("Number may overflow (size {:?}).", self.bit_width);
+        }
     }
 
     pub fn mul(mut self, other: &Self,

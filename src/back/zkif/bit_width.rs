@@ -11,6 +11,17 @@ pub enum BitWidth {
 
 use BitWidth::*;
 
+impl BitWidth {
+    /// Whether this bit width would fit into a bit representation.
+    /// Supports signed integers (`width + 1` bits must fit into `capacity`).
+    pub fn fits_into(self, bit_capacity: usize) -> bool {
+        match self {
+            BitWidth::Unknown => false,
+            BitWidth::Max(w) => w < bit_capacity,
+        }
+    }
+}
+
 impl From<u64> for BitWidth {
     fn from(literal: u64) -> Self {
         Max(64 - literal.leading_zeros() as usize)

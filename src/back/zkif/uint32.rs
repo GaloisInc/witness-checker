@@ -16,6 +16,7 @@ use zkinterface_bellman::{
         multieq::MultiEq,
     },
 };
+use crate::back::zkif::num::Num;
 
 
 /// Represents an interpretation of 32 `Boolean` objects as an
@@ -86,6 +87,30 @@ impl UInt32 {
             bits: bits,
             value: value,
         })
+    }
+
+    // TODO: check consistency between representations.
+    pub fn from_num<E: Engine, CS: ConstraintSystem<E>>(
+        mut cs: CS,
+        num: &Num<E>,
+    ) -> UInt32 {
+        let value = num.value.map(|val| {
+            let repr = val.into_repr();
+            let limbs = repr.as_ref();
+            limbs[0] as u32
+        });
+        UInt32::alloc(cs, value).unwrap()
+    }
+
+    pub fn from_boolean(bool: &Boolean) -> UInt32 {
+        let mut bits = Vec::with_capacity(32);
+        bits.push(bool.clone());
+        bits.resize(32, Boolean::constant(false));
+
+        UInt32 {
+            bits,
+            value: bool.get_value().map(|b| b as u32),
+        }
     }
 
     pub fn into_bits_be(&self) -> Vec<Boolean> {

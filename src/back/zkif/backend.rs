@@ -11,14 +11,14 @@ use zkinterface_bellman::sapling_crypto::circuit::{
 use zkinterface_bellman::ff::{Field, PrimeField};
 use zkinterface_bellman::pairing::bls12_381::Bls12;
 use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
-use crate::back::zkif::zkif_cs::{ZkifCS, En, LC, Fr, FrRepr, WireId, Num, fr_from_unsigned};
+use crate::back::zkif::zkif_cs::{ZkifCS, En, LC, Fr, FrRepr, Num, fr_from_unsigned};
 use std::path::Path;
 use std::ops::Sub;
 use crate::back::zkif::zkif_cs::fr_from_signed;
 use crate::back::zkif::int;
 use crate::back::zkif::uint32::UInt32;
 use crate::back::zkif::bit_width::BitWidth;
-use crate::back::zkif::representer::Representer;
+use crate::back::zkif::representer::{Representer, WireId};
 
 
 /// zkInterface backend based on Bellman.
@@ -146,13 +146,13 @@ impl<'a> Backend<'a> {
 
                         match op {
                             UnOp::Neg => {
-                                let num = self.representer.as_bellman_num(aw);
+                                let num = self.representer.as_bellman_num(aw, &mut self.cs);
                                 let neg = Num::zero() - &num;
                                 self.representer.set_bellman_num(wid, neg);
                             }
 
                             UnOp::Not => {
-                                let int = self.representer.as_bellman_uint32(aw);
+                                let int = self.representer.as_bellman_uint32(aw, &mut self.cs);
                                 let negs: Vec<Boolean> = int.bits.iter().map(|bit|
                                     bit.not()
                                 ).collect();
@@ -206,8 +206,8 @@ impl<'a> Backend<'a> {
                         match op {
                             // Arithmetic ops work on number representations.
                             BinOp::Add | BinOp::Sub | BinOp::Mul => {
-                                let left = self.representer.as_bellman_num(lw);
-                                let right = self.representer.as_bellman_num(rw);
+                                let left = self.representer.as_bellman_num(lw, &mut self.cs);
+                                let right = self.representer.as_bellman_num(rw, &mut self.cs);
 
                                 let out_num = match op {
                                     BinOp::Add => left + &right,
@@ -225,15 +225,15 @@ impl<'a> Backend<'a> {
 
                             // Ops using both number and bits representations.
                             BinOp::Div | BinOp::Mod => {
-                                let left_num = self.representer.as_bellman_num(lw);
-                                let left_int = self.representer.as_bellman_uint32(lw);
-                                let right_num = self.representer.as_bellman_num(rw);
-                                let right_int = self.representer.as_bellman_uint32(rw);
+                                let numer_num = self.representer.as_bellman_num(lw, &mut self.cs);
+                                let numer_int = self.representer.as_bellman_uint32(lw, &mut self.cs);
+                                let denom_num = self.representer.as_bellman_num(rw, &mut self.cs);
+                                let denom_int = self.representer.as_bellman_uint32(rw, &mut self.cs);
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int::div(
                                     &mut self.cs,
-                                    &left_num, &left_int,
-                                    &right_num, &right_int,
+                                    &numer_num, &numer_int,
+                                    &denom_num, &denom_int,
                                 );
 
                                 let (out_num, out_int) = match op {
@@ -248,8 +248,8 @@ impl<'a> Backend<'a> {
 
                             // Bitwise ops work on bit decompositions.
                             BinOp::Xor | BinOp::And | BinOp::Or => {
-                                let lu = self.representer.as_bellman_uint32(lw);
-                                let ru = self.representer.as_bellman_uint32(rw);
+                                let lu = self.representer.as_bellman_uint32(lw, &mut self.cs);
+                                let ru = self.representer.as_bellman_uint32(rw, &mut self.cs);
 
                                 let out = match op {
                                     BinOp::Xor =>
@@ -292,7 +292,7 @@ impl<'a> Backend<'a> {
                 };
 
                 let lw = self.wire(left);
-                let lu = self.representer.as_bellman_uint32(lw);
+                let lu = self.representer.as_bellman_uint32(lw, &mut self.cs);
 
                 let shifted = lu.shr(amount as usize);
 
@@ -312,13 +312,13 @@ impl<'a> Backend<'a> {
 
                 let yes = match op {
                     CmpOp::Eq => {
-                        let left = self.representer.as_bellman_num(lw);
+                        let left = self.representer.as_bellman_num(lw, &mut self.cs);
                         left.equals_zero(&mut self.cs)
                     }
 
                     CmpOp::Ge => {
                         // Interpret the most significant bit as "is negative".
-                        let int = self.representer.as_bellman_uint32(lw);
+                        let int = self.representer.as_bellman_uint32(lw, &mut self.cs);
                         int.bits.last().unwrap().not()
                     }
 
