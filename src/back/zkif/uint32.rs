@@ -113,6 +113,11 @@ impl UInt32 {
         }
     }
 
+    pub fn is_positive(&self) -> Boolean {
+        // Interpret the most significant bit as "is negative".
+        self.bits.last().unwrap().not()
+    }
+
     pub fn into_bits_be(&self) -> Vec<Boolean> {
         self.bits.iter().rev().cloned().collect()
     }

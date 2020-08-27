@@ -59,7 +59,7 @@ impl<'a> Backend<'a> {
                 match *ty {
                     TyKind::Bool => {
                         let b = Boolean::constant(val != 0);
-                        self.representer.set_bellman_boolean(wid, b);
+                        self.representer.mut_repr(wid).set_boolean(b);
                     }
 
                     TyKind::Uint(_) | TyKind::Int(_) => {
@@ -72,7 +72,7 @@ impl<'a> Backend<'a> {
                             lc: LC::zero() + (f.clone(), ZkifCS::one()),
                             bit_width: BitWidth::from(val),
                         };
-                        self.representer.set_bellman_num(wid, num);
+                        self.representer.mut_repr(wid).set_num(num);
                     }
 
                     _ => unimplemented!("Literal {:?}", ty),
@@ -90,10 +90,16 @@ impl<'a> Backend<'a> {
                         let b = Boolean::from(
                             AllocatedBit::alloc::<En, _>(&mut self.cs, val).unwrap()
                         );
-                        self.representer.set_bellman_boolean(wid, b);
+                        self.representer.mut_repr(wid).set_boolean(b);
                     }
 
                     TyKind::Uint(I32) | TyKind::Int(I32) => {
+                        let value = secret.val.map(|val| val as u32);
+                        let int = UInt32::alloc(&mut self.cs, value).unwrap();
+                        self.representer.mut_repr(wid).set_uint32(int);
+
+                        /* Version without size validation:
+
                         let value = secret.val.map(|val| {
                             match *secret.ty {
                                 TyKind::Int(_) => fr_from_signed(val as i64),
@@ -106,17 +112,13 @@ impl<'a> Backend<'a> {
                             || value.ok_or(SynthesisError::AssignmentMissing),
                         ).unwrap();
 
-                        // Validate size as a side-effect.
-                        // TODO: convert from var.
-                        let int = UInt32::constant(0);
-
                         let num = Num {
                             value,
                             lc: LC::zero() + var,
-                            bit_width: BitWidth::from(&int),
+                            bit_width: BitWidth::Unknown,
                         };
                         self.representer.set_bellman_num(wid, num);
-                        self.representer.set_bellman_uint32(wid, int);
+                        */
                     }
 
                     _ => unimplemented!("Secret {:?}", secret.ty),
@@ -131,9 +133,9 @@ impl<'a> Backend<'a> {
                     TyKind::Bool => {
                         match op {
                             UnOp::Not => {
-                                let ab = self.representer.as_bellman_boolean(aw);
+                                let ab = self.representer.mut_repr(aw).as_boolean();
                                 let wid = self.representer.allocate_repr();
-                                self.representer.set_bellman_boolean(wid, ab.not());
+                                self.representer.mut_repr(wid).set_boolean(ab.not());
                                 wid
                             }
 
@@ -146,18 +148,18 @@ impl<'a> Backend<'a> {
 
                         match op {
                             UnOp::Neg => {
-                                let num = self.representer.as_bellman_num(aw, &mut self.cs);
+                                let num = self.representer.mut_repr(aw).as_num(&mut self.cs);
                                 let neg = Num::zero() - &num;
-                                self.representer.set_bellman_num(wid, neg);
+                                self.representer.mut_repr(wid).set_num(neg);
                             }
 
                             UnOp::Not => {
-                                let int = self.representer.as_bellman_uint32(aw, &mut self.cs);
+                                let int = self.representer.mut_repr(aw).as_uint32(&mut self.cs);
                                 let negs: Vec<Boolean> = int.bits.iter().map(|bit|
                                     bit.not()
                                 ).collect();
                                 let not = UInt32::from_bits(&negs);
-                                self.representer.set_bellman_uint32(wid, not);
+                                self.representer.mut_repr(wid).set_uint32(not);
                             }
                         }
 
@@ -175,8 +177,8 @@ impl<'a> Backend<'a> {
 
                 match *gate.ty {
                     TyKind::Bool => {
-                        let lb = self.representer.as_bellman_boolean(lw);
-                        let rb = self.representer.as_bellman_boolean(rw);
+                        let lb = self.representer.mut_repr(lw).as_boolean();
+                        let rb = self.representer.mut_repr(rw).as_boolean();
 
                         let out_b = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub =>
@@ -199,15 +201,15 @@ impl<'a> Backend<'a> {
                                 unimplemented!("{:?} for {:?}", op, gate.ty),
                         };
 
-                        self.representer.set_bellman_boolean(wid, out_b);
+                        self.representer.mut_repr(wid).set_boolean(out_b);
                     }
 
                     TyKind::Int(_) | TyKind::Uint(_) => {
                         match op {
                             // Arithmetic ops work on number representations.
                             BinOp::Add | BinOp::Sub | BinOp::Mul => {
-                                let left = self.representer.as_bellman_num(lw, &mut self.cs);
-                                let right = self.representer.as_bellman_num(rw, &mut self.cs);
+                                let left = self.representer.mut_repr(lw).as_num(&mut self.cs);
+                                let right = self.representer.mut_repr(rw).as_num(&mut self.cs);
 
                                 let out_num = match op {
                                     BinOp::Add => left + &right,
@@ -220,15 +222,15 @@ impl<'a> Backend<'a> {
                                     _ => unreachable!(),
                                 };
 
-                                self.representer.set_bellman_num(wid, out_num);
+                                self.representer.mut_repr(wid).set_num(out_num);
                             }
 
                             // Ops using both number and bits representations.
                             BinOp::Div | BinOp::Mod => {
-                                let numer_num = self.representer.as_bellman_num(lw, &mut self.cs);
-                                let numer_int = self.representer.as_bellman_uint32(lw, &mut self.cs);
-                                let denom_num = self.representer.as_bellman_num(rw, &mut self.cs);
-                                let denom_int = self.representer.as_bellman_uint32(rw, &mut self.cs);
+                                let numer_num = self.representer.mut_repr(lw).as_num(&mut self.cs);
+                                let numer_int = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
+                                let denom_num = self.representer.mut_repr(rw).as_num(&mut self.cs);
+                                let denom_int = self.representer.mut_repr(rw).as_uint32(&mut self.cs);
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int::div(
                                     &mut self.cs,
@@ -242,14 +244,14 @@ impl<'a> Backend<'a> {
                                     _ => unreachable!(),
                                 };
 
-                                self.representer.set_bellman_num(wid, out_num);
-                                self.representer.set_bellman_uint32(wid, out_int);
+                                self.representer.mut_repr(wid).set_num(out_num);
+                                self.representer.mut_repr(wid).set_uint32(out_int);
                             }
 
                             // Bitwise ops work on bit decompositions.
                             BinOp::Xor | BinOp::And | BinOp::Or => {
-                                let lu = self.representer.as_bellman_uint32(lw, &mut self.cs);
-                                let ru = self.representer.as_bellman_uint32(rw, &mut self.cs);
+                                let lu = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
+                                let ru = self.representer.mut_repr(rw).as_uint32(&mut self.cs);
 
                                 let out = match op {
                                     BinOp::Xor =>
@@ -264,7 +266,7 @@ impl<'a> Backend<'a> {
                                     _ => unreachable!(),
                                 };
 
-                                self.representer.set_bellman_uint32(wid, out);
+                                self.representer.mut_repr(wid).set_uint32(out);
                             }
                         }
                     }
@@ -292,12 +294,12 @@ impl<'a> Backend<'a> {
                 };
 
                 let lw = self.wire(left);
-                let lu = self.representer.as_bellman_uint32(lw, &mut self.cs);
+                let lu = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
 
                 let shifted = lu.shr(amount as usize);
 
                 let wid = self.representer.allocate_repr();
-                self.representer.set_bellman_uint32(wid, shifted);
+                self.representer.mut_repr(wid).set_uint32(shifted);
                 wid
             }
 
@@ -312,20 +314,19 @@ impl<'a> Backend<'a> {
 
                 let yes = match op {
                     CmpOp::Eq => {
-                        let left = self.representer.as_bellman_num(lw, &mut self.cs);
+                        let left = self.representer.mut_repr(lw).as_num(&mut self.cs);
                         left.equals_zero(&mut self.cs)
                     }
 
                     CmpOp::Ge => {
-                        // Interpret the most significant bit as "is negative".
-                        let int = self.representer.as_bellman_uint32(lw, &mut self.cs);
-                        int.bits.last().unwrap().not()
+                        let int = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
+                        int.is_positive()
                     }
 
                     _ => unimplemented!("CMP {:?} {:?}", op, left.ty),
                 };
 
-                self.representer.set_bellman_boolean(wid, yes);
+                self.representer.mut_repr(wid).set_boolean(yes);
                 wid
             }
 
@@ -339,9 +340,9 @@ impl<'a> Backend<'a> {
                 match (*a.ty, *ty) {
                     (TyKind::Bool, TyKind::Uint(_)) => {
                         // TODO: move to the as_* methods.
-                        let bool = self.representer.as_bellman_boolean(aw);
+                        let bool = self.representer.mut_repr(aw).as_boolean();
                         let num = Num::from_boolean::<ZkifCS>(&bool);
-                        self.representer.set_bellman_num(aw, num);
+                        self.representer.mut_repr(aw).set_num(num);
                         aw
                     }
 
