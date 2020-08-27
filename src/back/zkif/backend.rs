@@ -17,6 +17,7 @@ use std::path::Path;
 use std::ops::Sub;
 use crate::back::zkif::representer::fr_from_signed;
 use crate::back::zkif::int;
+use crate::back::zkif::bit_width::BitWidth;
 
 
 /// zkInterface backend based on Bellman.
@@ -63,8 +64,11 @@ impl<'a> Backend<'a> {
                             TyKind::Int(_) => fr_from_signed(val as i64),
                             _ => fr_from_unsigned(val),
                         };
-                        let lc = LC::zero() + (f, Representer::one());
-                        let num = Num { value: Some(f), lc };
+                        let num = Num {
+                            value: Some(f),
+                            lc: LC::zero() + (f.clone(), Representer::one()),
+                            bit_width: BitWidth::Max(64), // It is a literal.
+                        };
                         self.representer.set_bellman_num(wid, num);
                     }
 
@@ -99,8 +103,11 @@ impl<'a> Backend<'a> {
                             || value.ok_or(SynthesisError::AssignmentMissing),
                         ).unwrap();
 
-                        let lc = LC::zero() + var;
-                        let num = Num { value, lc };
+                        let num = Num {
+                            value,
+                            lc: LC::zero() + var,
+                            bit_width: BitWidth::Max(32), // Proven below.
+                        };
                         self.representer.set_bellman_num(wid, num);
 
                         // Validate size as a side-effect.

@@ -2,6 +2,7 @@ pub mod backend_todo;
 pub mod backend;
 mod representer;
 mod num;
+mod bit_width;
 mod int;
 
 //mod gadget_specs;

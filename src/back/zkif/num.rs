@@ -8,12 +8,15 @@ use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBi
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeFieldRepr;
 use crate::back::zkif::representer::fr_from_unsigned;
+use crate::back::zkif::bit_width::BitWidth;
 
 
 #[derive(Clone)]
 pub struct Num<E: Engine> {
     pub value: Option<E::Fr>,
     pub lc: LinearCombination<E>,
+    /// How many bits would be required to represent this number.
+    pub bit_width: BitWidth,
 }
 
 impl<E: Engine> Num<E> {
@@ -21,6 +24,7 @@ impl<E: Engine> Num<E> {
         Num {
             value: Some(E::Fr::zero()),
             lc: LinearCombination::zero(),
+            bit_width: BitWidth::Max(0),
         }
     }
 
@@ -38,6 +42,7 @@ impl<E: Engine> Num<E> {
         Ok(Num {
             value,
             lc: LinearCombination::zero() + var,
+            bit_width: BitWidth::Unknown, // u32 is used but we did not prove it.
         })
     }
 
@@ -49,6 +54,7 @@ impl<E: Engine> Num<E> {
                 if b { E::Fr::one() } else { E::Fr::zero() }
             ),
             lc: boolean_lc::<E, CS>(bool),
+            bit_width: BitWidth::Max(1), // Proven by construction of Boolean.
         }
     }
 
@@ -78,6 +84,7 @@ impl<E: Engine> Num<E> {
         );
 
         self.lc = product_lc;
+        self.bit_width = self.bit_width.mul(other.bit_width);
         self
     }
 
@@ -132,6 +139,7 @@ impl<'a, E: Engine> Add<&'a Num<E>> for Num<E> {
         }
 
         self.lc = self.lc + &other.lc;
+        self.bit_width = self.bit_width.add(other.bit_width);
         self
     }
 }
@@ -150,6 +158,7 @@ impl<'a, E: Engine> Sub<&'a Num<E>> for Num<E> {
         }
 
         self.lc = self.lc - &other.lc;
+        self.bit_width = self.bit_width.sub(other.bit_width);
         self
     }
 }
