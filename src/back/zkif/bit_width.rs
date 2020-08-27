@@ -3,7 +3,7 @@ use std::cmp::max;
 use zkinterface_bellman::sapling_crypto::circuit::{boolean::Boolean};
 use crate::back::zkif::uint32::UInt32;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum BitWidth {
     Unknown,
     Max(usize),

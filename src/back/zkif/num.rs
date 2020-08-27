@@ -63,6 +63,15 @@ impl<E: Engine> Num<E> {
         }
     }
 
+    /// Assert that no overflows could occur in computing this Num.
+    /// Supports signed integers (`width + 1` bits must fit into `capacity`).
+    pub fn assert_no_overflow(&self) {
+        match self.bit_width {
+            BitWidth::Unknown => panic!("Number of unknown size may overflow."),
+            BitWidth::Max(w) => assert!((w as u32) < E::Fr::CAPACITY),
+        };
+    }
+
     pub fn mul(mut self, other: &Self,
                cs: &mut impl ConstraintSystem<E>,
     ) -> Self {

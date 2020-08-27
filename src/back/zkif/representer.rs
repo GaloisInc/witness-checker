@@ -85,6 +85,7 @@ impl Representer {
     }
 
     pub fn set_bellman_num(&mut self, wid: WireId, num: Num) {
+        num.assert_no_overflow();
         self.wire_reprs[wid.0].bl_lc = Some(num);
     }
 
