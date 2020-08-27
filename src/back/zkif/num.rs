@@ -1,3 +1,8 @@
+// Based on
+//     https://github.com/zcash/librustzcash/tree/d7ba3102/
+// License MIT
+// Copyright (c) 2017-2019 Electric Coin Company
+
 use zkinterface_bellman::{
     ff::{ScalarEngine, Field, PrimeField},
     bellman::LinearCombination,

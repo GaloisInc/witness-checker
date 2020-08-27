@@ -7,7 +7,6 @@ use zkinterface::statement::{StatementBuilder, FileStore};
 use zkinterface::{VariablesOwned, CircuitOwned, KeyValueOwned, CommandOwned};
 use zkinterface_bellman::sapling_crypto::circuit::{
     boolean::{AllocatedBit, Boolean},
-    uint32::UInt32,
 };
 use zkinterface_bellman::ff::{Field, PrimeField};
 use zkinterface_bellman::pairing::bls12_381::Bls12;
@@ -17,6 +16,7 @@ use std::path::Path;
 use std::ops::Sub;
 use crate::back::zkif::representer::fr_from_signed;
 use crate::back::zkif::int;
+use crate::back::zkif::uint32::UInt32;
 use crate::back::zkif::bit_width::BitWidth;
 
 
@@ -150,8 +150,7 @@ impl<'a> Backend<'a> {
 
                             UnOp::Not => {
                                 let int = self.representer.as_bellman_uint32(aw);
-                                let bits = int.into_bits();
-                                let negs: Vec<Boolean> = bits.iter().map(|bit|
+                                let negs: Vec<Boolean> = int.bits.iter().map(|bit|
                                     bit.not()
                                 ).collect();
                                 let not = UInt32::from_bits(&negs);
@@ -228,19 +227,20 @@ impl<'a> Backend<'a> {
                                 let right_num = self.representer.as_bellman_num(rw);
                                 let right_int = self.representer.as_bellman_uint32(rw);
 
-                                let (quotient, rest) = int::div(
+                                let (quot_num, quot_int, rest_num, rest_int) = int::div(
                                     &mut self.representer,
                                     &left_num, &left_int,
                                     &right_num, &right_int,
                                 );
 
-                                let out = match op {
-                                    BinOp::Div => quotient,
-                                    BinOp::Mod => rest,
+                                let (out_num, out_int) = match op {
+                                    BinOp::Div => (quot_num, quot_int),
+                                    BinOp::Mod => (rest_num, rest_int),
                                     _ => unreachable!(),
                                 };
 
-                                self.representer.set_bellman_uint32(wid, out);
+                                self.representer.set_bellman_num(wid, out_num);
+                                self.representer.set_bellman_uint32(wid, out_int);
                             }
 
                             // Bitwise ops work on bit decompositions.
@@ -316,8 +316,7 @@ impl<'a> Backend<'a> {
                     CmpOp::Ge => {
                         // Interpret the most significant bit as "is negative".
                         let int = self.representer.as_bellman_uint32(lw);
-                        let bits = int.into_bits();
-                        bits.last().unwrap().not()
+                        int.bits.last().unwrap().not()
                     }
 
                     _ => unimplemented!("CMP {:?} {:?}", op, left.ty),

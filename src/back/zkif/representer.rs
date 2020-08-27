@@ -4,10 +4,10 @@ use zkinterface_bellman::{
     ff::ScalarEngine,
     sapling_crypto::circuit::{
         boolean::{AllocatedBit, Boolean},
-        uint32::UInt32,
     },
     pairing::bls12_381::Bls12,
 };
+use crate::back::zkif::uint32::UInt32;
 use zkinterface::{ConstraintSystemOwned, WitnessOwned, VariablesOwned, CircuitOwned, KeyValueOwned};
 use zkinterface_bellman::export::to_zkif_constraint;
 use zkinterface_bellman::ff::{PrimeField, PrimeFieldRepr, Field};

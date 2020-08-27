@@ -1,6 +1,7 @@
 use std::ops::{Add, Sub, Mul};
 use std::cmp::max;
-use zkinterface_bellman::sapling_crypto::circuit::{uint32::UInt32, boolean::Boolean};
+use zkinterface_bellman::sapling_crypto::circuit::{boolean::Boolean};
+use crate::back::zkif::uint32::UInt32;
 
 #[derive(Copy, Clone)]
 pub enum BitWidth {

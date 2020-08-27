@@ -4,6 +4,7 @@ mod representer;
 mod num;
 mod bit_width;
 mod int;
+mod uint32;
 
 //mod gadget_specs;
 //mod prototype_backend;

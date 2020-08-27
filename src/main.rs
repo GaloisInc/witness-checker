@@ -48,7 +48,7 @@ macro_rules! wire_bug_if {
 struct SecretValue<T>(Option<T>);
 
 impl<T> SecretValue<T> {
-    fn map<U, F: FnOnce(T) -> U>(self, f: F) -> SecretValue<U> {
+    fn _map<U, F: FnOnce(T) -> U>(self, f: F) -> SecretValue<U> {
         SecretValue(self.0.map(f))
     }
 }

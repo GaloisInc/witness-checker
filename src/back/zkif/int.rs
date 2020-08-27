@@ -1,10 +1,11 @@
-use zkinterface_bellman::sapling_crypto::circuit::uint32::UInt32;
 use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeField;
 use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
 use crate::back::zkif::representer::{fr_from_unsigned};
 use crate::back::zkif::num::Num;
+use crate::back::zkif::uint32::UInt32;
+use crate::back::zkif::bit_width::BitWidth;
 
 pub fn bitwise_xor<E: Engine, CS: ConstraintSystem<E>>(
     cs: CS,
@@ -22,12 +23,9 @@ pub fn bitwise_and<E: Engine, CS: ConstraintSystem<E>>(
     right: &UInt32,
 ) -> UInt32
 {
-    let lbits = left.into_bits();
-    let rbits = right.into_bits();
-
     let out_bits: Vec<Boolean> =
-        lbits.iter()
-            .zip(rbits.iter())
+        left.bits.iter()
+            .zip(right.bits.iter())
             .map(|(l, r)|
                 Boolean::and(&mut cs, l, r).unwrap()
             ).collect();
@@ -41,12 +39,9 @@ pub fn bitwise_or<E: Engine, CS: ConstraintSystem<E>>(
     right: &UInt32,
 ) -> UInt32
 {
-    let lbits = left.into_bits();
-    let rbits = right.into_bits();
-
     let out_bits: Vec<Boolean> =
-        lbits.iter()
-            .zip(rbits.iter())
+        left.bits.iter()
+            .zip(right.bits.iter())
             .map(|(l, r)|
                 bool_or(&mut cs, l, r)
             ).collect();
@@ -72,7 +67,7 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
     numer_int: &UInt32,
     denom_num: &Num<E>,
     denom_int: &UInt32,
-) -> (/*quotient*/ UInt32, /*rest*/ UInt32) {
+) -> (/*quotient*/ Num<E>, UInt32, /*rest*/ Num<E>, UInt32) {
     let (quot_val, rest_val) = match (&numer_num.value, &denom_num.value) {
         (
             Some(ref numer_val),
@@ -97,8 +92,11 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
         _ => (None, None)
     };
 
-    let quot_num = Num::alloc(&mut cs, quot_val).unwrap();
-    let rest_num = Num::alloc(&mut cs, rest_val).unwrap();
+    let quot_int = UInt32::alloc(&mut cs, quot_val).unwrap();
+    let rest_int = UInt32::alloc(&mut cs, rest_val).unwrap();
+
+    let quot_num = int_into_num(&mut cs, &quot_int);
+    let rest_num = int_into_num(&mut cs, &rest_int);
 
     cs.enforce(
         || "division",
@@ -107,12 +105,17 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
         |lc| lc + &numer_num.lc - &rest_num.lc,
     );
 
-    // Convert to enforce the integer sizes.
-    // TODO: actual conversion from quotient_num and rest_num.
-    let quot_int = UInt32::alloc(&mut cs, quot_val).unwrap();
-    let rest_int = UInt32::alloc(&mut cs, rest_val).unwrap();
+    // TODO: verify that rest_int < denom_int.
 
-    // TODO: verify that rest<denom.
+    (quot_num, quot_int, rest_num, rest_int)
+}
 
-    (quot_int, rest_int)
+// TODO: check consistency between representations.
+pub fn int_into_num<E: Engine, CS: ConstraintSystem<E>>(
+    mut cs: CS,
+    int: &UInt32,
+) -> Num<E> {
+    let mut num = Num::alloc(&mut cs, int.value).unwrap();
+    num.bit_width = BitWidth::from(int);
+    num
 }
