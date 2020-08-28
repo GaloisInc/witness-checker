@@ -12,7 +12,7 @@ use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, Variable};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBit};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeFieldRepr;
-use crate::back::zkif::zkif_cs::{fr_from_unsigned, En, LC, ZkifCS, fr_from_signed};
+use crate::back::zkif::zkif_cs::{En, Fr, LC, ZkifCS, fr_from_signed, fr_from_unsigned};
 use crate::back::zkif::bit_width::BitWidth;
 use crate::back::zkif::uint32::UInt32;
 
@@ -27,7 +27,7 @@ pub struct Num<E: Engine> {
 
 impl From<u64> for Num<En> {
     fn from(literal: u64) -> Self {
-        let f = fr_from_unsigned(literal);
+        let f: Fr = fr_from_unsigned(literal);
         Num {
             value: Some(f.clone()),
             lc: LC::zero() + (f, ZkifCS::one()),
@@ -38,7 +38,7 @@ impl From<u64> for Num<En> {
 
 impl From<i64> for Num<En> {
     fn from(literal: i64) -> Self {
-        let f = fr_from_signed(literal);
+        let f: Fr = fr_from_signed(literal);
         Num {
             value: Some(f.clone()),
             lc: LC::zero() + (f, ZkifCS::one()),
@@ -74,14 +74,23 @@ impl<E: Engine> Num<E> {
         })
     }
 
-    // TODO: check consistency between representations.
     pub fn from_int<CS: ConstraintSystem<E>>(
-        mut cs: CS,
         int: &UInt32,
     ) -> Num<E> {
-        let mut num = Num::alloc(&mut cs, int.value).unwrap();
-        num.bit_width = BitWidth::from(int);
-        num
+        let value = int.value.map(|val|
+            fr_from_unsigned(val as u64));
+
+        let mut lc = LinearCombination::zero();
+        let one = CS::one();
+        let mut coeff = E::Fr::one();
+        for bit in &int.bits {
+            lc = lc + &bit.lc(one, coeff);
+            coeff.double();
+        }
+
+        let bit_width = BitWidth::from(int);
+
+        Num { value, lc, bit_width }
     }
 
     pub fn from_boolean<CS: ConstraintSystem<E>>(

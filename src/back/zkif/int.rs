@@ -2,7 +2,7 @@ use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeField;
 use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
-use crate::back::zkif::zkif_cs::{fr_from_unsigned};
+use crate::back::zkif::zkif_cs::{fr_from_unsigned, ZkifCS};
 use crate::back::zkif::num::Num;
 use crate::back::zkif::uint32::UInt32;
 use crate::back::zkif::bit_width::BitWidth;
@@ -86,8 +86,8 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
     let quot_int = UInt32::alloc(&mut cs, quot_val).unwrap();
     let rest_int = UInt32::alloc(&mut cs, rest_val).unwrap();
 
-    let quot_num = Num::from_int(&mut cs, &quot_int);
-    let rest_num = Num::from_int(&mut cs, &rest_int);
+    let quot_num = Num::from_int::<CS>(&quot_int);
+    let rest_num = Num::from_int::<CS>(&rest_int);
 
     cs.enforce(
         || "division",

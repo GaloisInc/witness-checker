@@ -131,16 +131,15 @@ impl ConstraintSystem<En> for ZkifCS {
     }
 }
 
-
-pub fn fr_from_unsigned(val: u64) -> Fr {
-    Fr::from_repr(FrRepr::from(val)).unwrap()
+pub fn fr_from_unsigned<Fr: PrimeField>(val: u64) -> Fr {
+    Fr::from_repr(<Fr::Repr as From<u64>>::from(val)).unwrap()
 }
 
-pub fn fr_from_signed(val: i64) -> Fr {
+pub fn fr_from_signed<Fr: PrimeField>(val: i64) -> Fr {
     if val >= 0 {
         fr_from_unsigned(val as u64)
     } else {
-        let mut f = fr_from_unsigned((-val) as u64);
+        let mut f: Fr = fr_from_unsigned((-val) as u64);
         f.negate();
         f
     }

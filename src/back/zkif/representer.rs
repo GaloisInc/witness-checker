@@ -70,7 +70,7 @@ impl WireRepr {
                     if let Some(b) = &self.boolean {
                         Num::from_boolean::<ZkifCS>(b)
                     } else if let Some(int) = &self.uint32 {
-                        Num::from_int(cs, int)
+                        Num::from_int::<ZkifCS>(int)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
