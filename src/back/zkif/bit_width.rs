@@ -27,6 +27,16 @@ impl From<u64> for BitWidth {
     }
 }
 
+impl From<i64> for BitWidth {
+    fn from(literal: i64) -> Self {
+        if literal >= 0 {
+            BitWidth::from(literal as u64)
+        } else {
+            Max(0) - BitWidth::from((-literal) as u64)
+        }
+    }
+}
+
 impl From<&Boolean> for BitWidth {
     /// This is a type-safe way to show that we have a validated boolean.
     fn from(_: &Boolean) -> Self {

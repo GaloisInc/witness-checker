@@ -62,16 +62,13 @@ impl<'a> Backend<'a> {
                         self.representer.mut_repr(wid).set_boolean(b);
                     }
 
-                    TyKind::Uint(_) | TyKind::Int(_) => {
-                        let f = match *ty {
-                            TyKind::Int(_) => fr_from_signed(val as i64),
-                            _ => fr_from_unsigned(val),
-                        };
-                        let num = Num {
-                            value: Some(f),
-                            lc: LC::zero() + (f.clone(), ZkifCS::one()),
-                            bit_width: BitWidth::from(val),
-                        };
+                    TyKind::Uint(_) => {
+                        let num = Num::from(val);
+                        self.representer.mut_repr(wid).set_num(num);
+                    }
+
+                    TyKind::Int(_) => {
+                        let num = Num::from(val as i64);
                         self.representer.mut_repr(wid).set_num(num);
                     }
 

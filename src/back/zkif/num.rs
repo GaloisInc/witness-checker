@@ -12,7 +12,7 @@ use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, Variable};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBit};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeFieldRepr;
-use crate::back::zkif::zkif_cs::fr_from_unsigned;
+use crate::back::zkif::zkif_cs::{fr_from_unsigned, En, LC, ZkifCS, fr_from_signed};
 use crate::back::zkif::bit_width::BitWidth;
 use crate::back::zkif::uint32::UInt32;
 
@@ -23,6 +23,28 @@ pub struct Num<E: Engine> {
     pub lc: LinearCombination<E>,
     /// How many bits would be required to represent this number.
     pub bit_width: BitWidth,
+}
+
+impl From<u64> for Num<En> {
+    fn from(literal: u64) -> Self {
+        let f = fr_from_unsigned(literal);
+        Num {
+            value: Some(f.clone()),
+            lc: LC::zero() + (f, ZkifCS::one()),
+            bit_width: BitWidth::from(literal),
+        }
+    }
+}
+
+impl From<i64> for Num<En> {
+    fn from(literal: i64) -> Self {
+        let f = fr_from_signed(literal);
+        Num {
+            value: Some(f.clone()),
+            lc: LC::zero() + (f, ZkifCS::one()),
+            bit_width: BitWidth::from(literal),
+        }
+    }
 }
 
 impl<E: Engine> Num<E> {
