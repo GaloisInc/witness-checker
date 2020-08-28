@@ -80,17 +80,24 @@ impl<E: Engine> Num<E> {
         let value = int.value.map(|val|
             fr_from_unsigned(val as u64));
 
-        let mut lc = LinearCombination::zero();
-        let one = CS::one();
-        let mut coeff = E::Fr::one();
-        for bit in &int.bits {
-            lc = lc + &bit.lc(one, coeff);
-            coeff.double();
-        }
+        let lc = Self::lc_from_bits::<CS>(&int.bits);
 
         let bit_width = BitWidth::from(int);
 
         Num { value, lc, bit_width }
+    }
+
+    pub fn lc_from_bits<CS: ConstraintSystem<E>>(
+        bits: &[Boolean]) -> LinearCombination<E>
+    {
+        let mut lc = LinearCombination::zero();
+        let one = CS::one();
+        let mut coeff = E::Fr::one();
+        for bit in bits {
+            lc = lc + &bit.lc(one, coeff);
+            coeff.double();
+        }
+        lc
     }
 
     pub fn from_boolean<CS: ConstraintSystem<E>>(
@@ -103,6 +110,54 @@ impl<E: Engine> Num<E> {
             lc: boolean_lc::<E, CS>(bool),
             bit_width: BitWidth::from(bool),
         }
+    }
+
+    pub fn alloc_bits<CS: ConstraintSystem<E>>(
+        &self, mut cs: CS) -> Vec<Boolean>
+    {
+        let n_bits = match self.bit_width {
+            BitWidth::Unknown => panic!("Cannot decompose a number of unknown size."),
+            BitWidth::Max(n_bits) => n_bits,
+        };
+
+        let values = match &self.value {
+            Some(val) => {
+                // TODO: handle negative numbers.
+                let repr = val.into_repr();
+                let limbs: &[u64] = repr.as_ref();
+                let mut bools = Vec::with_capacity(n_bits);
+
+                for i in 0..n_bits {
+                    let limb = limbs[i / 64];
+                    let bit = (limb >> (i % 64)) & 1 == 1;
+                    bools.push(Some(bit));
+                }
+
+                bools
+            }
+            None => vec![None; n_bits]
+        };
+
+        let bits: Vec<Boolean> = values.into_iter()
+            .enumerate()
+            .map(|(i, val)|
+                Boolean::from(AllocatedBit::alloc(
+                    cs.namespace(|| format!("allocated bit {}", i)),
+                    val,
+                ).unwrap())
+            ).collect();
+
+        let lc = Self::lc_from_bits::<CS>(&bits);
+
+        /*cs.enforce(
+            || "bit decomposition",
+            |zero| zero,
+            |zero| zero,
+            |_| lc - &self.lc,
+        );*/
+        // TODO: this could be optimized by deducing one of the bits from num instead of checking equality.
+
+        bits
     }
 
     /// Assert that no overflows could occur in computing this Num.
