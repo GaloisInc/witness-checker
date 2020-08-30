@@ -112,12 +112,31 @@ impl<E: Engine> Num<E> {
         }
     }
 
+
     pub fn alloc_bits<CS: ConstraintSystem<E>>(
+        &self, cs: CS) -> Vec<Boolean>
+    {
+        self.assert_no_overflow();
+
+        match self.bit_width {
+            BitWidth::Unknown => panic!("Cannot decompose a number of unknown size."),
+
+            BitWidth::Max(_, false) =>
+                self.alloc_bits_unsigned(cs),
+
+            BitWidth::Max(width, true) =>
+                Self::power_of_two::<CS>(width)
+                    .add_unsafe(self)
+                    .alloc_bits_unsigned(cs),
+        }
+    }
+
+    fn alloc_bits_unsigned<CS: ConstraintSystem<E>>(
         &self, mut cs: CS) -> Vec<Boolean>
     {
-        let (n_bits, signed) = match self.bit_width {
-            BitWidth::Unknown => panic!("Cannot decompose a number of unknown size."),
-            BitWidth::Max(n_bits, signed) => (n_bits, signed),
+        let n_bits = match self.bit_width {
+            BitWidth::Max(n_bits, false) => n_bits,
+            _ => panic!("Cannot decompose a negative or unsized number."),
         };
 
         let values = match &self.value {
@@ -149,16 +168,12 @@ impl<E: Engine> Num<E> {
 
         let lc = Self::lc_from_bits::<CS>(&bits);
 
-        if !signed {
-            cs.enforce(
-                || "bit decomposition",
-                |zero| zero,
-                |zero| zero,
-                |_| lc - &self.lc,
-            );
-        } else {
-            eprintln!("TODO: bit decomposition of signed integers.");
-        }
+        cs.enforce(
+            || "bit decomposition",
+            |zero| zero,
+            |zero| zero,
+            |_| lc - &self.lc,
+        );
         // TODO: this could be optimized by deducing one of the bits from num instead of checking equality.
 
         bits
@@ -235,6 +250,32 @@ impl<E: Engine> Num<E> {
 
         // TODO: should be doable without the boolean constraint of AllocatedBit.
         is_zero
+    }
+
+    pub fn power_of_two<CS: ConstraintSystem<E>>(
+        n: usize) -> Self
+    {
+        // Set a bit in a little-endian representation.
+        let which_limb = n / 64;
+        let which_bit = n % 64;
+        let mut repr = <E::Fr as PrimeField>::Repr::default();
+        let limbs: &mut [u64] = repr.as_mut();
+        limbs[which_limb] |= 1 << which_bit;
+        let f = E::Fr::from_repr(repr).unwrap();
+
+        Num::<E> {
+            value: Some(f.clone()),
+            lc: LinearCombination::zero() + (f, CS::one()),
+            bit_width: BitWidth::Max(n + 1, false),
+        }
+    }
+
+    /// Add without tracking the bit width.
+    fn add_unsafe(mut self, other: &Self) -> Self {
+        let original_width = self.bit_width.clone();
+        self = self + other;
+        self.bit_width = original_width;
+        self
     }
 }
 

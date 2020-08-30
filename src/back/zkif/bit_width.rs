@@ -21,7 +21,7 @@ impl BitWidth {
         match self {
             Unknown => false,
             Max(w, false) => w <= bit_capacity,
-            Max(w, true) => w < bit_capacity,
+            Max(w, true) => w + 1 <= bit_capacity,
         }
     }
 }
