@@ -86,8 +86,8 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
     let quot_int = UInt32::alloc(&mut cs, quot_val).unwrap();
     let rest_int = UInt32::alloc(&mut cs, rest_val).unwrap();
 
-    let quot_num = Num::from_int::<CS>(&quot_int);
-    let rest_num = Num::from_int::<CS>(&rest_int);
+    let quot_num = Num::from_uint::<CS>(&quot_int);
+    let rest_num = Num::from_uint::<CS>(&rest_int);
 
     cs.enforce(
         || "division",

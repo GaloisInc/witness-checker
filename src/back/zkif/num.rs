@@ -52,7 +52,7 @@ impl<E: Engine> Num<E> {
         Num {
             value: Some(E::Fr::zero()),
             lc: LinearCombination::zero(),
-            bit_width: BitWidth::Max(0),
+            bit_width: BitWidth::zero(),
         }
     }
 
@@ -74,7 +74,7 @@ impl<E: Engine> Num<E> {
         })
     }
 
-    pub fn from_int<CS: ConstraintSystem<E>>(
+    pub fn from_uint<CS: ConstraintSystem<E>>(
         int: &UInt32,
     ) -> Num<E> {
         let value = int.value.map(|val|
@@ -115,9 +115,9 @@ impl<E: Engine> Num<E> {
     pub fn alloc_bits<CS: ConstraintSystem<E>>(
         &self, mut cs: CS) -> Vec<Boolean>
     {
-        let n_bits = match self.bit_width {
+        let (n_bits, signed) = match self.bit_width {
             BitWidth::Unknown => panic!("Cannot decompose a number of unknown size."),
-            BitWidth::Max(n_bits) => n_bits,
+            BitWidth::Max(n_bits, signed) => (n_bits, signed),
         };
 
         let values = match &self.value {
@@ -149,12 +149,16 @@ impl<E: Engine> Num<E> {
 
         let lc = Self::lc_from_bits::<CS>(&bits);
 
-        /*cs.enforce(
-            || "bit decomposition",
-            |zero| zero,
-            |zero| zero,
-            |_| lc - &self.lc,
-        );*/
+        if !signed {
+            cs.enforce(
+                || "bit decomposition",
+                |zero| zero,
+                |zero| zero,
+                |_| lc - &self.lc,
+            );
+        } else {
+            eprintln!("TODO: bit decomposition of signed integers.");
+        }
         // TODO: this could be optimized by deducing one of the bits from num instead of checking equality.
 
         bits
