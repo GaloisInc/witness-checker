@@ -27,10 +27,10 @@ pub struct Num<E: Engine> {
 
 impl From<u64> for Num<En> {
     fn from(literal: u64) -> Self {
-        let f: Fr = fr_from_unsigned(literal);
+        let element: Fr = fr_from_unsigned(literal);
         Num {
-            value: Some(f.clone()),
-            lc: LC::zero() + (f, ZkifCS::one()),
+            value: Some(element.clone()),
+            lc: LC::zero() + (element, ZkifCS::one()),
             bit_width: BitWidth::from(literal),
         }
     }
@@ -38,10 +38,10 @@ impl From<u64> for Num<En> {
 
 impl From<i64> for Num<En> {
     fn from(literal: i64) -> Self {
-        let f: Fr = fr_from_signed(literal);
+        let element: Fr = fr_from_signed(literal);
         Num {
-            value: Some(f.clone()),
-            lc: LC::zero() + (f, ZkifCS::one()),
+            value: Some(element.clone()),
+            lc: LC::zero() + (element, ZkifCS::one()),
             bit_width: BitWidth::from(literal),
         }
     }
@@ -112,28 +112,37 @@ impl<E: Engine> Num<E> {
         }
     }
 
-
+    /// Decompose this number into bits, least-significant first.
+    /// Negative numbers are encoded in two-complement.
     pub fn alloc_bits<CS: ConstraintSystem<E>>(
         &self, cs: CS) -> Vec<Boolean>
     {
-        self.assert_no_overflow();
-
         match self.bit_width {
             BitWidth::Unknown => panic!("Cannot decompose a number of unknown size."),
 
             BitWidth::Max(_, false) =>
                 self.alloc_bits_unsigned(cs),
 
-            BitWidth::Max(width, true) =>
-                Self::power_of_two::<CS>(width)
-                    .add_unsafe(self)
-                    .alloc_bits_unsigned(cs),
+            BitWidth::Max(absolute_width, true) => {
+                // Shift the number to be centered around the next power of two.
+                let signed_width = absolute_width + 1;
+                let new_zero = Self::power_of_two::<CS>(signed_width);
+                let shifted = new_zero.add_unsafe(self);
+                // Encode as a positive number.
+                let mut bits = shifted.alloc_bits_unsigned(cs);
+                // Drop the last bit, ignoring the power of two that was added.
+                bits.truncate(signed_width);
+                // The rest is a two-complement encoding of the signed number.
+                bits
+            }
         }
     }
 
     fn alloc_bits_unsigned<CS: ConstraintSystem<E>>(
         &self, mut cs: CS) -> Vec<Boolean>
     {
+        self.assert_no_overflow();
+
         let n_bits = match self.bit_width {
             BitWidth::Max(n_bits, false) => n_bits,
             _ => panic!("Cannot decompose a negative or unsized number."),
@@ -146,9 +155,10 @@ impl<E: Engine> Num<E> {
                 let limbs: &[u64] = repr.as_ref();
                 let mut bools = Vec::with_capacity(n_bits);
 
-                for i in 0..n_bits {
-                    let limb = limbs[i / 64];
-                    let bit = (limb >> (i % 64)) & 1 == 1;
+                for i_bit in 0..n_bits {
+                    let which_limb = i_bit / 64;
+                    let which_bit = i_bit % 64;
+                    let bit = (limbs[which_limb] >> which_bit) & 1 == 1;
                     bools.push(Some(bit));
                 }
 
@@ -258,14 +268,16 @@ impl<E: Engine> Num<E> {
         // Set a bit in a little-endian representation.
         let which_limb = n / 64;
         let which_bit = n % 64;
-        let mut repr = <E::Fr as PrimeField>::Repr::default();
-        let limbs: &mut [u64] = repr.as_mut();
-        limbs[which_limb] |= 1 << which_bit;
-        let f = E::Fr::from_repr(repr).unwrap();
+        let element = {
+            let mut repr = <E::Fr as PrimeField>::Repr::default();
+            let limbs: &mut [u64] = repr.as_mut();
+            limbs[which_limb] |= 1 << which_bit;
+            E::Fr::from_repr(repr).unwrap()
+        };
 
         Num::<E> {
-            value: Some(f.clone()),
-            lc: LinearCombination::zero() + (f, CS::one()),
+            value: Some(element.clone()),
+            lc: LinearCombination::zero() + (element, CS::one()),
             bit_width: BitWidth::Max(n + 1, false),
         }
     }
