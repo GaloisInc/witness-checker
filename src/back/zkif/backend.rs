@@ -18,7 +18,7 @@ use crate::back::zkif::zkif_cs::fr_from_signed;
 use crate::back::zkif::int;
 use crate::back::zkif::uint32::UInt32;
 use crate::back::zkif::bit_width::BitWidth;
-use crate::back::zkif::representer::{Representer, WireId};
+use crate::back::zkif::representer::{Representer, ReprId, WireRepr};
 
 
 /// zkInterface backend based on Bellman.
@@ -27,7 +27,7 @@ use crate::back::zkif::representer::{Representer, WireId};
 /// - Allocate and retrieve representations of wires.
 /// - Write files.
 pub struct Backend<'a> {
-    wire_ids: HashMap<Wire<'a>, WireId>,
+    wire_to_repr: HashMap<Wire<'a>, ReprId>,
     representer: Representer,
     cs: ZkifCS,
 
@@ -38,129 +38,101 @@ impl<'a> Backend<'a> {
     pub fn new(workspace: impl AsRef<Path>, proving: bool) -> Backend<'a> {
         Backend {
             //gadget_specs: GadgetSpec::make_specs(),
-            wire_ids: HashMap::new(),
+            wire_to_repr: HashMap::new(),
             representer: Representer::new(),
             cs: ZkifCS::new(workspace, proving),
         }
     }
 
-    pub fn wire(&mut self, wire: Wire<'a>) -> WireId {
-        if let Some(wid) = self.wire_ids.get(&wire) {
+    pub fn wire(&mut self, wire: Wire<'a>) -> ReprId {
+        if let Some(wid) = self.wire_to_repr.get(&wire) {
             return *wid; // This Wire was already processed.
         }
 
-        let gate: &Gate = &*wire;
-        //eprintln!("{:?}", gate);
+        let wid = self.make_repr(wire);
 
-        let wid = match gate.kind {
+        self.wire_to_repr.insert(wire, wid);
+        wid
+    }
+
+    fn make_repr(&mut self, wire: Wire<'a>) -> ReprId {
+        // Most gates create a representation for a new wire,
+        // but some no-op gates return directly the ReprId of their argument.
+
+        let repr = match wire.kind {
             GateKind::Lit(val, ty) => {
-                let wid = self.representer.allocate_repr();
-
                 match *ty {
                     TyKind::Bool => {
                         let b = Boolean::constant(val != 0);
-                        self.representer.mut_repr(wid).set_boolean(b);
+                        WireRepr::from(b)
                     }
 
                     TyKind::Uint(_) => {
                         let num = Num::from(val);
-                        self.representer.mut_repr(wid).set_num(num);
+                        WireRepr::from(num)
                     }
 
                     TyKind::Int(_) => {
                         let num = Num::from(val as i64);
-                        self.representer.mut_repr(wid).set_num(num);
+                        WireRepr::from(num)
                     }
 
                     _ => unimplemented!("Literal {:?}", ty),
-                };
-
-                wid
+                }
             }
 
             GateKind::Secret(secret) => {
-                let wid = self.representer.allocate_repr();
-
                 match *secret.ty {
                     TyKind::Bool => {
                         let val = secret.val.map(|v| v != 0);
                         let b = Boolean::from(
                             AllocatedBit::alloc::<En, _>(&mut self.cs, val).unwrap()
                         );
-                        self.representer.mut_repr(wid).set_boolean(b);
+                        WireRepr::from(b)
                     }
 
                     TyKind::Uint(I32) | TyKind::Int(I32) => {
                         let value = secret.val.map(|val| val as u32);
                         let int = UInt32::alloc(&mut self.cs, value).unwrap();
-                        self.representer.mut_repr(wid).set_uint32(int);
-
-                        /* Version without size validation:
-
-                        let value = secret.val.map(|val| {
-                            match *secret.ty {
-                                TyKind::Int(_) => fr_from_signed(val as i64),
-                                _ => fr_from_unsigned(val),
-                            }
-                        });
-
-                        let var = self.cs.alloc(
-                            || "secret",
-                            || value.ok_or(SynthesisError::AssignmentMissing),
-                        ).unwrap();
-
-                        let num = Num {
-                            value,
-                            lc: LC::zero() + var,
-                            bit_width: BitWidth::Unknown,
-                        };
-                        self.representer.set_bellman_num(wid, num);
-                        */
+                        WireRepr::from(int)
                     }
 
                     _ => unimplemented!("Secret {:?}", secret.ty),
-                };
-                wid
+                }
             }
 
             GateKind::Unary(op, arg) => {
                 let aw = self.wire(arg);
 
-                match *gate.ty {
+                match *wire.ty {
                     TyKind::Bool => {
                         match op {
+                            UnOp::Neg => return aw, // No op, no new wire.
+
                             UnOp::Not => {
                                 let ab = self.representer.mut_repr(aw).as_boolean();
-                                let wid = self.representer.allocate_repr();
-                                self.representer.mut_repr(wid).set_boolean(ab.not());
-                                wid
+                                WireRepr::from(ab.not())
                             }
-
-                            UnOp::Neg => aw, // No op.
                         }
                     }
 
                     TyKind::Int(I32) | TyKind::Uint(I32) => {
-                        let wid = self.representer.allocate_repr();
-
                         match op {
                             UnOp::Neg => {
-                                let num = self.representer.mut_repr(aw).as_num(&mut self.cs);
+                                let num = self.representer.mut_repr(aw).as_num();
                                 let neg = Num::zero() - &num;
-                                self.representer.mut_repr(wid).set_num(neg);
+                                WireRepr::from(neg)
                             }
 
                             UnOp::Not => {
                                 let int = self.representer.mut_repr(aw).as_uint32(&mut self.cs);
-                                let negs: Vec<Boolean> = int.bits.iter().map(|bit|
+                                let not_bits: Vec<Boolean> = int.bits.iter().map(|bit|
                                     bit.not()
                                 ).collect();
-                                let not = UInt32::from_bits(&negs);
-                                self.representer.mut_repr(wid).set_uint32(not);
+                                let not = UInt32::from_bits(&not_bits);
+                                WireRepr::from(not)
                             }
                         }
-
-                        wid
                     }
 
                     _ => unimplemented!("Unary {:?} {:?}", op, arg.ty),
@@ -170,14 +142,13 @@ impl<'a> Backend<'a> {
             GateKind::Binary(op, left, right) => {
                 let lw = self.wire(left);
                 let rw = self.wire(right);
-                let wid = self.representer.allocate_repr();
 
-                match *gate.ty {
+                match *wire.ty {
                     TyKind::Bool => {
                         let lb = self.representer.mut_repr(lw).as_boolean();
                         let rb = self.representer.mut_repr(rw).as_boolean();
 
-                        let out_b = match op {
+                        let out_bool = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub =>
                                 Boolean::xor::<En, _>(
                                     &mut self.cs,
@@ -195,18 +166,18 @@ impl<'a> Backend<'a> {
                             ).unwrap().not(),
 
                             BinOp::Div | BinOp::Mod => // TODO: validate rb=1?
-                                unimplemented!("{:?} for {:?}", op, gate.ty),
+                                unimplemented!("{:?} for {:?}", op, wire.ty),
                         };
 
-                        self.representer.mut_repr(wid).set_boolean(out_b);
+                        WireRepr::from(out_bool)
                     }
 
                     TyKind::Int(_) | TyKind::Uint(_) => {
                         match op {
                             // Arithmetic ops work on number representations.
                             BinOp::Add | BinOp::Sub | BinOp::Mul => {
-                                let left = self.representer.mut_repr(lw).as_num(&mut self.cs);
-                                let right = self.representer.mut_repr(rw).as_num(&mut self.cs);
+                                let left = self.representer.mut_repr(lw).as_num();
+                                let right = self.representer.mut_repr(rw).as_num();
 
                                 let out_num = match op {
                                     BinOp::Add => left + &right,
@@ -219,14 +190,14 @@ impl<'a> Backend<'a> {
                                     _ => unreachable!(),
                                 };
 
-                                self.representer.mut_repr(wid).set_num(out_num);
+                                WireRepr::from(out_num)
                             }
 
                             // Ops using both number and bits representations.
                             BinOp::Div | BinOp::Mod => {
-                                let numer_num = self.representer.mut_repr(lw).as_num(&mut self.cs);
+                                let numer_num = self.representer.mut_repr(lw).as_num();
                                 let numer_int = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
-                                let denom_num = self.representer.mut_repr(rw).as_num(&mut self.cs);
+                                let denom_num = self.representer.mut_repr(rw).as_num();
                                 let denom_int = self.representer.mut_repr(rw).as_uint32(&mut self.cs);
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int::div(
@@ -241,8 +212,8 @@ impl<'a> Backend<'a> {
                                     _ => unreachable!(),
                                 };
 
-                                self.representer.mut_repr(wid).set_num(out_num);
-                                self.representer.mut_repr(wid).set_uint32(out_int);
+                                // TODO? Could cache out_num into the repr.
+                                WireRepr::from(out_int)
                             }
 
                             // Bitwise ops work on bit decompositions.
@@ -250,7 +221,7 @@ impl<'a> Backend<'a> {
                                 let lu = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
                                 let ru = self.representer.mut_repr(rw).as_uint32(&mut self.cs);
 
-                                let out = match op {
+                                let out_int = match op {
                                     BinOp::Xor =>
                                         int::bitwise_xor(&mut self.cs, &lu, &ru),
 
@@ -263,15 +234,13 @@ impl<'a> Backend<'a> {
                                     _ => unreachable!(),
                                 };
 
-                                self.representer.mut_repr(wid).set_uint32(out);
+                                WireRepr::from(out_int)
                             }
                         }
                     }
 
-                    _ => unimplemented!("Binary {:?} on {:?}", op, gate.ty),
+                    _ => unimplemented!("Binary {:?} on {:?}", op, wire.ty),
                 }
-
-                wid
             }
 
             GateKind::Shift(op, left, right) => {
@@ -292,17 +261,13 @@ impl<'a> Backend<'a> {
 
                 let lw = self.wire(left);
                 let lu = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
-
                 let shifted = lu.shr(amount as usize);
 
-                let wid = self.representer.allocate_repr();
-                self.representer.mut_repr(wid).set_uint32(shifted);
-                wid
+                WireRepr::from(shifted)
             }
 
             GateKind::Compare(op, left, right) => {
                 let lw = self.wire(left);
-                let wid = self.representer.allocate_repr();
 
                 assert!(
                     as_lit(right) == Some(0),
@@ -311,48 +276,38 @@ impl<'a> Backend<'a> {
 
                 let yes = match op {
                     CmpOp::Eq => {
-                        let left = self.representer.mut_repr(lw).as_num(&mut self.cs);
+                        let left = self.representer.mut_repr(lw).as_num();
                         left.equals_zero(&mut self.cs)
                     }
 
                     CmpOp::Ge => {
                         let int = self.representer.mut_repr(lw).as_uint32(&mut self.cs);
-                        int.is_positive()
+                        int.is_positive_or_zero()
                     }
 
                     _ => unimplemented!("CMP {:?} {:?}", op, left.ty),
                 };
 
-                self.representer.mut_repr(wid).set_boolean(yes);
-                wid
+                WireRepr::from(yes)
             }
 
             GateKind::Mux(cond, then_, else_) =>
                 unimplemented!("mux"),
 
             GateKind::Cast(a, ty) => {
-                //eprintln!("CAST {:?} to {:?}", a.ty, ty);
                 let aw = self.wire(a);
 
                 match (*a.ty, *ty) {
-                    (TyKind::Bool, TyKind::Uint(_)) => {
-                        // TODO: move to the as_* methods.
-                        let bool = self.representer.mut_repr(aw).as_boolean();
-                        let num = Num::from_boolean::<ZkifCS>(&bool);
-                        self.representer.mut_repr(aw).set_num(num);
-                        aw
-                    }
+                    (x, y) if x == y =>
+                        return aw, // No op, no new wire.
+
+                    (TyKind::Bool, TyKind::Uint(_)) =>
+                        return aw, // No op, no new wire.
 
                     (TyKind::Uint(_), TyKind::Bool) =>
                         panic!("Illegal cast of integer to boolean (use explicit i!=0)"),
 
-                    (x, y) => {
-                        if x == y {
-                            aw // No op.
-                        } else {
-                            unimplemented!("Cannot cast {:?} to {:?}", a.ty, ty);
-                        }
-                    }
+                    _ => unimplemented!("Cannot cast {:?} to {:?}", a.ty, ty),
                 }
             }
 
@@ -366,8 +321,7 @@ impl<'a> Backend<'a> {
                 unimplemented!("GADGET {:?}", gk),
         };
 
-        self.wire_ids.insert(wire, wid);
-        wid
+        self.representer.new_repr(repr)
     }
 }
 

@@ -12,20 +12,20 @@ impl Representer {
         Representer { wire_reprs: vec![] }
     }
 
-    pub fn allocate_repr(&mut self) -> WireId {
-        self.wire_reprs.push(WireRepr::default());
-        WireId(self.wire_reprs.len() - 1)
+    pub fn new_repr(&mut self, repr: WireRepr) -> ReprId {
+        self.wire_reprs.push(repr);
+        ReprId(self.wire_reprs.len() - 1)
     }
 
-    pub fn mut_repr(&mut self, wid: WireId) -> &mut WireRepr {
+    pub fn mut_repr(&mut self, wid: ReprId) -> &mut WireRepr {
         &mut self.wire_reprs[wid.0]
     }
 }
 
 
-// WireId is an handle to reference a wire in the backend.
+// ReprId is a reference to a wire representation.
 #[derive(Copy, Clone, PartialEq)]
-pub struct WireId(pub usize);
+pub struct ReprId(pub usize);
 
 // WireRepr holds one or several equivalent representations of a wire.
 #[derive(Default)]
@@ -35,32 +35,35 @@ pub struct WireRepr {
     pub uint32: Option<UInt32>,
 }
 
+impl From<Boolean> for WireRepr {
+    fn from(bool: Boolean) -> Self {
+        WireRepr { boolean: Some(bool), ..Self::default() }
+    }
+}
+
+impl From<Num> for WireRepr {
+    fn from(num: Num) -> Self {
+        WireRepr { num: Some(num), ..Self::default() }
+    }
+}
+
+impl From<UInt32> for WireRepr {
+    fn from(int: UInt32) -> Self {
+        WireRepr { uint32: Some(int), ..Self::default() }
+    }
+}
+
 impl WireRepr {
-    pub fn set_boolean(&mut self, b: Boolean) {
-        self.boolean = Some(b);
-    }
-
-    pub fn set_num(&mut self, num: Num) {
-        num.assert_no_overflow();
-        self.num = Some(num);
-    }
-
-    pub fn set_uint32(&mut self, u: UInt32) {
-        self.uint32 = Some(u);
-    }
-
     pub fn as_boolean(&mut self) -> Boolean {
         match &self.boolean {
             Some(b) => b.clone(),
             None => {
                 panic!("Access to a wire that has no Boolean representation");
-                // TODO: convert from other repr.
-                Boolean::constant(true)
             }
         }
     }
 
-    pub fn as_num(&mut self, cs: &mut ZkifCS) -> Num {
+    pub fn as_num(&mut self) -> Num {
         match &self.num {
             Some(num) => num.clone(),
 

@@ -141,7 +141,7 @@ impl UInt32 {
         }
     }
 
-    pub fn is_positive(&self) -> Boolean {
+    pub fn is_positive_or_zero(&self) -> Boolean {
         // Interpret the most significant bit as "is negative".
         self.bits.last().unwrap().not()
     }

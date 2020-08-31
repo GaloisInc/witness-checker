@@ -70,15 +70,15 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
 ) -> (/*quotient*/ Num<E>, UInt32, /*rest*/ Num<E>, UInt32) {
     let (quot_val, rest_val) = match (numer_int.value, denom_int.value) {
         (Some(numer), Some(denom)) => {
-            assert_ne!(denom, 0, "Attempt to divide by zero");
-            /*let denom = if denom == 0 {
+            //assert_ne!(denom, 0, "Attempt to divide by zero");
+            if denom == 0 {
                 eprintln!("Warning: divide by zero");
-                1
-            } else { denom };*/
-
-            let quot_val = numer / denom;
-            let rest_val = numer % denom;
-            (Some(quot_val), Some(rest_val))
+                (Some(0), Some(numer))
+            } else {
+                let quot_val = numer / denom;
+                let rest_val = numer % denom;
+                (Some(quot_val), Some(rest_val))
+            }
         }
         _ => (None, None)
     };
