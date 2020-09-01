@@ -1,9 +1,9 @@
-use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError};
+use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, LinearCombination};
 use zkinterface_bellman::pairing::Engine;
 use zkinterface_bellman::ff::PrimeField;
 use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
 use crate::back::zkif::zkif_cs::{fr_from_unsigned, ZkifCS};
-use crate::back::zkif::num::Num;
+use crate::back::zkif::num::{Num, boolean_lc};
 use crate::back::zkif::uint32::UInt32;
 use crate::back::zkif::bit_width::BitWidth;
 
@@ -70,10 +70,9 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
 ) -> (/*quotient*/ Num<E>, UInt32, /*rest*/ Num<E>, UInt32) {
     let (quot_val, rest_val) = match (numer_int.value, denom_int.value) {
         (Some(numer), Some(denom)) => {
-            //assert_ne!(denom, 0, "Attempt to divide by zero");
             if denom == 0 {
-                eprintln!("Warning: divide by zero");
-                (Some(0), Some(numer))
+                panic!("Attempt to divide by zero");
+                //(Some(0), Some(numer))
             } else {
                 let quot_val = numer / denom;
                 let rest_val = numer % denom;
@@ -85,6 +84,7 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
 
     let quot_int = UInt32::alloc(&mut cs, quot_val).unwrap();
     let rest_int = UInt32::alloc(&mut cs, rest_val).unwrap();
+    // TODO: optimize the integer sizes.
 
     let quot_num = Num::from_uint::<CS>(&quot_int);
     let rest_num = Num::from_uint::<CS>(&rest_int);
@@ -96,7 +96,18 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
         |lc| lc + &numer_num.lc - &rest_num.lc,
     );
 
-    // TODO: verify that rest_int < denom_int.
+    // Verify that rest < denom.
+    let diff_num = rest_num.clone() - denom_num;
+    let diff_int = UInt32::from_num(&mut cs, &diff_num);
+    let ok = diff_int.is_negative();
+    let one = CS::one();
+    cs.enforce(
+        || "rest < denom",
+        |lc| lc + one,
+        |lc| lc + one,
+        |_| boolean_lc::<E, CS>(&ok),
+    );
+    // TODO: this should be done without enforce but by construction of diff_int.
 
     (quot_num, quot_int, rest_num, rest_int)
 }
