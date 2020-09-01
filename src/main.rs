@@ -674,8 +674,8 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(feature = "bellman")] {
-        let flags = run_pass(&c, flags, lower::int::greater_or_equal_to_zero);
-        let flags = run_pass(&c, flags, crate::back::zkif::backend_todo::ignore_gates_todo);
+        let flags = run_pass(&c, flags, lower::int::compare_to_greater_or_equal_to_zero);
+        let flags = run_pass(&c, flags, lower::int::downgrade_64_to_32bits);
 
         // Clean workspace.
         let workspace = Path::new("local/test");

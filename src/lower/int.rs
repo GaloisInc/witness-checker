@@ -19,8 +19,7 @@ pub fn compare_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wir
     c.gate(gk)
 }
 
-// TODO: Does this work on UInt?
-pub fn greater_or_equal_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+pub fn compare_to_greater_or_equal_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
         if a.ty.is_integer() {
             let zero = c.lit(a.ty, 0);
@@ -117,6 +116,39 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
                 return normalize_64(c, c.gate(gk), old.ty);
             }
         }
+    }
+    c.gate(gk)
+}
+
+/// Convert 64 bits inputs to 32 bits.
+pub fn downgrade_64_to_32bits<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+    match gk {
+        GateKind::Lit(val, ty) => match *ty {
+            TyKind::I64 =>
+                return c.lit(c.ty(TyKind::I32), val as i32 as u64),
+            TyKind::U64 =>
+                return c.lit(c.ty(TyKind::U32), val as u32 as u64),
+            _ => {}
+        }
+        GateKind::Secret(secret) => match *secret.ty {
+            TyKind::I64 =>
+                return c.new_secret(
+                    c.ty(TyKind::I32),
+                    secret.val.map(|val| val as i32 as u64)),
+            TyKind::U64 =>
+                return c.new_secret(
+                    c.ty(TyKind::U32),
+                    secret.val.map(|val| val as u32 as u64)),
+            _ => {}
+        }
+        GateKind::Cast(arg, ty) => match *ty {
+            TyKind::I64 =>
+                return c.cast(arg, c.ty(TyKind::I32)),
+            TyKind::U64 =>
+                return c.cast(arg, c.ty(TyKind::U32)),
+            _ => {}
+        }
+        _ => {}
     }
     c.gate(gk)
 }

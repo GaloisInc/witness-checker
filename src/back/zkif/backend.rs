@@ -91,7 +91,7 @@ impl<'a> Backend<'a> {
                         WireRepr::from(b)
                     }
 
-                    TyKind::Uint(I32) | TyKind::Int(I32) => {
+                    TyKind::U32 | TyKind::I32 => {
                         let value = secret.val.map(|val| val as u32);
                         let int = UInt32::alloc(&mut self.cs, value).unwrap();
                         WireRepr::from(int)
@@ -116,7 +116,7 @@ impl<'a> Backend<'a> {
                         }
                     }
 
-                    TyKind::Int(I32) | TyKind::Uint(I32) => {
+                    TyKind::I32 | TyKind::U32 => {
                         match op {
                             UnOp::Neg => {
                                 let num = self.representer.mut_repr(aw).as_num();
@@ -245,7 +245,7 @@ impl<'a> Backend<'a> {
 
             GateKind::Shift(op, left, right) => {
                 match *left.ty {
-                    TyKind::Int(I32) | TyKind::Uint(I32) => {}
+                    TyKind::I32 | TyKind::U32 => {}
                     _ => unimplemented!("Shift for {:?}", left.ty),
                 };
 
