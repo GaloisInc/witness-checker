@@ -117,22 +117,25 @@ impl<E: Engine> Num<E> {
     pub fn alloc_bits<CS: ConstraintSystem<E>>(
         &self, cs: CS) -> Vec<Boolean>
     {
+        self.assert_no_overflow();
+
         match self.bit_width {
             BitWidth::Unknown => panic!("Cannot decompose a number of unknown size."),
 
             BitWidth::Max(_, false) =>
                 self.alloc_bits_unsigned(cs),
 
-            BitWidth::Max(absolute_width, true) => {
+            BitWidth::Max(width, true) => {
                 // Shift the number to be centered around the next power of two.
-                let signed_width = absolute_width + 1;
-                let new_zero = Self::power_of_two::<CS>(signed_width);
-                let shifted = new_zero.add_unsafe(self);
+                let offset = Self::power_of_two::<CS>(width);
+                // This cannot over- or underflow so we don't extend the bit width.
+                let shifted = offset.add_unsafe(self);
                 // Encode as a positive number.
                 let mut bits = shifted.alloc_bits_unsigned(cs);
-                // Drop the last bit, ignoring the power of two that was added.
-                bits.truncate(signed_width);
-                // The rest is a two-complement encoding of the signed number.
+                assert_eq!(bits.len(), width + 1);
+                // Substract the offset by flipping the corresponding bit.
+                bits[width] = bits[width].not();
+                // bits is now a two-complement encoding of the signed number.
                 bits
             }
         }
@@ -141,8 +144,6 @@ impl<E: Engine> Num<E> {
     fn alloc_bits_unsigned<CS: ConstraintSystem<E>>(
         &self, mut cs: CS) -> Vec<Boolean>
     {
-        self.assert_no_overflow();
-
         let n_bits = match self.bit_width {
             BitWidth::Max(n_bits, false) => n_bits,
             _ => panic!("Cannot decompose a negative or unsized number."),
@@ -150,7 +151,6 @@ impl<E: Engine> Num<E> {
 
         let values = match &self.value {
             Some(val) => {
-                // TODO: handle negative numbers.
                 let repr = val.into_repr();
                 let limbs: &[u64] = repr.as_ref();
                 let mut bools = Vec::with_capacity(n_bits);

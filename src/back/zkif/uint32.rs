@@ -95,39 +95,13 @@ impl UInt32 {
         num: &Num<E>,
     ) -> UInt32 {
         let mut bits = num.alloc_bits(&mut cs);
-        bits.resize(32, Boolean::Constant(false));
+        let expand_bit = match num.bit_width {
+            BitWidth::Max(_, false) => Boolean::Constant(false),
+            BitWidth::Max(_, true) => bits[bits.len() - 1].clone(),
+            _ => unreachable!(),
+        };
+        bits.resize(32, expand_bit);
         Self::from_bits(&bits)
-
-        /* Version assuming num is 32 bits.
-
-        let value = num.value.map(|val| {
-            let repr = val.into_repr();
-            let limbs: &[u64] = repr.as_ref();
-            if limbs[limbs.len() - 1] == 0 {
-                //limbs.iter().skip(1).for_each(|l| assert_eq!(*l, 0));
-                limbs[0] as u32
-            } else {
-                let mut val = val.clone();
-                val.negate();
-                let repr = val.into_repr();
-                let limbs: &[u64] = repr.as_ref();
-                let u = -(limbs[0] as i64) as u32;
-                u
-            }
-        });
-        let int = UInt32::alloc(&mut cs, value).unwrap();
-
-        // Check consistency between representations.
-        let num2 = Num::from_int::<CS>(&int);
-
-        cs.enforce(
-            || "uint32 == num",
-            |zero| zero,
-            |zero| zero,
-            |_| num2.lc - &num.lc,
-        );
-        int
-        */
     }
 
     pub fn from_boolean(bool: &Boolean) -> UInt32 {
@@ -141,9 +115,13 @@ impl UInt32 {
         }
     }
 
-    pub fn is_positive_or_zero(&self) -> Boolean {
+    pub fn is_negative(&self) -> &Boolean {
         // Interpret the most significant bit as "is negative".
-        self.bits.last().unwrap().not()
+        self.bits.last().unwrap()
+    }
+
+    pub fn is_positive_or_zero(&self) -> Boolean {
+        self.is_negative().not()
     }
 
     pub fn into_bits_be(&self) -> Vec<Boolean> {
