@@ -16,21 +16,23 @@ use zkinterface_bellman::{
         multieq::MultiEq,
     },
 };
-use crate::back::zkif::num::Num;
-use crate::back::zkif::bit_width::BitWidth;
+use super::{
+    num::Num,
+    bit_width::BitWidth,
+};
 
 
-/// Represents an interpretation of 32 `Boolean` objects as an
-/// unsigned integer.
+/// Represents an interpretation of 32 `Boolean` objects as a
+/// unsigned integer, or two-complement signed integer.
 #[derive(Clone)]
-pub struct UInt32 {
+pub struct Int32 {
     // Least significant bit first
     pub bits: Vec<Boolean>,
     pub value: Option<u32>,
 }
 
-impl UInt32 {
-    /// Construct a constant `UInt32` from a `u32`
+impl Int32 {
+    /// Construct a constant `Int32` from a `u32`
     pub fn constant(value: u32) -> Self
     {
         let mut bits = Vec::with_capacity(32);
@@ -46,13 +48,13 @@ impl UInt32 {
             tmp >>= 1;
         }
 
-        UInt32 {
+        Int32 {
             bits: bits,
             value: Some(value),
         }
     }
 
-    /// Allocate a `UInt32` in the constraint system
+    /// Allocate a `Int32` in the constraint system
     pub fn alloc<E, CS>(
         mut cs: CS,
         value: Option<u32>,
@@ -84,7 +86,7 @@ impl UInt32 {
             })
             .collect::<Result<Vec<_>, SynthesisError>>()?;
 
-        Ok(UInt32 {
+        Ok(Int32 {
             bits: bits,
             value: value,
         })
@@ -93,10 +95,12 @@ impl UInt32 {
     pub fn from_num<E: Engine, CS: ConstraintSystem<E>>(
         mut cs: CS,
         num: &Num<E>,
-    ) -> UInt32 {
+    ) -> Int32 {
         let mut bits = num.alloc_bits(&mut cs);
         let expand_bit = match num.bit_width {
+            // Unsigned numbers are padded with zeros.
             BitWidth::Max(_, false) => Boolean::Constant(false),
+            // Signed numbers are padded by copying the sign bit.
             BitWidth::Max(_, true) => bits[bits.len() - 1].clone(),
             _ => unreachable!(),
         };
@@ -104,12 +108,12 @@ impl UInt32 {
         Self::from_bits(&bits)
     }
 
-    pub fn from_boolean(bool: &Boolean) -> UInt32 {
+    pub fn from_boolean(bool: &Boolean) -> Int32 {
         let mut bits = Vec::with_capacity(32);
         bits.push(bool.clone());
         bits.resize(32, Boolean::constant(false));
 
-        UInt32 {
+        Int32 {
             bits,
             value: bool.get_value().map(|b| b as u32),
         }
@@ -142,20 +146,19 @@ impl UInt32 {
             }
         }
 
-        UInt32 {
+        Int32 {
             value: value,
             bits: bits.iter().rev().cloned().collect(),
         }
     }
 
-
-    /// Turns this `UInt32` into its little-endian byte order representation.
+    /// Turns this `Int32` into its little-endian byte order representation.
     pub fn into_bits(&self) -> Vec<Boolean> {
         self.bits.clone()
     }
 
     /// Converts a little-endian byte order representation of bits into a
-    /// `UInt32`.
+    /// `Int32`.
     pub fn from_bits(bits: &[Boolean]) -> Self
     {
         assert_eq!(bits.len(), 32);
@@ -189,7 +192,7 @@ impl UInt32 {
             }
         }
 
-        UInt32 {
+        Int32 {
             value: value,
             bits: new_bits,
         }
@@ -205,7 +208,7 @@ impl UInt32 {
             .cloned()
             .collect();
 
-        UInt32 {
+        Int32 {
             bits: new_bits,
             value: self.value.map(|v| v.rotate_right(by as u32)),
         }
@@ -224,7 +227,7 @@ impl UInt32 {
             .cloned()
             .collect();
 
-        UInt32 {
+        Int32 {
             bits: new_bits,
             value: self.value.map(|v| v >> by as u32),
         }
@@ -257,7 +260,7 @@ impl UInt32 {
             .map(|(i, ((a, b), c))| circuit_fn(&mut cs, i, a, b, c))
             .collect::<Result<_, _>>()?;
 
-        Ok(UInt32 {
+        Ok(Int32 {
             bits: bits,
             value: new_value,
         })
@@ -309,7 +312,7 @@ impl UInt32 {
         )
     }
 
-    /// XOR this `UInt32` with another `UInt32`
+    /// XOR this `Int32` with another `Int32`
     pub fn xor<E, CS>(
         &self,
         mut cs: CS,
@@ -337,13 +340,13 @@ impl UInt32 {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(UInt32 {
+        Ok(Int32 {
             bits: bits,
             value: new_value,
         })
     }
 
-    /// Perform modular addition of several `UInt32` objects.
+    /// Perform modular addition of several `Int32` objects.
     pub fn addmany<E, CS, M>(
         mut cs: M,
         operands: &[Self],
@@ -404,7 +407,7 @@ impl UInt32 {
             // We can just return a constant, rather than
             // unpacking the result into allocated bits.
 
-            return Ok(UInt32::constant(modular_value.unwrap()));
+            return Ok(Int32::constant(modular_value.unwrap()));
         }
 
         // Storage area for the resulting bits
@@ -440,7 +443,7 @@ impl UInt32 {
         // Discard carry bits that we don't care about
         result_bits.truncate(32);
 
-        Ok(UInt32 {
+        Ok(Int32 {
             bits: result_bits,
             value: modular_value,
         })
@@ -451,7 +454,7 @@ impl UInt32 {
 mod test {
     use rand::{XorShiftRng, SeedableRng, Rng};
     use ::circuit::boolean::{Boolean};
-    use super::{UInt32};
+    use super::{Int32};
     use ff::Field;
     use pairing::bls12_381::{Bls12};
     use ::circuit::test::*;
@@ -465,7 +468,7 @@ mod test {
         for _ in 0..1000 {
             let mut v = (0..32).map(|_| Boolean::constant(rng.gen())).collect::<Vec<_>>();
 
-            let b = UInt32::from_bits_be(&v);
+            let b = Int32::from_bits_be(&v);
 
             for (i, bit) in b.bits.iter().enumerate() {
                 match bit {
@@ -496,7 +499,7 @@ mod test {
         for _ in 0..1000 {
             let mut v = (0..32).map(|_| Boolean::constant(rng.gen())).collect::<Vec<_>>();
 
-            let b = UInt32::from_bits(&v);
+            let b = Int32::from_bits(&v);
 
             for (i, bit) in b.bits.iter().enumerate() {
                 match bit {
@@ -533,9 +536,9 @@ mod test {
 
             let mut expected = a ^ b ^ c;
 
-            let a_bit = UInt32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
-            let b_bit = UInt32::constant(b);
-            let c_bit = UInt32::alloc(cs.namespace(|| "c_bit"), Some(c)).unwrap();
+            let a_bit = Int32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
+            let b_bit = Int32::constant(b);
+            let c_bit = Int32::alloc(cs.namespace(|| "c_bit"), Some(c)).unwrap();
 
             let r = a_bit.xor(cs.namespace(|| "first xor"), &b_bit).unwrap();
             let r = r.xor(cs.namespace(|| "second xor"), &c_bit).unwrap();
@@ -573,15 +576,15 @@ mod test {
             let b: u32 = rng.gen();
             let c: u32 = rng.gen();
 
-            let a_bit = UInt32::constant(a);
-            let b_bit = UInt32::constant(b);
-            let c_bit = UInt32::constant(c);
+            let a_bit = Int32::constant(a);
+            let b_bit = Int32::constant(b);
+            let c_bit = Int32::constant(c);
 
             let mut expected = a.wrapping_add(b).wrapping_add(c);
 
             let r = {
                 let mut cs = MultiEq::new(&mut cs);
-                let r = UInt32::addmany(cs.namespace(|| "addition"), &[a_bit, b_bit, c_bit]).unwrap();
+                let r = Int32::addmany(cs.namespace(|| "addition"), &[a_bit, b_bit, c_bit]).unwrap();
                 r
             };
 
@@ -615,15 +618,15 @@ mod test {
 
             let mut expected = (a ^ b).wrapping_add(c).wrapping_add(d);
 
-            let a_bit = UInt32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
-            let b_bit = UInt32::constant(b);
-            let c_bit = UInt32::constant(c);
-            let d_bit = UInt32::alloc(cs.namespace(|| "d_bit"), Some(d)).unwrap();
+            let a_bit = Int32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
+            let b_bit = Int32::constant(b);
+            let c_bit = Int32::constant(c);
+            let d_bit = Int32::alloc(cs.namespace(|| "d_bit"), Some(d)).unwrap();
 
             let r = a_bit.xor(cs.namespace(|| "xor"), &b_bit).unwrap();
             let r = {
                 let mut cs = MultiEq::new(&mut cs);
-                let r = UInt32::addmany(cs.namespace(|| "addition"), &[r, c_bit, d_bit]).unwrap();
+                let r = Int32::addmany(cs.namespace(|| "addition"), &[r, c_bit, d_bit]).unwrap();
                 r
             };
 
@@ -664,7 +667,7 @@ mod test {
 
         let mut num = rng.gen();
 
-        let a = UInt32::constant(num);
+        let a = Int32::constant(num);
 
         for i in 0..32 {
             let b = a.rotr(i);
@@ -695,8 +698,8 @@ mod test {
         for _ in 0..50 {
             for i in 0..60 {
                 let num = rng.gen();
-                let a = UInt32::constant(num).shr(i);
-                let b = UInt32::constant(num >> i);
+                let a = Int32::constant(num).shr(i);
+                let b = Int32::constant(num >> i);
 
                 assert_eq!(a.value.unwrap(), num >> i);
 
@@ -721,11 +724,11 @@ mod test {
 
             let mut expected = (a & b) ^ (a & c) ^ (b & c);
 
-            let a_bit = UInt32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
-            let b_bit = UInt32::constant(b);
-            let c_bit = UInt32::alloc(cs.namespace(|| "c_bit"), Some(c)).unwrap();
+            let a_bit = Int32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
+            let b_bit = Int32::constant(b);
+            let c_bit = Int32::alloc(cs.namespace(|| "c_bit"), Some(c)).unwrap();
 
-            let r = UInt32::sha256_maj(&mut cs, &a_bit, &b_bit, &c_bit).unwrap();
+            let r = Int32::sha256_maj(&mut cs, &a_bit, &b_bit, &c_bit).unwrap();
 
             assert!(cs.is_satisfied());
 
@@ -762,11 +765,11 @@ mod test {
 
             let mut expected = (a & b) ^ ((!a) & c);
 
-            let a_bit = UInt32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
-            let b_bit = UInt32::constant(b);
-            let c_bit = UInt32::alloc(cs.namespace(|| "c_bit"), Some(c)).unwrap();
+            let a_bit = Int32::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
+            let b_bit = Int32::constant(b);
+            let c_bit = Int32::alloc(cs.namespace(|| "c_bit"), Some(c)).unwrap();
 
-            let r = UInt32::sha256_ch(&mut cs, &a_bit, &b_bit, &c_bit).unwrap();
+            let r = Int32::sha256_ch(&mut cs, &a_bit, &b_bit, &c_bit).unwrap();
 
             assert!(cs.is_satisfied());
 

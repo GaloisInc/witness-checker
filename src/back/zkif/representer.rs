@@ -1,6 +1,8 @@
-use crate::back::zkif::zkif_cs::{Num, ZkifCS};
 use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
-use crate::back::zkif::uint32::UInt32;
+use super::{
+    zkif_cs::{Num, ZkifCS},
+    int32::Int32,
+};
 
 
 pub struct Representer {
@@ -32,7 +34,7 @@ pub struct ReprId(pub usize);
 pub struct WireRepr {
     pub boolean: Option<Boolean>,
     pub num: Option<Num>,
-    pub uint32: Option<UInt32>,
+    pub int32: Option<Int32>,
 }
 
 impl From<Boolean> for WireRepr {
@@ -47,9 +49,9 @@ impl From<Num> for WireRepr {
     }
 }
 
-impl From<UInt32> for WireRepr {
-    fn from(int: UInt32) -> Self {
-        WireRepr { uint32: Some(int), ..Self::default() }
+impl From<Int32> for WireRepr {
+    fn from(int: Int32) -> Self {
+        WireRepr { int32: Some(int), ..Self::default() }
     }
 }
 
@@ -72,8 +74,8 @@ impl WireRepr {
                 let num = {
                     if let Some(b) = &self.boolean {
                         Num::from_boolean::<ZkifCS>(b)
-                    } else if let Some(int) = &self.uint32 {
-                        Num::from_uint::<ZkifCS>(int)
+                    } else if let Some(int) = &self.int32 {
+                        Num::from_int::<ZkifCS>(int)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
@@ -84,22 +86,22 @@ impl WireRepr {
         }
     }
 
-    pub fn as_uint32(&mut self, cs: &mut ZkifCS) -> UInt32 {
-        match &self.uint32 {
+    pub fn as_int32(&mut self, cs: &mut ZkifCS) -> Int32 {
+        match &self.int32 {
             Some(u) => u.clone(),
 
             None => {
                 // Convert from another repr.
                 let int = {
                     if let Some(b) = &self.boolean {
-                        UInt32::from_boolean(b)
+                        Int32::from_boolean(b)
                     } else if let Some(num) = &self.num {
-                        UInt32::from_num(cs, num)
+                        Int32::from_num(cs, num)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
                 };
-                self.uint32 = Some(int.clone());
+                self.int32 = Some(int.clone());
                 int
             }
         }

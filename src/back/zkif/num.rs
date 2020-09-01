@@ -3,18 +3,19 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
-use zkinterface_bellman::{
-    ff::{ScalarEngine, Field, PrimeField},
-    bellman::LinearCombination,
-};
 use std::ops::{Add, Sub, Mul};
-use zkinterface_bellman::bellman::{ConstraintSystem, SynthesisError, Variable};
-use zkinterface_bellman::sapling_crypto::circuit::boolean::{Boolean, AllocatedBit};
-use zkinterface_bellman::pairing::Engine;
-use zkinterface_bellman::ff::PrimeFieldRepr;
-use crate::back::zkif::zkif_cs::{En, Fr, LC, ZkifCS, fr_from_signed, fr_from_unsigned};
-use crate::back::zkif::bit_width::BitWidth;
-use crate::back::zkif::uint32::UInt32;
+
+use zkinterface_bellman::{
+    bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},
+    sapling_crypto::circuit::boolean::{Boolean, AllocatedBit},
+    pairing::Engine,
+    ff::{ScalarEngine, Field, PrimeField, PrimeFieldRepr},
+};
+use super::{
+    zkif_cs::{En, Fr, LC, ZkifCS, fr_from_signed, fr_from_unsigned},
+    bit_width::BitWidth,
+    int32::Int32,
+};
 
 
 #[derive(Clone)]
@@ -56,7 +57,7 @@ impl<E: Engine> Num<E> {
         }
     }
 
-    pub fn alloc<CS: ConstraintSystem<E>>(
+    pub fn _alloc<CS: ConstraintSystem<E>>(
         mut cs: CS,
         value: Option<u32>,
     ) -> Result<Self, SynthesisError>
@@ -74,8 +75,8 @@ impl<E: Engine> Num<E> {
         })
     }
 
-    pub fn from_uint<CS: ConstraintSystem<E>>(
-        int: &UInt32,
+    pub fn from_int<CS: ConstraintSystem<E>>(
+        int: &Int32,
     ) -> Num<E> {
         let value = int.value.map(|val|
             fr_from_unsigned(val as u64));

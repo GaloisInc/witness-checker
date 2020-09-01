@@ -9,7 +9,8 @@ mod zkif_cs;
 mod representer;
 mod num;
 mod bit_width;
-mod int;
-mod uint32;
+mod int_ops;
+#[allow(dead_code)]
+mod int32;
 
 //mod debug;

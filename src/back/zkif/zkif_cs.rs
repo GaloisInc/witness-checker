@@ -1,17 +1,17 @@
-use zkinterface::statement::{StatementBuilder, FileStore, GadgetCallbacks, Store};
+use std::path::Path;
+
+use zkinterface::{
+    ConstraintSystemOwned, WitnessOwned, VariablesOwned, CircuitOwned, KeyValueOwned,
+    statement::{StatementBuilder, FileStore, GadgetCallbacks, Store},
+};
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, Variable, Index, LinearCombination, SynthesisError},
-    ff::ScalarEngine,
-    sapling_crypto::circuit::{
-        boolean::{AllocatedBit, Boolean},
-    },
+    ff::{ScalarEngine, PrimeField, PrimeFieldRepr, Field},
+    sapling_crypto::circuit::boolean::{AllocatedBit, Boolean},
     pairing::bls12_381::Bls12,
+    export::to_zkif_constraint,
 };
-use crate::back::zkif::uint32::UInt32;
-use zkinterface::{ConstraintSystemOwned, WitnessOwned, VariablesOwned, CircuitOwned, KeyValueOwned};
-use zkinterface_bellman::export::to_zkif_constraint;
-use zkinterface_bellman::ff::{PrimeField, PrimeFieldRepr, Field};
-use std::path::Path;
+use super::int32::Int32;
 use super::num;
 
 // TODO: template with trait ScalarEngine.
@@ -19,7 +19,7 @@ pub type En = Bls12;
 pub type LC = LinearCombination<En>;
 pub type Num = num::Num<En>;
 pub type Fr = <En as ScalarEngine>::Fr;
-pub type FrRepr = <Fr as PrimeField>::Repr;
+pub type _FrRepr = <Fr as PrimeField>::Repr;
 
 
 pub struct ZkifCS {
