@@ -329,3 +329,59 @@ fn as_lit(wire: Wire) -> Option<u64> {
         _ => None,
     }
 }
+
+#[test]
+fn test_zkif() {
+    let mut b = Backend::new(Path::new("local/test"), true);
+
+    let arena = bumpalo::Bump::new();
+    let c = Circuit::new(&arena);
+
+    let zero = c.lit(c.ty(TyKind::I32), 0);
+    let lit = c.lit(c.ty(TyKind::I32), 11);
+    let sec1 = c.new_secret(c.ty(TyKind::I32), Some(12));
+    let sec2 = c.new_secret(c.ty(TyKind::I32), Some(13));
+    let prod = c.mul(sec1, sec2);
+    let is_zero = c.compare(CmpOp::Eq, prod, zero);
+    let diff1 = c.sub(prod, lit);
+    let is_ge_zero1 = c.compare(CmpOp::Ge, diff1, zero);
+    let diff2 = c.sub(lit, prod);
+    let is_ge_zero2 = c.compare(CmpOp::Ge, diff2, zero);
+
+    b.wire(is_zero);
+    b.wire(is_ge_zero1);
+    b.wire(is_ge_zero2);
+
+    fn check_int<'a>(b: &'a Backend<'a>, w: Wire<'a>, expect: u32) {
+        let wi = *b.wire_to_repr.get(&w).unwrap();
+        let wr = &b.representer.wire_reprs[wi.0];
+        let int = wr.int32.as_ref().unwrap();
+        assert_eq!(int.value, Some(expect));
+    }
+
+    fn check_num<'a>(b: &'a Backend<'a>, w: Wire<'a>, expect: u32) {
+        let wi = *b.wire_to_repr.get(&w).unwrap();
+        let wr = &b.representer.wire_reprs[wi.0];
+        let int = wr.num.as_ref().unwrap();
+        let value = int.value.unwrap();
+        assert_eq!(value, fr_from_unsigned::<Fr>(expect as u64));
+    }
+
+    fn check_bool<'a>(b: &'a Backend<'a>, w: Wire<'a>, expect: bool) {
+        let wi = *b.wire_to_repr.get(&w).unwrap();
+        let wr = &b.representer.wire_reprs[wi.0];
+        let bool = wr.boolean.as_ref().unwrap();
+        let value = bool.get_value().unwrap();
+        assert_eq!(value, expect);
+    }
+
+    check_num(&b, lit, 11);
+    check_int(&b, sec1, 12);
+    check_int(&b, sec2, 13);
+    check_num(&b, prod, 12 * 13);
+    check_bool(&b, is_zero, false);
+    check_int(&b, diff1, 12 * 13 - 11);
+    check_int(&b, diff2, (11 - 12 * 13) as u32);
+    check_bool(&b, is_ge_zero1, true);
+    check_bool(&b, is_ge_zero2, false);
+}

@@ -678,7 +678,7 @@ fn main() -> io::Result<()> {
         let flags = run_pass(&c, flags, lower::int::downgrade_64_to_32bits);
 
         // Clean workspace.
-        let workspace = Path::new("local/test");
+        let workspace = Path::new("local/example");
         let files = vec![
             workspace.join("main.zkif"),
             workspace.join("constraints.zkif"),

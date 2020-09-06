@@ -450,16 +450,21 @@ impl Int32 {
     }
 }
 
+/*
 #[cfg(test)]
 mod test {
     use rand::{XorShiftRng, SeedableRng, Rng};
-    use ::circuit::boolean::{Boolean};
     use super::{Int32};
-    use ff::Field;
-    use pairing::bls12_381::{Bls12};
-    use ::circuit::test::*;
-    use bellman::{ConstraintSystem};
-    use circuit::multieq::MultiEq;
+    use zkinterface_bellman::{
+        bellman::ConstraintSystem,
+        ff::Field,
+        pairing::bls12_381::{Bls12},
+        test_cs::TestConstraintSystem,
+        sapling_crypto::circuit::{
+            boolean::Boolean,
+            multieq::MultiEq,
+        },
+    };
 
     #[test]
     fn test_uint32_from_bits_be() {
@@ -793,3 +798,4 @@ mod test {
         }
     }
 }
+*/
