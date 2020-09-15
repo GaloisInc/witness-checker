@@ -214,7 +214,24 @@ impl Int32 {
         }
     }
 
-    pub fn shr(&self, by: usize) -> Self {
+    pub fn shift_left(&self, by: usize) -> Self {
+        let by = by % 32;
+
+        let fill = Boolean::constant(false);
+
+        let new_bits = Some(&fill).into_iter().cycle() // Generate zeros to insert.
+            .take(by) // Take the least significant zeros.
+            .chain(self.bits.iter()) // Append the bits to keep.
+            .take(32) // Truncate to 32 bits.
+            .cloned().collect();
+
+        Int32 {
+            bits: new_bits,
+            value: self.value.map(|v| v << by as u32),
+        }
+    }
+
+    pub fn shift_right(&self, by: usize) -> Self {
         let by = by % 32;
 
         let fill = Boolean::constant(false);

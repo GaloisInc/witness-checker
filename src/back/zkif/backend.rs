@@ -252,19 +252,16 @@ impl<'a> Backend<'a> {
                     _ => unimplemented!("Shift for {:?}", left.ty),
                 };
 
-                let amount = {
-                    let amount = as_lit(right).unwrap_or_else(|| {
-                        panic!("only shifts by literals (not {:?}) are supported", right);
-                    }) as i64;
-                    match op {
-                        ShiftOp::Shl => -amount,
-                        ShiftOp::Shr => amount,
-                    }
-                };
+                let amount = as_lit(right).unwrap_or_else(|| {
+                    panic!("only shifts by literals (not {:?}) are supported", right);
+                }) as usize;
 
                 let lw = self.wire(left);
                 let lu = self.representer.mut_repr(lw).as_int32(&mut self.cs);
-                let shifted = lu.shr(amount as usize);
+                let shifted = match op {
+                    ShiftOp::Shl => lu.shift_left(amount),
+                    ShiftOp::Shr => lu.shift_right(amount),
+                };
 
                 WireRepr::from(shifted)
             }
