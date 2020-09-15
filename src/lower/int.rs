@@ -121,6 +121,7 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
 }
 
 /// Convert 64 bits inputs to 32 bits.
+/// Warning: this pass may change the behaviour of the circuit.
 pub fn downgrade_64_to_32bits<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     match gk {
         GateKind::Lit(val, ty) => match *ty {

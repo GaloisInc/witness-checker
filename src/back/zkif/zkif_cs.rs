@@ -30,6 +30,7 @@ pub struct ZkifCS {
 }
 
 impl ZkifCS {
+    /// Must call finish() to finalize the files in the workspace.
     pub fn new(workspace: impl AsRef<Path>, proving: bool) -> ZkifCS {
         let store = FileStore::new(workspace, true, true, false).unwrap();
         let stmt = StatementBuilder::new(store);
@@ -41,10 +42,8 @@ impl ZkifCS {
             witness: vec![],
         }
     }
-}
 
-impl Drop for ZkifCS {
-    fn drop(&mut self) {
+    pub fn finish(mut self) {
         let mut msg = Vec::<u8>::new();
         self.constraints.write_into(&mut msg).unwrap();
         self.stmt.receive_constraints(&msg).unwrap();

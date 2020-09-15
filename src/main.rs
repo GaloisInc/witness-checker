@@ -694,7 +694,7 @@ fn main() -> io::Result<()> {
             backend.wire(*flag);
         }
         // Write files.
-        drop(backend);
+        backend.finish();
 
         // Validate the circuit and witness.
         let mut messages = Messages::new();

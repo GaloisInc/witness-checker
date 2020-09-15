@@ -35,12 +35,17 @@ pub struct Backend<'a> {
 }
 
 impl<'a> Backend<'a> {
+    /// Must call finish() to finalize the files in the workspace.
     pub fn new(workspace: impl AsRef<Path>, proving: bool) -> Backend<'a> {
         Backend {
             wire_to_repr: HashMap::new(),
             representer: Representer::new(),
             cs: ZkifCS::new(workspace, proving),
         }
+    }
+
+    pub fn finish(self) {
+        self.cs.finish()
     }
 
     pub fn wire(&mut self, wire: Wire<'a>) -> ReprId {
@@ -352,14 +357,14 @@ fn test_zkif() {
     b.wire(is_ge_zero1);
     b.wire(is_ge_zero2);
 
-    fn check_int<'a>(b: &'a Backend<'a>, w: Wire<'a>, expect: u32) {
+    fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u32) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.int32.as_ref().unwrap();
         assert_eq!(int.value, Some(expect));
     }
 
-    fn check_num<'a>(b: &'a Backend<'a>, w: Wire<'a>, expect: u32) {
+    fn check_num<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u32) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
@@ -367,7 +372,7 @@ fn test_zkif() {
         assert_eq!(value, fr_from_unsigned::<Fr>(expect as u64));
     }
 
-    fn check_bool<'a>(b: &'a Backend<'a>, w: Wire<'a>, expect: bool) {
+    fn check_bool<'a>(b: &Backend<'a>, w: Wire<'a>, expect: bool) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let bool = wr.boolean.as_ref().unwrap();
@@ -384,4 +389,6 @@ fn test_zkif() {
     check_int(&b, diff2, (11 - 12 * 13) as u32);
     check_bool(&b, is_ge_zero1, true);
     check_bool(&b, is_ge_zero2, false);
+
+    b.finish();
 }
