@@ -11,7 +11,7 @@ use zkinterface_bellman::{
     pairing::bls12_381::Bls12,
     export::to_zkif_constraint,
 };
-use super::int32::Int32;
+use super::int64::Int64;
 use super::num;
 
 // TODO: template with trait ScalarEngine.

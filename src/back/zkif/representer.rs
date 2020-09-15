@@ -1,7 +1,7 @@
 use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
 use super::{
     zkif_cs::{Num, ZkifCS},
-    int32::Int32,
+    int64::Int64,
 };
 
 
@@ -34,7 +34,7 @@ pub struct ReprId(pub usize);
 pub struct WireRepr {
     pub boolean: Option<Boolean>,
     pub num: Option<Num>,
-    pub int32: Option<Int32>,
+    pub int64: Option<Int64>,
 }
 
 impl From<Boolean> for WireRepr {
@@ -49,9 +49,9 @@ impl From<Num> for WireRepr {
     }
 }
 
-impl From<Int32> for WireRepr {
-    fn from(int: Int32) -> Self {
-        WireRepr { int32: Some(int), ..Self::default() }
+impl From<Int64> for WireRepr {
+    fn from(int: Int64) -> Self {
+        WireRepr { int64: Some(int), ..Self::default() }
     }
 }
 
@@ -74,7 +74,7 @@ impl WireRepr {
                 let num = {
                     if let Some(b) = &self.boolean {
                         Num::from_boolean::<ZkifCS>(b)
-                    } else if let Some(int) = &self.int32 {
+                    } else if let Some(int) = &self.int64 {
                         Num::from_int::<ZkifCS>(int)
                     } else {
                         panic!("Access to a wire that has no representation")
@@ -86,22 +86,22 @@ impl WireRepr {
         }
     }
 
-    pub fn as_int32(&mut self, cs: &mut ZkifCS) -> Int32 {
-        match &self.int32 {
+    pub fn as_int64(&mut self, cs: &mut ZkifCS) -> Int64 {
+        match &self.int64 {
             Some(u) => u.clone(),
 
             None => {
                 // Convert from another repr.
                 let int = {
                     if let Some(b) = &self.boolean {
-                        Int32::from_boolean(b)
+                        Int64::from_boolean(b)
                     } else if let Some(num) = &self.num {
-                        Int32::from_num(cs, num)
+                        Int64::from_num(cs, num)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
                 };
-                self.int32 = Some(int.clone());
+                self.int64 = Some(int.clone());
                 int
             }
         }

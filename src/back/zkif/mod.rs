@@ -11,4 +11,4 @@ mod num;
 mod bit_width;
 mod int_ops;
 #[allow(dead_code)]
-mod int32;
+mod int64;

@@ -17,7 +17,7 @@ use zkinterface_bellman::{
 use super::{
     zkif_cs::{ZkifCS, En, LC, Fr, Num, fr_from_unsigned, fr_from_signed},
     int_ops,
-    int32::Int32,
+    int64::Int64,
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
 };
@@ -95,9 +95,8 @@ impl<'a> Backend<'a> {
                         WireRepr::from(b)
                     }
 
-                    TyKind::U32 | TyKind::I32 => {
-                        let value = secret.val.map(|val| val as u32);
-                        let int = Int32::alloc(&mut self.cs, value).unwrap();
+                    TyKind::U64 | TyKind::I64 => {
+                        let int = Int64::alloc(&mut self.cs, secret.val).unwrap();
                         WireRepr::from(int)
                     }
 
@@ -120,7 +119,7 @@ impl<'a> Backend<'a> {
                         }
                     }
 
-                    TyKind::U32 | TyKind::I32 => {
+                    TyKind::U64 | TyKind::I64 => {
                         match op {
                             UnOp::Neg => {
                                 let num = self.representer.mut_repr(aw).as_num();
@@ -129,11 +128,11 @@ impl<'a> Backend<'a> {
                             }
 
                             UnOp::Not => {
-                                let int = self.representer.mut_repr(aw).as_int32(&mut self.cs);
+                                let int = self.representer.mut_repr(aw).as_int64(&mut self.cs);
                                 let not_bits: Vec<Boolean> = int.bits.iter().map(|bit|
                                     bit.not()
                                 ).collect();
-                                let not = Int32::from_bits(&not_bits);
+                                let not = Int64::from_bits(&not_bits);
                                 WireRepr::from(not)
                             }
                         }
@@ -199,9 +198,9 @@ impl<'a> Backend<'a> {
                             // Ops using both number and bits representations.
                             BinOp::Div | BinOp::Mod => {
                                 let numer_num = self.representer.mut_repr(lw).as_num();
-                                let numer_int = self.representer.mut_repr(lw).as_int32(&mut self.cs);
+                                let numer_int = self.representer.mut_repr(lw).as_int64(&mut self.cs);
                                 let denom_num = self.representer.mut_repr(rw).as_num();
-                                let denom_int = self.representer.mut_repr(rw).as_int32(&mut self.cs);
+                                let denom_int = self.representer.mut_repr(rw).as_int64(&mut self.cs);
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int_ops::div(
                                     &mut self.cs,
@@ -221,8 +220,8 @@ impl<'a> Backend<'a> {
 
                             // Bitwise ops work on bit decompositions.
                             BinOp::Xor | BinOp::And | BinOp::Or => {
-                                let lu = self.representer.mut_repr(lw).as_int32(&mut self.cs);
-                                let ru = self.representer.mut_repr(rw).as_int32(&mut self.cs);
+                                let lu = self.representer.mut_repr(lw).as_int64(&mut self.cs);
+                                let ru = self.representer.mut_repr(rw).as_int64(&mut self.cs);
 
                                 let out_int = match op {
                                     BinOp::Xor =>
@@ -248,7 +247,7 @@ impl<'a> Backend<'a> {
 
             GateKind::Shift(op, left, right) => {
                 match *left.ty {
-                    TyKind::U32 | TyKind::I32 => {}
+                    TyKind::U64 | TyKind::I64 => {}
                     _ => unimplemented!("Shift for {:?}", left.ty),
                 };
 
@@ -257,7 +256,7 @@ impl<'a> Backend<'a> {
                 }) as usize;
 
                 let lw = self.wire(left);
-                let lu = self.representer.mut_repr(lw).as_int32(&mut self.cs);
+                let lu = self.representer.mut_repr(lw).as_int64(&mut self.cs);
                 let shifted = match op {
                     ShiftOp::Shl => lu.shift_left(amount),
                     ShiftOp::Shr => lu.shift_right(amount),
@@ -281,7 +280,7 @@ impl<'a> Backend<'a> {
                     }
 
                     CmpOp::Ge => {
-                        let int = self.representer.mut_repr(lw).as_int32(&mut self.cs);
+                        let int = self.representer.mut_repr(lw).as_int64(&mut self.cs);
                         int.is_positive_or_zero()
                     }
 
@@ -339,10 +338,10 @@ fn test_zkif() {
     let arena = bumpalo::Bump::new();
     let c = Circuit::new(&arena);
 
-    let zero = c.lit(c.ty(TyKind::I32), 0);
-    let lit = c.lit(c.ty(TyKind::I32), 11);
-    let sec1 = c.new_secret(c.ty(TyKind::I32), Some(12));
-    let sec2 = c.new_secret(c.ty(TyKind::I32), Some(13));
+    let zero = c.lit(c.ty(TyKind::I64), 0);
+    let lit = c.lit(c.ty(TyKind::I64), 11);
+    let sec1 = c.new_secret(c.ty(TyKind::I64), Some(12));
+    let sec2 = c.new_secret(c.ty(TyKind::I64), Some(13));
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);
@@ -354,14 +353,14 @@ fn test_zkif() {
     b.wire(is_ge_zero1);
     b.wire(is_ge_zero2);
 
-    fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u32) {
+    fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
-        let int = wr.int32.as_ref().unwrap();
+        let int = wr.int64.as_ref().unwrap();
         assert_eq!(int.value, Some(expect));
     }
 
-    fn check_num<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u32) {
+    fn check_num<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
@@ -383,7 +382,7 @@ fn test_zkif() {
     check_num(&b, prod, 12 * 13);
     check_bool(&b, is_zero, false);
     check_int(&b, diff1, 12 * 13 - 11);
-    check_int(&b, diff2, (11 - 12 * 13) as u32);
+    check_int(&b, diff2, (11 - 12 * 13) as u64);
     check_bool(&b, is_ge_zero1, true);
     check_bool(&b, is_ge_zero2, false);
 

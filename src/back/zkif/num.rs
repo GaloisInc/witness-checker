@@ -14,7 +14,7 @@ use zkinterface_bellman::{
 use super::{
     zkif_cs::{En, Fr, LC, ZkifCS, fr_from_signed, fr_from_unsigned},
     bit_width::BitWidth,
-    int32::Int32,
+    int64::Int64,
 };
 
 
@@ -59,7 +59,7 @@ impl<E: Engine> Num<E> {
 
     pub fn _alloc<CS: ConstraintSystem<E>>(
         mut cs: CS,
-        value: Option<u32>,
+        value: Option<u64>,
     ) -> Result<Self, SynthesisError>
     {
         let value = value.map(|val|
@@ -71,12 +71,12 @@ impl<E: Engine> Num<E> {
         Ok(Num {
             value,
             lc: LinearCombination::zero() + var,
-            bit_width: BitWidth::Unknown, // u32 is used but we did not prove it.
+            bit_width: BitWidth::Unknown, // u64 is used but we did not prove it.
         })
     }
 
     pub fn from_int<CS: ConstraintSystem<E>>(
-        int: &Int32,
+        int: &Int64,
     ) -> Num<E> {
         let value = int.value.map(|val|
             fr_from_unsigned(val as u64));
