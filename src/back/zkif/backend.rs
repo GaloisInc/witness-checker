@@ -20,6 +20,8 @@ use super::{
     int64::Int64,
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
+    int_ops::{bool_or, enforce_true},
+    num::boolean_lc,
 };
 
 
@@ -46,6 +48,12 @@ impl<'a> Backend<'a> {
 
     pub fn finish(self) {
         self.cs.finish()
+    }
+
+    pub fn enforce_true(&mut self, wire: Wire<'a>) {
+        let repr_id = self.wire(wire);
+        let bool = self.representer.mut_repr(repr_id).as_boolean();
+        enforce_true(&mut self.cs, &bool);
     }
 
     pub fn wire(&mut self, wire: Wire<'a>) -> ReprId {
@@ -153,20 +161,13 @@ impl<'a> Backend<'a> {
 
                         let out_bool = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub =>
-                                Boolean::xor::<En, _>(
-                                    &mut self.cs,
-                                    &lb, &rb,
-                                ).unwrap(),
+                                Boolean::xor(&mut self.cs, &lb, &rb).unwrap(),
 
-                            BinOp::And | BinOp::Mul => Boolean::and::<En, _>(
-                                &mut self.cs,
-                                &lb, &rb,
-                            ).unwrap(),
+                            BinOp::And | BinOp::Mul =>
+                                Boolean::and(&mut self.cs, &lb, &rb).unwrap(),
 
-                            BinOp::Or => Boolean::and::<En, _>(
-                                &mut self.cs,
-                                &lb.not(), &rb.not(),
-                            ).unwrap().not(),
+                            BinOp::Or =>
+                                bool_or(&mut self.cs, &lb, &rb),
 
                             BinOp::Div | BinOp::Mod =>
                                 unimplemented!("{:?} for {:?}", op, wire.ty),
@@ -252,7 +253,7 @@ impl<'a> Backend<'a> {
                 };
 
                 let amount = as_lit(right).unwrap_or_else(|| {
-                    panic!("only shifts by literals (not {:?}) are supported", right);
+                    panic!("only shifts by literals are supported (not {:?})", right);
                 }) as usize;
 
                 let lw = self.wire(left);
@@ -268,9 +269,9 @@ impl<'a> Backend<'a> {
             GateKind::Compare(op, left, right) => {
                 let lw = self.wire(left);
 
-                assert!(
-                    as_lit(right) == Some(0),
-                    "only comparisons to zero (not {:?}) are supported", right,
+                assert_eq!(
+                    as_lit(right), Some(0),
+                    "only comparisons to zero are supported (not {:?})", right,
                 );
 
                 let yes = match op {

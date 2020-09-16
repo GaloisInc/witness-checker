@@ -243,6 +243,22 @@ impl<'a> Circuit<'a> {
         self.binary(BinOp::Or, a, b)
     }
 
+    pub fn all_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
+        let true_if_empty = self.lit(self.ty(TyKind::Bool), 1);
+        wires.fold(
+            true_if_empty,
+            |all_true, w| self.and(all_true, w),
+        )
+    }
+
+    pub fn any_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
+        let false_if_empty = self.lit(self.ty(TyKind::Bool), 0);
+        wires.fold(
+            false_if_empty,
+            |any_true, w| self.or(any_true, w),
+        )
+    }
+
     pub fn xor(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
         self.binary(BinOp::Xor, a, b)
     }

@@ -4,6 +4,7 @@ use std::fs::{self, File, remove_file};
 use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::Path;
+use std::iter;
 use bumpalo::Bump;
 
 use cheesecloth::back;
@@ -18,6 +19,7 @@ use cheesecloth::tiny_ram::{
     MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 use zkinterface::Messages;
+use cheesecloth::ir::circuit::TyKind::Bool;
 
 macro_rules! wire_assert {
     ($cx:expr, $cond:expr, $($args:tt)*) => {
@@ -645,13 +647,27 @@ fn main() -> io::Result<()> {
         check_mem(&cx, &b, port1, port2);
     }
 
-    // Lower IR code
+    // Collect assertions and bugs.
     drop(b);
     let (asserts, bugs) = cx.finish();
-    let num_asserts = asserts.len();
-    let flags = asserts.into_iter().chain(bugs.into_iter())
-        .map(|tw| tw.repr).collect::<Vec<_>>();
+    let asserts = asserts.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
+    let bugs = bugs.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
 
+    // The statement is accepted if all assertions hold and at least one bug exists.
+    let accepted = c.and(
+        c.all_true(asserts.iter().cloned()),
+        c.any_true(bugs.iter().cloned()),
+    );
+
+    // Concatenate accepted, asserts, bugs.
+    let num_asserts = 1 + asserts.len();
+    let flags =
+        iter::once(accepted)
+            .chain(asserts.into_iter())
+            .chain(bugs.into_iter())
+            .collect::<Vec<_>>();
+
+    // Lower IR code
     // TODO: need a better way to handle passes that must be run to fixpoint
     let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
     let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
@@ -675,6 +691,7 @@ fn main() -> io::Result<()> {
 
     #[cfg(feature = "bellman")] {
         let flags = run_pass(&c, flags, lower::int::compare_to_greater_or_equal_to_zero);
+        let accepted = flags[0];
 
         // Clean workspace.
         let workspace = Path::new("local/example");
@@ -689,9 +706,9 @@ fn main() -> io::Result<()> {
 
         // Generate the circuit and witness.
         let mut backend = back::zkif::backend::Backend::new(workspace, true);
-        for flag in &flags {
-            backend.wire(*flag);
-        }
+
+        backend.enforce_true(accepted);
+
         // Write files.
         backend.finish();
 

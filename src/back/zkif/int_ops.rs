@@ -64,6 +64,19 @@ pub fn bool_or<'a, E, CS>(
     Boolean::and(cs, &a.not(), &b.not()).unwrap().not()
 }
 
+pub fn enforce_true<E, CS>(
+    mut cs: CS,
+    bool: &Boolean,
+) where E: Engine,
+        CS: ConstraintSystem<E>
+{
+    cs.enforce(
+        || "enforce true",
+        |_| boolean_lc::<E, CS>(bool),
+        |lc| lc + CS::one(),
+        |lc| lc + CS::one(),
+    );
+}
 
 pub fn div<E: Engine, CS: ConstraintSystem<E>>(
     mut cs: CS,
