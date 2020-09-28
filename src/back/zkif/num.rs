@@ -3,7 +3,7 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
-use std::ops::{Add, Sub, Mul};
+use std::ops::{Add, Sub, Mul, AddAssign};
 
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},

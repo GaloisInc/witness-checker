@@ -653,11 +653,14 @@ fn main() -> io::Result<()> {
     let asserts = asserts.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
     let bugs = bugs.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
 
+    // The statement is accepted if all assertions hold.
+    let accepted = c.all_true(asserts.iter().cloned());
+    /* Or if proving bug existence:
     // The statement is accepted if all assertions hold and at least one bug exists.
     let accepted = c.and(
         c.all_true(asserts.iter().cloned()),
         c.any_true(bugs.iter().cloned()),
-    );
+    );*/
 
     // Concatenate accepted, asserts, bugs.
     let num_asserts = 1 + asserts.len();
@@ -709,6 +712,14 @@ fn main() -> io::Result<()> {
 
         backend.enforce_true(accepted);
 
+        /* Print individual assertions.
+        for flag in flags.iter().take(num_asserts) {
+            eprintln!("ASSERT {}", backend.get_bool(*flag).unwrap());
+        }
+        for flag in flags.iter().skip(num_asserts) {
+            eprintln!("BUG {}", backend.get_bool(*flag).unwrap());
+        } */
+
         // Write files.
         backend.finish();
 
@@ -718,8 +729,6 @@ fn main() -> io::Result<()> {
             messages.read_file(f).unwrap();
         }
         zkinterface_bellman::zkif_backend::validate(&messages, false).unwrap();
-
-        // TODO: Compact all output wires into an assertion.
     }
 
     #[cfg(feature = "scale")] {

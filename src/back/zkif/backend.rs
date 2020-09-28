@@ -56,7 +56,13 @@ impl<'a> Backend<'a> {
         enforce_true(&mut self.cs, &bool);
     }
 
-    pub fn wire(&mut self, wire: Wire<'a>) -> ReprId {
+    pub fn get_bool(&mut self, wire: Wire<'a>) -> Option<bool> {
+        let repr_id = self.wire(wire);
+        let bool = self.representer.mut_repr(repr_id).as_boolean();
+        bool.get_value()
+    }
+
+    fn wire(&mut self, wire: Wire<'a>) -> ReprId {
         if let Some(wid) = self.wire_to_repr.get(&wire) {
             return *wid; // This Wire was already processed.
         }
