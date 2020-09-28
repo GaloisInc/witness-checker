@@ -8,29 +8,24 @@ use zkinterface_bellman::{
     bellman::{ConstraintSystem, Variable, Index, LinearCombination, SynthesisError},
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
     ff::{PrimeField, Field},
-    bls12_381::{Bls12, Scalar},
     export::to_zkif_constraint,
 };
 use super::int64::Int64;
-use super::num;
 use zkinterface_bellman::export::encode_scalar;
-
-// TODO: template with trait PrimeField instead of Scalar.
-pub type LC = LinearCombination<Scalar>;
-pub type Num = num::Num<Scalar>;
-pub type Fr = Scalar;
+use serde::export::PhantomData;
 
 
-pub struct ZkifCS {
+pub struct ZkifCS<Scalar: PrimeField> {
     stmt: StatementBuilder<FileStore>,
     constraints: ConstraintSystemOwned,
     proving: bool,
     witness: Vec<u8>,
+    phantom: PhantomData<Scalar>,
 }
 
-impl ZkifCS {
+impl<Scalar: PrimeField> ZkifCS<Scalar> {
     /// Must call finish() to finalize the files in the workspace.
-    pub fn new(workspace: impl AsRef<Path>, proving: bool) -> ZkifCS {
+    pub fn new(workspace: impl AsRef<Path>, proving: bool) -> Self {
         let store = FileStore::new(workspace, true, true, false).unwrap();
         let stmt = StatementBuilder::new(store);
 
@@ -39,6 +34,7 @@ impl ZkifCS {
             constraints: ConstraintSystemOwned { constraints: vec![] },
             proving,
             witness: vec![],
+            phantom: PhantomData,
         }
     }
 
@@ -83,7 +79,7 @@ impl ZkifCS {
     }
 }
 
-impl ConstraintSystem<Scalar> for ZkifCS {
+impl<Scalar: PrimeField> ConstraintSystem<Scalar> for ZkifCS<Scalar> {
     type Root = Self;
 
     fn alloc<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>

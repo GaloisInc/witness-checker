@@ -12,7 +12,7 @@ use zkinterface_bellman::{
     ff::{Field, PrimeField},
 };
 use super::{
-    zkif_cs::{Fr, LC, ZkifCS, scalar_from_signed, scalar_from_unsigned},
+    zkif_cs::{ZkifCS, scalar_from_signed, scalar_from_unsigned},
     bit_width::BitWidth,
     int64::Int64,
 };
@@ -26,23 +26,23 @@ pub struct Num<Scalar: PrimeField> {
     pub bit_width: BitWidth,
 }
 
-impl From<u64> for Num<Fr> {
+impl<Scalar: PrimeField> From<u64> for Num<Scalar> {
     fn from(literal: u64) -> Self {
-        let element: Fr = scalar_from_unsigned(literal);
+        let element: Scalar = scalar_from_unsigned(literal);
         Num {
             value: Some(element.clone()),
-            lc: LC::zero() + (element, ZkifCS::one()),
+            lc: LinearCombination::zero() + (element, ZkifCS::<Scalar>::one()),
             bit_width: BitWidth::from(literal),
         }
     }
 }
 
-impl From<i64> for Num<Fr> {
+impl<Scalar: PrimeField> From<i64> for Num<Scalar> {
     fn from(literal: i64) -> Self {
-        let element: Fr = scalar_from_signed(literal);
+        let element: Scalar = scalar_from_signed(literal);
         Num {
             value: Some(element.clone()),
-            lc: LC::zero() + (element, ZkifCS::one()),
+            lc: LinearCombination::zero() + (element, ZkifCS::<Scalar>::one()),
             bit_width: BitWidth::from(literal),
         }
     }
@@ -317,4 +317,14 @@ pub fn boolean_lc<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     bool: &Boolean,
 ) -> LinearCombination<Scalar> {
     bool.lc(CS::one(), Scalar::one())
+}
+
+
+#[test]
+fn test_num() -> Result<(), Box<dyn std::error::Error>> {
+    use super::field::GaloisScalar;
+
+    let n = Num::<GaloisScalar>::zero();
+
+    Ok(())
 }

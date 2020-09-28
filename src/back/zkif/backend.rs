@@ -12,17 +12,22 @@ use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
     bellman::{ConstraintSystem, SynthesisError},
     ff::{Field, PrimeField},
-    bls12_381::Bls12,
+    bls12_381::{Bls12, Scalar as Bls12Scalar},
 };
 use super::{
-    zkif_cs::{ZkifCS, LC, Fr, Num, scalar_from_unsigned, scalar_from_signed},
+    zkif_cs::{ZkifCS, scalar_from_unsigned, scalar_from_signed},
     int_ops,
     int64::Int64,
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
-    num::boolean_lc,
+    num, num::boolean_lc,
 };
+
+// TODO: template with trait PrimeField instead of Bls12Scalar.
+pub type Scalar = Bls12Scalar;
+pub type Num = num::Num<Bls12Scalar>;
+pub type CS = ZkifCS<Bls12Scalar>;
 
 
 /// zkInterface backend based on Bellman.
@@ -33,7 +38,7 @@ use super::{
 pub struct Backend<'a> {
     wire_to_repr: HashMap<Wire<'a>, ReprId>,
     representer: Representer,
-    cs: ZkifCS,
+    cs: ZkifCS<Scalar>,
 }
 
 impl<'a> Backend<'a> {
@@ -104,13 +109,13 @@ impl<'a> Backend<'a> {
                     TyKind::Bool => {
                         let val = secret.val.map(|v| v != 0);
                         let b = Boolean::from(
-                            AllocatedBit::alloc::<Fr, _>(&mut self.cs, val).unwrap()
+                            AllocatedBit::alloc::<Scalar, _>(&mut self.cs, val).unwrap()
                         );
                         WireRepr::from(b)
                     }
 
                     TyKind::U64 | TyKind::I64 => {
-                        let int = Int64::alloc(&mut self.cs, secret.val).unwrap();
+                        let int = Int64::alloc::<Scalar, _>(&mut self.cs, secret.val).unwrap();
                         WireRepr::from(int)
                     }
 
@@ -372,7 +377,7 @@ fn test_zkif() {
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
         let value = int.value.unwrap();
-        assert_eq!(value, scalar_from_unsigned::<Fr>(expect as u64));
+        assert_eq!(value, scalar_from_unsigned::<Scalar>(expect as u64));
     }
 
     fn check_bool<'a>(b: &Backend<'a>, w: Wire<'a>, expect: bool) {

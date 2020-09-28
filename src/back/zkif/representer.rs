@@ -1,6 +1,6 @@
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use super::{
-    zkif_cs::{Num, ZkifCS},
+    backend::{Num, CS},
     int64::Int64,
 };
 
@@ -73,9 +73,9 @@ impl WireRepr {
                 // Convert from another repr.
                 let num = {
                     if let Some(b) = &self.boolean {
-                        Num::from_boolean::<ZkifCS>(b)
+                        Num::from_boolean::<CS>(b)
                     } else if let Some(int) = &self.int64 {
-                        Num::from_int::<ZkifCS>(int)
+                        Num::from_int::<CS>(int)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
@@ -86,7 +86,7 @@ impl WireRepr {
         }
     }
 
-    pub fn as_int64(&mut self, cs: &mut ZkifCS) -> Int64 {
+    pub fn as_int64(&mut self, cs: &mut CS) -> Int64 {
         match &self.int64 {
             Some(u) => u.clone(),
 
@@ -107,4 +107,3 @@ impl WireRepr {
         }
     }
 }
-

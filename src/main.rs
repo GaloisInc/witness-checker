@@ -693,6 +693,9 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(feature = "bellman")] {
+        use back::zkif::backend::{Backend, Scalar};
+        use zkinterface_bellman::zkif_backend::validate;
+
         let flags = run_pass(&c, flags, lower::int::compare_to_greater_or_equal_to_zero);
         let accepted = flags[0];
 
@@ -708,7 +711,7 @@ fn main() -> io::Result<()> {
         }
 
         // Generate the circuit and witness.
-        let mut backend = back::zkif::backend::Backend::new(workspace, true);
+        let mut backend = Backend::new(workspace, true);
 
         backend.enforce_true(accepted);
 
@@ -728,7 +731,7 @@ fn main() -> io::Result<()> {
         for f in &files {
             messages.read_file(f).unwrap();
         }
-        zkinterface_bellman::zkif_backend::validate(&messages, false).unwrap();
+        validate::<Scalar>(&messages, false).unwrap();
     }
 
     #[cfg(feature = "scale")] {
