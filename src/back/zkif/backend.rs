@@ -12,7 +12,6 @@ use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
     bellman::{ConstraintSystem, SynthesisError},
     ff::{Field, PrimeField},
-    bls12_381::{Bls12, Scalar as Bls12Scalar},
 };
 use super::{
     zkif_cs::{ZkifCS, scalar_from_unsigned, scalar_from_signed},
@@ -22,12 +21,14 @@ use super::{
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
     num, num::boolean_lc,
+    field::QuarkScalar,
 };
 
-// TODO: template with trait PrimeField instead of Bls12Scalar.
-pub type Scalar = Bls12Scalar;
-pub type Num = num::Num<Bls12Scalar>;
-pub type CS = ZkifCS<Bls12Scalar>;
+// TODO: template with trait PrimeField instead of a specific Scalar.
+// Alternative on 255 bits: zkinterface_bellman::bls12_381::Scalar
+pub type Scalar = QuarkScalar;
+pub type Num = num::Num<Scalar>;
+pub type CS = ZkifCS<Scalar>;
 
 
 /// zkInterface backend based on Bellman.

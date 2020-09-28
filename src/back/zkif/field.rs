@@ -1,7 +1,8 @@
 use ff::PrimeField;
 
+// 2**128 - 159
 #[derive(PrimeField)]
-#[PrimeFieldModulus = "52435875175126190479447740508185965837690552500527637822603658699938581184513"]
+#[PrimeFieldModulus = "340282366920938463463374607431768211297"]
 #[PrimeFieldGenerator = "7"]
 #[PrimeFieldReprEndianness = "little"]
-pub struct GaloisScalar([u64; 4]);
+pub struct QuarkScalar([u64; 3]);
