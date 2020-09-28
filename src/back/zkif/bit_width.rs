@@ -1,6 +1,6 @@
 use std::ops::{Add, Sub, Mul};
 use std::cmp::max;
-use zkinterface_bellman::sapling_crypto::circuit::{boolean::Boolean};
+use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use crate::back::zkif::int64::Int64;
 
 #[derive(Copy, Clone, Debug)]

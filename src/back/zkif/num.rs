@@ -7,28 +7,28 @@ use std::ops::{Add, Sub, Mul};
 
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},
-    sapling_crypto::circuit::boolean::{Boolean, AllocatedBit},
+    bellman::gadgets::boolean::{AllocatedBit, Boolean},
     pairing::Engine,
-    ff::{ScalarEngine, Field, PrimeField, PrimeFieldRepr},
+    ff::{Field, PrimeField},
 };
 use super::{
-    zkif_cs::{En, Fr, LC, ZkifCS, fr_from_signed, fr_from_unsigned},
+    zkif_cs::{Fr, LC, ZkifCS, scalar_from_signed, scalar_from_unsigned},
     bit_width::BitWidth,
     int64::Int64,
 };
 
 
 #[derive(Clone)]
-pub struct Num<E: Engine> {
-    pub value: Option<E::Fr>,
-    pub lc: LinearCombination<E>,
+pub struct Num<Scalar: PrimeField> {
+    pub value: Option<Scalar>,
+    pub lc: LinearCombination<Scalar>,
     /// How many bits would be required to represent this number.
     pub bit_width: BitWidth,
 }
 
-impl From<u64> for Num<En> {
+impl From<u64> for Num<Fr> {
     fn from(literal: u64) -> Self {
-        let element: Fr = fr_from_unsigned(literal);
+        let element: Fr = scalar_from_unsigned(literal);
         Num {
             value: Some(element.clone()),
             lc: LC::zero() + (element, ZkifCS::one()),
@@ -37,9 +37,9 @@ impl From<u64> for Num<En> {
     }
 }
 
-impl From<i64> for Num<En> {
+impl From<i64> for Num<Fr> {
     fn from(literal: i64) -> Self {
-        let element: Fr = fr_from_signed(literal);
+        let element: Fr = scalar_from_signed(literal);
         Num {
             value: Some(element.clone()),
             lc: LC::zero() + (element, ZkifCS::one()),
@@ -48,24 +48,21 @@ impl From<i64> for Num<En> {
     }
 }
 
-impl<E: Engine> Num<E> {
+impl<Scalar: PrimeField> Num<Scalar> {
     pub fn zero() -> Self {
         Num {
-            value: Some(E::Fr::zero()),
+            value: Some(Scalar::zero()),
             lc: LinearCombination::zero(),
             bit_width: BitWidth::zero(),
         }
     }
 
-    pub fn _alloc<CS: ConstraintSystem<E>>(
+    pub fn _alloc<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         value: Option<u64>,
     ) -> Result<Self, SynthesisError>
     {
-        let value = value.map(|val|
-            E::Fr::from_repr(<<E::Fr as PrimeField>::Repr as From<u64>>::
-            from(val as u64)).unwrap()
-        );
+        let value = value.map(|val| Scalar::from(val));
         let var = cs.alloc(|| "num", ||
             value.ok_or(SynthesisError::AssignmentMissing))?;
         Ok(Num {
@@ -75,11 +72,11 @@ impl<E: Engine> Num<E> {
         })
     }
 
-    pub fn from_int<CS: ConstraintSystem<E>>(
+    pub fn from_int<CS: ConstraintSystem<Scalar>>(
         int: &Int64,
-    ) -> Num<E> {
+    ) -> Num<Scalar> {
         let value = int.value.map(|val|
-            fr_from_unsigned(val as u64));
+            scalar_from_unsigned(val as u64));
 
         let lc = Self::lc_from_bits::<CS>(&int.bits);
 
@@ -88,34 +85,34 @@ impl<E: Engine> Num<E> {
         Num { value, lc, bit_width }
     }
 
-    pub fn lc_from_bits<CS: ConstraintSystem<E>>(
-        bits: &[Boolean]) -> LinearCombination<E>
+    pub fn lc_from_bits<CS: ConstraintSystem<Scalar>>(
+        bits: &[Boolean]) -> LinearCombination<Scalar>
     {
         let mut lc = LinearCombination::zero();
         let one = CS::one();
-        let mut coeff = E::Fr::one();
+        let mut coeff = Scalar::one();
         for bit in bits {
             lc = lc + &bit.lc(one, coeff);
-            coeff.double();
+            coeff = coeff.double();
         }
         lc
     }
 
-    pub fn from_boolean<CS: ConstraintSystem<E>>(
+    pub fn from_boolean<CS: ConstraintSystem<Scalar>>(
         bool: &Boolean,
     ) -> Self {
         Num {
             value: bool.get_value().map(|b|
-                if b { E::Fr::one() } else { E::Fr::zero() }
+                if b { Scalar::one() } else { Scalar::zero() }
             ),
-            lc: boolean_lc::<E, CS>(bool),
+            lc: boolean_lc::<Scalar, CS>(bool),
             bit_width: BitWidth::from(bool),
         }
     }
 
     /// Decompose this number into bits, least-significant first.
     /// Negative numbers are encoded in two-complement.
-    pub fn alloc_bits<CS: ConstraintSystem<E>>(
+    pub fn alloc_bits<CS: ConstraintSystem<Scalar>>(
         &self, cs: CS) -> Vec<Boolean>
     {
         self.assert_no_overflow();
@@ -142,7 +139,7 @@ impl<E: Engine> Num<E> {
         }
     }
 
-    fn alloc_bits_unsigned<CS: ConstraintSystem<E>>(
+    fn alloc_bits_unsigned<CS: ConstraintSystem<Scalar>>(
         &self, mut cs: CS) -> Vec<Boolean>
     {
         let n_bits = match self.bit_width {
@@ -150,20 +147,10 @@ impl<E: Engine> Num<E> {
             _ => panic!("Cannot decompose a negative or unsized number."),
         };
 
-        let values = match &self.value {
+        let values: Vec<Option<bool>> = match &self.value {
             Some(val) => {
-                let repr = val.into_repr();
-                let limbs: &[u64] = repr.as_ref();
-                let mut bools = Vec::with_capacity(n_bits);
-
-                for i_bit in 0..n_bits {
-                    let which_limb = i_bit / 64;
-                    let which_bit = i_bit % 64;
-                    let bit = (limbs[which_limb] >> which_bit) & 1 == 1;
-                    bools.push(Some(bit));
-                }
-
-                bools
+                let bits = val.to_le_bits();
+                bits.iter().take(n_bits).map(|b| Some(*b)).collect()
             }
             None => vec![None; n_bits]
         };
@@ -192,13 +179,13 @@ impl<E: Engine> Num<E> {
 
     /// Assert that no overflows could occur in computing this Num.
     pub fn assert_no_overflow(&self) {
-        if !self.bit_width.fits_into(E::Fr::CAPACITY as usize) {
+        if !self.bit_width.fits_into(Scalar::CAPACITY as usize) {
             panic!("Number may overflow (size {:?}).", self.bit_width);
         }
     }
 
     pub fn mul(mut self, other: &Self,
-               cs: &mut impl ConstraintSystem<E>,
+               cs: &mut impl ConstraintSystem<Scalar>,
     ) -> Self {
         match (&mut self.value, &other.value) {
             (
@@ -213,7 +200,7 @@ impl<E: Engine> Num<E> {
             || "product",
             || self.value.ok_or(SynthesisError::AssignmentMissing),
         ).unwrap();
-        let product_lc = LinearCombination::<E>::zero() + product;
+        let product_lc = LinearCombination::<Scalar>::zero() + product;
 
         cs.enforce(
             || "multiplication",
@@ -227,16 +214,16 @@ impl<E: Engine> Num<E> {
         self
     }
 
-    pub fn equals_zero<CS: ConstraintSystem<E>>(
+    pub fn equals_zero<CS: ConstraintSystem<Scalar>>(
         &self,
         cs: &mut CS,
     ) -> Boolean {
         let is_zero = {
             let value = self.value.map(|val| val.is_zero());
-            Boolean::from(AllocatedBit::alloc::<E, &mut CS>(
+            Boolean::from(AllocatedBit::alloc::<Scalar, &mut CS>(
                 cs, value).unwrap())
         };
-        let is_zero_lc = boolean_lc::<E, CS>(&is_zero);
+        let is_zero_lc = boolean_lc::<Scalar, CS>(&is_zero);
 
         cs.enforce(
             || "eq=1 => self=0",
@@ -248,8 +235,8 @@ impl<E: Engine> Num<E> {
         let self_inv = cs.alloc(
             || "inv",
             || Ok(
-                self.value.unwrap().inverse()
-                    .unwrap_or_else(|| E::Fr::zero())
+                self.value.unwrap().invert()
+                    .unwrap_or_else(|| Scalar::zero())
             ),
         ).unwrap();
         cs.enforce(
@@ -263,20 +250,15 @@ impl<E: Engine> Num<E> {
         is_zero
     }
 
-    pub fn power_of_two<CS: ConstraintSystem<E>>(
-        n: usize) -> Self
+    // TODO: cache.
+    pub fn power_of_two<CS: ConstraintSystem<Scalar>>(n: usize) -> Self
     {
-        // Set a bit in a little-endian representation.
-        let which_limb = n / 64;
-        let which_bit = n % 64;
-        let element = {
-            let mut repr = <E::Fr as PrimeField>::Repr::default();
-            let limbs: &mut [u64] = repr.as_mut();
-            limbs[which_limb] |= 1 << which_bit;
-            E::Fr::from_repr(repr).unwrap()
-        };
+        let mut element = Scalar::one();
+        for _ in 0..n {
+            element = element.double();
+        }
 
-        Num::<E> {
+        Num::<Scalar> {
             value: Some(element.clone()),
             lc: LinearCombination::zero() + (element, CS::one()),
             bit_width: BitWidth::Max(n + 1, false),
@@ -292,10 +274,10 @@ impl<E: Engine> Num<E> {
     }
 }
 
-impl<'a, E: Engine> Add<&'a Num<E>> for Num<E> {
-    type Output = Num<E>;
+impl<'a, Scalar: PrimeField> Add<&'a Num<Scalar>> for Num<Scalar> {
+    type Output = Num<Scalar>;
 
-    fn add(mut self, other: &'a Num<E>) -> Num<E> {
+    fn add(mut self, other: &'a Num<Scalar>) -> Num<Scalar> {
         match (&mut self.value, &other.value) {
             (
                 Some(ref mut self_val),
@@ -311,10 +293,10 @@ impl<'a, E: Engine> Add<&'a Num<E>> for Num<E> {
     }
 }
 
-impl<'a, E: Engine> Sub<&'a Num<E>> for Num<E> {
-    type Output = Num<E>;
+impl<'a, Scalar: PrimeField> Sub<&'a Num<Scalar>> for Num<Scalar> {
+    type Output = Num<Scalar>;
 
-    fn sub(mut self, other: &'a Num<E>) -> Num<E> {
+    fn sub(mut self, other: &'a Num<Scalar>) -> Num<Scalar> {
         match (&mut self.value, &other.value) {
             (
                 Some(ref mut self_val),
@@ -331,8 +313,8 @@ impl<'a, E: Engine> Sub<&'a Num<E>> for Num<E> {
 }
 
 
-pub fn boolean_lc<E: Engine, CS: ConstraintSystem<E>>(
+pub fn boolean_lc<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     bool: &Boolean,
-) -> LinearCombination<E> {
-    bool.lc(CS::one(), E::Fr::one())
+) -> LinearCombination<Scalar> {
+    bool.lc(CS::one(), Scalar::one())
 }

@@ -9,13 +9,13 @@ use zkinterface::{
     statement::{StatementBuilder, FileStore},
 };
 use zkinterface_bellman::{
-    sapling_crypto::circuit::boolean::{AllocatedBit, Boolean},
-    ff::{Field, PrimeField},
-    pairing::bls12_381::Bls12,
+    bellman::gadgets::boolean::{AllocatedBit, Boolean},
     bellman::{ConstraintSystem, SynthesisError},
+    ff::{Field, PrimeField},
+    bls12_381::Bls12,
 };
 use super::{
-    zkif_cs::{ZkifCS, En, LC, Fr, Num, fr_from_unsigned, fr_from_signed},
+    zkif_cs::{ZkifCS, LC, Fr, Num, scalar_from_unsigned, scalar_from_signed},
     int_ops,
     int64::Int64,
     bit_width::BitWidth,
@@ -98,7 +98,7 @@ impl<'a> Backend<'a> {
                     TyKind::Bool => {
                         let val = secret.val.map(|v| v != 0);
                         let b = Boolean::from(
-                            AllocatedBit::alloc::<En, _>(&mut self.cs, val).unwrap()
+                            AllocatedBit::alloc::<Fr, _>(&mut self.cs, val).unwrap()
                         );
                         WireRepr::from(b)
                     }
@@ -366,7 +366,7 @@ fn test_zkif() {
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
         let value = int.value.unwrap();
-        assert_eq!(value, fr_from_unsigned::<Fr>(expect as u64));
+        assert_eq!(value, scalar_from_unsigned::<Fr>(expect as u64));
     }
 
     fn check_bool<'a>(b: &Backend<'a>, w: Wire<'a>, expect: bool) {

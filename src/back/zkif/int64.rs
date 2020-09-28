@@ -5,15 +5,11 @@
 
 use zkinterface_bellman::{
     ff::{Field, PrimeField},
-    pairing::Engine,
     bellman::{
         SynthesisError,
         ConstraintSystem,
         LinearCombination,
-    },
-    sapling_crypto::circuit::{
-        boolean::{Boolean, AllocatedBit},
-        multieq::MultiEq,
+        gadgets::boolean::{Boolean, AllocatedBit},
     },
 };
 use super::{
@@ -57,12 +53,12 @@ impl Int64 {
     }
 
     /// Allocate a `Int64` in the constraint system
-    pub fn alloc<E, CS>(
+    pub fn alloc<Scalar, CS>(
         mut cs: CS,
         value: Option<u64>,
     ) -> Result<Self, SynthesisError>
-        where E: Engine,
-              CS: ConstraintSystem<E>
+        where Scalar: PrimeField,
+              CS: ConstraintSystem<Scalar>
     {
         let values = match value {
             Some(mut val) => {
@@ -94,9 +90,9 @@ impl Int64 {
         })
     }
 
-    pub fn from_num<E: Engine, CS: ConstraintSystem<E>>(
+    pub fn from_num<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
-        num: &Num<E>,
+        num: &Num<Scalar>,
     ) -> Int64 {
         let mut bits = num.alloc_bits(&mut cs);
         let expand_bit = match num.bit_width {
@@ -213,13 +209,13 @@ impl Int64 {
     }
 
     /// XOR this `Int64` with another `Int64`
-    pub fn xor<E, CS>(
+    pub fn xor<Scalar, CS>(
         &self,
         mut cs: CS,
         other: &Self,
     ) -> Result<Self, SynthesisError>
-        where E: Engine,
-              CS: ConstraintSystem<E>
+        where Scalar: PrimeField,
+              CS: ConstraintSystem<Scalar>
     {
         let new_value = match (self.value, other.value) {
             (Some(a), Some(b)) => {
@@ -246,114 +242,3 @@ impl Int64 {
         })
     }
 }
-
-/*
-#[cfg(test)]
-mod test {
-    use rand::{XorShiftRng, SeedableRng, Rng};
-    use super::{Int64};
-    use zkinterface_bellman::{
-        bellman::ConstraintSystem,
-        ff::Field,
-        pairing::bls12_381::{Bls12},
-        test_cs::TestConstraintSystem,
-        sapling_crypto::circuit::{
-            boolean::Boolean,
-            multieq::MultiEq,
-        },
-    };
-
-    #[test]
-    fn test_uint64_from_bits() {
-        let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0653]);
-
-        for _ in 0..1000 {
-            let mut v = (0..SIZE).map(|_| Boolean::constant(rng.gen())).collect::<Vec<_>>();
-
-            let b = Int64::from_bits(&v);
-
-            for (i, bit) in b.bits.iter().enumerate() {
-                match bit {
-                    &Boolean::Constant(bit) => {
-                        assert!(bit == ((b.value.unwrap() >> i) & 1 == 1));
-                    }
-                    _ => unreachable!()
-                }
-            }
-
-            let expected_to_be_same = b.into_bits();
-
-            for x in v.iter().zip(expected_to_be_same.iter())
-            {
-                match x {
-                    (&Boolean::Constant(true), &Boolean::Constant(true)) => {}
-                    (&Boolean::Constant(false), &Boolean::Constant(false)) => {}
-                    _ => unreachable!()
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_uint64_xor() {
-        let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0653]);
-
-        for _ in 0..1000 {
-            let mut cs = TestConstraintSystem::<Bls12>::new();
-
-            let a: u64 = rng.gen();
-            let b: u64 = rng.gen();
-            let c: u64 = rng.gen();
-
-            let mut expected = a ^ b ^ c;
-
-            let a_bit = Int64::alloc(cs.namespace(|| "a_bit"), Some(a)).unwrap();
-            let b_bit = Int64::constant(b);
-            let c_bit = Int64::alloc(cs.namespace(|| "c_bit"), Some(c)).unwrap();
-
-            let r = a_bit.xor(cs.namespace(|| "first xor"), &b_bit).unwrap();
-            let r = r.xor(cs.namespace(|| "second xor"), &c_bit).unwrap();
-
-            assert!(cs.is_satisfied());
-
-            assert!(r.value == Some(expected));
-
-            for b in r.bits.iter() {
-                match b {
-                    &Boolean::Is(ref b) => {
-                        assert!(b.get_value().unwrap() == (expected & 1 == 1));
-                    }
-                    &Boolean::Not(ref b) => {
-                        assert!(!b.get_value().unwrap() == (expected & 1 == 1));
-                    }
-                    &Boolean::Constant(b) => {
-                        assert!(b == (expected & 1 == 1));
-                    }
-                }
-
-                expected >>= 1;
-            }
-        }
-    }
-
-    #[test]
-    fn test_uint64_shift_right() {
-        let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
-
-        for _ in 0..50 {
-            for i in 0..60 {
-                let num = rng.gen();
-                let a = Int64::constant(num).shift_right(i);
-                let b = Int64::constant(num >> i);
-
-                assert_eq!(a.value.unwrap(), num >> i);
-
-                assert_eq!(a.bits.len(), b.bits.len());
-                for (a, b) in a.bits.iter().zip(b.bits.iter()) {
-                    assert_eq!(a.get_value().unwrap(), b.get_value().unwrap());
-                }
-            }
-        }
-    }
-}
-*/

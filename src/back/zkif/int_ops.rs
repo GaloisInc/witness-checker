@@ -1,17 +1,17 @@
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, SynthesisError, LinearCombination},
+    bellman::gadgets::boolean::Boolean,
     pairing::Engine,
     ff::PrimeField,
-    sapling_crypto::circuit::boolean::Boolean,
 };
 use super::{
-    zkif_cs::{fr_from_unsigned, ZkifCS},
+    zkif_cs::{scalar_from_unsigned, ZkifCS},
     num::{Num, boolean_lc},
     int64::Int64,
     bit_width::BitWidth,
 };
 
-pub fn bitwise_xor<E: Engine, CS: ConstraintSystem<E>>(
+pub fn bitwise_xor<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: CS,
     left: &Int64,
     right: &Int64,
@@ -21,7 +21,7 @@ pub fn bitwise_xor<E: Engine, CS: ConstraintSystem<E>>(
 }
 
 // TODO: Implement directly on the type but fields are private.
-pub fn bitwise_and<E: Engine, CS: ConstraintSystem<E>>(
+pub fn bitwise_and<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     left: &Int64,
     right: &Int64,
@@ -37,7 +37,7 @@ pub fn bitwise_and<E: Engine, CS: ConstraintSystem<E>>(
     Int64::from_bits(&out_bits)
 }
 
-pub fn bitwise_or<E: Engine, CS: ConstraintSystem<E>>(
+pub fn bitwise_or<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: &mut CS,
     left: &Int64,
     right: &Int64,
@@ -53,38 +53,38 @@ pub fn bitwise_or<E: Engine, CS: ConstraintSystem<E>>(
     Int64::from_bits(&out_bits)
 }
 
-pub fn bool_or<'a, E, CS>(
+pub fn bool_or<'a, Scalar, CS>(
     cs: CS,
     a: &'a Boolean,
     b: &'a Boolean,
 ) -> Boolean
-    where E: Engine,
-          CS: ConstraintSystem<E>
+    where Scalar: PrimeField,
+          CS: ConstraintSystem<Scalar>
 {
     Boolean::and(cs, &a.not(), &b.not()).unwrap().not()
 }
 
-pub fn enforce_true<E, CS>(
+pub fn enforce_true<Scalar, CS>(
     mut cs: CS,
     bool: &Boolean,
-) where E: Engine,
-        CS: ConstraintSystem<E>
+) where Scalar: PrimeField,
+        CS: ConstraintSystem<Scalar>
 {
     cs.enforce(
         || "enforce true",
-        |_| boolean_lc::<E, CS>(bool),
+        |_| boolean_lc::<Scalar, CS>(bool),
         |lc| lc + CS::one(),
         |lc| lc + CS::one(),
     );
 }
 
-pub fn div<E: Engine, CS: ConstraintSystem<E>>(
+pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    numer_num: &Num<E>,
+    numer_num: &Num<Scalar>,
     numer_int: &Int64,
-    denom_num: &Num<E>,
+    denom_num: &Num<Scalar>,
     denom_int: &Int64,
-) -> (/*quotient*/ Num<E>, Int64, /*rest*/ Num<E>, Int64) {
+) -> (/*quotient*/ Num<Scalar>, Int64, /*rest*/ Num<Scalar>, Int64) {
     let (quot_val, rest_val) = match (numer_int.value, denom_int.value) {
         (Some(numer), Some(denom)) => {
             if denom == 0 {
@@ -123,7 +123,7 @@ pub fn div<E: Engine, CS: ConstraintSystem<E>>(
         || "rest < denom",
         |lc| lc + one,
         |lc| lc + one,
-        |_| boolean_lc::<E, CS>(&ok),
+        |_| boolean_lc::<Scalar, CS>(&ok),
     );
     // TODO: this should be done without enforce but by construction of diff_int.
 

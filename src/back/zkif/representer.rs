@@ -1,4 +1,4 @@
-use zkinterface_bellman::sapling_crypto::circuit::boolean::Boolean;
+use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use super::{
     zkif_cs::{Num, ZkifCS},
     int64::Int64,

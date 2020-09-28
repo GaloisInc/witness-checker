@@ -6,20 +6,19 @@ use zkinterface::{
 };
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, Variable, Index, LinearCombination, SynthesisError},
-    ff::{ScalarEngine, PrimeField, PrimeFieldRepr, Field},
-    sapling_crypto::circuit::boolean::{AllocatedBit, Boolean},
-    pairing::bls12_381::Bls12,
+    bellman::gadgets::boolean::{AllocatedBit, Boolean},
+    ff::{PrimeField, Field},
+    bls12_381::{Bls12, Scalar},
     export::to_zkif_constraint,
 };
 use super::int64::Int64;
 use super::num;
+use zkinterface_bellman::export::encode_scalar;
 
-// TODO: template with trait ScalarEngine.
-pub type En = Bls12;
-pub type LC = LinearCombination<En>;
-pub type Num = num::Num<En>;
-pub type Fr = <En as ScalarEngine>::Fr;
-pub type _FrRepr = <Fr as PrimeField>::Repr;
+// TODO: template with trait PrimeField instead of Scalar.
+pub type LC = LinearCombination<Scalar>;
+pub type Num = num::Num<Scalar>;
+pub type Fr = Scalar;
 
 
 pub struct ZkifCS {
@@ -61,10 +60,9 @@ impl ZkifCS {
             self.stmt.receive_witness(&msg).unwrap();
         }
 
-        let mut fr = <En as ScalarEngine>::Fr::one();
-        fr.negate();
+        let negative_one = Scalar::one().neg();
         let mut field_maximum = Vec::<u8>::new();
-        fr.into_repr().write_le(&mut field_maximum).unwrap();
+        encode_scalar(&negative_one, &mut field_maximum);
 
         let statement = CircuitOwned {
             connections: VariablesOwned {
@@ -85,33 +83,33 @@ impl ZkifCS {
     }
 }
 
-impl ConstraintSystem<En> for ZkifCS {
+impl ConstraintSystem<Scalar> for ZkifCS {
     type Root = Self;
 
     fn alloc<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>
-        where F: FnOnce() -> Result<Fr, SynthesisError>,
+        where F: FnOnce() -> Result<Scalar, SynthesisError>,
               A: FnOnce() -> AR, AR: Into<String>
     {
         let zkid = self.stmt.vars.allocate();
         if self.proving {
             let fr = f()?;
-            fr.into_repr().write_le(&mut self.witness)?;
+            encode_scalar(&fr, &mut self.witness);
         }
         Ok(Variable::new_unchecked(Index::Aux(zkid as usize)))
     }
 
     fn alloc_input<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>
-        where F: FnOnce() -> Result<Fr, SynthesisError>,
+        where F: FnOnce() -> Result<Scalar, SynthesisError>,
               A: FnOnce() -> AR, AR: Into<String>
     {
-        ConstraintSystem::<En>::alloc(self, annotation, f)
+        ConstraintSystem::<Scalar>::alloc(self, annotation, f)
     }
 
     fn enforce<A, AR, LA, LB, LC>(&mut self, annotation: A, a: LA, b: LB, c: LC)
         where A: FnOnce() -> AR, AR: Into<String>,
-              LA: FnOnce(LinearCombination<En>) -> LinearCombination<En>,
-              LB: FnOnce(LinearCombination<En>) -> LinearCombination<En>,
-              LC: FnOnce(LinearCombination<En>) -> LinearCombination<En>
+              LA: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
+              LB: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
+              LC: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>
     {
         let a = a(LinearCombination::zero());
         let b = b(LinearCombination::zero());
@@ -130,16 +128,14 @@ impl ConstraintSystem<En> for ZkifCS {
     }
 }
 
-pub fn fr_from_unsigned<Fr: PrimeField>(val: u64) -> Fr {
-    Fr::from_repr(<Fr::Repr as From<u64>>::from(val)).unwrap()
+pub fn scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Scalar {
+    Scalar::from(val)
 }
 
-pub fn fr_from_signed<Fr: PrimeField>(val: i64) -> Fr {
+pub fn scalar_from_signed<Scalar: PrimeField>(val: i64) -> Scalar {
     if val >= 0 {
-        fr_from_unsigned(val as u64)
+        scalar_from_unsigned::<Scalar>(val as u64)
     } else {
-        let mut f: Fr = fr_from_unsigned((-val) as u64);
-        f.negate();
-        f
+        scalar_from_unsigned::<Scalar>((-val) as u64).neg()
     }
 }
