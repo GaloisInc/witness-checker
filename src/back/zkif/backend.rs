@@ -12,15 +12,15 @@ use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
     bellman::{ConstraintSystem, SynthesisError},
     ff::{Field, PrimeField},
+    zkif_cs::ZkifCS,
 };
 use super::{
-    zkif_cs::{ZkifCS, scalar_from_unsigned, scalar_from_signed},
     int_ops,
     int64::Int64,
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
-    num, num::boolean_lc,
+    num, num::{boolean_lc, scalar_from_unsigned, scalar_from_signed},
     field::QuarkScalar,
 };
 
@@ -53,7 +53,7 @@ impl<'a> Backend<'a> {
     }
 
     pub fn finish(self) {
-        self.cs.finish()
+        self.cs.finish("cheesecloth")
     }
 
     pub fn enforce_true(&mut self, wire: Wire<'a>) {

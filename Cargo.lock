@@ -643,7 +643,7 @@ dependencies = [
 [[package]]
 name = "zkinterface_bellman"
 version = "1.2.0"
-source = "git+https://github.com/QED-it/zkinterface-bellman?rev=1f9ffdf5#1f9ffdf5207231a2511586ce41081903d9045889"
+source = "git+https://github.com/QED-it/zkinterface-bellman?rev=982a98fd#982a98fdcaa2643a6a7b6af69334da314bc8a59d"
 dependencies = [
  "bellman",
  "bls12_381",

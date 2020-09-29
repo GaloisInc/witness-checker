@@ -5,7 +5,6 @@ use zkinterface::{
 };
 
 pub mod backend;
-mod zkif_cs;
 mod representer;
 mod num;
 mod bit_width;

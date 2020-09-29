@@ -10,9 +10,9 @@ use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
     pairing::Engine,
     ff::{Field, PrimeField},
+    zkif_cs::ZkifCS,
 };
 use super::{
-    zkif_cs::{ZkifCS, scalar_from_signed, scalar_from_unsigned},
     bit_width::BitWidth,
     int64::Int64,
 };
@@ -317,6 +317,19 @@ pub fn boolean_lc<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     bool: &Boolean,
 ) -> LinearCombination<Scalar> {
     bool.lc(CS::one(), Scalar::one())
+}
+
+
+pub fn scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Scalar {
+    Scalar::from(val)
+}
+
+pub fn scalar_from_signed<Scalar: PrimeField>(val: i64) -> Scalar {
+    if val >= 0 {
+        scalar_from_unsigned::<Scalar>(val as u64)
+    } else {
+        scalar_from_unsigned::<Scalar>((-val) as u64).neg()
+    }
 }
 
 

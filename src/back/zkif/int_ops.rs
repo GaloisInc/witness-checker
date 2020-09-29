@@ -3,10 +3,10 @@ use zkinterface_bellman::{
     bellman::gadgets::boolean::Boolean,
     pairing::Engine,
     ff::PrimeField,
+    zkif_cs::ZkifCS,
 };
 use super::{
-    zkif_cs::{scalar_from_unsigned, ZkifCS},
-    num::{Num, boolean_lc},
+    num::{Num, boolean_lc, scalar_from_unsigned},
     int64::Int64,
     bit_width::BitWidth,
 };
