@@ -18,7 +18,7 @@ use cheesecloth::tiny_ram::{
     Execution, RamInstr, RamState, MemPort, Opcode, Advice, REG_NONE, REG_PC,
     MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
-use zkinterface::Messages;
+use zkinterface::Reader;
 use cheesecloth::ir::circuit::TyKind::Bool;
 
 macro_rules! wire_assert {
@@ -702,7 +702,7 @@ fn main() -> io::Result<()> {
         // Clean workspace.
         let workspace = Path::new("local/example");
         let files = vec![
-            workspace.join("main.zkif"),
+            workspace.join("header.zkif"),
             workspace.join("constraints.zkif"),
             workspace.join("witness.zkif"),
         ];
@@ -727,11 +727,11 @@ fn main() -> io::Result<()> {
         backend.finish();
 
         // Validate the circuit and witness.
-        let mut messages = Messages::new();
+        let mut reader = Reader::new();
         for f in &files {
-            messages.read_file(f).unwrap();
+            reader.read_file(f).unwrap();
         }
-        validate::<Scalar>(&messages, false).unwrap();
+        validate::<Scalar>(&reader, false).unwrap();
     }
 
     #[cfg(feature = "scale")] {

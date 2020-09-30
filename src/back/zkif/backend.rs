@@ -4,10 +4,6 @@ use std::ops::Sub;
 
 use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit};
 
-use zkinterface::{
-    VariablesOwned, CircuitOwned, KeyValueOwned, CommandOwned,
-    statement::{StatementBuilder, FileStore},
-};
 use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
     bellman::{ConstraintSystem, SynthesisError},
