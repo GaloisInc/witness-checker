@@ -594,13 +594,12 @@ fn main() -> io::Result<()> {
     for (&i, advs) in &exec.advice {
         for adv in advs {
             match *adv {
-                Advice::MemOp { addr, value, write } => {
+                Advice::MemOp { addr, value, op } => {
                     // It should be fine to replace the old `Secret` gates with new ones here.  The
                     // shape of the circuit will be the same either way.
                     mem_ports[i as usize - 1] = b.secret(Some(MemPort {
                         cycle: i as u32 - 1,
-                        addr, value,
-                        op: if write { MemOpKind::Write } else { MemOpKind::Read },
+                        addr, value, op,
                     }));
                 },
                 Advice::Stutter => {},

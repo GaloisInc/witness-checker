@@ -58,9 +58,9 @@ trace:
   - [8, [ 0, 7, 100], false]
 
 advice:
-  2:  [[MemOp, 4, 2, true]]
-  3:  [[MemOp, 2, 10, false]]
-  8:  [[MemOp, 3, 48, false]]
-  13: [[MemOp, 4, 2, false]]
-  18: [[MemOp, 5, 40, false]]
-  23: [[MemOp, 6, 0, false]]
+  2:  [[MemOp, 4, 2, write]]
+  3:  [[MemOp, 2, 10, read]]
+  8:  [[MemOp, 3, 48, read]]
+  13: [[MemOp, 4, 2, read]]
+  18: [[MemOp, 5, 40, read]]
+  23: [[MemOp, 6, 0, read]]

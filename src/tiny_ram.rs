@@ -569,7 +569,7 @@ pub struct Params {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, write: bool },
+    MemOp { addr: u64, value: u64, op: MemOpKind },
     Stutter,
     Advise { advise: u64 },
 }
@@ -583,6 +583,19 @@ impl<'de> Deserialize<'de> for Opcode {
             None => Err(de::Error::invalid_value(
                 de::Unexpected::Str(&s),
                 &"a MicroRAM opcode mnemonic",
+            )),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MemOpKind {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        match MemOpKind::from_str(&s) {
+            Some(x) => Ok(x),
+            None => Err(de::Error::invalid_value(
+                de::Unexpected::Str(&s),
+                &"a memory op kind",
             )),
         }
     }
@@ -640,7 +653,7 @@ impl<'de> Visitor<'de> for AdviceVisitor {
                 Advice::MemOp {
                     addr: seq.next_element()?,
                     value: seq.next_element()?,
-                    write: seq.next_element()?,
+                    op: seq.next_element()?,
                 }
             },
             "Stutter" => {
