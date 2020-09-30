@@ -222,74 +222,113 @@ impl RamState {
 }
 
 
-macro_rules! mk_opcode {
-    ($($Variant:ident = $value:expr,)*) => {
+macro_rules! mk_named_enum {
+    (
+        $(#[$attr:meta])*
+        $vis:vis enum $Name:ident {
+            $($Variant:ident = $value:expr,)*
+        }
+    ) => {
+        $(#[$attr])*
         #[repr(u8)]
-        pub enum Opcode {
+        $vis enum $Name {
             $($Variant = $value,)*
         }
 
-        impl Opcode {
-            pub fn from_raw(x: u8) -> Option<Opcode> {
+        impl $Name {
+            pub fn from_raw(x: u8) -> Option<$Name> {
                 Some(match x {
-                    $($value => Opcode::$Variant,)*
+                    $($value => $Name::$Variant,)*
                     _ => return None,
                 })
             }
 
             pub fn count() -> usize {
-                0 $(+ { drop(Opcode::$Variant); 1})*
+                0 $(+ { drop($Name::$Variant); 1})*
             }
 
-            pub fn iter() -> impl Iterator<Item = Opcode> {
+            pub fn iter() -> impl Iterator<Item = $Name> {
                 (0 .. Self::count() as u8).map(|i| Self::from_raw(i).unwrap())
             }
 
-            pub fn from_str(s: &str) -> Option<Opcode> {
+            pub fn from_str(s: &str) -> Option<$Name> {
                 $( if s.eq_ignore_ascii_case(stringify!($Variant)) {
-                    return Some(Opcode::$Variant);
+                    return Some($Name::$Variant);
                 } )*
                 None
+            }
+        }
+
+
+        impl<'a> Repr<'a> for $Name {
+            type Repr = TWire<'a, u8>;
+        }
+
+        impl<'a> Lit<'a> for $Name {
+            fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+                bld.lit(a as u8)
+            }
+        }
+
+        impl<'a> Secret<'a> for $Name {
+            fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+                bld.secret(a.map(|a| a as u8))
+            }
+        }
+
+        impl<'a> typed::Eq<'a, $Name> for $Name {
+            type Output = bool;
+            fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+                bld.eq(a, b).repr
+            }
+        }
+
+        impl<'a> typed::Ne<'a, $Name> for $Name {
+            type Output = bool;
+            fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+                bld.ne(a, b).repr
             }
         }
     };
 }
 
-mk_opcode! {
-    And = 0,
-    Or = 1,
-    Xor = 2,
-    Not = 3,
-    Add = 4,
-    Sub = 5,
-    Mull = 6,
-    Umulh = 7,
-    Smulh = 8,
-    Udiv = 9,
-    Umod = 10,
-    Shl = 11,
-    Shr = 12,
+mk_named_enum! {
+    pub enum Opcode {
+        And = 0,
+        Or = 1,
+        Xor = 2,
+        Not = 3,
+        Add = 4,
+        Sub = 5,
+        Mull = 6,
+        Umulh = 7,
+        Smulh = 8,
+        Udiv = 9,
+        Umod = 10,
+        Shl = 11,
+        Shr = 12,
 
-    Cmpe = 13,
-    Cmpa = 14,
-    Cmpae = 15,
-    Cmpg = 16,
-    Cmpge = 17,
+        Cmpe = 13,
+        Cmpa = 14,
+        Cmpae = 15,
+        Cmpg = 16,
+        Cmpge = 17,
 
-    Mov = 18,
-    Cmov = 19,
+        Mov = 18,
+        Cmov = 19,
 
-    Jmp = 20,
-    Cjmp = 21,
-    Cnjmp = 22,
+        Jmp = 20,
+        Cjmp = 21,
+        Cnjmp = 22,
 
-    Store = 23,
-    Load = 24,
+        Store = 23,
+        Load = 24,
 
-    Read = 25,
-    Answer = 26,
+        Read = 25,
+        Answer = 26,
 
-    Advise = 27,
+        Advise = 27,
+    }
 }
 
 
@@ -304,46 +343,17 @@ pub struct MemPort {
     pub op: MemOpKind,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
-pub enum MemOpKind {
-    Read,
-    Write,
-    Poison,
+mk_named_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum MemOpKind {
+        Read = 0,
+        Write = 1,
+        Poison = 2,
+    }
 }
 
 impl Default for MemOpKind {
     fn default() -> MemOpKind { MemOpKind::Read }
-}
-
-impl<'a> Repr<'a> for MemOpKind {
-    type Repr = TWire<'a, u8>;
-}
-
-impl<'a> Lit<'a> for MemOpKind {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
-        bld.lit(a as u8)
-    }
-}
-
-impl<'a> Secret<'a> for MemOpKind {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        bld.secret(a.map(|a| a as u8))
-    }
-}
-
-impl<'a> typed::Eq<'a, MemOpKind> for MemOpKind {
-    type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        bld.eq(a, b).repr
-    }
-}
-
-impl<'a> typed::Ne<'a, MemOpKind> for MemOpKind {
-    type Output = bool;
-    fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        bld.ne(a, b).repr
-    }
 }
 
 impl<'a, C: Repr<'a>> Mux<'a, C, MemOpKind> for MemOpKind
