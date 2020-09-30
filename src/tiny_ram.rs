@@ -301,7 +301,66 @@ pub struct MemPort {
     pub cycle: u32,
     pub addr: u64,
     pub value: u64,
-    pub write: bool,
+    pub op: MemOpKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum MemOpKind {
+    Read,
+    Write,
+    Poison,
+}
+
+impl Default for MemOpKind {
+    fn default() -> MemOpKind { MemOpKind::Read }
+}
+
+impl<'a> Repr<'a> for MemOpKind {
+    type Repr = TWire<'a, u8>;
+}
+
+impl<'a> Lit<'a> for MemOpKind {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        bld.lit(a as u8)
+    }
+}
+
+impl<'a> Secret<'a> for MemOpKind {
+    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+        bld.secret(a.map(|a| a as u8))
+    }
+}
+
+impl<'a> typed::Eq<'a, MemOpKind> for MemOpKind {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.eq(a, b).repr
+    }
+}
+
+impl<'a> typed::Ne<'a, MemOpKind> for MemOpKind {
+    type Output = bool;
+    fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.ne(a, b).repr
+    }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, MemOpKind> for MemOpKind
+where
+    C::Repr: Clone,
+    u8: Mux<'a, C, u8, Output = u8>,
+{
+    type Output = MemOpKind;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: TWire<'a, u8>,
+        e: TWire<'a, u8>,
+    ) -> TWire<'a, u8> {
+        bld.mux(TWire::new(c), t, e)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -309,7 +368,7 @@ pub struct MemPortRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
-    pub write: TWire<'a, bool>,
+    pub op: TWire<'a, MemOpKind>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -322,7 +381,7 @@ impl<'a> Lit<'a> for MemPort {
             cycle: bld.lit(a.cycle),
             addr: bld.lit(a.addr),
             value: bld.lit(a.value),
-            write: bld.lit(a.write),
+            op: bld.lit(a.op),
         }
     }
 }
@@ -334,14 +393,14 @@ impl<'a> Secret<'a> for MemPort {
                 cycle: bld.secret(Some(a.cycle)),
                 addr: bld.secret(Some(a.addr)),
                 value: bld.secret(Some(a.value)),
-                write: bld.secret(Some(a.write)),
+                op: bld.secret(Some(a.op)),
             }
         } else {
             MemPortRepr {
                 cycle: bld.secret(None),
                 addr: bld.secret(None),
                 value: bld.secret(None),
-                write: bld.secret(None),
+                op: bld.secret(None),
             }
         }
     }
@@ -352,7 +411,7 @@ where
     C::Repr: Clone,
     u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
-    bool: Mux<'a, C, bool, Output = bool>,
+    MemOpKind: Mux<'a, C, MemOpKind, Output = MemOpKind>,
 {
     type Output = MemPort;
 
@@ -367,7 +426,7 @@ where
             cycle: bld.mux(c.clone(), t.cycle, e.cycle),
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
-            write: bld.mux(c.clone(), t.write, e.write),
+            op: bld.mux(c.clone(), t.op, e.op),
         }
     }
 }

@@ -15,7 +15,7 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{
-    Execution, RamInstr, RamState, MemPort, FetchPort, Opcode, Advice, REG_NONE, REG_PC,
+    Execution, RamInstr, RamState, MemPort, MemOpKind, FetchPort, Opcode, Advice, REG_NONE, REG_PC,
     MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 
@@ -411,10 +411,11 @@ fn check_step<'a>(
             "cycle {}'s mem port has address {} (expected {})",
             cycle, cx.eval(mem_port.addr), cx.eval(y),
         );
+        let is_write = b.eq(mem_port.op, b.lit(MemOpKind::Write));
         wire_assert!(
-            cx, b.eq(mem_port.write, is_store),
+            cx, b.eq(is_write, is_store),
             "cycle {}'s mem port has write flag {} (expected {})",
-            cycle, cx.eval(mem_port.write), cx.eval(is_store),
+            cycle, cx.eval(is_write), cx.eval(is_store),
         );
         wire_assert!(
             cx, b.eq(mem_port.value, expect_value),
@@ -477,7 +478,7 @@ fn check_first_mem<'a>(
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_bug_if!(
-        cx, b.mux(active, b.not(port.write), b.lit(false)),
+        cx, b.mux(active, b.ne(port.op, b.lit(MemOpKind::Write)), b.lit(false)),
         "uninit read from {:x} on cycle {}",
         cx.eval(port.addr), cx.eval(port.cycle),
     );
@@ -493,7 +494,7 @@ fn check_mem<'a>(
     let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     cx.when(b, active, |cx| {
-        cx.when(b, b.not(port2.write), |cx| {
+        cx.when(b, b.ne(port2.op, b.lit(MemOpKind::Write)), |cx| {
             // `port2` is a read.
 
             // `port1` should be an active read or write with the same address.  Otherwise, `port2`
@@ -598,7 +599,8 @@ fn main() -> io::Result<()> {
                     // shape of the circuit will be the same either way.
                     mem_ports[i as usize - 1] = b.secret(Some(MemPort {
                         cycle: i as u32 - 1,
-                        addr, value, write,
+                        addr, value,
+                        op: if write { MemOpKind::Write } else { MemOpKind::Read },
                     }));
                 },
                 Advice::Stutter => {},
@@ -613,7 +615,7 @@ fn main() -> io::Result<()> {
             cycle: MEM_PORT_PRELOAD_CYCLE,
             addr: 2 + i as u64,
             value: x,
-            write: true,
+            op: MemOpKind::Write,
         })));
     }
 
