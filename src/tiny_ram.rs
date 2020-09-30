@@ -323,11 +323,12 @@ mk_named_enum! {
 
         Store = 23,
         Load = 24,
+        Poison = 25,
 
-        Read = 25,
-        Answer = 26,
+        Read = 26,
+        Answer = 27,
 
-        Advise = 27,
+        Advise = 28,
     }
 }
 

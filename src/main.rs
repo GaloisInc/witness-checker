@@ -358,6 +358,10 @@ fn check_step<'a>(
     }
 
     {
+        add_case(Opcode::Poison, b.lit(0), b.lit(REG_NONE), s1.flag);
+    }
+
+    {
         // TODO: dummy implementation of `Answer` as a no-op infinite loop
         add_case(Opcode::Answer, s1.pc, b.lit(REG_PC), s1.flag);
     }
@@ -393,13 +397,15 @@ fn check_step<'a>(
     );
 
 
-    // If the instruction is a store or a load, we need additional checks to make sure the fields
-    // of `mem_port` match the instruction operands.
+    // If the instruction is a store, load, or poison, we need additional checks to make sure the
+    // fields of `mem_port` match the instruction operands.
     let is_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
     let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
-    let is_mem = b.or(is_load, is_store);
+    let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
+    let is_store_like = b.or(is_store, is_poison);
+    let is_mem = b.or(is_load, b.or(is_store, is_poison));
 
-    let expect_value = b.mux(is_store, x, result);
+    let expect_value = b.mux(is_store_like, x, result);
     cx.when(b, is_mem, |cx| {
         wire_assert!(
             cx, b.eq(mem_port.cycle, b.lit(cycle)),
@@ -411,16 +417,24 @@ fn check_step<'a>(
             "cycle {}'s mem port has address {} (expected {})",
             cycle, cx.eval(mem_port.addr), cx.eval(y),
         );
-        let is_write = b.eq(mem_port.op, b.lit(MemOpKind::Write));
-        wire_assert!(
-            cx, b.eq(is_write, is_store),
-            "cycle {}'s mem port has write flag {} (expected {})",
-            cycle, cx.eval(is_write), cx.eval(is_store),
-        );
+        let flag_ops = [
+            (is_load, MemOpKind::Read),
+            (is_store, MemOpKind::Write),
+            (is_poison, MemOpKind::Poison),
+        ];
+        for &(flag, op) in flag_ops.iter() {
+            cx.when(b, flag, |cx| {
+                wire_assert!(
+                    cx, b.eq(mem_port.op, b.lit(op)),
+                    "cycle {}'s mem port has op kind {} (expected {}, {:?})",
+                    cycle, cx.eval(mem_port.op.repr), op as u8, op,
+                );
+            });
+        }
         wire_assert!(
             cx, b.eq(mem_port.value, expect_value),
-            "cycle {}'s mem port (load) has value {} (expected {})",
-            cycle, cx.eval(mem_port.value), cx.eval(expect_value),
+            "cycle {}'s mem port (op {}) has value {} (expected {})",
+            cycle, cx.eval(mem_port.op.repr), cx.eval(mem_port.value), cx.eval(expect_value),
         );
     });
 
