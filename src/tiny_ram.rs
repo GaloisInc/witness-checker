@@ -3,12 +3,12 @@ use std::convert::TryFrom;
 use std::fmt;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
-use crate::ir::typed::{Builder, TWire, Repr, Lit, Secret, Mux};
+use crate::ir::typed::{self, Builder, TWire, Repr, Lit, Secret, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u64,
@@ -97,6 +97,28 @@ impl<'a> Lit<'a> for RamInstr {
     }
 }
 
+impl<'a> Secret<'a> for RamInstr {
+    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+        if let Some(a) = a {
+            RamInstrRepr {
+                opcode: bld.secret(Some(a.opcode)),
+                dest: bld.secret(Some(a.dest)),
+                op1: bld.secret(Some(a.op1)),
+                op2: bld.secret(Some(a.op2)),
+                imm: bld.secret(Some(a.imm)),
+            }
+        } else {
+            RamInstrRepr {
+                opcode: bld.secret(None),
+                dest: bld.secret(None),
+                op1: bld.secret(None),
+                op2: bld.secret(None),
+                imm: bld.secret(None),
+            }
+        }
+    }
+}
+
 impl<'a, C: Repr<'a>> Mux<'a, C, RamInstr> for RamInstr
 where
     C::Repr: Clone,
@@ -122,6 +144,25 @@ where
         }
     }
 }
+
+impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        let parts = [
+            bld.eq(a.opcode, b.opcode),
+            bld.eq(a.dest, b.dest),
+            bld.eq(a.op1, b.op1),
+            bld.eq(a.op2, b.op2),
+            bld.eq(a.imm, b.imm),
+        ];
+        let mut acc = parts[0];
+        for &part in &parts[1..] {
+            acc = bld.and(acc, part);
+        }
+        acc.repr
+    }
+}
+
 
 
 #[derive(Clone, Debug, Deserialize)]
@@ -326,6 +367,80 @@ where
             cycle: bld.mux(c.clone(), t.cycle, e.cycle),
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
+            write: bld.mux(c.clone(), t.write, e.write),
+        }
+    }
+}
+
+
+/// A simplified version of `MemPort` used for instruction fetch.  Since all accesses after
+/// initialization are reads, we don't need to track the cycle number - we sort by `(addr, !write)`
+/// instead of `(addr, cycle)`.
+#[derive(Clone, Copy, Default)]
+pub struct FetchPort {
+    pub addr: u64,
+    pub instr: RamInstr,
+    pub write: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct FetchPortRepr<'a> {
+    pub addr: TWire<'a, u64>,
+    pub instr: TWire<'a, RamInstr>,
+    pub write: TWire<'a, bool>,
+}
+
+impl<'a> Repr<'a> for FetchPort {
+    type Repr = FetchPortRepr<'a>;
+}
+
+impl<'a> Lit<'a> for FetchPort {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        FetchPortRepr {
+            addr: bld.lit(a.addr),
+            instr: bld.lit(a.instr),
+            write: bld.lit(a.write),
+        }
+    }
+}
+
+impl<'a> Secret<'a> for FetchPort {
+    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+        if let Some(a) = a {
+            FetchPortRepr {
+                addr: bld.secret(Some(a.addr)),
+                instr: bld.secret(Some(a.instr)),
+                write: bld.secret(Some(a.write)),
+            }
+        } else {
+            FetchPortRepr {
+                addr: bld.secret(None),
+                instr: bld.secret(None),
+                write: bld.secret(None),
+            }
+        }
+    }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, FetchPort> for FetchPort
+where
+    C::Repr: Clone,
+    u64: Mux<'a, C, u64, Output = u64>,
+    RamInstr: Mux<'a, C, RamInstr, Output = RamInstr>,
+    bool: Mux<'a, C, bool, Output = bool>,
+{
+    type Output = FetchPort;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: FetchPortRepr<'a>,
+        e: FetchPortRepr<'a>,
+    ) -> FetchPortRepr<'a> {
+        let c: TWire<C> = TWire::new(c);
+        FetchPortRepr {
+            addr: bld.mux(c.clone(), t.addr, e.addr),
+            instr: bld.mux(c.clone(), t.instr, e.instr),
             write: bld.mux(c.clone(), t.write, e.write),
         }
     }

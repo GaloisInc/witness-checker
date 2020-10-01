@@ -15,7 +15,7 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{
-    Execution, RamInstr, RamState, MemPort, Opcode, Advice, REG_NONE, REG_PC,
+    Execution, RamInstr, RamState, MemPort, FetchPort, Opcode, Advice, REG_NONE, REG_PC,
     MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 
@@ -205,14 +205,12 @@ fn check_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     cycle: u32,
-    prog: &[TWire<'a, RamInstr>],
+    instr: TWire<'a, RamInstr>,
     mem_ports: &[TWire<'a, MemPort>],
     advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) {
-    let instr = b.index(prog, s1.pc, |b, i| b.lit(i as u64));
-
     let mut cases = Vec::new();
     let mut add_case = |op, result, dest, flag| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
@@ -437,7 +435,6 @@ fn check_step<'a>(
 fn check_first<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    _prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
     wire_assert!(
@@ -462,14 +459,8 @@ fn check_first<'a>(
 fn check_last<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    wire_assert!(
-        cx, b.eq(s.pc, b.lit(prog.len() as u64)),
-        "final pc is {} (expected {})",
-        cx.eval(s.pc), prog.len(),
-    );
     wire_assert!(
         cx, b.eq(s.regs[0], b.lit(0)),
         "final r0 is {} (expected {})",
@@ -537,6 +528,38 @@ fn check_mem<'a>(
     });
 }
 
+fn check_first_fetch<'a>(
+    cx: &Context<'a>,
+    _b: &Builder<'a>,
+    port: &TWire<'a, FetchPort>,
+) {
+    wire_assert!(
+        cx, port.write,
+        "uninit fetch from program address {:x}",
+        cx.eval(port.addr),
+    );
+}
+
+fn check_fetch<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    port1: &TWire<'a, FetchPort>,
+    port2: &TWire<'a, FetchPort>,
+) {
+    cx.when(b, b.not(port2.write), |cx| {
+        wire_assert!(
+            cx, b.eq(port2.addr, port1.addr),
+            "fetch from uninitialized program address {:x}",
+            cx.eval(port2.addr),
+        );
+        wire_assert!(
+            cx, b.eq(port2.instr, port1.instr),
+            "fetch from program address {:x} produced wrong instruction",
+            cx.eval(port2.addr),
+        );
+    });
+}
+
 fn main() -> io::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     assert!(args.len() == 2, "usage: {} WITNESS", args.get(0).map_or("witness-checker", |x| x));
@@ -554,17 +577,12 @@ fn main() -> io::Result<()> {
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
 
-    let mut prog = Vec::new();
-    for instr in exec.program {
-        prog.push(b.lit(instr));
-    }
-
     let mut trace = Vec::new();
-    for state in exec.trace {
-        trace.push(RamState::secret_with_value(&b, state));
+    for state in &exec.trace {
+        trace.push(RamState::secret_with_value(&b, state.clone()));
     }
 
-    let mut mem_ports : Vec<TWire<MemPort>> = Vec::new();
+    let mut mem_ports: Vec<TWire<MemPort>> = Vec::new();
     let mut advices = HashMap::new();
     for _ in 1 .. trace.len() {
         mem_ports.push(b.secret(Some(MemPort {
@@ -599,17 +617,39 @@ fn main() -> io::Result<()> {
         })));
     }
 
-    // Generate IR code to check the trace
-
-    check_first(&cx, &b, &prog, trace.first().unwrap());
-
-    for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
-        let port = &mem_ports[i];
-        let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
-        check_step(&cx, &b, i as u32, &prog, &[port.clone()], advice, s1, s2);
+    let mut fetch_ports: Vec<TWire<FetchPort>> = Vec::new();
+    for (i, x) in exec.program.iter().enumerate() {
+        fetch_ports.push(b.secret(Some(FetchPort {
+            addr: i as u64,
+            instr: *x,
+            write: true,
+        })));
+    }
+    for s in &exec.trace[..exec.trace.len() - 1] {
+        let idx = s.pc as usize;
+        assert!(
+            idx < exec.program.len(),
+            "program executes out of bounds: {} >= {}", idx, exec.program.len(),
+        );
+        fetch_ports.push(b.secret(Some(FetchPort {
+            addr: s.pc,
+            instr: exec.program[s.pc as usize],
+            write: false,
+        })));
     }
 
-    check_last(&cx, &b, &prog, trace.last().unwrap());
+    // Generate IR code to check the trace
+
+    check_first(&cx, &b, trace.first().unwrap());
+
+    for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
+        let instr = b.secret(Some(exec.program[exec.trace[i].pc as usize]));
+        let port = &mem_ports[i];
+        let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
+        check_step(&cx, &b, i as u32, instr, &[port.clone()], advice, s1, s2);
+    }
+
+    check_last(&cx, &b, trace.last().unwrap());
 
     // Check the memory ports
     for (i, port) in mem_ports.iter().enumerate().take(trace.len() - 1) {
@@ -651,6 +691,21 @@ fn main() -> io::Result<()> {
     check_first_mem(&cx, &b, &sorted_mem[0]);
     for (port1, port2) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)) {
         check_mem(&cx, &b, port1, port2);
+    }
+
+    // Check instruction-fetch consistency
+
+    let mut sorted_fetch = fetch_ports.clone();
+    sort::sort(&b, &mut sorted_fetch, &mut |x, y| {
+        // Sort first by address, then by `!write`.
+        b.or(
+            b.lt(x.addr, y.addr),
+            b.and(b.eq(x.addr, y.addr), x.write),
+        )
+    });
+    check_first_fetch(&cx, &b, &sorted_fetch[0]);
+    for (port1, port2) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)) {
+        check_fetch(&cx, &b, port1, port2);
     }
 
     // Lower IR code
