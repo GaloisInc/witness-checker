@@ -488,11 +488,11 @@ fn check_first_mem<'a>(
     b: &Builder<'a>,
     port: &TWire<'a, MemPort>,
 ) {
-    // If the first memory port is active, then it must be a write, since there are no previous
+    // If the first memory port is active, then it must not be a read, since there are no previous
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_bug_if!(
-        cx, b.mux(active, b.ne(port.op, b.lit(MemOpKind::Write)), b.lit(false)),
+        cx, b.mux(active, b.eq(port.op, b.lit(MemOpKind::Read)), b.lit(false)),
         "uninit read from {:x} on cycle {}",
         cx.eval(port.addr), cx.eval(port.cycle),
     );
@@ -507,39 +507,51 @@ fn check_mem<'a>(
 ) {
     let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
-    cx.when(b, active, |cx| {
-        cx.when(b, b.ne(port2.op, b.lit(MemOpKind::Write)), |cx| {
-            // `port2` is a read.
+    // Whether `port2` is the first memory op for its address.
+    let is_first = b.or(
+        b.ne(port1.addr, port2.addr),
+        b.eq(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
+    );
 
-            // `port1` should be an active read or write with the same address.  Otherwise, `port2`
-            // is a read from uninitialized memory.
-            let port1_active = b.ne(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-            wire_bug_if!(
-                cx, b.not(port1_active),
-                "uninit read from {:x} on cycle {} (previous op was inactive)",
+    cx.when(b, b.and(active, b.not(is_first)), |cx| {
+        cx.when(b, b.eq(port1.op, b.lit(MemOpKind::Poison)), |cx| {
+            let is_poison = b.eq(port2.op, b.lit(MemOpKind::Poison));
+
+            // Poison -> Poison is invalid.
+            wire_assert!(
+                cx, b.not(is_poison),
+                "double poison of address {:x} on cycle {}",
                 cx.eval(port2.addr), cx.eval(port2.cycle),
             );
 
-            let is_init = b.eq(port1.addr, port2.addr);
+            // Poison -> Read/Write is a bug.
             wire_bug_if!(
-                cx, b.not(is_init),
-                "uninit read from {:x} on cycle {} (previous op had address {:x})",
-                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port1.addr),
+                cx, b.not(is_poison),
+                "access of poisoned address {:x} on cycle {}",
+                cx.eval(port2.addr), cx.eval(port2.cycle),
             );
-
-            // If this is a legal read, then it must return the same value as the previous
-            // operation.  Otherwise, the prover is cheating by changing memory without a proper
-            // write.
-            cx.when(b, is_init, |cx| wire_assert!(
-                cx,
-                b.eq(port1.value, port2.value),
-                "read from {:x} on cycle {} produced {} (expected {})",
-                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port2.value),
-                cx.eval(port1.value),
-            ));
         });
 
-        // If `port2` is a write, then its address and value are unconstrained.
+        // A Read must have the same value as the previous Read/Write.  (Write and Poison values
+        // are unconstrained.)
+        cx.when(b, b.eq(port2.op, b.lit(MemOpKind::Read)), |cx| {
+            wire_assert!(
+                cx, b.eq(port1.value, port2.value),
+                "read from {:x} on cycle {} produced {} (expected {})",
+                cx.eval(port2.addr), cx.eval(port2.cycle),
+                cx.eval(port2.value), cx.eval(port1.value),
+            );
+        });
+    });
+
+    cx.when(b, b.and(active, is_first), |cx| {
+        // The first operation for an address can't be a Read, since there is no previous Write for
+        // it to read from.
+        wire_assert!(
+            cx, b.ne(port2.op, b.lit(MemOpKind::Read)),
+            "uninit read from {:x} on cycle {}",
+            cx.eval(port2.addr), cx.eval(port2.cycle),
+        );
     });
 }
 
