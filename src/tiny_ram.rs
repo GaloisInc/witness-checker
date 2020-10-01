@@ -247,6 +247,8 @@ mk_opcode! {
 
     Read = 25,
     Answer = 26,
+
+    Advise = 27,
 }
 
 
@@ -385,6 +387,7 @@ pub struct Params {
 pub enum Advice {
     MemOp { addr: u64, value: u64, write: bool },
     Stutter,
+    Advise { advise: u64 },
 }
 
 
@@ -458,6 +461,12 @@ impl<'de> Visitor<'de> for AdviceVisitor {
             },
             "Stutter" => {
                 Advice::Stutter
+            },
+            "Advise" => {
+                seq.expect += 1;
+                Advice::Advise {
+                    advise: seq.next_element()?,
+                }
             },
             kind => return Err(de::Error::custom(
                 format_args!("unknown advice kind {}", kind),

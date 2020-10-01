@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::fs::{self, File};
@@ -206,6 +207,7 @@ fn check_step<'a>(
     cycle: u32,
     prog: &[TWire<'a, RamInstr>],
     mem_ports: &[TWire<'a, MemPort>],
+    advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) {
@@ -360,6 +362,10 @@ fn check_step<'a>(
     {
         // TODO: dummy implementation of `Answer` as a no-op infinite loop
         add_case(Opcode::Answer, s1.pc, b.lit(REG_PC), s1.flag);
+    }
+
+    {
+        add_case(Opcode::Advise, advice, instr.dest, s1.flag);
     }
 
     let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
@@ -558,7 +564,8 @@ fn main() -> io::Result<()> {
         trace.push(RamState::secret_with_value(&b, state));
     }
 
-    let mut mem_ports = Vec::new();
+    let mut mem_ports : Vec<TWire<MemPort>> = Vec::new();
+    let mut advices = HashMap::new();
     for _ in 1 .. trace.len() {
         mem_ports.push(b.secret(Some(MemPort {
             cycle: MEM_PORT_UNUSED_CYCLE,
@@ -577,6 +584,9 @@ fn main() -> io::Result<()> {
                     }));
                 },
                 Advice::Stutter => {},
+                Advice::Advise { advise } => {
+                    advices.insert(i as u32 - 1, advise);
+                },
             }
         }
     }
@@ -595,7 +605,8 @@ fn main() -> io::Result<()> {
 
     for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
         let port = &mem_ports[i];
-        check_step(&cx, &b, i as u32, &prog, &[port.clone()], s1, s2);
+        let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
+        check_step(&cx, &b, i as u32, &prog, &[port.clone()], advice, s1, s2);
     }
 
     check_last(&cx, &b, &prog, trace.last().unwrap());
