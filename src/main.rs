@@ -635,13 +635,18 @@ fn main() -> io::Result<()> {
             }
         }
     }
-    for (i, &x) in exec.init_mem.iter().enumerate() {
-        mem_ports.push(b.secret(Some(MemPort {
-            cycle: MEM_PORT_PRELOAD_CYCLE,
-            addr: 2 + i as u64,
-            value: x,
-            op: MemOpKind::Write,
-        })));
+    for seg in &exec.init_mem {
+        for i in 0 .. seg.len {
+            let x = seg.data.get(i as usize).cloned().unwrap_or(0);
+            let mp = MemPort {
+                cycle: MEM_PORT_PRELOAD_CYCLE,
+                addr: seg.start + i as u64,
+                value: x,
+                op: MemOpKind::Write,
+            };
+            let wire = if seg.secret { b.secret(Some(mp)) } else { b.lit(mp) };
+            mem_ports.push(wire);
+        }
     }
 
     let mut fetch_ports: Vec<TWire<FetchPort>> = Vec::new();

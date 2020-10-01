@@ -517,11 +517,12 @@ where
 }
 
 
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Execution {
     pub program: Vec<RamInstr>,
     #[serde(default)]
-    pub init_mem: Vec<u64>,
+    pub init_mem: Vec<MemSegment>,
     pub params: Params,
     pub trace: Vec<RamState>,
     #[serde(default)]
@@ -560,6 +561,16 @@ impl Execution {
 
         Ok(self)
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MemSegment {
+    pub start: u64,
+    pub len: u64,
+    pub read_only: bool,
+    pub secret: bool,
+    #[serde(default)]
+    pub data: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

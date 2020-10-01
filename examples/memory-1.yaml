@@ -14,7 +14,12 @@ program:
 
   - [sub, 0, 2, true, 100]          # sub r0, r2, 100
 
-init_mem: [10, 20, 30, 40, 0, 0, 0, 0]
+init_mem:
+  - start: 2
+    len: 8
+    read_only: true
+    secret: true
+    data: [10, 20, 30, 40, 0, 0, 0, 0]
 
 params:
   num_regs: 3
