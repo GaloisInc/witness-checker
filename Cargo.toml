@@ -7,7 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-scale_isa = { path = "../dialogue/scale_isa" }
+scale_isa = { path = "../dialogue/scale_isa/scale_isa" }
 bumpalo = "3.4"
 serde = { version = "1", features = ["derive"] }
 serde_cbor = "0.10"

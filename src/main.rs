@@ -207,7 +207,7 @@ fn check_step<'a>(
     cycle: u32,
     prog: &[TWire<'a, RamInstr>],
     mem_ports: &[TWire<'a, MemPort>],
-    advice: u64,
+    advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) {
@@ -365,8 +365,7 @@ fn check_step<'a>(
     }
 
     {
-        let result = b.lit(advice);
-        add_case(Opcode::Advise, result, instr.dest, s1.flag)
+        add_case(Opcode::Advise, advice, instr.dest, s1.flag);
     }
 
     let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
@@ -606,8 +605,8 @@ fn main() -> io::Result<()> {
 
     for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
         let port = &mem_ports[i];
-        let advice = advices.get(&(i as u32)).unwrap_or(&0);
-        check_step(&cx, &b, i as u32, &prog, &[port.clone()], *advice, s1, s2);
+        let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
+        check_step(&cx, &b, i as u32, &prog, &[port.clone()], advice, s1, s2);
     }
 
     check_last(&cx, &b, &prog, trace.last().unwrap());
