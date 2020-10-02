@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::ir::circuit::{Circuit, Wire, GateKind, Ty, TyKind};
 
 pub mod bool_;
@@ -24,32 +24,95 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
         }
     }
 
+    /// Get a list of all wires that must be processed in order to process `old_wire`.  Wires
+    /// already present in `self.m` are excluded.
+    fn wires_needed(&self, old_wire: Wire<'old>) -> Vec<Wire<'old>> {
+        let mut stack = vec![old_wire];
+        let mut list = Vec::new();
+        let mut seen = HashSet::new();
+
+        while let Some(wire) = stack.last().cloned() {
+            // Push onto `stack` every wire that must be processed before the current one.  If
+            // there are no such wires, then we can pop the current wire and add it to the output
+            // list; otherwise, we leave it on the stack and process it again once its
+            // newly-recorded dependencies have been handled.
+
+            // Check whether `w` has already been processed.
+            let mut check = |w| {
+                if !self.m.contains_key(&w) && !seen.contains(&w) {
+                    stack.push(w);
+                    false
+                } else {
+                    true
+                }
+            };
+
+            let ok = match wire.kind {
+                GateKind::Lit(..) |
+                GateKind::Secret(..) => true,
+
+                GateKind::Unary(_, a) |
+                GateKind::Cast(a, _) |
+                GateKind::Extract(a, _) => check(a),
+
+                GateKind::Binary(_, a, b) |
+                GateKind::Shift(_, a, b) |
+                GateKind::Compare(_, a, b) => check(a) && check(b),
+
+                GateKind::Mux(a, b, c) => check(a) && check(b) && check(c),
+
+                GateKind::Pack(ws) |
+                GateKind::Gadget(_, ws) => ws.iter().all(|&w| check(w)),
+            };
+
+            if ok {
+                let result = stack.pop();
+                debug_assert!(result == Some(wire));
+                list.push(wire);
+                seen.insert(wire);
+            }
+        }
+
+        list
+    }
+
     fn wire(&mut self, old_wire: Wire<'old>) -> Wire<'new> {
         if let Some(&new_wire) = self.m.get(&old_wire) {
             return new_wire;
         }
 
-        let old_gate = &*old_wire;
-        let new_gate_kind = match old_gate.kind {
-            GateKind::Lit(val, ty) => GateKind::Lit(val, self.ty(ty)),
-            // TODO: avoid unnecessary duplication of Secrets
-            GateKind::Secret(s) => self.c.new_secret(self.ty(s.ty), s.val).kind,
-            GateKind::Unary(op, a) => GateKind::Unary(op, self.wire(a)),
-            GateKind::Binary(op, a, b) => GateKind::Binary(op, self.wire(a), self.wire(b)),
-            GateKind::Shift(op, a, b) => GateKind::Shift(op, self.wire(a), self.wire(b)),
-            GateKind::Compare(op, a, b) => GateKind::Compare(op, self.wire(a), self.wire(b)),
-            GateKind::Mux(c, t, e) => GateKind::Mux(self.wire(c), self.wire(t), self.wire(e)),
-            GateKind::Cast(w, ty) => GateKind::Cast(self.wire(w), self.ty(ty)),
-            GateKind::Pack(ws) => self.c.pack_iter(ws.iter().map(|&w| self.wire(w))).kind,
-            GateKind::Extract(w, i) => GateKind::Extract(self.wire(w), i),
-            GateKind::Gadget(g, ws) => {
-                let g = g.transfer(self.c);
-                self.c.gadget_iter(g, ws.iter().map(|&w| self.wire(w))).kind
-            },
-        };
-        let new_wire = (self.f)(self.c, old_wire, new_gate_kind);
-        self.m.insert(old_wire, new_wire);
-        new_wire
+        let order = self.wires_needed(old_wire);
+
+        for old_wire in order {
+            // Lookups should always succeed, since `order` is supposed to follow the dependency
+            // order.
+            let get = |w| self.m.get(&w).cloned()
+                .unwrap_or_else(|| panic!("missing transformed wire for {:?}", w));
+
+            let old_gate = &*old_wire;
+            let new_gate_kind = match old_gate.kind {
+                GateKind::Lit(val, ty) => GateKind::Lit(val, self.ty(ty)),
+                // TODO: avoid unnecessary duplication of Secrets
+                GateKind::Secret(s) => self.c.new_secret(self.ty(s.ty), s.val).kind,
+                GateKind::Unary(op, a) => GateKind::Unary(op, get(a)),
+                GateKind::Binary(op, a, b) => GateKind::Binary(op, get(a), get(b)),
+                GateKind::Shift(op, a, b) => GateKind::Shift(op, get(a), get(b)),
+                GateKind::Compare(op, a, b) => GateKind::Compare(op, get(a), get(b)),
+                GateKind::Mux(c, t, e) => GateKind::Mux(get(c), get(t), get(e)),
+                GateKind::Cast(w, ty) => GateKind::Cast(get(w), self.ty(ty)),
+                GateKind::Pack(ws) => self.c.pack_iter(ws.iter().map(|&w| get(w))).kind,
+                GateKind::Extract(w, i) => GateKind::Extract(get(w), i),
+                GateKind::Gadget(g, ws) => {
+                    let g = g.transfer(self.c);
+                    self.c.gadget_iter(g, ws.iter().map(|&w| get(w))).kind
+                },
+            };
+            let new_wire = (self.f)(self.c, old_wire, new_gate_kind);
+            self.m.insert(old_wire, new_wire);
+        }
+
+        self.m.get(&old_wire).cloned()
+            .unwrap_or_else(|| panic!("missing transformed wire for {:?} (top level)", old_wire))
     }
 
     fn ty(&mut self, old_ty: Ty<'old>) -> Ty<'new> {
