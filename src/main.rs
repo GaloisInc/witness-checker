@@ -724,7 +724,7 @@ fn main() -> io::Result<()> {
         } */
 
         // Write files.
-        backend.finish();
+        backend.finish().unwrap();
 
         // Validate the circuit and witness.
         let mut reader = Reader::new();

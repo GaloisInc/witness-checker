@@ -4,6 +4,7 @@ use std::ops::Sub;
 
 use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit};
 
+use zkinterface::Result;
 use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
     bellman::{ConstraintSystem, SynthesisError},
@@ -48,7 +49,7 @@ impl<'a> Backend<'a> {
         }
     }
 
-    pub fn finish(self) {
+    pub fn finish(self) -> Result<()> {
         self.cs.finish("cheesecloth")
     }
 
@@ -341,7 +342,7 @@ fn as_lit(wire: Wire) -> Option<u64> {
 }
 
 #[test]
-fn test_zkif() {
+fn test_zkif() -> Result<()> {
     let mut b = Backend::new(Path::new("local/test"), true);
 
     let arena = bumpalo::Bump::new();
@@ -395,5 +396,5 @@ fn test_zkif() {
     check_bool(&b, is_ge_zero1, true);
     check_bool(&b, is_ge_zero2, false);
 
-    b.finish();
+    b.finish()
 }

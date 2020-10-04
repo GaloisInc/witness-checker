@@ -14,8 +14,8 @@ bellman = ["zkinterface", "zkinterface_bellman", "ff"]
 [dependencies]
 scale_isa = { optional = true, path = "../dialogue/scale_isa" }
 
-zkinterface = { optional = true, version = "1.2.0", git = "https://github.com/QED-it/zkinterface", rev = "0fb79c5e" }
-zkinterface_bellman = { optional = true, version = "1.2.0", git = "https://github.com/QED-it/zkinterface-bellman", rev = "778550d6" }
+zkinterface = { optional = true, version = "1.2.0", git = "https://github.com/QED-it/zkinterface", rev = "5107154" }
+zkinterface_bellman = { optional = true, version = "1.2.0", git = "https://github.com/QED-it/zkinterface-bellman", rev = "a161e91" }
 
 # Use the crate ff_derive. The dependencies must be repeated to use in the macro derive(PrimeField).
 ff = { optional = true, version = "0.8.0", features = ["derive"] }

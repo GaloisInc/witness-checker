@@ -801,7 +801,7 @@ dependencies = [
 [[package]]
 name = "zkinterface"
 version = "1.2.0"
-source = "git+https://github.com/QED-it/zkinterface?rev=0fb79c5e#0fb79c5e365a2a92fdc3ef0a47d07fd2f606eee0"
+source = "git+https://github.com/QED-it/zkinterface?rev=5107154#51071541941884b73139294205ca94bee4d96227"
 dependencies = [
  "colored",
  "flatbuffers",
@@ -817,7 +817,7 @@ dependencies = [
 [[package]]
 name = "zkinterface_bellman"
 version = "1.2.0"
-source = "git+https://github.com/QED-it/zkinterface-bellman?rev=778550d6#778550d638187efd1936617268c4455256bc4315"
+source = "git+https://github.com/QED-it/zkinterface-bellman?rev=a161e91#a161e9157b507f00e2b9c96a19ba255a4a2770b3"
 dependencies = [
  "bellman",
  "bls12_381",
