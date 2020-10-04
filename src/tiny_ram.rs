@@ -3,12 +3,12 @@ use std::convert::TryFrom;
 use std::fmt;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
-use crate::ir::typed::{Builder, TWire, Repr, Lit, Secret, Mux};
+use crate::ir::typed::{self, Builder, TWire, Repr, Lit, Secret, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u64,
@@ -97,6 +97,28 @@ impl<'a> Lit<'a> for RamInstr {
     }
 }
 
+impl<'a> Secret<'a> for RamInstr {
+    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+        if let Some(a) = a {
+            RamInstrRepr {
+                opcode: bld.secret(Some(a.opcode)),
+                dest: bld.secret(Some(a.dest)),
+                op1: bld.secret(Some(a.op1)),
+                op2: bld.secret(Some(a.op2)),
+                imm: bld.secret(Some(a.imm)),
+            }
+        } else {
+            RamInstrRepr {
+                opcode: bld.secret(None),
+                dest: bld.secret(None),
+                op1: bld.secret(None),
+                op2: bld.secret(None),
+                imm: bld.secret(None),
+            }
+        }
+    }
+}
+
 impl<'a, C: Repr<'a>> Mux<'a, C, RamInstr> for RamInstr
 where
     C::Repr: Clone,
@@ -122,6 +144,25 @@ where
         }
     }
 }
+
+impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        let parts = [
+            bld.eq(a.opcode, b.opcode),
+            bld.eq(a.dest, b.dest),
+            bld.eq(a.op1, b.op1),
+            bld.eq(a.op2, b.op2),
+            bld.eq(a.imm, b.imm),
+        ];
+        let mut acc = parts[0];
+        for &part in &parts[1..] {
+            acc = bld.and(acc, part);
+        }
+        acc.repr
+    }
+}
+
 
 
 #[derive(Clone, Debug, Deserialize)]
@@ -181,72 +222,114 @@ impl RamState {
 }
 
 
-macro_rules! mk_opcode {
-    ($($Variant:ident = $value:expr,)*) => {
+macro_rules! mk_named_enum {
+    (
+        $(#[$attr:meta])*
+        $vis:vis enum $Name:ident {
+            $($Variant:ident = $value:expr,)*
+        }
+    ) => {
+        $(#[$attr])*
         #[repr(u8)]
-        pub enum Opcode {
+        $vis enum $Name {
             $($Variant = $value,)*
         }
 
-        impl Opcode {
-            pub fn from_raw(x: u8) -> Option<Opcode> {
+        impl $Name {
+            pub fn from_raw(x: u8) -> Option<$Name> {
                 Some(match x {
-                    $($value => Opcode::$Variant,)*
+                    $($value => $Name::$Variant,)*
                     _ => return None,
                 })
             }
 
             pub fn count() -> usize {
-                0 $(+ { drop(Opcode::$Variant); 1})*
+                0 $(+ { drop($Name::$Variant); 1})*
             }
 
-            pub fn iter() -> impl Iterator<Item = Opcode> {
+            pub fn iter() -> impl Iterator<Item = $Name> {
                 (0 .. Self::count() as u8).map(|i| Self::from_raw(i).unwrap())
             }
 
-            pub fn from_str(s: &str) -> Option<Opcode> {
+            pub fn from_str(s: &str) -> Option<$Name> {
                 $( if s.eq_ignore_ascii_case(stringify!($Variant)) {
-                    return Some(Opcode::$Variant);
+                    return Some($Name::$Variant);
                 } )*
                 None
+            }
+        }
+
+
+        impl<'a> Repr<'a> for $Name {
+            type Repr = TWire<'a, u8>;
+        }
+
+        impl<'a> Lit<'a> for $Name {
+            fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+                bld.lit(a as u8)
+            }
+        }
+
+        impl<'a> Secret<'a> for $Name {
+            fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+                bld.secret(a.map(|a| a as u8))
+            }
+        }
+
+        impl<'a> typed::Eq<'a, $Name> for $Name {
+            type Output = bool;
+            fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+                bld.eq(a, b).repr
+            }
+        }
+
+        impl<'a> typed::Ne<'a, $Name> for $Name {
+            type Output = bool;
+            fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+                bld.ne(a, b).repr
             }
         }
     };
 }
 
-mk_opcode! {
-    And = 0,
-    Or = 1,
-    Xor = 2,
-    Not = 3,
-    Add = 4,
-    Sub = 5,
-    Mull = 6,
-    Umulh = 7,
-    Smulh = 8,
-    Udiv = 9,
-    Umod = 10,
-    Shl = 11,
-    Shr = 12,
+mk_named_enum! {
+    pub enum Opcode {
+        And = 0,
+        Or = 1,
+        Xor = 2,
+        Not = 3,
+        Add = 4,
+        Sub = 5,
+        Mull = 6,
+        Umulh = 7,
+        Smulh = 8,
+        Udiv = 9,
+        Umod = 10,
+        Shl = 11,
+        Shr = 12,
 
-    Cmpe = 13,
-    Cmpa = 14,
-    Cmpae = 15,
-    Cmpg = 16,
-    Cmpge = 17,
+        Cmpe = 13,
+        Cmpa = 14,
+        Cmpae = 15,
+        Cmpg = 16,
+        Cmpge = 17,
 
-    Mov = 18,
-    Cmov = 19,
+        Mov = 18,
+        Cmov = 19,
 
-    Jmp = 20,
-    Cjmp = 21,
-    Cnjmp = 22,
+        Jmp = 20,
+        Cjmp = 21,
+        Cnjmp = 22,
 
-    Store = 23,
-    Load = 24,
+        Store = 23,
+        Load = 24,
+        Poison = 25,
 
-    Read = 25,
-    Answer = 26,
+        Read = 26,
+        Answer = 27,
+
+        Advise = 28,
+    }
 }
 
 
@@ -258,7 +341,37 @@ pub struct MemPort {
     pub cycle: u32,
     pub addr: u64,
     pub value: u64,
-    pub write: bool,
+    pub op: MemOpKind,
+}
+
+mk_named_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum MemOpKind {
+        Read = 0,
+        Write = 1,
+        Poison = 2,
+    }
+}
+
+impl Default for MemOpKind {
+    fn default() -> MemOpKind { MemOpKind::Read }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, MemOpKind> for MemOpKind
+where
+    C::Repr: Clone,
+    u8: Mux<'a, C, u8, Output = u8>,
+{
+    type Output = MemOpKind;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: TWire<'a, u8>,
+        e: TWire<'a, u8>,
+    ) -> TWire<'a, u8> {
+        bld.mux(TWire::new(c), t, e)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -266,7 +379,7 @@ pub struct MemPortRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
-    pub write: TWire<'a, bool>,
+    pub op: TWire<'a, MemOpKind>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -279,7 +392,7 @@ impl<'a> Lit<'a> for MemPort {
             cycle: bld.lit(a.cycle),
             addr: bld.lit(a.addr),
             value: bld.lit(a.value),
-            write: bld.lit(a.write),
+            op: bld.lit(a.op),
         }
     }
 }
@@ -291,14 +404,14 @@ impl<'a> Secret<'a> for MemPort {
                 cycle: bld.secret(Some(a.cycle)),
                 addr: bld.secret(Some(a.addr)),
                 value: bld.secret(Some(a.value)),
-                write: bld.secret(Some(a.write)),
+                op: bld.secret(Some(a.op)),
             }
         } else {
             MemPortRepr {
                 cycle: bld.secret(None),
                 addr: bld.secret(None),
                 value: bld.secret(None),
-                write: bld.secret(None),
+                op: bld.secret(None),
             }
         }
     }
@@ -309,7 +422,7 @@ where
     C::Repr: Clone,
     u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
-    bool: Mux<'a, C, bool, Output = bool>,
+    MemOpKind: Mux<'a, C, MemOpKind, Output = MemOpKind>,
 {
     type Output = MemPort;
 
@@ -324,17 +437,92 @@ where
             cycle: bld.mux(c.clone(), t.cycle, e.cycle),
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
+            op: bld.mux(c.clone(), t.op, e.op),
+        }
+    }
+}
+
+
+/// A simplified version of `MemPort` used for instruction fetch.  Since all accesses after
+/// initialization are reads, we don't need to track the cycle number - we sort by `(addr, !write)`
+/// instead of `(addr, cycle)`.
+#[derive(Clone, Copy, Default)]
+pub struct FetchPort {
+    pub addr: u64,
+    pub instr: RamInstr,
+    pub write: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct FetchPortRepr<'a> {
+    pub addr: TWire<'a, u64>,
+    pub instr: TWire<'a, RamInstr>,
+    pub write: TWire<'a, bool>,
+}
+
+impl<'a> Repr<'a> for FetchPort {
+    type Repr = FetchPortRepr<'a>;
+}
+
+impl<'a> Lit<'a> for FetchPort {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        FetchPortRepr {
+            addr: bld.lit(a.addr),
+            instr: bld.lit(a.instr),
+            write: bld.lit(a.write),
+        }
+    }
+}
+
+impl<'a> Secret<'a> for FetchPort {
+    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
+        if let Some(a) = a {
+            FetchPortRepr {
+                addr: bld.secret(Some(a.addr)),
+                instr: bld.secret(Some(a.instr)),
+                write: bld.secret(Some(a.write)),
+            }
+        } else {
+            FetchPortRepr {
+                addr: bld.secret(None),
+                instr: bld.secret(None),
+                write: bld.secret(None),
+            }
+        }
+    }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, FetchPort> for FetchPort
+where
+    C::Repr: Clone,
+    u64: Mux<'a, C, u64, Output = u64>,
+    RamInstr: Mux<'a, C, RamInstr, Output = RamInstr>,
+    bool: Mux<'a, C, bool, Output = bool>,
+{
+    type Output = FetchPort;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: FetchPortRepr<'a>,
+        e: FetchPortRepr<'a>,
+    ) -> FetchPortRepr<'a> {
+        let c: TWire<C> = TWire::new(c);
+        FetchPortRepr {
+            addr: bld.mux(c.clone(), t.addr, e.addr),
+            instr: bld.mux(c.clone(), t.instr, e.instr),
             write: bld.mux(c.clone(), t.write, e.write),
         }
     }
 }
 
 
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Execution {
     pub program: Vec<RamInstr>,
     #[serde(default)]
-    pub init_mem: Vec<u64>,
+    pub init_mem: Vec<MemSegment>,
     pub params: Params,
     pub trace: Vec<RamState>,
     #[serde(default)]
@@ -376,6 +564,16 @@ impl Execution {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct MemSegment {
+    pub start: u64,
+    pub len: u64,
+    pub read_only: bool,
+    pub secret: bool,
+    #[serde(default)]
+    pub data: Vec<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Params {
     pub num_regs: usize,
     pub trace_len: usize,
@@ -383,8 +581,9 @@ pub struct Params {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, write: bool },
+    MemOp { addr: u64, value: u64, op: MemOpKind },
     Stutter,
+    Advise { advise: u64 },
 }
 
 
@@ -396,6 +595,19 @@ impl<'de> Deserialize<'de> for Opcode {
             None => Err(de::Error::invalid_value(
                 de::Unexpected::Str(&s),
                 &"a MicroRAM opcode mnemonic",
+            )),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MemOpKind {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        match MemOpKind::from_str(&s) {
+            Some(x) => Ok(x),
+            None => Err(de::Error::invalid_value(
+                de::Unexpected::Str(&s),
+                &"a memory op kind",
             )),
         }
     }
@@ -453,11 +665,17 @@ impl<'de> Visitor<'de> for AdviceVisitor {
                 Advice::MemOp {
                     addr: seq.next_element()?,
                     value: seq.next_element()?,
-                    write: seq.next_element()?,
+                    op: seq.next_element()?,
                 }
             },
             "Stutter" => {
                 Advice::Stutter
+            },
+            "Advise" => {
+                seq.expect += 1;
+                Advice::Advise {
+                    advise: seq.next_element()?,
+                }
             },
             kind => return Err(de::Error::custom(
                 format_args!("unknown advice kind {}", kind),

@@ -3,7 +3,7 @@
 program:
   # r0: temporary, r1: address, r2: sum
   - [mov, 1, null, true, 2]         # mov r1, 2
-  - [store, null, 1, true, 4]       # store [4], r1
+  - [poison, null, 1, true, 4]      # store [4], r1
 
   # Top of loop (pc = 2):
   - [load, 0, null, false, 1]       # load r0, [r1]
@@ -63,7 +63,7 @@ trace:
   - [8, [ 0, 7, 100], false]
 
 advice:
-  2:  [[MemOp, 4, 2, write]]
+  2:  [[MemOp, 4, 2, poison]]
   3:  [[MemOp, 2, 10, read]]
   8:  [[MemOp, 3, 48, read]]
   13: [[MemOp, 4, 2, read]]

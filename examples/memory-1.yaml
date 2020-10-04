@@ -14,7 +14,12 @@ program:
 
   - [sub, 0, 2, true, 100]          # sub r0, r2, 100
 
-init_mem: [10, 20, 30, 40, 0, 0, 0, 0]
+init_mem:
+  - start: 2
+    len: 8
+    read_only: true
+    secret: true
+    data: [10, 20, 30, 40, 0, 0, 0, 0]
 
 params:
   num_regs: 3
@@ -58,8 +63,8 @@ trace:
   - [8, [ 0, 7, 100], false]
 
 advice:
-  3:  [[MemOp, 2, 10, false]]
-  8:  [[MemOp, 3, 20, false]]
-  13: [[MemOp, 4, 30, false]]
-  18: [[MemOp, 5, 40, false]]
-  23: [[MemOp, 6, 0, false]]
+  3:  [[MemOp, 2, 10, read]]
+  8:  [[MemOp, 3, 20, read]]
+  13: [[MemOp, 4, 30, read]]
+  18: [[MemOp, 5, 40, read]]
+  23: [[MemOp, 6, 0, read]]

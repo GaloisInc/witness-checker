@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File, remove_file};
 use std::fmt;
@@ -15,7 +16,7 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{
-    Execution, RamInstr, RamState, MemPort, Opcode, Advice, REG_NONE, REG_PC,
+    Execution, RamInstr, RamState, MemPort, MemOpKind, FetchPort, Opcode, Advice, REG_NONE, REG_PC,
     MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 use zkinterface::Reader;
@@ -207,13 +208,12 @@ fn check_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     cycle: u32,
-    prog: &[TWire<'a, RamInstr>],
+    instr: TWire<'a, RamInstr>,
     mem_ports: &[TWire<'a, MemPort>],
+    advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) {
-    let instr = b.index(prog, s1.pc, |b, i| b.lit(i as u64));
-
     let mut cases = Vec::new();
     let mut add_case = |op, result, dest, flag| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
@@ -361,8 +361,16 @@ fn check_step<'a>(
     }
 
     {
+        add_case(Opcode::Poison, b.lit(0), b.lit(REG_NONE), s1.flag);
+    }
+
+    {
         // TODO: dummy implementation of `Answer` as a no-op infinite loop
         add_case(Opcode::Answer, s1.pc, b.lit(REG_PC), s1.flag);
+    }
+
+    {
+        add_case(Opcode::Advise, advice, instr.dest, s1.flag);
     }
 
     let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
@@ -392,13 +400,15 @@ fn check_step<'a>(
     );
 
 
-    // If the instruction is a store or a load, we need additional checks to make sure the fields
-    // of `mem_port` match the instruction operands.
+    // If the instruction is a store, load, or poison, we need additional checks to make sure the
+    // fields of `mem_port` match the instruction operands.
     let is_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
     let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
-    let is_mem = b.or(is_load, is_store);
+    let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
+    let is_store_like = b.or(is_store, is_poison);
+    let is_mem = b.or(is_load, b.or(is_store, is_poison));
 
-    let expect_value = b.mux(is_store, x, result);
+    let expect_value = b.mux(is_store_like, x, result);
     cx.when(b, is_mem, |cx| {
         wire_assert!(
             cx, b.eq(mem_port.cycle, b.lit(cycle)),
@@ -410,15 +420,24 @@ fn check_step<'a>(
             "cycle {}'s mem port has address {} (expected {})",
             cycle, cx.eval(mem_port.addr), cx.eval(y),
         );
-        wire_assert!(
-            cx, b.eq(mem_port.write, is_store),
-            "cycle {}'s mem port has write flag {} (expected {})",
-            cycle, cx.eval(mem_port.write), cx.eval(is_store),
-        );
+        let flag_ops = [
+            (is_load, MemOpKind::Read),
+            (is_store, MemOpKind::Write),
+            (is_poison, MemOpKind::Poison),
+        ];
+        for &(flag, op) in flag_ops.iter() {
+            cx.when(b, flag, |cx| {
+                wire_assert!(
+                    cx, b.eq(mem_port.op, b.lit(op)),
+                    "cycle {}'s mem port has op kind {} (expected {}, {:?})",
+                    cycle, cx.eval(mem_port.op.repr), op as u8, op,
+                );
+            });
+        }
         wire_assert!(
             cx, b.eq(mem_port.value, expect_value),
-            "cycle {}'s mem port (load) has value {} (expected {})",
-            cycle, cx.eval(mem_port.value), cx.eval(expect_value),
+            "cycle {}'s mem port (op {}) has value {} (expected {})",
+            cycle, cx.eval(mem_port.op.repr), cx.eval(mem_port.value), cx.eval(expect_value),
         );
     });
 
@@ -434,7 +453,6 @@ fn check_step<'a>(
 fn check_first<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    _prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
     wire_assert!(
@@ -459,14 +477,8 @@ fn check_first<'a>(
 fn check_last<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    prog: &[TWire<'a, RamInstr>],
     s: &TWire<'a, RamState>,
 ) {
-    wire_assert!(
-        cx, b.eq(s.pc, b.lit(prog.len() as u64)),
-        "final pc is {} (expected {})",
-        cx.eval(s.pc), prog.len(),
-    );
     wire_assert!(
         cx, b.eq(s.regs[0], b.lit(0)),
         "final r0 is {} (expected {})",
@@ -479,11 +491,11 @@ fn check_first_mem<'a>(
     b: &Builder<'a>,
     port: &TWire<'a, MemPort>,
 ) {
-    // If the first memory port is active, then it must be a write, since there are no previous
+    // If the first memory port is active, then it must not be a read, since there are no previous
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_bug_if!(
-        cx, b.mux(active, b.not(port.write), b.lit(false)),
+        cx, b.mux(active, b.eq(port.op, b.lit(MemOpKind::Read)), b.lit(false)),
         "uninit read from {:x} on cycle {}",
         cx.eval(port.addr), cx.eval(port.cycle),
     );
@@ -498,39 +510,83 @@ fn check_mem<'a>(
 ) {
     let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
-    cx.when(b, active, |cx| {
-        cx.when(b, b.not(port2.write), |cx| {
-            // `port2` is a read.
+    // Whether `port2` is the first memory op for its address.
+    let is_first = b.or(
+        b.ne(port1.addr, port2.addr),
+        b.eq(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
+    );
 
-            // `port1` should be an active read or write with the same address.  Otherwise, `port2`
-            // is a read from uninitialized memory.
-            let port1_active = b.ne(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-            wire_bug_if!(
-                cx, b.not(port1_active),
-                "uninit read from {:x} on cycle {} (previous op was inactive)",
+    cx.when(b, b.and(active, b.not(is_first)), |cx| {
+        cx.when(b, b.eq(port1.op, b.lit(MemOpKind::Poison)), |cx| {
+            let is_poison = b.eq(port2.op, b.lit(MemOpKind::Poison));
+
+            // Poison -> Poison is invalid.
+            wire_assert!(
+                cx, b.not(is_poison),
+                "double poison of address {:x} on cycle {}",
                 cx.eval(port2.addr), cx.eval(port2.cycle),
             );
 
-            let is_init = b.eq(port1.addr, port2.addr);
+            // Poison -> Read/Write is a bug.
             wire_bug_if!(
-                cx, b.not(is_init),
-                "uninit read from {:x} on cycle {} (previous op had address {:x})",
-                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port1.addr),
+                cx, b.not(is_poison),
+                "access of poisoned address {:x} on cycle {}",
+                cx.eval(port2.addr), cx.eval(port2.cycle),
             );
-
-            // If this is a legal read, then it must return the same value as the previous
-            // operation.  Otherwise, the prover is cheating by changing memory without a proper
-            // write.
-            cx.when(b, is_init, |cx| wire_assert!(
-                cx,
-                b.eq(port1.value, port2.value),
-                "read from {:x} on cycle {} produced {} (expected {})",
-                cx.eval(port2.addr), cx.eval(port2.cycle), cx.eval(port2.value),
-                cx.eval(port1.value),
-            ));
         });
 
-        // If `port2` is a write, then its address and value are unconstrained.
+        // A Read must have the same value as the previous Read/Write.  (Write and Poison values
+        // are unconstrained.)
+        cx.when(b, b.eq(port2.op, b.lit(MemOpKind::Read)), |cx| {
+            wire_assert!(
+                cx, b.eq(port1.value, port2.value),
+                "read from {:x} on cycle {} produced {} (expected {})",
+                cx.eval(port2.addr), cx.eval(port2.cycle),
+                cx.eval(port2.value), cx.eval(port1.value),
+            );
+        });
+    });
+
+    cx.when(b, b.and(active, is_first), |cx| {
+        // The first operation for an address can't be a Read, since there is no previous Write for
+        // it to read from.
+        wire_assert!(
+            cx, b.ne(port2.op, b.lit(MemOpKind::Read)),
+            "uninit read from {:x} on cycle {}",
+            cx.eval(port2.addr), cx.eval(port2.cycle),
+        );
+    });
+}
+
+fn check_first_fetch<'a>(
+    cx: &Context<'a>,
+    _b: &Builder<'a>,
+    port: &TWire<'a, FetchPort>,
+) {
+    wire_assert!(
+        cx, port.write,
+        "uninit fetch from program address {:x}",
+        cx.eval(port.addr),
+    );
+}
+
+fn check_fetch<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    port1: &TWire<'a, FetchPort>,
+    port2: &TWire<'a, FetchPort>,
+) {
+    cx.when(b, b.not(port2.write), |cx| {
+        wire_assert!(
+            cx, b.eq(port2.addr, port1.addr),
+            "fetch from uninitialized program address {:x}",
+            cx.eval(port2.addr),
+        );
+        wire_assert!(
+            cx, b.eq(port2.instr, port1.instr),
+            "fetch from program address {:x} produced wrong instruction",
+            cx.eval(port2.addr),
+        );
     });
 }
 
@@ -551,17 +607,13 @@ fn main() -> io::Result<()> {
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
 
-    let mut prog = Vec::new();
-    for instr in exec.program {
-        prog.push(b.lit(instr));
-    }
-
     let mut trace = Vec::new();
-    for state in exec.trace {
-        trace.push(RamState::secret_with_value(&b, state));
+    for state in &exec.trace {
+        trace.push(RamState::secret_with_value(&b, state.clone()));
     }
 
-    let mut mem_ports = Vec::new();
+    let mut mem_ports: Vec<TWire<MemPort>> = Vec::new();
+    let mut advices = HashMap::new();
     for _ in 1..trace.len() {
         mem_ports.push(b.secret(Some(MemPort {
             cycle: MEM_PORT_UNUSED_CYCLE,
@@ -571,39 +623,70 @@ fn main() -> io::Result<()> {
     for (&i, advs) in &exec.advice {
         for adv in advs {
             match *adv {
-                Advice::MemOp { addr, value, write } => {
+                Advice::MemOp { addr, value, op } => {
                     // It should be fine to replace the old `Secret` gates with new ones here.  The
                     // shape of the circuit will be the same either way.
                     mem_ports[i as usize - 1] = b.secret(Some(MemPort {
                         cycle: i as u32 - 1,
                         addr,
                         value,
-                        write,
+                        op,
                     }));
                 }
                 Advice::Stutter => {}
+                Advice::Advise { advise } => {
+                    advices.insert(i as u32 - 1, advise);
+                }
             }
         }
     }
-    for (i, &x) in exec.init_mem.iter().enumerate() {
-        mem_ports.push(b.secret(Some(MemPort {
-            cycle: MEM_PORT_PRELOAD_CYCLE,
-            addr: 2 + i as u64,
-            value: x,
+    for seg in &exec.init_mem {
+        for i in 0..seg.len {
+            let x = seg.data.get(i as usize).cloned().unwrap_or(0);
+            let mp = MemPort {
+                cycle: MEM_PORT_PRELOAD_CYCLE,
+                addr: seg.start + i as u64,
+                value: x,
+                op: MemOpKind::Write,
+            };
+            let wire = if seg.secret { b.secret(Some(mp)) } else { b.lit(mp) };
+            mem_ports.push(wire);
+        }
+    }
+
+    let mut fetch_ports: Vec<TWire<FetchPort>> = Vec::new();
+    for (i, x) in exec.program.iter().enumerate() {
+        fetch_ports.push(b.secret(Some(FetchPort {
+            addr: i as u64,
+            instr: *x,
             write: true,
+        })));
+    }
+    for s in &exec.trace[..exec.trace.len() - 1] {
+        let idx = s.pc as usize;
+        assert!(
+            idx < exec.program.len(),
+            "program executes out of bounds: {} >= {}", idx, exec.program.len(),
+        );
+        fetch_ports.push(b.secret(Some(FetchPort {
+            addr: s.pc,
+            instr: exec.program[s.pc as usize],
+            write: false,
         })));
     }
 
     // Generate IR code to check the trace
 
-    check_first(&cx, &b, &prog, trace.first().unwrap());
+    check_first(&cx, &b, trace.first().unwrap());
 
     for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
+        let instr = b.secret(Some(exec.program[exec.trace[i].pc as usize]));
         let port = &mem_ports[i];
-        check_step(&cx, &b, i as u32, &prog, &[port.clone()], s1, s2);
+        let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
+        check_step(&cx, &b, i as u32, instr, &[port.clone()], advice, s1, s2);
     }
 
-    check_last(&cx, &b, &prog, trace.last().unwrap());
+    check_last(&cx, &b, trace.last().unwrap());
 
     // Check the memory ports
     for (i, port) in mem_ports.iter().enumerate().take(trace.len() - 1) {
@@ -645,6 +728,21 @@ fn main() -> io::Result<()> {
     check_first_mem(&cx, &b, &sorted_mem[0]);
     for (port1, port2) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)) {
         check_mem(&cx, &b, port1, port2);
+    }
+
+    // Check instruction-fetch consistency
+
+    let mut sorted_fetch = fetch_ports.clone();
+    sort::sort(&b, &mut sorted_fetch, &mut |x, y| {
+        // Sort first by address, then by `!write`.
+        b.or(
+            b.lt(x.addr, y.addr),
+            b.and(b.eq(x.addr, y.addr), x.write),
+        )
+    });
+    check_first_fetch(&cx, &b, &sorted_fetch[0]);
+    for (port1, port2) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)) {
+        check_fetch(&cx, &b, port1, port2);
     }
 
     // Collect assertions and bugs.
