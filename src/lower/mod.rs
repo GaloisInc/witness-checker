@@ -84,6 +84,8 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
         let order = self.wires_needed(old_wire);
 
         for old_wire in order {
+            let _g = self.c.scoped_label(old_wire.label);
+
             // Lookups should always succeed, since `order` is supposed to follow the dependency
             // order.
             let get = |w| self.m.get(&w).cloned()

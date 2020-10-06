@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::fmt;
 use std::ops::Deref;
+use std::str;
 use bumpalo::Bump;
 
 /// A high-level arithmetic/boolean circuit.
@@ -30,6 +31,9 @@ pub struct Circuit<'a> {
     intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
     intern_gadget_kind: RefCell<HashMap<String, &'a dyn GadgetKind<'a>>>,
+    intern_str: RefCell<HashSet<&'a str>>,
+
+    current_label: Cell<&'a str>,
 }
 
 impl<'a> Circuit<'a> {
@@ -41,6 +45,8 @@ impl<'a> Circuit<'a> {
             intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
             intern_gadget_kind: RefCell::new(HashMap::new()),
+            intern_str: RefCell::new(HashSet::new()),
+            current_label: Cell::new(""),
         }
     }
 
@@ -118,6 +124,19 @@ impl<'a> Circuit<'a> {
         }
     }
 
+    fn intern_str(&self, s: &str) -> &'a str {
+        let mut intern = self.intern_str.borrow_mut();
+        match intern.get(s) {
+            Some(&x) => x,
+            None => {
+                let s_bytes = self.arena.alloc_slice_copy(s.as_bytes());
+                let s = unsafe { str::from_utf8_unchecked(s_bytes) };
+                intern.insert(s);
+                s
+            },
+        }
+    }
+
     pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         // Forbid constructing gates that violate type-safety invariants.
         match kind {
@@ -165,6 +184,7 @@ impl<'a> Circuit<'a> {
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
+            label: self.current_label.get(),
         }))
     }
 
@@ -319,6 +339,13 @@ impl<'a> Circuit<'a> {
     where I: IntoIterator<Item = Wire<'a>> {
         let args = it.into_iter().collect::<Vec<_>>();
         self.gadget(kind, &args)
+    }
+
+
+    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+        let old = self.current_label.get();
+        let new = self.intern_str(&format!("{}/{}", old, label));
+        CellResetGuard::new(&self.current_label, new)
     }
 
 
@@ -482,6 +509,7 @@ pub struct Gate<'a> {
     /// recurse over the entire depth of the circuit.
     pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
+    pub label: &'a str,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -677,5 +705,28 @@ declare_interned_pointer! {
 impl<'a> fmt::Debug for GadgetKindRef<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "GadgetKindRef({})", self.name())
+    }
+}
+
+
+pub struct CellResetGuard<'a, T> {
+    cell: &'a Cell<T>,
+    old: Cell<T>,
+}
+
+impl<'a, T> CellResetGuard<'a, T> {
+    /// Set the contents of `cell` to `new`, and return a guard that restores the previous value
+    /// when dropped.
+    pub fn new(cell: &'a Cell<T>, new: T) -> CellResetGuard<'a, T> {
+        let old = Cell::new(new);
+        // We use `swap` to avoid copying the new or old value.
+        cell.swap(&old);
+        CellResetGuard { cell, old }
+    }
+}
+
+impl<'a, T> Drop for CellResetGuard<'a, T> {
+    fn drop(&mut self) {
+        self.cell.swap(&self.old)
     }
 }

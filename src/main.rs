@@ -213,6 +213,8 @@ fn check_step<'a>(
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) {
+    let _g = b.scoped_label(format_args!("check_step/cycle {:5}", cycle));
+
     let mut cases = Vec::new();
     let mut add_case = |op, result, dest, flag| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
@@ -454,6 +456,7 @@ fn check_first<'a>(
     b: &Builder<'a>,
     s: &TWire<'a, RamState>,
 ) {
+    let _g = b.scoped_label("check_first");
     wire_assert!(
         cx, b.eq(s.pc, b.lit(0)),
         "initial pc is {} (expected {})",
@@ -478,6 +481,7 @@ fn check_last<'a>(
     b: &Builder<'a>,
     s: &TWire<'a, RamState>,
 ) {
+    let _g = b.scoped_label("check_last");
     wire_assert!(
         cx, b.eq(s.regs[0], b.lit(0)),
         "final r0 is {} (expected {})",
@@ -490,6 +494,7 @@ fn check_first_mem<'a>(
     b: &Builder<'a>,
     port: &TWire<'a, MemPort>,
 ) {
+    let _g = b.scoped_label("check_first_mem");
     // If the first memory port is active, then it must not be a read, since there are no previous
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
@@ -504,9 +509,11 @@ fn check_first_mem<'a>(
 fn check_mem<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    index: usize,
     port1: &TWire<'a, MemPort>,
     port2: &TWire<'a, MemPort>,
 ) {
+    let _g = b.scoped_label(format_args!("check_mem/index {:5}", index));
     let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     // Whether `port2` is the first memory op for its address.
@@ -559,9 +566,10 @@ fn check_mem<'a>(
 
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
-    _b: &Builder<'a>,
+    b: &Builder<'a>,
     port: &TWire<'a, FetchPort>,
 ) {
+    let _g = b.scoped_label("check_first_fetch");
     wire_assert!(
         cx, port.write,
         "uninit fetch from program address {:x}",
@@ -572,9 +580,11 @@ fn check_first_fetch<'a>(
 fn check_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    index: usize,
     port1: &TWire<'a, FetchPort>,
     port2: &TWire<'a, FetchPort>,
 ) {
+    let _g = b.scoped_label(format_args!("check_fetch/index {:5}", index));
     cx.when(b, b.not(port2.write), |cx| {
         wire_assert!(
             cx, b.eq(port2.addr, port1.addr),
@@ -750,16 +760,20 @@ fn main() -> io::Result<()> {
     // Check memory consistency
 
     let mut sorted_mem = mem_ports.clone();
-    sort::sort(&b, &mut sorted_mem, &mut |x, y| {
-        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
-        // cycles.
-        let x_cyc = b.add(x.cycle, b.lit(1));
-        let y_cyc = b.add(y.cycle, b.lit(1));
-        b.or(
-            b.lt(x.addr, y.addr),
-            b.and(b.eq(x.addr, y.addr), b.lt(x_cyc, y_cyc)),
-        )
-    });
+    {
+        let _g = b.scoped_label("sort mem");
+        sort::sort(&b, &mut sorted_mem, &mut |x, y| {
+            let _g = b.scoped_label("compare");
+            // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
+            // cycles.
+            let x_cyc = b.add(x.cycle, b.lit(1));
+            let y_cyc = b.add(y.cycle, b.lit(1));
+            b.or(
+                b.lt(x.addr, y.addr),
+                b.and(b.eq(x.addr, y.addr), b.lt(x_cyc, y_cyc)),
+            )
+        });
+    }
     /*
     for port in &sorted_mem {
         eprintln!(
@@ -770,23 +784,27 @@ fn main() -> io::Result<()> {
     }
     */
     check_first_mem(&cx, &b, &sorted_mem[0]);
-    for (port1, port2) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)) {
-        check_mem(&cx, &b, port1, port2);
+    for (i, (port1, port2)) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)).enumerate() {
+        check_mem(&cx, &b, i, port1, port2);
     }
 
     // Check instruction-fetch consistency
 
     let mut sorted_fetch = fetch_ports.clone();
-    sort::sort(&b, &mut sorted_fetch, &mut |x, y| {
-        // Sort first by address, then by `!write`.
-        b.or(
-            b.lt(x.addr, y.addr),
-            b.and(b.eq(x.addr, y.addr), x.write),
-        )
-    });
+    {
+        let _g = b.scoped_label("sort fetch");
+        sort::sort(&b, &mut sorted_fetch, &mut |x, y| {
+            let _g = b.scoped_label("compare");
+            // Sort first by address, then by `!write`.
+            b.or(
+                b.lt(x.addr, y.addr),
+                b.and(b.eq(x.addr, y.addr), x.write),
+            )
+        });
+    }
     check_first_fetch(&cx, &b, &sorted_fetch[0]);
-    for (port1, port2) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)) {
-        check_fetch(&cx, &b, port1, port2);
+    for (i, (port1, port2)) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)).enumerate() {
+        check_fetch(&cx, &b, i, port1, port2);
     }
 
     // Lower IR code
