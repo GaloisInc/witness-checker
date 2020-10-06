@@ -4,12 +4,14 @@ use std::env;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
+use std::mem::{self, MaybeUninit};
 use std::path::Path;
+use std::ptr;
 use bumpalo::Bump;
 
 use cheesecloth::back;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, Wire};
+use cheesecloth::ir::circuit::{Circuit, Wire, GateKind};
 use cheesecloth::ir::typed::{Builder, TWire, Repr};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
@@ -84,7 +86,7 @@ impl<T: fmt::UpperHex> fmt::UpperHex for SecretValue<T> {
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
     bugs: RefCell<Vec<TWire<'a, bool>>>,
-    eval: Option<RefCell<CachingEvaluator<'a, eval::RevealSecrets>>>,
+    eval: Option<RefCell<CachingEvaluator<'a, 'a, eval::RevealSecrets>>>,
 }
 
 impl<'a> Context<'a> {
@@ -587,6 +589,53 @@ fn check_fetch<'a>(
     });
 }
 
+struct PassRunner<'a> {
+    // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have
+    // overlapping `&` and `&mut` references.
+    cur: MaybeUninit<&'a mut Bump>,
+    next: MaybeUninit<&'a mut Bump>,
+    /// Invariant: the underlying `Gate` of every wire in `wires` is allocated from the `cur`
+    /// arena.
+    wires: MaybeUninit<Vec<Wire<'a>>>,
+}
+
+impl<'a> PassRunner<'a> {
+    pub fn new(a: &'a mut Bump, b: &'a mut Bump, wires: Vec<Wire>) -> PassRunner<'a> {
+        a.reset();
+        b.reset();
+        let cur = MaybeUninit::new(a);
+        let next = MaybeUninit::new(b);
+        let wires = unsafe {
+            // Transfer all wires into the `cur` arena.
+            let arena: &Bump = &**cur.as_ptr();
+            let c = Circuit::new(arena);
+            let wires = run_pass(&c, wires, |c, _old, gk| c.gate(gk));
+            MaybeUninit::new(wires)
+        };
+
+        PassRunner { cur, next, wires }
+    }
+
+    pub fn run(&mut self, f: impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a>) {
+        unsafe {
+            {
+                let arena: &Bump = &**self.next.as_ptr();
+                let c = Circuit::new(arena);
+                let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
+                let wires = run_pass(&c, wires, f);
+                *self.wires.as_mut_ptr() = wires;
+            }
+            // All `wires` are now allocated from `self.next`, leaving `self.cur` unused.
+            (*self.cur.as_mut_ptr()).reset();
+            ptr::swap(self.cur.as_mut_ptr(), self.next.as_mut_ptr());
+        }
+    }
+
+    pub fn finish(self) -> Vec<Wire<'a>> {
+        unsafe { ptr::read(self.wires.as_ptr()) }
+    }
+}
+
 fn main() -> io::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     assert!(args.len() == 2, "usage: {} WITNESS", args.get(0).map_or("witness-checker", |x| x));
@@ -747,22 +796,28 @@ fn main() -> io::Result<()> {
     let flags = asserts.into_iter().chain(bugs.into_iter())
         .map(|tw| tw.repr).collect::<Vec<_>>();
 
+
+    let mut arena1 = Bump::new();
+    let mut arena2 = Bump::new();
+    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags);
+
     // TODO: need a better way to handle passes that must be run to fixpoint
-    let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
-    let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
-    let flags = run_pass(&c, flags, lower::bundle::unbundle_mux);
-    let flags = run_pass(&c, flags, lower::bundle::simplify);
-    let flags = run_pass(&c, flags, lower::const_fold::const_fold(&c));
-    let flags = run_pass(&c, flags, lower::int::mod_to_div);
-    let flags = run_pass(&c, flags, lower::int::non_constant_shift);
-    let flags = run_pass(&c, flags, lower::int::extend_to_64);
-    let flags = run_pass(&c, flags, lower::int::int_to_uint);
-    let flags = run_pass(&c, flags, lower::int::reduce_lit_32);
-    let flags = run_pass(&c, flags, lower::int::mux);
-    let flags = run_pass(&c, flags, lower::int::compare_to_zero);
-    let flags = run_pass(&c, flags, lower::bool_::mux);
-    let flags = run_pass(&c, flags, lower::bool_::compare_to_logic);
-    let flags = run_pass(&c, flags, lower::bool_::not_to_xor);
+    passes.run(lower::gadget::decompose_all_gadgets);
+    passes.run(lower::gadget::decompose_all_gadgets);
+    passes.run(lower::bundle::unbundle_mux);
+    passes.run(lower::bundle::simplify);
+    passes.run(lower::const_fold::const_fold(&c));
+    passes.run(lower::int::mod_to_div);
+    passes.run(lower::int::non_constant_shift);
+    passes.run(lower::int::extend_to_64);
+    passes.run(lower::int::int_to_uint);
+    passes.run(lower::int::reduce_lit_32);
+    passes.run(lower::int::mux);
+    passes.run(lower::int::compare_to_zero);
+    passes.run(lower::bool_::mux);
+    passes.run(lower::bool_::compare_to_logic);
+    passes.run(lower::bool_::not_to_xor);
+    let flags = passes.finish();
 
     // Generate SCALE
     let mut backend = back::scale::Backend::new();

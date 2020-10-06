@@ -65,13 +65,13 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
 
 /// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
 /// sharing.
-pub struct CachingEvaluator<'a, S> {
-    c: &'a Circuit<'a>,
+pub struct CachingEvaluator<'a, 'c, S> {
+    c: &'c Circuit<'a>,
     cache: HashMap<Wire<'a>, Option<Value>>,
     secret_eval: S,
 }
-impl<'a, S: Default> CachingEvaluator<'a, S> {
-    pub fn new(c: &'a Circuit<'a>) -> Self {
+impl<'a, 'c, S: Default> CachingEvaluator<'a, 'c, S> {
+    pub fn new(c: &'c Circuit<'a>) -> Self {
         CachingEvaluator {
             c,
             cache: HashMap::new(),
@@ -81,13 +81,13 @@ impl<'a, S: Default> CachingEvaluator<'a, S> {
 }
 
 
-impl<'a, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, S> {
+impl<'a, 'c, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, 'c, S> {
     fn eval_secret(&mut self, s: Secret<'a>) -> Option<Value> {
         self.secret_eval.eval_secret(s)
     }
 }
 
-impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
+impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, S> {
     fn eval_wire(&mut self, w: Wire<'a>) -> Option<Value> {
         if let Some(opt_val) = self.cache.get(&w) {
             return opt_val.clone();
