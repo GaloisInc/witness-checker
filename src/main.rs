@@ -1,14 +1,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::env;
-use std::fs::{self, File, remove_file};
+use std::fs;
 use std::fmt;
-use std::io::{self, BufWriter};
-use std::path::Path;
+use std::io;
 use std::iter;
+use std::path::Path;
 use bumpalo::Bump;
+use clap::{App, Arg, ArgMatches};
 
-use cheesecloth::back;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire};
 use cheesecloth::ir::typed::{Builder, TWire, Repr};
@@ -19,8 +18,30 @@ use cheesecloth::tiny_ram::{
     Execution, RamInstr, RamState, MemPort, MemOpKind, FetchPort, Opcode, Advice, REG_NONE, REG_PC,
     MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
-use zkinterface::Reader;
-use cheesecloth::ir::circuit::TyKind::Bool;
+
+
+fn parse_args() -> ArgMatches<'static> {
+    App::new("witness-checker")
+        .about("generate a witness checker circuit for a given MicroRAM execution trace")
+        .arg(Arg::with_name("trace")
+             .takes_value(true)
+             .value_name("TRACE.CBOR")
+             .help("MicroRAM execution trace")
+             .required(true))
+        .arg(Arg::with_name("scale-out")
+             .long("scale-out")
+             .takes_value(true)
+             .value_name("OUT.BC")
+             .help("output SCALE bytecode circuit representation in this directory"))
+        .arg(Arg::with_name("zkif-out")
+             .long("zkif-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output zkinterface circuit representation in this directory"))
+        .after_help("With no output options, prints the result of evaluating the circuit.")
+        .get_matches()
+}
+
 
 macro_rules! wire_assert {
     ($cx:expr, $cond:expr, $($args:tt)*) => {
@@ -585,16 +606,29 @@ fn check_fetch<'a>(
 }
 
 fn main() -> io::Result<()> {
-    let args = env::args().collect::<Vec<_>>();
-    assert!(args.len() == 2, "usage: {} WITNESS", args.get(0).map_or("witness-checker", |x| x));
+    let args = parse_args();
+
+    #[cfg(not(feature = "bellman"))]
+    if args.is_present("zkif-out") {
+        eprintln!("error: zkinterface output is not supported - build with `--features bellman`");
+        std::process::exit(1);
+    }
+    #[cfg(not(feature = "scale"))]
+    if args.is_present("scale-out") {
+        eprintln!("error: scale output is not supported - build with `--features scale`");
+        std::process::exit(1);
+    }
+
+
     let arena = Bump::new();
     let c = Circuit::new(&arena);
     let b = Builder::new(&c);
     let cx = Context::new(&c);
 
     // Load the program and trace from files
-    let content = fs::read(&args[1]).unwrap();
-    let exec: Execution = match Path::new(&args[1]).extension().and_then(|os| os.to_str()) {
+    let trace_path = Path::new(args.value_of_os("trace").unwrap());
+    let content = fs::read(trace_path).unwrap();
+    let exec: Execution = match trace_path.extension().and_then(|os| os.to_str()) {
         Some("yaml") => serde_yaml::from_slice(&content).unwrap(),
         Some("cbor") => serde_cbor::from_slice(&content).unwrap(),
         Some("json") => serde_json::from_slice(&content).unwrap(),
@@ -773,6 +807,10 @@ fn main() -> io::Result<()> {
     let flags = run_pass(&c, flags, lower::int::int_to_uint);
     let flags = run_pass(&c, flags, lower::int::reduce_lit_32);
     let flags = run_pass(&c, flags, lower::int::mux);
+    #[cfg(feature = "scale")]
+    let flags = run_pass(&c, flags, lower::int::compare_to_zero);
+    #[cfg(feature = "bellman")]
+    let flags = run_pass(&c, flags, lower::int::compare_to_greater_or_equal_to_zero);
     let flags = run_pass(&c, flags, lower::bool_::mux);
     let flags = run_pass(&c, flags, lower::bool_::compare_to_logic);
     let flags = run_pass(&c, flags, lower::bool_::not_to_xor);
@@ -782,15 +820,17 @@ fn main() -> io::Result<()> {
         //println!("Wire {:?}", wire);
     }
 
-    #[cfg(feature = "bellman")] {
-        use back::zkif::backend::{Backend, Scalar};
+    #[cfg(feature = "bellman")]
+    if let Some(dest) = args.value_of_os("zkif-out") {
+        use cheesecloth::back::zkif::backend::{Backend, Scalar};
+        use std::fs::remove_file;
+        use zkinterface::Reader;
         use zkinterface_bellman::zkif_backend::validate;
 
-        let flags = run_pass(&c, flags, lower::int::compare_to_greater_or_equal_to_zero);
         let accepted = flags[0];
 
         // Clean workspace.
-        let workspace = Path::new("local/example");
+        let workspace = Path::new(dest);
         let files = vec![
             workspace.join("header.zkif"),
             workspace.join("constraints.zkif"),
@@ -824,14 +864,17 @@ fn main() -> io::Result<()> {
         validate::<Scalar>(&reader, false).unwrap();
     }
 
-    #[cfg(feature = "scale")] {
-        let flags = run_pass(&c, flags, lower::int::compare_to_zero);
+    #[cfg(feature = "scale")]
+    if let Some(dest) = args.value_of_os("scale-out") {
+        use std::fs::File;
+        use std::io::BufWriter;
+        use cheesecloth::back::scale::Backend;
 
         // Generate SCALE
-        let mut backend = back::scale::Backend::new();
+        let mut backend = Backend::new();
 
         backend.print_str("asserts: ");
-        for w in flags.iter().take(num_asserts) {
+        for w in flags.iter().skip(1).take(num_asserts) {
             let sbit = backend.wire(w.clone());
             let bit = backend.reveal(sbit);
             backend.print(bit);
@@ -839,7 +882,7 @@ fn main() -> io::Result<()> {
         backend.print_str("\n");
 
         backend.print_str("bugs: ");
-        for w in flags.iter().skip(num_asserts) {
+        for w in flags.iter().skip(1 + num_asserts) {
             let sbit = backend.wire(w.clone());
             let bit = backend.reveal(sbit);
             backend.print(bit);
@@ -847,11 +890,14 @@ fn main() -> io::Result<()> {
 
         // Write out the generated SCALE program
         let instrs = backend.finish();
-        let mut f = BufWriter::new(File::create("out.bc")?);
+        let mut f = BufWriter::new(File::create(dest)?);
         for i in instrs {
             scale_isa::functions::write_instruction(&mut f, i)?;
         }
     }
+
+    // Unused in some configurations.
+    let _ = num_asserts;
 
     Ok(())
 }
