@@ -38,6 +38,9 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output zkinterface circuit representation in this directory"))
+        .arg(Arg::with_name("validate-only")
+             .long("validate-only")
+             .help("check only that the trace is valid; don't require it to demonstrate a bug"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -778,13 +781,14 @@ fn main() -> io::Result<()> {
     let bugs = bugs.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
 
     // The statement is accepted if all assertions hold.
-    let accepted = c.all_true(asserts.iter().cloned());
-    /* Or if proving bug existence:
-    // The statement is accepted if all assertions hold and at least one bug exists.
-    let accepted = c.and(
-        c.all_true(asserts.iter().cloned()),
-        c.any_true(bugs.iter().cloned()),
-    );*/
+    let accepted = if args.is_present("validate-only") {
+        c.all_true(asserts.iter().cloned())
+    } else {
+        c.and(
+            c.all_true(asserts.iter().cloned()),
+            c.any_true(bugs.iter().cloned()),
+        )
+    };
 
     // Concatenate accepted, asserts, bugs.
     let num_asserts = 1 + asserts.len();
@@ -814,11 +818,6 @@ fn main() -> io::Result<()> {
     let flags = run_pass(&c, flags, lower::bool_::mux);
     let flags = run_pass(&c, flags, lower::bool_::compare_to_logic);
     let flags = run_pass(&c, flags, lower::bool_::not_to_xor);
-
-    // Print
-    for wire in &flags {
-        //println!("Wire {:?}", wire);
-    }
 
     #[cfg(feature = "bellman")]
     if let Some(dest) = args.value_of_os("zkif-out") {
