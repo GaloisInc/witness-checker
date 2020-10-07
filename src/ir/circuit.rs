@@ -357,24 +357,29 @@ enum PostorderEntry<'a> {
     Yield(Wire<'a>),
 }
 
-pub struct PostorderIter<'a> {
+pub struct PostorderIter<'a, F> {
     stack: Vec<PostorderEntry<'a>>,
     /// Wires that have already been yielded.  We avoid processing the same wire twice.
     yielded: HashSet<Wire<'a>>,
+    filter: F,
 }
 
-impl<'a> PostorderIter<'a> {
+impl<'a, F> PostorderIter<'a, F> {
     fn push_expand(&mut self, w: Wire<'a>) {
         self.stack.push(PostorderEntry::Expand(w));
     }
 }
 
-impl<'a> Iterator for PostorderIter<'a> {
+impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
     type Item = Wire<'a>;
     fn next(&mut self) -> Option<Wire<'a>> {
         while let Some(entry) = self.stack.pop() {
             match entry {
                 PostorderEntry::Expand(w) => {
+                    if !(self.filter)(w) {
+                        continue;
+                    }
+
                     // It's possible for a yielded wire to appear in an `Expand` entry, as a wire
                     // may have multiple parents.  We ignore these entries to avoid duplicate work.
                     if self.yielded.contains(&w) {
@@ -442,13 +447,25 @@ impl<'a> Iterator for PostorderIter<'a> {
     }
 }
 
-pub fn walk_wires<'a, I>(wires: I) -> PostorderIter<'a>
+pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
 where I: IntoIterator<Item = Wire<'a>> {
     let mut stack = wires.into_iter().map(PostorderEntry::Expand).collect::<Vec<_>>();
     stack.reverse();
     PostorderIter {
         stack,
         yielded: HashSet::new(),
+        filter: |_| true,
+    }
+}
+
+pub fn walk_wires_filtered<'a, I, F>(wires: I, filter: F) -> PostorderIter<'a, F>
+where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
+    let mut stack = wires.into_iter().map(PostorderEntry::Expand).collect::<Vec<_>>();
+    stack.reverse();
+    PostorderIter {
+        stack,
+        yielded: HashSet::new(),
+        filter,
     }
 }
 
