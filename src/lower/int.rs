@@ -95,7 +95,7 @@ fn normalize_64<'a>(c: &Circuit<'a>, w: Wire<'a>, ty: Ty) -> Wire<'a> {
 /// Extend all integers to 64 bits.  That is, all `Uint`s will be extended to `U64`, and all `Int`s
 /// will be extended to `I64`.
 pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a> {
-    if old.ty.is_integer() && old.ty.integer_size() != IntSize::I64 {
+    if old.ty.is_integer() && old.ty.integer_size() < IntSize(64) {
         match gk {
             GateKind::Lit(x, ty) => {
                 return c.lit(extend_integer_ty(c, ty), maybe_sign_extend(x, ty));

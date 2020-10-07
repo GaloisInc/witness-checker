@@ -467,13 +467,8 @@ where I: IntoIterator<Item = Wire<'a>> {
 }
 
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum IntSize {
-    I8,
-    I16,
-    I32,
-    I64,
-}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub struct IntSize(pub u16);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum TyKind<'a> {
@@ -484,25 +479,20 @@ pub enum TyKind<'a> {
 }
 
 impl IntSize {
-    pub fn bits(self) -> u8 {
-        match self {
-            IntSize::I8 => 8,
-            IntSize::I16 => 16,
-            IntSize::I32 => 32,
-            IntSize::I64 => 64,
-        }
+    pub fn bits(self) -> u16 {
+        self.0
     }
 }
 
 impl TyKind<'_> {
-    pub const I8: TyKind<'static> = TyKind::Int(IntSize::I8);
-    pub const I16: TyKind<'static> = TyKind::Int(IntSize::I16);
-    pub const I32: TyKind<'static> = TyKind::Int(IntSize::I32);
-    pub const I64: TyKind<'static> = TyKind::Int(IntSize::I64);
-    pub const U8: TyKind<'static> = TyKind::Uint(IntSize::I8);
-    pub const U16: TyKind<'static> = TyKind::Uint(IntSize::I16);
-    pub const U32: TyKind<'static> = TyKind::Uint(IntSize::I32);
-    pub const U64: TyKind<'static> = TyKind::Uint(IntSize::I64);
+    pub const I8: TyKind<'static> = TyKind::Int(IntSize(8));
+    pub const I16: TyKind<'static> = TyKind::Int(IntSize(16));
+    pub const I32: TyKind<'static> = TyKind::Int(IntSize(32));
+    pub const I64: TyKind<'static> = TyKind::Int(IntSize(64));
+    pub const U8: TyKind<'static> = TyKind::Uint(IntSize(8));
+    pub const U16: TyKind<'static> = TyKind::Uint(IntSize(16));
+    pub const U32: TyKind<'static> = TyKind::Uint(IntSize(32));
+    pub const U64: TyKind<'static> = TyKind::Uint(IntSize(64));
 
     pub fn is_integer(&self) -> bool {
         match *self {
