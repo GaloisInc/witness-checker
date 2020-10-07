@@ -349,98 +349,55 @@ impl<'a> Circuit<'a> {
     }
 }
 
-/// `PostorderIter` performs a depth-first postorder traversal.  Since it's postorder, we need to
-/// distinguish the first visit to a given node (when it gets expanded and its children are pushed)
-/// from the second (when the node itself is yielded to the callback).
-enum PostorderEntry<'a> {
-    Expand(Wire<'a>),
-    Yield(Wire<'a>),
-}
 
 pub struct PostorderIter<'a, F> {
-    stack: Vec<PostorderEntry<'a>>,
+    stack: Vec<Wire<'a>>,
     /// Wires that have already been yielded.  We avoid processing the same wire twice.
-    yielded: HashSet<Wire<'a>>,
+    seen: HashSet<Wire<'a>>,
     filter: F,
-}
-
-impl<'a, F> PostorderIter<'a, F> {
-    fn push_expand(&mut self, w: Wire<'a>) {
-        self.stack.push(PostorderEntry::Expand(w));
-    }
 }
 
 impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
     type Item = Wire<'a>;
     fn next(&mut self) -> Option<Wire<'a>> {
-        while let Some(entry) = self.stack.pop() {
-            match entry {
-                PostorderEntry::Expand(w) => {
-                    if !(self.filter)(w) {
-                        continue;
-                    }
+        // NB: `last().cloned()`, not `pop()`.  We only pop the item if all its children have been
+        // processed.
+        while let Some(wire) = self.stack.last().cloned() {
+            // We may end up with the same wire on the stack twice, if the wire is accessible via
+            // two different paths.
+            if self.seen.contains(&wire) {
+                self.stack.pop();
+                continue;
+            }
 
-                    // It's possible for a yielded wire to appear in an `Expand` entry, as a wire
-                    // may have multiple parents.  We ignore these entries to avoid duplicate work.
-                    if self.yielded.contains(&w) {
-                        continue;
-                    }
+            let mut maybe_push = |w| {
+                if self.seen.contains(&w) || !(self.filter)(w) {
+                    false
+                } else {
+                    self.stack.push(w);
+                    true
+                }
+            };
 
-                    self.stack.push(PostorderEntry::Yield(w));
-                    match w.kind {
-                        GateKind::Lit(_, _) => {}
-                        GateKind::Secret(_) => {}
-                        GateKind::Unary(_, a) => {
-                            self.push_expand(a);
-                        },
-                        GateKind::Binary(_, a, b) => {
-                            self.push_expand(b);
-                            self.push_expand(a);
-                        },
-                        GateKind::Shift(_, a, b) => {
-                            self.push_expand(b);
-                            self.push_expand(a);
-                        },
-                        GateKind::Compare(_, a, b) => {
-                            self.push_expand(b);
-                            self.push_expand(a);
-                        },
-                        GateKind::Mux(c, t, e) => {
-                            self.push_expand(e);
-                            self.push_expand(t);
-                            self.push_expand(c);
-                        },
-                        GateKind::Cast(w, _) => {
-                            self.push_expand(w);
-                        },
-                        GateKind::Pack(ws) => {
-                            for &w in ws.iter().rev() {
-                                self.push_expand(w);
-                            }
-                        },
-                        GateKind::Extract(w, _) => {
-                            self.push_expand(w);
-                        },
-                        GateKind::Gadget(_, ws) => {
-                            for &w in ws.iter().rev() {
-                                self.push_expand(w);
-                            }
-                        },
-                    }
-                },
+            let children_pending = match wire.kind {
+                GateKind::Lit(_, _) |
+                GateKind::Secret(_) => false,
+                GateKind::Unary(_, a) |
+                GateKind::Cast(a, _) |
+                GateKind::Extract(a, _) => maybe_push(a),
+                GateKind::Binary(_, a, b) |
+                GateKind::Shift(_, a, b) |
+                GateKind::Compare(_, a, b) => maybe_push(b) || maybe_push(a),
+                GateKind::Mux(c, t, e) => maybe_push(e) || maybe_push(t) || maybe_push(c),
+                GateKind::Pack(ws) |
+                GateKind::Gadget(_, ws) => ws.iter().rev().cloned().any(maybe_push),
+            };
 
-                PostorderEntry::Yield(w) => {
-                    let inserted = self.yielded.insert(w);
-                    // It's not possible for a yielded wire to appear in a `Yield` entry.  This
-                    // would imply that there were once two different `Yield` entries for the same
-                    // wire in the stack.  But `Yield` entries correspond to the direct ancestors
-                    // of the current node, so two `Yield` entries would imply that the wire is its
-                    // own ancestor (a cycle in the circuit).  Cycles are impossible to construct,
-                    // since gates are read-only after construction.
-                    assert!(inserted);
-
-                    return Some(w);
-                },
+            if !children_pending {
+                let result = self.stack.pop();
+                debug_assert!(result == Some(wire));
+                self.seen.insert(wire);
+                return Some(wire);
             }
         }
         None
@@ -449,22 +406,22 @@ impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
 
 pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
 where I: IntoIterator<Item = Wire<'a>> {
-    let mut stack = wires.into_iter().map(PostorderEntry::Expand).collect::<Vec<_>>();
+    let mut stack = wires.into_iter().collect::<Vec<_>>();
     stack.reverse();
     PostorderIter {
         stack,
-        yielded: HashSet::new(),
+        seen: HashSet::new(),
         filter: |_| true,
     }
 }
 
 pub fn walk_wires_filtered<'a, I, F>(wires: I, filter: F) -> PostorderIter<'a, F>
 where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
-    let mut stack = wires.into_iter().map(PostorderEntry::Expand).collect::<Vec<_>>();
+    let mut stack = wires.into_iter().collect::<Vec<_>>();
     stack.reverse();
     PostorderIter {
         stack,
-        yielded: HashSet::new(),
+        seen: HashSet::new(),
         filter,
     }
 }
