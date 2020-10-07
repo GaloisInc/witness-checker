@@ -653,6 +653,9 @@ impl<'a> PassRunner<'a> {
         PassRunner { cur, next, wires }
     }
 
+    // FIXME: using `'a` instead of a fresh lifetime (`for <'b>`) potentially allows the closure to
+    // stash a `GateKind` or `Wire` somewhere and use it after the arena has been `reset`.
+    // However, this also makes it hard to apply stateful transformation passes (`const_fold`).
     pub fn run(&mut self, f: impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a>) {
         unsafe {
             {
