@@ -4,12 +4,14 @@ use std::fs;
 use std::fmt;
 use std::io;
 use std::iter;
+use std::mem::{self, MaybeUninit};
 use std::path::Path;
+use std::ptr;
 use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
 
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, Wire};
+use cheesecloth::ir::circuit::{Circuit, Wire, GateKind};
 use cheesecloth::ir::typed::{Builder, TWire, Repr};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
@@ -105,7 +107,7 @@ impl<T: fmt::UpperHex> fmt::UpperHex for SecretValue<T> {
 struct Context<'a> {
     asserts: RefCell<Vec<TWire<'a, bool>>>,
     bugs: RefCell<Vec<TWire<'a, bool>>>,
-    eval: Option<RefCell<CachingEvaluator<'a, eval::RevealSecrets>>>,
+    eval: Option<RefCell<CachingEvaluator<'a, 'a, eval::RevealSecrets>>>,
 }
 
 impl<'a> Context<'a> {
@@ -232,6 +234,8 @@ fn check_step<'a>(
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) {
+    let _g = b.scoped_label(format_args!("check_step/cycle {:5}", cycle));
+
     let mut cases = Vec::new();
     let mut add_case = |op, result, dest, flag| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
@@ -473,6 +477,7 @@ fn check_first<'a>(
     b: &Builder<'a>,
     s: &TWire<'a, RamState>,
 ) {
+    let _g = b.scoped_label("check_first");
     wire_assert!(
         cx, b.eq(s.pc, b.lit(0)),
         "initial pc is {} (expected {})",
@@ -497,6 +502,7 @@ fn check_last<'a>(
     b: &Builder<'a>,
     s: &TWire<'a, RamState>,
 ) {
+    let _g = b.scoped_label("check_last");
     wire_assert!(
         cx, b.eq(s.regs[0], b.lit(0)),
         "final r0 is {} (expected {})",
@@ -509,6 +515,7 @@ fn check_first_mem<'a>(
     b: &Builder<'a>,
     port: &TWire<'a, MemPort>,
 ) {
+    let _g = b.scoped_label("check_first_mem");
     // If the first memory port is active, then it must not be a read, since there are no previous
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
@@ -523,9 +530,11 @@ fn check_first_mem<'a>(
 fn check_mem<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    index: usize,
     port1: &TWire<'a, MemPort>,
     port2: &TWire<'a, MemPort>,
 ) {
+    let _g = b.scoped_label(format_args!("check_mem/index {:5}", index));
     let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     // Whether `port2` is the first memory op for its address.
@@ -578,9 +587,10 @@ fn check_mem<'a>(
 
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
-    _b: &Builder<'a>,
+    b: &Builder<'a>,
     port: &TWire<'a, FetchPort>,
 ) {
+    let _g = b.scoped_label("check_first_fetch");
     wire_assert!(
         cx, port.write,
         "uninit fetch from program address {:x}",
@@ -591,9 +601,11 @@ fn check_first_fetch<'a>(
 fn check_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    index: usize,
     port1: &TWire<'a, FetchPort>,
     port2: &TWire<'a, FetchPort>,
 ) {
+    let _g = b.scoped_label(format_args!("check_fetch/index {:5}", index));
     cx.when(b, b.not(port2.write), |cx| {
         wire_assert!(
             cx, b.eq(port2.addr, port1.addr),
@@ -606,6 +618,53 @@ fn check_fetch<'a>(
             cx.eval(port2.addr),
         );
     });
+}
+
+struct PassRunner<'a> {
+    // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have
+    // overlapping `&` and `&mut` references.
+    cur: MaybeUninit<&'a mut Bump>,
+    next: MaybeUninit<&'a mut Bump>,
+    /// Invariant: the underlying `Gate` of every wire in `wires` is allocated from the `cur`
+    /// arena.
+    wires: MaybeUninit<Vec<Wire<'a>>>,
+}
+
+impl<'a> PassRunner<'a> {
+    pub fn new(a: &'a mut Bump, b: &'a mut Bump, wires: Vec<Wire>) -> PassRunner<'a> {
+        a.reset();
+        b.reset();
+        let cur = MaybeUninit::new(a);
+        let next = MaybeUninit::new(b);
+        let wires = unsafe {
+            // Transfer all wires into the `cur` arena.
+            let arena: &Bump = &**cur.as_ptr();
+            let c = Circuit::new(arena);
+            let wires = run_pass(&c, wires, |c, _old, gk| c.gate(gk));
+            MaybeUninit::new(wires)
+        };
+
+        PassRunner { cur, next, wires }
+    }
+
+    pub fn run(&mut self, f: impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a>) {
+        unsafe {
+            {
+                let arena: &Bump = &**self.next.as_ptr();
+                let c = Circuit::new(arena);
+                let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
+                let wires = run_pass(&c, wires, f);
+                *self.wires.as_mut_ptr() = wires;
+            }
+            // All `wires` are now allocated from `self.next`, leaving `self.cur` unused.
+            (*self.cur.as_mut_ptr()).reset();
+            ptr::swap(self.cur.as_mut_ptr(), self.next.as_mut_ptr());
+        }
+    }
+
+    pub fn finish(self) -> Vec<Wire<'a>> {
+        unsafe { ptr::read(self.wires.as_ptr()) }
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -735,16 +794,20 @@ fn main() -> io::Result<()> {
     // Check memory consistency
 
     let mut sorted_mem = mem_ports.clone();
-    sort::sort(&b, &mut sorted_mem, &mut |x, y| {
-        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
-        // cycles.
-        let x_cyc = b.add(x.cycle, b.lit(1));
-        let y_cyc = b.add(y.cycle, b.lit(1));
-        b.or(
-            b.lt(x.addr, y.addr),
-            b.and(b.eq(x.addr, y.addr), b.lt(x_cyc, y_cyc)),
-        )
-    });
+    {
+        let _g = b.scoped_label("sort mem");
+        sort::sort(&b, &mut sorted_mem, &mut |x, y| {
+            let _g = b.scoped_label("compare");
+            // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
+            // cycles.
+            let x_cyc = b.add(x.cycle, b.lit(1));
+            let y_cyc = b.add(y.cycle, b.lit(1));
+            b.or(
+                b.lt(x.addr, y.addr),
+                b.and(b.eq(x.addr, y.addr), b.lt(x_cyc, y_cyc)),
+            )
+        });
+    }
     /*
     for port in &sorted_mem {
         eprintln!(
@@ -755,23 +818,27 @@ fn main() -> io::Result<()> {
     }
     */
     check_first_mem(&cx, &b, &sorted_mem[0]);
-    for (port1, port2) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)) {
-        check_mem(&cx, &b, port1, port2);
+    for (i, (port1, port2)) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)).enumerate() {
+        check_mem(&cx, &b, i, port1, port2);
     }
 
     // Check instruction-fetch consistency
 
     let mut sorted_fetch = fetch_ports.clone();
-    sort::sort(&b, &mut sorted_fetch, &mut |x, y| {
-        // Sort first by address, then by `!write`.
-        b.or(
-            b.lt(x.addr, y.addr),
-            b.and(b.eq(x.addr, y.addr), x.write),
-        )
-    });
+    {
+        let _g = b.scoped_label("sort fetch");
+        sort::sort(&b, &mut sorted_fetch, &mut |x, y| {
+            let _g = b.scoped_label("compare");
+            // Sort first by address, then by `!write`.
+            b.or(
+                b.lt(x.addr, y.addr),
+                b.and(b.eq(x.addr, y.addr), x.write),
+            )
+        });
+    }
     check_first_fetch(&cx, &b, &sorted_fetch[0]);
-    for (port1, port2) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)) {
-        check_fetch(&cx, &b, port1, port2);
+    for (i, (port1, port2)) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)).enumerate() {
+        check_fetch(&cx, &b, i, port1, port2);
     }
 
     // Collect assertions and bugs.
@@ -798,26 +865,31 @@ fn main() -> io::Result<()> {
             .chain(bugs.into_iter())
             .collect::<Vec<_>>();
 
-    // Lower IR code
+
+    let mut arena1 = Bump::new();
+    let mut arena2 = Bump::new();
+    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags);
+
     // TODO: need a better way to handle passes that must be run to fixpoint
-    let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
-    let flags = run_pass(&c, flags, lower::gadget::decompose_all_gadgets);
-    let flags = run_pass(&c, flags, lower::bundle::unbundle_mux);
-    let flags = run_pass(&c, flags, lower::bundle::simplify);
-    let flags = run_pass(&c, flags, lower::const_fold::const_fold(&c));
-    let flags = run_pass(&c, flags, lower::int::mod_to_div);
-    let flags = run_pass(&c, flags, lower::int::non_constant_shift);
-    let flags = run_pass(&c, flags, lower::int::extend_to_64);
-    let flags = run_pass(&c, flags, lower::int::int_to_uint);
-    let flags = run_pass(&c, flags, lower::int::reduce_lit_32);
-    let flags = run_pass(&c, flags, lower::int::mux);
+    passes.run(lower::gadget::decompose_all_gadgets);
+    passes.run(lower::gadget::decompose_all_gadgets);
+    passes.run(lower::bundle::unbundle_mux);
+    passes.run(lower::bundle::simplify);
+    passes.run(lower::const_fold::const_fold(&c));
+    passes.run(lower::int::mod_to_div);
+    passes.run(lower::int::non_constant_shift);
+    passes.run(lower::int::extend_to_64);
+    passes.run(lower::int::int_to_uint);
+    passes.run(lower::int::reduce_lit_32);
+    passes.run(lower::int::mux);
     #[cfg(feature = "scale")]
-    let flags = run_pass(&c, flags, lower::int::compare_to_zero);
+    passes.run(lower::int::compare_to_zero);
     #[cfg(feature = "bellman")]
-    let flags = run_pass(&c, flags, lower::int::compare_to_greater_or_equal_to_zero);
-    let flags = run_pass(&c, flags, lower::bool_::mux);
-    let flags = run_pass(&c, flags, lower::bool_::compare_to_logic);
-    let flags = run_pass(&c, flags, lower::bool_::not_to_xor);
+    passes.run(lower::int::compare_to_greater_or_equal_to_zero);
+    passes.run(lower::bool_::mux);
+    passes.run(lower::bool_::compare_to_logic);
+    passes.run(lower::bool_::not_to_xor);
+    let flags = passes.finish();
 
     #[cfg(feature = "bellman")]
     if let Some(dest) = args.value_of_os("zkif-out") {

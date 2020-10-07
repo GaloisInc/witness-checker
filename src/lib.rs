@@ -1,4 +1,5 @@
 pub mod back;
+pub mod debug;
 pub mod eval;
 pub mod gadget;
 pub mod ir;

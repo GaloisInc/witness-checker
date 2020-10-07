@@ -68,6 +68,7 @@ where
         let a = &self.xs[i];
         let b = &self.xs[j];
         let lt = (self.compare)(a, b);
+        let _g = self.b.scoped_label("swap");
         let new_a = self.b.mux(lt, a.clone(), b.clone());
         let new_b = self.b.mux(lt, b.clone(), a.clone());
         self.xs[i] = new_a;

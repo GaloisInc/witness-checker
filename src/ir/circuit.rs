@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::fmt;
 use std::ops::Deref;
+use std::str;
 use bumpalo::Bump;
 
 /// A high-level arithmetic/boolean circuit.
@@ -30,6 +31,9 @@ pub struct Circuit<'a> {
     intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
     intern_gadget_kind: RefCell<HashMap<String, &'a dyn GadgetKind<'a>>>,
+    intern_str: RefCell<HashSet<&'a str>>,
+
+    current_label: Cell<&'a str>,
 }
 
 impl<'a> Circuit<'a> {
@@ -41,6 +45,8 @@ impl<'a> Circuit<'a> {
             intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
             intern_gadget_kind: RefCell::new(HashMap::new()),
+            intern_str: RefCell::new(HashSet::new()),
+            current_label: Cell::new(""),
         }
     }
 
@@ -118,6 +124,19 @@ impl<'a> Circuit<'a> {
         }
     }
 
+    fn intern_str(&self, s: &str) -> &'a str {
+        let mut intern = self.intern_str.borrow_mut();
+        match intern.get(s) {
+            Some(&x) => x,
+            None => {
+                let s_bytes = self.arena.alloc_slice_copy(s.as_bytes());
+                let s = unsafe { str::from_utf8_unchecked(s_bytes) };
+                intern.insert(s);
+                s
+            },
+        }
+    }
+
     pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         // Forbid constructing gates that violate type-safety invariants.
         match kind {
@@ -165,6 +184,7 @@ impl<'a> Circuit<'a> {
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
+            label: self.current_label.get(),
         }))
     }
 
@@ -338,101 +358,100 @@ impl<'a> Circuit<'a> {
     }
 
 
-    pub fn walk_wires<I, F>(&self, wires: I, mut f: F)
-    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Wire<'a>) {
-        // This is a depth-first postorder traversal.  Since it's postorder, we need to distinguish
-        // the first visit to a given node (when it gets expanded and its children are pushed)
-        // from the second (when the node itself is yielded to the callback).
-        enum Entry<'a> {
-            Expand(Wire<'a>),
-            Yield(Wire<'a>),
-        }
-
-        let mut stack = wires.into_iter().map(Entry::Expand).collect::<Vec<_>>();
-        stack.reverse();
-
-        // Wires that have already been yielded.  We avoid processing the same wire twice.
-        let mut yielded = HashSet::new();
-
-        while let Some(entry) = stack.pop() {
-            match entry {
-                Entry::Expand(w) => {
-                    // It's possible for a yielded wire to appear in an `Expand` entry, as a wire
-                    // may have multiple parents.  We ignore these entries to avoid duplicate work.
-                    if yielded.contains(&w) {
-                        continue;
-                    }
-
-                    stack.push(Entry::Yield(w));
-                    match w.kind {
-                        GateKind::Lit(_, _) => {}
-                        GateKind::Secret(_) => {}
-                        GateKind::Unary(_, a) => {
-                            stack.push(Entry::Expand(a));
-                        },
-                        GateKind::Binary(_, a, b) => {
-                            stack.push(Entry::Expand(b));
-                            stack.push(Entry::Expand(a));
-                        },
-                        GateKind::Shift(_, a, b) => {
-                            stack.push(Entry::Expand(b));
-                            stack.push(Entry::Expand(a));
-                        },
-                        GateKind::Compare(_, a, b) => {
-                            stack.push(Entry::Expand(b));
-                            stack.push(Entry::Expand(a));
-                        },
-                        GateKind::Mux(c, t, e) => {
-                            stack.push(Entry::Expand(e));
-                            stack.push(Entry::Expand(t));
-                            stack.push(Entry::Expand(c));
-                        },
-                        GateKind::Cast(w, _) => {
-                            stack.push(Entry::Expand(w));
-                        },
-                        GateKind::Pack(ws) => {
-                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
-                        },
-                        GateKind::Extract(w, _) => {
-                            stack.push(Entry::Expand(w));
-                        },
-                        GateKind::Gadget(_, ws) => {
-                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
-                        },
-                    }
-                },
-
-                Entry::Yield(w) => {
-                    let inserted = yielded.insert(w);
-                    // It's not possible for a yielded wire to appear in a `Yield` entry.  This
-                    // would imply that there were once two different `Yield` entries for the same
-                    // wire in the stack.  But `Yield` entries correspond to the direct ancestors
-                    // of the current node, so two `Yield` entries would imply that the wire is its
-                    // own ancestor (a cycle in the circuit).  Cycles are impossible to construct,
-                    // since gates are read-only after construction.
-                    assert!(inserted);
-
-                    f(w);
-                },
-            }
-        }
-    }
-
-    /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
-    /// once, in some deterministic order (assuming `wires` itself is deterministic).
-    pub fn walk_witness<I, F>(&self, wires: I, mut f: F)
-    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Secret<'a>) {
-        // In the normal case where every gate is interned properly, we should visit each distinct
-        // `GateKind::Secret` only once, and see each `Secret` only once.  However, this can go
-        // wrong if there are multiple `Circuit`s using the same arena but different `intern`
-        // tables, and wires from one `Circuit` are referenced in another.  Currently we don't
-        // defend against this misuse.
-        self.walk_wires(wires, |w| match w.kind {
-            GateKind::Secret(s) => f(s),
-            _ => {},
-        });
+    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+        let old = self.current_label.get();
+        let new = self.intern_str(&format!("{}/{}", old, label));
+        CellResetGuard::new(&self.current_label, new)
     }
 }
+
+
+pub struct PostorderIter<'a, F> {
+    stack: Vec<Wire<'a>>,
+    /// Wires that have already been yielded.  We avoid processing the same wire twice.
+    seen: HashSet<Wire<'a>>,
+    filter: F,
+}
+
+impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
+    type Item = Wire<'a>;
+    fn next(&mut self) -> Option<Wire<'a>> {
+        // NB: `last().cloned()`, not `pop()`.  We only pop the item if all its children have been
+        // processed.
+        while let Some(wire) = self.stack.last().cloned() {
+            // We may end up with the same wire on the stack twice, if the wire is accessible via
+            // two different paths.
+            if self.seen.contains(&wire) {
+                self.stack.pop();
+                continue;
+            }
+
+            let mut maybe_push = |w| {
+                if self.seen.contains(&w) || !(self.filter)(w) {
+                    false
+                } else {
+                    self.stack.push(w);
+                    true
+                }
+            };
+
+            let children_pending = match wire.kind {
+                GateKind::Lit(_, _) |
+                GateKind::Secret(_) => false,
+                GateKind::Unary(_, a) |
+                GateKind::Cast(a, _) |
+                GateKind::Extract(a, _) => maybe_push(a),
+                GateKind::Binary(_, a, b) |
+                GateKind::Shift(_, a, b) |
+                GateKind::Compare(_, a, b) => maybe_push(b) || maybe_push(a),
+                GateKind::Mux(c, t, e) => maybe_push(e) || maybe_push(t) || maybe_push(c),
+                GateKind::Pack(ws) |
+                GateKind::Gadget(_, ws) => ws.iter().rev().cloned().any(maybe_push),
+            };
+
+            if !children_pending {
+                let result = self.stack.pop();
+                debug_assert!(result == Some(wire));
+                self.seen.insert(wire);
+                return Some(wire);
+            }
+        }
+        None
+    }
+}
+
+pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
+where I: IntoIterator<Item = Wire<'a>> {
+    let mut stack = wires.into_iter().collect::<Vec<_>>();
+    stack.reverse();
+    PostorderIter {
+        stack,
+        seen: HashSet::new(),
+        filter: |_| true,
+    }
+}
+
+pub fn walk_wires_filtered<'a, I, F>(wires: I, filter: F) -> PostorderIter<'a, F>
+where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
+    let mut stack = wires.into_iter().collect::<Vec<_>>();
+    stack.reverse();
+    PostorderIter {
+        stack,
+        seen: HashSet::new(),
+        filter,
+    }
+}
+
+/// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
+/// once, in some deterministic order (assuming `wires` itself is deterministic).
+pub fn walk_witness<'a, I>(wires: I) -> impl Iterator<Item = Secret<'a>>
+where I: IntoIterator<Item = Wire<'a>> {
+    walk_wires(wires).filter_map(|w| match w.kind {
+        GateKind::Secret(s) => Some(s),
+        _ => None,
+    })
+}
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum IntSize {
@@ -498,6 +517,7 @@ pub struct Gate<'a> {
     /// recurse over the entire depth of the circuit.
     pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
+    pub label: &'a str,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -693,5 +713,28 @@ declare_interned_pointer! {
 impl<'a> fmt::Debug for GadgetKindRef<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "GadgetKindRef({})", self.name())
+    }
+}
+
+
+pub struct CellResetGuard<'a, T> {
+    cell: &'a Cell<T>,
+    old: Cell<T>,
+}
+
+impl<'a, T> CellResetGuard<'a, T> {
+    /// Set the contents of `cell` to `new`, and return a guard that restores the previous value
+    /// when dropped.
+    pub fn new(cell: &'a Cell<T>, new: T) -> CellResetGuard<'a, T> {
+        let old = Cell::new(new);
+        // We use `swap` to avoid copying the new or old value.
+        cell.swap(&old);
+        CellResetGuard { cell, old }
+    }
+}
+
+impl<'a, T> Drop for CellResetGuard<'a, T> {
+    fn drop(&mut self) {
+        self.cell.swap(&self.old)
     }
 }

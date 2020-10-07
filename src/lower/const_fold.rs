@@ -108,9 +108,9 @@ fn try_identities<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<Wire<'a>> {
     })
 }
 
-pub fn const_fold<'a>(
-    c: &'a Circuit<'a>,
-) -> impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a> {
+pub fn const_fold<'a, 'c>(
+    c: &'c Circuit<'a>,
+) -> impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a> + 'c {
     let mut e = CachingEvaluator::<eval::Public>::new(c);
     move |c, _old, gk| {
         match eval::eval_gate(&mut e, gk) {

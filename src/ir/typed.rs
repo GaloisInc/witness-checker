@@ -1,6 +1,7 @@
+use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
-use crate::ir::circuit::{Circuit, Wire, TyKind};
+use crate::ir::circuit::{Circuit, Wire, TyKind, CellResetGuard};
 
 
 pub struct Builder<'a> {
@@ -14,6 +15,10 @@ impl<'a> Builder<'a> {
 
     pub fn circuit(&self) -> &Circuit<'a> {
         &self.c
+    }
+
+    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+        self.c.scoped_label(label)
     }
 }
 
