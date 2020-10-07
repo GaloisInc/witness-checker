@@ -1,8 +1,11 @@
 use std::collections::HashMap;
+use std::iter;
 use std::path::Path;
 use std::ops::Sub;
 
-use crate::ir::circuit::{Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit};
+use crate::ir::circuit::{
+    self, Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit,
+};
 
 use zkinterface::Result;
 use zkinterface_bellman::{
@@ -70,10 +73,17 @@ impl<'a> Backend<'a> {
             return *wid; // This Wire was already processed.
         }
 
-        let wid = self.make_repr(wire);
+        let order = circuit::walk_wires_filtered(
+            iter::once(wire),
+            |w| !self.wire_to_repr.contains_key(&w),
+        ).collect::<Vec<_>>();
 
-        self.wire_to_repr.insert(wire, wid);
-        wid
+        for wire in order {
+            let wid = self.make_repr(wire);
+            self.wire_to_repr.insert(wire, wid);
+        }
+
+        self.wire_to_repr.get(&wire).cloned().unwrap()
     }
 
     fn make_repr(&mut self, wire: Wire<'a>) -> ReprId {
