@@ -50,12 +50,6 @@ macro_rules! wire_bug_if {
 
 struct SecretValue<T>(Option<T>);
 
-impl<T> SecretValue<T> {
-    fn _map<U, F: FnOnce(T) -> U>(self, f: F) -> SecretValue<U> {
-        SecretValue(self.0.map(f))
-    }
-}
-
 impl<T: fmt::Display> fmt::Display for SecretValue<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {
@@ -141,7 +135,7 @@ impl<'a> Context<'a> {
         Some(self.eval_u64(cond.repr)? != 0)
     }
 
-    fn eval<T: Repr<'a, Repr=Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
+    fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
         SecretValue(self.eval_u64(w.repr))
     }
 }
@@ -188,7 +182,7 @@ impl<'a, 'b> ContextWhen<'a, 'b> {
         self.cx.bug_triggered(self.bug_cond(cond))
     }
 
-    fn eval<T: Repr<'a, Repr=Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
+    fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
         self.cx.eval(w)
     }
 }
@@ -628,20 +622,18 @@ fn main() -> io::Result<()> {
                     // shape of the circuit will be the same either way.
                     mem_ports[i as usize - 1] = b.secret(Some(MemPort {
                         cycle: i as u32 - 1,
-                        addr,
-                        value,
-                        op,
+                        addr, value, op,
                     }));
-                }
-                Advice::Stutter => {}
+                },
+                Advice::Stutter => {},
                 Advice::Advise { advise } => {
                     advices.insert(i as u32 - 1, advise);
-                }
+                },
             }
         }
     }
     for seg in &exec.init_mem {
-        for i in 0..seg.len {
+        for i in 0 .. seg.len {
             let x = seg.data.get(i as usize).cloned().unwrap_or(0);
             let mp = MemPort {
                 cycle: MEM_PORT_PRELOAD_CYCLE,
