@@ -32,6 +32,7 @@ impl<'a> AsBuilder<'a> for Builder<'a> {
 
 /// Typed wire, which carries a a representation of `T`.  This is useful for distinguishing wires
 /// with different high-level types, even when they share a low-level representation.
+#[derive(Debug)]
 pub struct TWire<'a, T: Repr<'a>> {
     pub repr: T::Repr,
 }
