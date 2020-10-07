@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::ir::circuit::{Circuit, Wire};
+use crate::ir::circuit::{self, Wire};
 
 #[derive(Default)]
 struct CountTree<'a> {
@@ -22,17 +22,17 @@ impl CountTree<'_> {
     }
 }
 
-pub fn count_gates<'a>(circuit: &Circuit<'a>, wires: &[Wire<'a>]) {
+pub fn count_gates<'a>(wires: &[Wire<'a>]) {
     let mut tree = CountTree::default();
 
-    circuit.walk_wires(wires.iter().cloned(), |w| {
+    for w in circuit::walk_wires(wires.iter().cloned()) {
         let mut cur = &mut tree;
         cur.count += 1;
         for part in w.label.trim_start_matches("/").split("/") {
             cur = cur.children.entry(part).or_insert_with(CountTree::default);
             cur.count += 1;
         }
-    });
+    }
 
     tree.print("", "all gates");
 }

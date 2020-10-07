@@ -347,74 +347,85 @@ impl<'a> Circuit<'a> {
         let new = self.intern_str(&format!("{}/{}", old, label));
         CellResetGuard::new(&self.current_label, new)
     }
+}
 
+/// `PostorderIter` performs a depth-first postorder traversal.  Since it's postorder, we need to
+/// distinguish the first visit to a given node (when it gets expanded and its children are pushed)
+/// from the second (when the node itself is yielded to the callback).
+enum PostorderEntry<'a> {
+    Expand(Wire<'a>),
+    Yield(Wire<'a>),
+}
 
-    pub fn walk_wires<I, F>(&self, wires: I, mut f: F)
-    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Wire<'a>) {
-        // This is a depth-first postorder traversal.  Since it's postorder, we need to distinguish
-        // the first visit to a given node (when it gets expanded and its children are pushed)
-        // from the second (when the node itself is yielded to the callback).
-        enum Entry<'a> {
-            Expand(Wire<'a>),
-            Yield(Wire<'a>),
-        }
+pub struct PostorderIter<'a> {
+    stack: Vec<PostorderEntry<'a>>,
+    /// Wires that have already been yielded.  We avoid processing the same wire twice.
+    yielded: HashSet<Wire<'a>>,
+}
 
-        let mut stack = wires.into_iter().map(Entry::Expand).collect::<Vec<_>>();
-        stack.reverse();
+impl<'a> PostorderIter<'a> {
+    fn push_expand(&mut self, w: Wire<'a>) {
+        self.stack.push(PostorderEntry::Expand(w));
+    }
+}
 
-        // Wires that have already been yielded.  We avoid processing the same wire twice.
-        let mut yielded = HashSet::new();
-
-        while let Some(entry) = stack.pop() {
+impl<'a> Iterator for PostorderIter<'a> {
+    type Item = Wire<'a>;
+    fn next(&mut self) -> Option<Wire<'a>> {
+        while let Some(entry) = self.stack.pop() {
             match entry {
-                Entry::Expand(w) => {
+                PostorderEntry::Expand(w) => {
                     // It's possible for a yielded wire to appear in an `Expand` entry, as a wire
                     // may have multiple parents.  We ignore these entries to avoid duplicate work.
-                    if yielded.contains(&w) {
+                    if self.yielded.contains(&w) {
                         continue;
                     }
 
-                    stack.push(Entry::Yield(w));
+                    self.stack.push(PostorderEntry::Yield(w));
                     match w.kind {
                         GateKind::Lit(_, _) => {}
                         GateKind::Secret(_) => {}
                         GateKind::Unary(_, a) => {
-                            stack.push(Entry::Expand(a));
+                            self.push_expand(a);
                         },
                         GateKind::Binary(_, a, b) => {
-                            stack.push(Entry::Expand(b));
-                            stack.push(Entry::Expand(a));
+                            self.push_expand(b);
+                            self.push_expand(a);
                         },
                         GateKind::Shift(_, a, b) => {
-                            stack.push(Entry::Expand(b));
-                            stack.push(Entry::Expand(a));
+                            self.push_expand(b);
+                            self.push_expand(a);
                         },
                         GateKind::Compare(_, a, b) => {
-                            stack.push(Entry::Expand(b));
-                            stack.push(Entry::Expand(a));
+                            self.push_expand(b);
+                            self.push_expand(a);
                         },
                         GateKind::Mux(c, t, e) => {
-                            stack.push(Entry::Expand(e));
-                            stack.push(Entry::Expand(t));
-                            stack.push(Entry::Expand(c));
+                            self.push_expand(e);
+                            self.push_expand(t);
+                            self.push_expand(c);
                         },
                         GateKind::Cast(w, _) => {
-                            stack.push(Entry::Expand(w));
+                            self.push_expand(w);
                         },
                         GateKind::Pack(ws) => {
-                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
+                            for &w in ws.iter().rev() {
+                                self.push_expand(w);
+                            }
                         },
                         GateKind::Extract(w, _) => {
-                            stack.push(Entry::Expand(w));
+                            self.push_expand(w);
                         },
                         GateKind::Gadget(_, ws) => {
-                            stack.extend(ws.iter().rev().map(|&w| Entry::Expand(w)));
+                            for &w in ws.iter().rev() {
+                                self.push_expand(w);
+                            }
                         },
                     }
                 },
 
-                Entry::Yield(w) => {
-                    let inserted = yielded.insert(w);
+                PostorderEntry::Yield(w) => {
+                    let inserted = self.yielded.insert(w);
                     // It's not possible for a yielded wire to appear in a `Yield` entry.  This
                     // would imply that there were once two different `Yield` entries for the same
                     // wire in the stack.  But `Yield` entries correspond to the direct ancestors
@@ -423,27 +434,34 @@ impl<'a> Circuit<'a> {
                     // since gates are read-only after construction.
                     assert!(inserted);
 
-                    f(w);
+                    return Some(w);
                 },
             }
         }
-    }
-
-    /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
-    /// once, in some deterministic order (assuming `wires` itself is deterministic).
-    pub fn walk_witness<I, F>(&self, wires: I, mut f: F)
-    where I: IntoIterator<Item=Wire<'a>>, F: FnMut(Secret<'a>) {
-        // In the normal case where every gate is interned properly, we should visit each distinct
-        // `GateKind::Secret` only once, and see each `Secret` only once.  However, this can go
-        // wrong if there are multiple `Circuit`s using the same arena but different `intern`
-        // tables, and wires from one `Circuit` are referenced in another.  Currently we don't
-        // defend against this misuse.
-        self.walk_wires(wires, |w| match w.kind {
-            GateKind::Secret(s) => f(s),
-            _ => {},
-        });
+        None
     }
 }
+
+pub fn walk_wires<'a, I>(wires: I) -> PostorderIter<'a>
+where I: IntoIterator<Item = Wire<'a>> {
+    let mut stack = wires.into_iter().map(PostorderEntry::Expand).collect::<Vec<_>>();
+    stack.reverse();
+    PostorderIter {
+        stack,
+        yielded: HashSet::new(),
+    }
+}
+
+/// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
+/// once, in some deterministic order (assuming `wires` itself is deterministic).
+pub fn walk_witness<'a, I>(wires: I) -> impl Iterator<Item = Secret<'a>>
+where I: IntoIterator<Item = Wire<'a>> {
+    walk_wires(wires).filter_map(|w| match w.kind {
+        GateKind::Secret(s) => Some(s),
+        _ => None,
+    })
+}
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum IntSize {
