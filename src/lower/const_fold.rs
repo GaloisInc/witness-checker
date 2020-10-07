@@ -10,7 +10,6 @@ fn get_const<'a>(w: Wire<'a>) -> Option<u64> {
 
 fn value_mask(ty: Ty) -> Option<u64> {
     match *ty {
-        TyKind::Bool => Some(1),
         TyKind::Int(sz) |
         TyKind::Uint(sz) => Some(!0 >> (64 - sz.bits())),
         TyKind::Bundle(_) => None,
@@ -81,20 +80,20 @@ fn try_identities<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<Wire<'a>> {
         },
         GateKind::Compare(op, a, b) => match (op, *ty, get_const(a), get_const(b)) {
             // x == x, x <= x, x >= x: true
-            (CmpOp::Eq, _, None, None) if a == b => c.lit(c.ty(TyKind::Bool), 1),
-            (CmpOp::Le, _, None, None) if a == b => c.lit(c.ty(TyKind::Bool), 1),
-            (CmpOp::Ge, _, None, None) if a == b => c.lit(c.ty(TyKind::Bool), 1),
+            (CmpOp::Eq, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
+            (CmpOp::Le, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
+            (CmpOp::Ge, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
             // x != x, x < x, x > x: false
-            (CmpOp::Ne, _, None, None) if a == b => c.lit(c.ty(TyKind::Bool), 0),
-            (CmpOp::Gt, _, None, None) if a == b => c.lit(c.ty(TyKind::Bool), 0),
-            (CmpOp::Lt, _, None, None) if a == b => c.lit(c.ty(TyKind::Bool), 0),
+            (CmpOp::Ne, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
+            (CmpOp::Gt, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
+            (CmpOp::Lt, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
 
             // (unsigned) x >= 0, 0 <= x: true
-            (CmpOp::Ge, TyKind::Uint(_), None, Some(0)) => c.lit(c.ty(TyKind::Bool), 1),
-            (CmpOp::Le, TyKind::Uint(_), Some(0), None) => c.lit(c.ty(TyKind::Bool), 1),
+            (CmpOp::Ge, TyKind::Uint(_), None, Some(0)) => c.lit(c.ty(TyKind::BOOL), 1),
+            (CmpOp::Le, TyKind::Uint(_), Some(0), None) => c.lit(c.ty(TyKind::BOOL), 1),
             // (unsigned) x < 0, 0 > x: false
-            (CmpOp::Gt, TyKind::Uint(_), None, Some(0)) => c.lit(c.ty(TyKind::Bool), 0),
-            (CmpOp::Lt, TyKind::Uint(_), Some(0), None) => c.lit(c.ty(TyKind::Bool), 0),
+            (CmpOp::Gt, TyKind::Uint(_), None, Some(0)) => c.lit(c.ty(TyKind::BOOL), 0),
+            (CmpOp::Lt, TyKind::Uint(_), Some(0), None) => c.lit(c.ty(TyKind::BOOL), 0),
 
             _ => return None,
         },

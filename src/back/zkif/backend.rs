@@ -93,7 +93,7 @@ impl<'a> Backend<'a> {
         let repr = match wire.kind {
             GateKind::Lit(val, ty) => {
                 match *ty {
-                    TyKind::Bool => {
+                    TyKind::BOOL => {
                         let b = Boolean::constant(val != 0);
                         WireRepr::from(b)
                     }
@@ -114,7 +114,7 @@ impl<'a> Backend<'a> {
 
             GateKind::Secret(secret) => {
                 match *secret.ty {
-                    TyKind::Bool => {
+                    TyKind::BOOL => {
                         let val = secret.val.map(|v| v != 0);
                         let b = Boolean::from(
                             AllocatedBit::alloc::<Scalar, _>(&mut self.cs, val).unwrap()
@@ -135,7 +135,7 @@ impl<'a> Backend<'a> {
                 let aw = self.wire(arg);
 
                 match *wire.ty {
-                    TyKind::Bool => {
+                    TyKind::BOOL => {
                         match op {
                             UnOp::Neg => return aw, // No op, no new wire.
 
@@ -174,7 +174,7 @@ impl<'a> Backend<'a> {
                 let rw = self.wire(right);
 
                 match *wire.ty {
-                    TyKind::Bool => {
+                    TyKind::BOOL => {
                         let lb = self.representer.mut_repr(lw).as_boolean();
                         let rb = self.representer.mut_repr(rw).as_boolean();
 
@@ -320,10 +320,10 @@ impl<'a> Backend<'a> {
                     (x, y) if x == y =>
                         return aw, // No op, no new wire.
 
-                    (TyKind::Bool, TyKind::Uint(_)) =>
+                    (TyKind::BOOL, TyKind::Uint(_)) =>
                         return aw, // No op, no new wire.
 
-                    (TyKind::Uint(_), TyKind::Bool) =>
+                    (TyKind::Uint(_), TyKind::BOOL) =>
                         panic!("Illegal cast of integer to boolean (use explicit i!=0)"),
 
                     _ => unimplemented!("Cannot cast {:?} to {:?}", a.ty, ty),

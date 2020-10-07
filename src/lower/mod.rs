@@ -75,7 +75,6 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
         }
 
         let new_ty = match *old_ty {
-            TyKind::Bool => self.c.ty(TyKind::Bool),
             TyKind::Uint(sz) => self.c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => self.c.ty(TyKind::Int(sz)),
             TyKind::Bundle(tys) =>

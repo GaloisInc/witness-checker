@@ -20,7 +20,6 @@ fn write_val(s: &mut String, v: Value) -> Result<(), fmt::Error> {
 
 fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
     match *ty {
-        TyKind::Bool => { write!(s, "bool")?; },
         TyKind::Uint(sz) => { write!(s, "u{}", sz.bits())?; },
         TyKind::Int(sz) => { write!(s, "i{}", sz.bits())?; },
         TyKind::Bundle(tys) => {

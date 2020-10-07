@@ -21,7 +21,7 @@ impl<'a> GadgetKind<'a> for AddWithOverflow {
             _ => panic!("expected Uint, but got {:?}", ty),
         }
 
-        c.ty_bundle(&[ty, c.ty(TyKind::Bool)])
+        c.ty_bundle(&[ty, c.ty(TyKind::BOOL)])
     }
 
     fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {
@@ -51,7 +51,7 @@ impl<'a> GadgetKind<'a> for SubWithOverflow {
             _ => panic!("expected Uint, but got {:?}", ty),
         }
 
-        c.ty_bundle(&[ty, c.ty(TyKind::Bool)])
+        c.ty_bundle(&[ty, c.ty(TyKind::BOOL)])
     }
 
     fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {

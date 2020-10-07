@@ -108,7 +108,6 @@ impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, 
 
 fn value_mask(ty: Ty) -> Option<u64> {
     match *ty {
-        TyKind::Bool => Some(1),
         TyKind::Int(sz) |
         TyKind::Uint(sz) => Some(!0 >> (64 - sz.bits())),
         TyKind::Bundle(_) => None,

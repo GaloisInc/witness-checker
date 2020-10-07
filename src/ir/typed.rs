@@ -241,13 +241,13 @@ impl<'a> Repr<'a> for bool {
 
 impl<'a> Lit<'a> for bool {
     fn lit(bld: &Builder<'a>, x: bool) -> Wire<'a> {
-        bld.c.lit(bld.c.ty(TyKind::Bool), x as u64)
+        bld.c.lit(bld.c.ty(TyKind::BOOL), x as u64)
     }
 }
 
 impl<'a> Secret<'a> for bool {
     fn secret(bld: &Builder<'a>, x: Option<bool>) -> Wire<'a> {
-        bld.c.new_secret(bld.c.ty(TyKind::Bool), x.map(|x| x as u64))
+        bld.c.new_secret(bld.c.ty(TyKind::BOOL), x.map(|x| x as u64))
     }
 }
 

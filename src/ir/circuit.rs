@@ -158,8 +158,8 @@ impl<'a> Circuit<'a> {
             },
             GateKind::Mux(c, t, e) => {
                 assert!(
-                    *c.ty == TyKind::Bool,
-                    "mux condition must be Bool, not {:?}", c.ty,
+                    *c.ty == TyKind::BOOL,
+                    "mux condition must be {:?}, not {:?}", TyKind::BOOL, c.ty,
                 );
                 assert!(
                     t.ty == e.ty,
@@ -264,7 +264,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn all_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
-        let true_if_empty = self.lit(self.ty(TyKind::Bool), 1);
+        let true_if_empty = self.lit(self.ty(TyKind::BOOL), 1);
         wires.fold(
             true_if_empty,
             |all_true, w| self.and(all_true, w),
@@ -272,7 +272,7 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn any_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
-        let false_if_empty = self.lit(self.ty(TyKind::Bool), 0);
+        let false_if_empty = self.lit(self.ty(TyKind::BOOL), 0);
         wires.fold(
             false_if_empty,
             |any_true, w| self.or(any_true, w),
@@ -472,7 +472,6 @@ pub struct IntSize(pub u16);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum TyKind<'a> {
-    Bool,
     Int(IntSize),
     Uint(IntSize),
     Bundle(&'a [Ty<'a>]),
@@ -493,10 +492,10 @@ impl TyKind<'_> {
     pub const U16: TyKind<'static> = TyKind::Uint(IntSize(16));
     pub const U32: TyKind<'static> = TyKind::Uint(IntSize(32));
     pub const U64: TyKind<'static> = TyKind::Uint(IntSize(64));
+    pub const BOOL: TyKind<'static> = TyKind::Uint(IntSize(1));
 
     pub fn is_integer(&self) -> bool {
         match *self {
-            TyKind::Bool => false,
             TyKind::Int(_) => true,
             TyKind::Uint(_) => true,
             TyKind::Bundle(_) => false,
@@ -505,7 +504,6 @@ impl TyKind<'_> {
 
     pub fn integer_size(&self) -> IntSize {
         match *self {
-            TyKind::Bool => panic!("Bool has no IntSize"),
             TyKind::Int(sz) => sz,
             TyKind::Uint(sz) => sz,
             TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
@@ -559,7 +557,7 @@ impl<'a> GateKind<'a> {
             GateKind::Unary(_, w) => w.ty,
             GateKind::Binary(_, w, _) => w.ty,
             GateKind::Shift(_, w, _) => w.ty,
-            GateKind::Compare(_, _, _) => c.ty(TyKind::Bool),
+            GateKind::Compare(_, _, _) => c.ty(TyKind::BOOL),
             GateKind::Mux(_, w, _) => w.ty,
             GateKind::Cast(_, ty) => ty,
             GateKind::Pack(ws) => c.ty_bundle_iter(ws.iter().map(|&w| w.ty)),
