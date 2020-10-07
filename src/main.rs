@@ -43,6 +43,9 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("validate-only")
              .long("validate-only")
              .help("check only that the trace is valid; don't require it to demonstrate a bug"))
+        .arg(Arg::with_name("expect-zero")
+             .long("expect-zero")
+             .help("check that r0 == 0 in the final state"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -501,13 +504,16 @@ fn check_last<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     s: &TWire<'a, RamState>,
+    expect_zero: bool,
 ) {
     let _g = b.scoped_label("check_last");
-    wire_assert!(
-        cx, b.eq(s.regs[0], b.lit(0)),
-        "final r0 is {} (expected {})",
-        cx.eval(s.regs[0]), 0,
-    );
+    if expect_zero {
+        wire_assert!(
+            cx, b.eq(s.regs[0], b.lit(0)),
+            "final r0 is {} (expected {})",
+            cx.eval(s.regs[0]), 0,
+        );
+    }
 }
 
 fn check_first_mem<'a>(
@@ -774,7 +780,7 @@ fn main() -> io::Result<()> {
         check_step(&cx, &b, i as u32, instr, &[port.clone()], advice, s1, s2);
     }
 
-    check_last(&cx, &b, trace.last().unwrap());
+    check_last(&cx, &b, trace.last().unwrap(), args.is_present("expect-zero"));
 
     // Check the memory ports
     for (i, port) in mem_ports.iter().enumerate().take(trace.len() - 1) {
