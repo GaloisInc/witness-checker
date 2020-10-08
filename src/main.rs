@@ -671,8 +671,13 @@ impl<'a> PassRunner<'a> {
         }
     }
 
-    pub fn finish(self) -> Vec<Wire<'a>> {
-        unsafe { ptr::read(self.wires.as_ptr()) }
+    pub fn finish(self) -> (Circuit<'a>, Vec<Wire<'a>>) {
+        unsafe {
+            let arena: &Bump = &**self.cur.as_ptr();
+            let c = Circuit::new(arena);
+            let wires = ptr::read(self.wires.as_ptr());
+            (c, wires)
+        }
     }
 }
 
@@ -867,7 +872,7 @@ fn main() -> io::Result<()> {
     };
 
     // Concatenate accepted, asserts, bugs.
-    let num_asserts = 1 + asserts.len();
+    let num_asserts = asserts.len();
     let flags =
         iter::once(accepted)
             .chain(asserts.into_iter())
@@ -898,7 +903,23 @@ fn main() -> io::Result<()> {
     passes.run(lower::bool_::mux);
     passes.run(lower::bool_::compare_to_logic);
     passes.run(lower::bool_::not_to_xor);
-    let flags = passes.finish();
+    let (c, flags) = passes.finish();
+
+    {
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let flag_vals = flags.iter().map(|&w| {
+            ev.eval_wire(w).and_then(|v| v.as_single()).unwrap() == 1
+        }).collect::<Vec<_>>();
+
+        let asserts_ok: u32 = flag_vals[1 .. 1 + num_asserts].iter().map(|&ok| ok as u32).sum();
+        let bugs_ok: u32 = flag_vals[1 + num_asserts ..].iter().map(|&ok| ok as u32).sum();
+
+        eprintln!(
+            "internal evaluator: {} asserts passed, {} failed; found {} bugs; overall status: {}",
+            asserts_ok, num_asserts as u32 - asserts_ok, bugs_ok,
+            if flag_vals[0] { "GOOD" } else { "BAD" },
+        );
+    }
 
     #[cfg(feature = "bellman")]
     if let Some(dest) = args.value_of_os("zkif-out") {
