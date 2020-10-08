@@ -325,16 +325,27 @@ impl<'a> Backend<'a> {
 
             GateKind::Cast(a, ty) => {
                 let aw = self.wire(a);
+                let width = a.ty.integer_size().bits() as usize;
+                let int = self.representer.mut_repr(aw).as_int(&mut self.cs, width);
 
                 match (*a.ty, *ty) {
-                    (x, y) if x == y =>
-                        return aw, // No op, no new wire.
-
                     (TyKind::BOOL, TyKind::Uint(_)) =>
                         return aw, // No op, no new wire.
 
-                    (TyKind::Uint(_), TyKind::BOOL) =>
-                        panic!("Illegal cast of integer to boolean (use explicit i!=0)"),
+                    (TyKind::Uint(sz1), TyKind::Uint(sz2)) |
+                    (TyKind::Uint(sz1), TyKind::Int(sz2)) => {
+                        let mut bits = int.bits.clone();
+                        bits.resize(sz2.bits() as usize, Boolean::constant(false));
+                        WireRepr::from(Int::from_bits(&bits))
+                    },
+
+                    (TyKind::Int(sz1), TyKind::Uint(sz2)) |
+                    (TyKind::Int(sz1), TyKind::Int(sz2)) => {
+                        let mut bits = int.bits.clone();
+                        let last = bits.last().unwrap().clone();
+                        bits.resize(sz2.bits() as usize, last);
+                        WireRepr::from(Int::from_bits(&bits))
+                    },
 
                     _ => unimplemented!("Cannot cast {:?} to {:?}", a.ty, ty),
                 }
