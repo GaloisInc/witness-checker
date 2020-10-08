@@ -1,3 +1,5 @@
+use std::cmp;
+use num_traits::Zero;
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, SynthesisError, LinearCombination},
     bellman::gadgets::boolean::Boolean,
@@ -7,15 +9,15 @@ use zkinterface_bellman::{
 };
 use super::{
     num::{Num, boolean_lc, scalar_from_unsigned},
-    int64::Int64,
+    int64::Int,
     bit_width::BitWidth,
 };
 
 pub fn bitwise_xor<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    left: &Int64,
-    right: &Int64,
-) -> Int64
+    left: &Int,
+    right: &Int,
+) -> Int
 {
     left.xor(cs, right).unwrap()
 }
@@ -23,9 +25,9 @@ pub fn bitwise_xor<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
 // TODO: Implement directly on the type but fields are private.
 pub fn bitwise_and<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    left: &Int64,
-    right: &Int64,
-) -> Int64
+    left: &Int,
+    right: &Int,
+) -> Int
 {
     let out_bits: Vec<Boolean> =
         left.bits.iter()
@@ -34,14 +36,14 @@ pub fn bitwise_and<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
                 Boolean::and(&mut cs, l, r).unwrap()
             ).collect();
 
-    Int64::from_bits(&out_bits)
+    Int::from_bits(&out_bits)
 }
 
 pub fn bitwise_or<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: &mut CS,
-    left: &Int64,
-    right: &Int64,
-) -> Int64
+    left: &Int,
+    right: &Int,
+) -> Int
 {
     let out_bits: Vec<Boolean> =
         left.bits.iter()
@@ -50,7 +52,7 @@ pub fn bitwise_or<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
                 bool_or(&mut cs, l, r)
             ).collect();
 
-    Int64::from_bits(&out_bits)
+    Int::from_bits(&out_bits)
 }
 
 pub fn bool_or<'a, Scalar, CS>(
@@ -81,13 +83,13 @@ pub fn enforce_true<Scalar, CS>(
 pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     numer_num: &Num<Scalar>,
-    numer_int: &Int64,
+    numer_int: &Int,
     denom_num: &Num<Scalar>,
-    denom_int: &Int64,
-) -> (/*quotient*/ Num<Scalar>, Int64, /*rest*/ Num<Scalar>, Int64) {
-    let (quot_val, rest_val) = match (numer_int.value, denom_int.value) {
+    denom_int: &Int,
+) -> (/*quotient*/ Num<Scalar>, Int, /*rest*/ Num<Scalar>, Int) {
+    let (quot_val, rest_val) = match (numer_int.value.as_ref(), denom_int.value.as_ref()) {
         (Some(numer), Some(denom)) => {
-            if denom == 0 {
+            if denom.is_zero() {
                 panic!("Attempt to divide by zero");
                 //(Some(0), Some(numer))
             } else {
@@ -99,9 +101,9 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
         _ => (None, None)
     };
 
-    let quot_int = Int64::alloc(&mut cs, quot_val).unwrap();
-    let rest_int = Int64::alloc(&mut cs, rest_val).unwrap();
-    // TODO: optimize the integer sizes.
+    let max_width = cmp::max(numer_int.width(), denom_int.width());
+    let quot_int = Int::alloc(&mut cs, max_width, quot_val).unwrap();
+    let rest_int = Int::alloc(&mut cs, denom_int.width(), rest_val).unwrap();
 
     let quot_num = Num::from_int::<CS>(&quot_int);
     let rest_num = Num::from_int::<CS>(&rest_int);
@@ -116,7 +118,7 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
 
     // Verify that rest < denom.
     let diff_num = rest_num.clone() - denom_num;
-    let diff_int = Int64::from_num(&mut cs, &diff_num);
+    let diff_int = Int::from_num(&mut cs, denom_int.width(), &diff_num);
     let ok = diff_int.is_negative();
     let one = CS::one();
     cs.enforce(

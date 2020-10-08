@@ -1,7 +1,7 @@
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use super::{
     backend::{Num, CS},
-    int64::Int64,
+    int64::Int,
 };
 
 
@@ -34,7 +34,7 @@ pub struct ReprId(pub usize);
 pub struct WireRepr {
     pub boolean: Option<Boolean>,
     pub num: Option<Num>,
-    pub int64: Option<Int64>,
+    pub int: Option<Int>,
 }
 
 impl From<Boolean> for WireRepr {
@@ -49,9 +49,9 @@ impl From<Num> for WireRepr {
     }
 }
 
-impl From<Int64> for WireRepr {
-    fn from(int: Int64) -> Self {
-        WireRepr { int64: Some(int), ..Self::default() }
+impl From<Int> for WireRepr {
+    fn from(int: Int) -> Self {
+        WireRepr { int: Some(int), ..Self::default() }
     }
 }
 
@@ -74,7 +74,7 @@ impl WireRepr {
                 let num = {
                     if let Some(b) = &self.boolean {
                         Num::from_boolean::<CS>(b)
-                    } else if let Some(int) = &self.int64 {
+                    } else if let Some(int) = &self.int {
                         Num::from_int::<CS>(int)
                     } else {
                         panic!("Access to a wire that has no representation")
@@ -86,22 +86,28 @@ impl WireRepr {
         }
     }
 
-    pub fn as_int64(&mut self, cs: &mut CS) -> Int64 {
-        match &self.int64 {
-            Some(u) => u.clone(),
+    pub fn as_int(&mut self, cs: &mut CS, width: usize) -> Int {
+        match &self.int {
+            Some(u) => {
+                // Currently we don't support treating the same `WireRepr` as multiple widths of
+                // int - and anyway, it should never happen, since the width is set based on the
+                // type of the wire.
+                assert_eq!(u.width(), width);
+                u.clone()
+            }
 
             None => {
                 // Convert from another repr.
                 let int = {
                     if let Some(b) = &self.boolean {
-                        Int64::from_boolean(b)
+                        Int::from_boolean(width, b)
                     } else if let Some(num) = &self.num {
-                        Int64::from_num(cs, num)
+                        Int::from_num(cs, width, num)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
                 };
-                self.int64 = Some(int.clone());
+                self.int = Some(int.clone());
                 int
             }
         }

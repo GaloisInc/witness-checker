@@ -16,7 +16,7 @@ use zkinterface_bellman::{
 };
 use super::{
     int_ops,
-    int64::Int64,
+    int64::Int,
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
@@ -122,8 +122,12 @@ impl<'a> Backend<'a> {
                         WireRepr::from(b)
                     }
 
-                    TyKind::U64 | TyKind::I64 => {
-                        let int = Int64::alloc::<Scalar, _>(&mut self.cs, secret.val).unwrap();
+                    TyKind::Uint(sz) | TyKind::Int(sz) => {
+                        let int = Int::alloc::<Scalar, _>(
+                            &mut self.cs,
+                            sz.bits() as usize,
+                            secret.val.map(From::from),
+                        ).unwrap();
                         WireRepr::from(int)
                     }
 
@@ -146,7 +150,7 @@ impl<'a> Backend<'a> {
                         }
                     }
 
-                    TyKind::U64 | TyKind::I64 => {
+                    TyKind::Uint(sz) | TyKind::Int(sz) => {
                         match op {
                             UnOp::Neg => {
                                 let num = self.representer.mut_repr(aw).as_num();
@@ -155,11 +159,12 @@ impl<'a> Backend<'a> {
                             }
 
                             UnOp::Not => {
-                                let int = self.representer.mut_repr(aw).as_int64(&mut self.cs);
+                                let int = self.representer.mut_repr(aw)
+                                    .as_int(&mut self.cs, sz.bits() as usize);
                                 let not_bits: Vec<Boolean> = int.bits.iter().map(|bit|
                                     bit.not()
                                 ).collect();
-                                let not = Int64::from_bits(&not_bits);
+                                let not = Int::from_bits(&not_bits);
                                 WireRepr::from(not)
                             }
                         }
@@ -195,7 +200,7 @@ impl<'a> Backend<'a> {
                         WireRepr::from(out_bool)
                     }
 
-                    TyKind::Int(_) | TyKind::Uint(_) => {
+                    TyKind::Int(sz) | TyKind::Uint(sz) => {
                         match op {
                             // Arithmetic ops work on number representations.
                             BinOp::Add | BinOp::Sub | BinOp::Mul => {
@@ -218,9 +223,11 @@ impl<'a> Backend<'a> {
                             // Ops using both number and bits representations.
                             BinOp::Div | BinOp::Mod => {
                                 let numer_num = self.representer.mut_repr(lw).as_num();
-                                let numer_int = self.representer.mut_repr(lw).as_int64(&mut self.cs);
+                                let numer_int = self.representer.mut_repr(lw)
+                                    .as_int(&mut self.cs, sz.bits() as usize);
                                 let denom_num = self.representer.mut_repr(rw).as_num();
-                                let denom_int = self.representer.mut_repr(rw).as_int64(&mut self.cs);
+                                let denom_int = self.representer.mut_repr(rw)
+                                    .as_int(&mut self.cs, sz.bits() as usize);
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int_ops::div(
                                     &mut self.cs,
@@ -240,8 +247,10 @@ impl<'a> Backend<'a> {
 
                             // Bitwise ops work on bit decompositions.
                             BinOp::Xor | BinOp::And | BinOp::Or => {
-                                let lu = self.representer.mut_repr(lw).as_int64(&mut self.cs);
-                                let ru = self.representer.mut_repr(rw).as_int64(&mut self.cs);
+                                let lu = self.representer.mut_repr(lw)
+                                    .as_int(&mut self.cs, sz.bits() as usize);
+                                let ru = self.representer.mut_repr(rw)
+                                    .as_int(&mut self.cs, sz.bits() as usize);
 
                                 let out_int = match op {
                                     BinOp::Xor =>
@@ -266,9 +275,9 @@ impl<'a> Backend<'a> {
             }
 
             GateKind::Shift(op, left, right) => {
-                match *left.ty {
-                    TyKind::U64 | TyKind::I64 => {}
-                    _ => unimplemented!("Shift for {:?}", left.ty),
+                let width = match *left.ty {
+                    TyKind::Uint(sz) | TyKind::Int(sz) => sz.bits() as usize,
+                    _ => panic!("don't know how to shift {:?}", left.ty),
                 };
 
                 let amount = as_lit(right).unwrap_or_else(|| {
@@ -276,7 +285,7 @@ impl<'a> Backend<'a> {
                 }) as usize;
 
                 let lw = self.wire(left);
-                let lu = self.representer.mut_repr(lw).as_int64(&mut self.cs);
+                let lu = self.representer.mut_repr(lw).as_int(&mut self.cs, width);
                 let shifted = match op {
                     ShiftOp::Shl => lu.shift_left(amount),
                     ShiftOp::Shr => lu.shift_right(amount),
@@ -287,6 +296,7 @@ impl<'a> Backend<'a> {
 
             GateKind::Compare(op, left, right) => {
                 let lw = self.wire(left);
+                let width = left.ty.integer_size().bits() as usize;
 
                 assert_eq!(
                     as_lit(right), Some(0),
@@ -300,7 +310,7 @@ impl<'a> Backend<'a> {
                     }
 
                     CmpOp::Ge => {
-                        let int = self.representer.mut_repr(lw).as_int64(&mut self.cs);
+                        let int = self.representer.mut_repr(lw).as_int(&mut self.cs, width);
                         int.is_positive_or_zero()
                     }
 

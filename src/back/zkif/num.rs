@@ -4,6 +4,7 @@
 // Copyright (c) 2017-2019 Electric Coin Company
 
 use std::ops::{Add, Sub, Mul, AddAssign};
+use num_bigint::{BigUint, BigInt, Sign};
 
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},
@@ -14,10 +15,11 @@ use zkinterface_bellman::{
 };
 use super::{
     bit_width::BitWidth,
-    int64::Int64,
+    int64::Int,
 };
 
 
+/// A number, represented as a single field element.
 #[derive(Clone)]
 pub struct Num<Scalar: PrimeField> {
     pub value: Option<Scalar>,
@@ -73,10 +75,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
     }
 
     pub fn from_int<CS: ConstraintSystem<Scalar>>(
-        int: &Int64,
+        int: &Int,
     ) -> Num<Scalar> {
-        let value = int.value.map(|val|
-            scalar_from_unsigned(val as u64));
+        let value = int.value.as_ref().map(scalar_from_biguint);
 
         let lc = Self::lc_from_bits::<CS>(&int.bits);
 
@@ -329,6 +330,26 @@ pub fn scalar_from_signed<Scalar: PrimeField>(val: i64) -> Scalar {
         scalar_from_unsigned::<Scalar>(val as u64)
     } else {
         scalar_from_unsigned::<Scalar>((-val) as u64).neg()
+    }
+}
+
+pub fn scalar_from_biguint<Scalar: PrimeField>(val: &BigUint) -> Scalar {
+    let bytes = val.to_bytes_le();
+    let mut repr: Scalar::Repr = Default::default();
+    repr.as_mut()[..bytes.len()].copy_from_slice(&bytes);
+    Scalar::from_repr(repr)
+        .expect("uint out of range for Scalar")
+}
+
+pub fn scalar_from_bigint<Scalar: PrimeField>(val: &BigInt) -> Scalar {
+    let (sign, bytes) = val.to_bytes_le();
+    let mut repr: Scalar::Repr = Default::default();
+    repr.as_mut()[..bytes.len()].copy_from_slice(&bytes);
+    let scalar = Scalar::from_repr(repr)
+        .expect("uint out of range for Scalar");
+    match sign {
+        Sign::Minus => scalar.neg(),
+        Sign::Plus | Sign::NoSign => scalar,
     }
 }
 

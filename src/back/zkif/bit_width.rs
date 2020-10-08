@@ -1,7 +1,7 @@
 use std::ops::{Add, Sub, Mul};
 use std::cmp::max;
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
-use crate::back::zkif::int64::Int64;
+use crate::back::zkif::int64::Int;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BitWidth {
@@ -49,9 +49,9 @@ impl From<&Boolean> for BitWidth {
     }
 }
 
-impl From<&Int64> for BitWidth {
+impl From<&Int> for BitWidth {
     /// This is a type-safe way to show that we have a validated integer.
-    fn from(_: &Int64) -> Self {
+    fn from(_: &Int) -> Self {
         Max(32, false)
     }
 }

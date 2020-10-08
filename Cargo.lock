@@ -147,6 +147,8 @@ dependencies = [
  "byteorder",
  "clap",
  "ff",
+ "num-bigint",
+ "num-traits",
  "rand_core",
  "serde",
  "serde_cbor",
