@@ -1,7 +1,7 @@
 use std::ops::{Add, Sub, Mul};
 use std::cmp::max;
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
-use crate::back::zkif::int64::Int;
+use crate::back::zkif::int::Int;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BitWidth {

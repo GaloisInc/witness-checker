@@ -1,7 +1,7 @@
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use super::{
     backend::{Num, CS},
-    int64::Int,
+    int::Int,
 };
 
 

@@ -15,7 +15,7 @@ use zkinterface_bellman::{
 };
 use super::{
     bit_width::BitWidth,
-    int64::Int,
+    int::Int,
 };
 
 

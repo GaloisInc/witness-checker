@@ -16,7 +16,7 @@ use zkinterface_bellman::{
 };
 use super::{
     int_ops,
-    int64::Int,
+    int::Int,
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
@@ -386,7 +386,7 @@ fn test_zkif() -> Result<()> {
     fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
-        let int = wr.int64.as_ref().unwrap();
+        let int = wr.int.as_ref().unwrap();
         assert_eq!(int.value, Some(expect));
     }
 

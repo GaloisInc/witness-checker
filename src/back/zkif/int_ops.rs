@@ -9,7 +9,7 @@ use zkinterface_bellman::{
 };
 use super::{
     num::{Num, boolean_lc, scalar_from_unsigned},
-    int64::Int,
+    int::Int,
     bit_width::BitWidth,
 };
 
