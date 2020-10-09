@@ -7,6 +7,7 @@ pub fn decompose_gadget<'a>(
     move |c, _old, gk| {
         if let GateKind::Gadget(g, args) = gk {
             if f(g.name()) {
+                let _g = c.scoped_label(g.name());
                 return g.decompose(c, args);
             }
         }
@@ -16,6 +17,7 @@ pub fn decompose_gadget<'a>(
 
 pub fn decompose_all_gadgets<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Gadget(g, args) = gk {
+        let _g = c.scoped_label(g.name());
         return g.decompose(c, args);
     }
     c.gate(gk)
