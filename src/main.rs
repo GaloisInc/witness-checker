@@ -897,9 +897,13 @@ fn main() -> io::Result<()> {
     passes.run(lower::int::reduce_lit_32);
     passes.run(lower::int::mux);
     #[cfg(feature = "scale")]
-    passes.run(lower::int::compare_to_zero);
+    if args.is_present("scale-out") {
+        passes.run(lower::int::compare_to_zero);
+    }
     #[cfg(feature = "bellman")]
-    passes.run(lower::int::compare_to_greater_or_equal_to_zero);
+    if args.is_present("zkif-out") {
+        passes.run(lower::int::compare_to_greater_or_equal_to_zero);
+    }
     passes.run(lower::bool_::mux);
     passes.run(lower::bool_::compare_to_logic);
     passes.run(lower::bool_::not_to_xor);
