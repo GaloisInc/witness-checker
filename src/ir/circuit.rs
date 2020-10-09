@@ -363,6 +363,15 @@ impl<'a> Circuit<'a> {
         let new = self.intern_str(&format!("{}/{}", old, label));
         CellResetGuard::new(&self.current_label, new)
     }
+
+    pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+        let new = self.intern_str(&label.to_string());
+        CellResetGuard::new(&self.current_label, new)
+    }
+
+    pub fn current_label(&self) -> &'a str {
+        self.current_label.get()
+    }
 }
 
 
