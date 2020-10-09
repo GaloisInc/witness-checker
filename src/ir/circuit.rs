@@ -602,6 +602,12 @@ macro_rules! declare_interned_pointer {
         #[derive(Clone, Copy)]
         $pub_ struct $Ptr<$lt>(&$lt $T);
 
+        impl<$lt> $Ptr<$lt> {
+            pub fn as_ptr(self) -> *const $T {
+                self.0 as *const $T
+            }
+        }
+
         impl<$lt> PartialEq for $Ptr<$lt> {
             fn eq(&self, other: &$Ptr<$lt>) -> bool {
                 self.0 as *const _ == other.0 as *const _
@@ -624,6 +630,12 @@ macro_rules! declare_interned_pointer {
             type Target = $T;
             fn deref(&self) -> &$T {
                 self.0
+            }
+        }
+
+        impl<$lt> fmt::Pointer for $Ptr<$lt> {
+            fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+                fmt::Pointer::fmt(&self.as_ptr(), fmt)
             }
         }
     };
