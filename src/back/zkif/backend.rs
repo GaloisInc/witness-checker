@@ -402,7 +402,7 @@ fn test_zkif() -> Result<()> {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.int.as_ref().unwrap();
-        assert_eq!(int.value, Some(expect));
+        assert_eq!(int.value, Some(BigUint::from(expect)));
     }
 
     fn check_num<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {

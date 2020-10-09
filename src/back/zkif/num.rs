@@ -374,20 +374,3 @@ pub fn scalar_from_bigint<Scalar: PrimeField>(val: &BigInt) -> Scalar {
         Sign::Plus | Sign::NoSign => scalar,
     }
 }
-
-
-#[test]
-fn test_num() -> Result<(), Box<dyn std::error::Error>> {
-    use super::field::QuarkScalar;
-    use zkinterface_bellman::export::encode_scalar;
-
-    let n = Num::<QuarkScalar>::from((3u64 << 8) + (5u64 << 32));
-    let val = n.value.unwrap();
-    let expected = vec![0, 3, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 as u8];
-
-    let mut encoded = vec![];
-    encode_scalar(&val, &mut encoded);
-    assert_eq!(encoded, expected);
-
-    Ok(())
-}
