@@ -4,15 +4,30 @@ use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, Sh
 
 pub fn compare_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
-        if a.ty.is_integer() {
+        if a.ty.is_integer() && *a.ty != TyKind::BOOL {
             let zero = c.lit(a.ty, 0);
+
+            // For Lt/Gt comparisons, we have to extend the inputs by 1 bit, then do a signed
+            // comparison (regardless of input signedness).
+            //
+            // Signed case: consider 8-bit inputs `-128 < 1` (true).  This becomes `-128 - 1 < 0`,
+            // but `-128 - 1` underflows to `127`, and `127 < 0` is false.  But if the inputs are
+            // first extended to 9 bits, then `-128 - 1 = -129`, and `-129 < 0` is true.
+            //
+            // Unsigned case: `x < 0` is always false for unsigned `x`.
+            //
+            // These are all lazy evaluated.
+            let ext_ty = c.ty(TyKind::Int(IntSize(a.ty.integer_size().bits() + 1)));
+            let ext_zero = c.lit(ext_ty, 0);
+            let ext = |w| c.cast(w, ext_ty);
+
             return match op {
                 CmpOp::Eq => c.eq(c.sub(a, b), zero),
                 CmpOp::Ne => c.not(c.eq(c.sub(a, b), zero)),
-                CmpOp::Lt => c.lt(c.sub(a, b), zero),
-                CmpOp::Le => c.not(c.lt(c.sub(b, a), zero)),
-                CmpOp::Gt => c.lt(c.sub(b, a), zero),
-                CmpOp::Ge => c.not(c.lt(c.sub(a, b), zero)),
+                CmpOp::Lt => c.lt(c.sub(ext(a), ext(b)), ext_zero),
+                CmpOp::Le => c.not(c.lt(c.sub(ext(b), ext(a)), ext_zero)),
+                CmpOp::Gt => c.lt(c.sub(ext(b), ext(a)), ext_zero),
+                CmpOp::Ge => c.not(c.lt(c.sub(ext(a), ext(b)), ext_zero)),
             };
         }
     }
@@ -21,19 +36,22 @@ pub fn compare_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wir
 
 pub fn compare_to_greater_or_equal_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
-        if a.ty.is_integer() {
+        if a.ty.is_integer() && *a.ty != TyKind::BOOL {
             let zero = c.lit(a.ty, 0);
+            let ext_ty = c.ty(TyKind::Int(IntSize(a.ty.integer_size().bits() + 1)));
+            let ext_zero = c.lit(ext_ty, 0);
+            let ext = |w| c.cast(w, ext_ty);
             return match op {
                 CmpOp::Eq => c.eq(c.sub(a, b), zero),
                 CmpOp::Ne => c.not(c.eq(c.sub(a, b), zero)),
                 // Greater or equal: a - b >= 0.
-                CmpOp::Ge => c.ge(c.sub(a, b), zero),
+                CmpOp::Ge => c.ge(c.sub(ext(a), ext(b)), ext_zero),
                 // Lesser or equal: swap a and b.
-                CmpOp::Le => c.ge(c.sub(b, a), zero),
+                CmpOp::Le => c.ge(c.sub(ext(b), ext(a)), ext_zero),
                 // Lesser than: not greater or equal.
-                CmpOp::Lt => c.not(c.ge(c.sub(a, b), zero)),
+                CmpOp::Lt => c.not(c.ge(c.sub(ext(a), ext(b)), ext_zero)),
                 // Greater or equal: not lesser or equal.
-                CmpOp::Gt => c.not(c.ge(c.sub(b, a), zero)),
+                CmpOp::Gt => c.not(c.ge(c.sub(ext(b), ext(a)), ext_zero)),
             };
         }
     }
