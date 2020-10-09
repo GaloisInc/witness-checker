@@ -50,6 +50,28 @@ impl<Scalar: PrimeField> From<i64> for Num<Scalar> {
     }
 }
 
+impl<Scalar: PrimeField> From<BigUint> for Num<Scalar> {
+    fn from(literal: BigUint) -> Self {
+        let element: Scalar = scalar_from_biguint(&literal);
+        Num {
+            value: Some(element.clone()),
+            lc: LinearCombination::zero() + (element, ZkifCS::<Scalar>::one()),
+            bit_width: BitWidth::from(&literal),
+        }
+    }
+}
+
+impl<Scalar: PrimeField> From<BigInt> for Num<Scalar> {
+    fn from(literal: BigInt) -> Self {
+        let element: Scalar = scalar_from_bigint(&literal);
+        Num {
+            value: Some(element.clone()),
+            lc: LinearCombination::zero() + (element, ZkifCS::<Scalar>::one()),
+            bit_width: BitWidth::from(&literal),
+        }
+    }
+}
+
 impl<Scalar: PrimeField> Num<Scalar> {
     pub fn zero() -> Self {
         Num {

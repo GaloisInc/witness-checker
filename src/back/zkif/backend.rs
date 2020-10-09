@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::iter;
 use std::path::Path;
 use std::ops::Sub;
+use num_bigint::BigUint;
+use num_traits::{Zero, One};
 
 use crate::ir::circuit::{
     self, Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit,
@@ -94,17 +97,12 @@ impl<'a> Backend<'a> {
             GateKind::Lit(val, ty) => {
                 match *ty {
                     TyKind::BOOL => {
-                        let b = Boolean::constant(val != 0);
+                        let b = Boolean::constant(!val.is_zero());
                         WireRepr::from(b)
                     }
 
-                    TyKind::Uint(_) => {
-                        let num = Num::from(val);
-                        WireRepr::from(num)
-                    }
-
-                    TyKind::Int(_) => {
-                        let num = Num::from(val as i64);
+                    TyKind::Uint(_) | TyKind::Int(_) => {
+                        let num = Num::from(val.to_bigint(ty));
                         WireRepr::from(num)
                     }
 
@@ -115,7 +113,7 @@ impl<'a> Backend<'a> {
             GateKind::Secret(secret) => {
                 match *secret.ty {
                     TyKind::BOOL => {
-                        let val = secret.val.map(|v| v != 0);
+                        let val = secret.val.map(|v| !v.is_zero());
                         let b = Boolean::from(
                             AllocatedBit::alloc::<Scalar, _>(&mut self.cs, val).unwrap()
                         );
@@ -126,7 +124,7 @@ impl<'a> Backend<'a> {
                         let int = Int::alloc::<Scalar, _>(
                             &mut self.cs,
                             sz.bits() as usize,
-                            secret.val.map(From::from),
+                            secret.val.map(|val| val.to_biguint()),
                         ).unwrap();
                         WireRepr::from(int)
                     }
@@ -282,7 +280,10 @@ impl<'a> Backend<'a> {
 
                 let amount = as_lit(right).unwrap_or_else(|| {
                     panic!("only shifts by literals are supported (not {:?})", right);
-                }) as usize;
+                });
+                let amount = usize::try_from(amount).unwrap_or_else(|_| {
+                    panic!("shift amount {:?} out of range", right);
+                });
 
                 let lw = self.wire(left);
                 let lu = self.representer.mut_repr(lw).as_int(&mut self.cs, width);
@@ -298,8 +299,8 @@ impl<'a> Backend<'a> {
                 let lw = self.wire(left);
                 let width = left.ty.integer_size().bits() as usize;
 
-                assert_eq!(
-                    as_lit(right), Some(0),
+                assert!(
+                    as_lit(right).map_or(false, |val| val.is_zero()),
                     "only comparisons to zero are supported (not {:?})", right,
                 );
 
@@ -365,9 +366,9 @@ impl<'a> Backend<'a> {
     }
 }
 
-fn as_lit(wire: Wire) -> Option<u64> {
+fn as_lit(wire: Wire) -> Option<BigUint> {
     match wire.kind {
-        GateKind::Lit(x, _) => Some(x),
+        GateKind::Lit(x, _) => Some(x.to_biguint()),
         _ => None,
     }
 }

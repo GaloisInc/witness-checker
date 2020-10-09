@@ -1,5 +1,6 @@
 use std::ops::{Add, Sub, Mul};
 use std::cmp::max;
+use num_bigint::{BigUint, BigInt, Sign};
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use crate::back::zkif::int::Int;
 
@@ -38,6 +39,22 @@ impl From<i64> for BitWidth {
             BitWidth::from(literal as u64)
         } else {
             Self::zero() - BitWidth::from((-literal) as u64)
+        }
+    }
+}
+
+impl From<&BigUint> for BitWidth {
+    fn from(literal: &BigUint) -> Self {
+        Max(literal.bits() as usize, false)
+    }
+}
+
+impl From<&BigInt> for BitWidth {
+    fn from(literal: &BigInt) -> Self {
+        let (sign, mag) = literal.clone().into_parts();
+        match sign {
+            Sign::Minus => Self::zero() - BitWidth::from(&mag),
+            Sign::Plus | Sign::NoSign => BitWidth::from(&mag),
         }
     }
 }

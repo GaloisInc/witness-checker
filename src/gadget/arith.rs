@@ -1,3 +1,4 @@
+use num_bigint::BigUint;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, GadgetKind, GadgetKindRef};
 use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
 
@@ -113,7 +114,8 @@ impl<'a> GadgetKind<'a> for WideMul {
         //
         //      return c0, c1
 
-        let mask_val = (1 << (sz.bits() / 2)) - 1;
+        assert!(sz.bits() % 2 == 0, "WideMul for odd-sized integers is not yet supported");
+        let mask_val = (BigUint::from(1_u8) << (sz.bits() / 2)) - 1_u8;
         let mask = c.lit(ty, mask_val);
         let half_n = c.lit(c.ty(TyKind::U8), sz.bits() as u64 / 2);
         let zero = c.lit(ty, 0);

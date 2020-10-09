@@ -1,11 +1,13 @@
 use std::any;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::convert::TryFrom;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::str;
 use bumpalo::Bump;
+use num_bigint::{BigUint, BigInt, Sign};
 
 /// A high-level arithmetic/boolean circuit.
 ///
@@ -32,6 +34,7 @@ pub struct Circuit<'a> {
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
     intern_gadget_kind: RefCell<HashMap<String, &'a dyn GadgetKind<'a>>>,
     intern_str: RefCell<HashSet<&'a str>>,
+    intern_bits: RefCell<HashSet<&'a [u32]>>,
 
     current_label: Cell<&'a str>,
 }
@@ -46,6 +49,7 @@ impl<'a> Circuit<'a> {
             intern_ty_list: RefCell::new(HashSet::new()),
             intern_gadget_kind: RefCell::new(HashMap::new()),
             intern_str: RefCell::new(HashSet::new()),
+            intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
         }
     }
@@ -137,6 +141,18 @@ impl<'a> Circuit<'a> {
         }
     }
 
+    fn intern_bits(&self, b: &[u32]) -> Bits<'a> {
+        let mut intern = self.intern_bits.borrow_mut();
+        match intern.get(b) {
+            Some(&x) => Bits(x),
+            None => {
+                let b = self.arena.alloc_slice_copy(b);
+                intern.insert(b);
+                Bits(b)
+            },
+        }
+    }
+
     pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         // Forbid constructing gates that violate type-safety invariants.
         match kind {
@@ -202,7 +218,8 @@ impl<'a> Circuit<'a> {
         self.ty_bundle(&tys)
     }
 
-    pub fn lit(&self, ty: Ty<'a>, val: u64) -> Wire<'a> {
+    pub fn lit(&self, ty: Ty<'a>, val: impl AsBits) -> Wire<'a> {
+        let val = self.bits(ty, val);
         self.gate(GateKind::Lit(val, ty))
     }
 
@@ -214,9 +231,20 @@ impl<'a> Circuit<'a> {
     ///
     /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
     /// prover) is generating the circuit.
-    pub fn new_secret(&self, ty: Ty<'a>, val: Option<u64>) -> Wire<'a> {
+    pub fn new_secret<T: AsBits>(&self, ty: Ty<'a>, val: Option<T>) -> Wire<'a> {
+        let val = val.map(|val| self.bits(ty, val));
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
         self.secret(secret)
+    }
+
+    pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
+        let sz = match *ty {
+            TyKind::Int(sz) | TyKind::Uint(sz) => sz,
+            _ => panic!("can't construct bit representation for non-integer type {:?}", ty),
+        };
+        let val = val.as_bits(self, sz);
+        assert!(val.width() <= sz.bits());
+        val
     }
 
     pub fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
@@ -509,6 +537,13 @@ impl TyKind<'_> {
             TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
         }
     }
+
+    pub fn is_uint(&self) -> bool {
+        match *self {
+            TyKind::Uint(_) => true,
+            _ => false,
+        }
+    }
 }
 
 
@@ -525,7 +560,7 @@ pub struct Gate<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum GateKind<'a> {
     /// A literal/constant value.
-    Lit(u64, Ty<'a>),
+    Lit(Bits<'a>, Ty<'a>),
     /// Retrieve a secret value from the witness.
     Secret(Secret<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
@@ -677,7 +712,7 @@ declare_interned_pointer! {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
-    pub val: Option<u64>,
+    pub val: Option<Bits<'a>>,
 }
 
 declare_interned_pointer! {
@@ -752,5 +787,164 @@ impl<'a, T> CellResetGuard<'a, T> {
 impl<'a, T> Drop for CellResetGuard<'a, T> {
     fn drop(&mut self) {
         self.cell.swap(&self.old)
+    }
+}
+
+
+/// An arbitrary-sized array of bits.  Used to represent integer values in the circuit and
+/// evaluator.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct Bits<'a>(pub &'a [u32]);
+
+impl<'a> Bits<'a> {
+    pub fn width(&self) -> u16 {
+        for (i, &x) in self.0.iter().enumerate().rev() {
+            if x != 0 {
+                let b = (i + 1) * 32 - x.leading_zeros() as usize;
+                return u16::try_from(b).unwrap();
+            }
+        }
+        0
+    }
+
+    pub fn as_u64(&self) -> Option<u64> {
+        match self.0.len() {
+            0 => Some(0),
+            1 => Some(self.0[0] as u64),
+            2 => Some(self.0[0] as u64 | (self.0[1] as u64) << 32),
+            _ => None,
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.0.iter().all(|&x| x == 0)
+    }
+
+    pub fn to_biguint(&self) -> BigUint {
+        BigUint::from_slice(self.0)
+    }
+
+    /// Interpret these bits as an integer of type `ty`.  For `TyKind::Uint(sz)`, the result is in
+    /// the range `0 .. 2^sz`; for `TyKind::Int(sz)`, it's in the range `-2^(sz-1) .. 2^(sz-1)`.
+    pub fn to_bigint(&self, ty: Ty) -> BigInt {
+        match *ty {
+            TyKind::Uint(sz) => {
+                assert!(self.width() <= sz.bits());
+                BigInt::from_biguint(Sign::Plus, BigUint::from_slice(self.0))
+            },
+            TyKind::Int(sz) => {
+                assert!(self.width() <= sz.bits());
+                let mut i = BigInt::from_biguint(Sign::Plus, BigUint::from_slice(self.0));
+                let sign_bit = sz.bits() as usize - 1;
+                let sb_idx = sign_bit / 32;
+                let sb_off = sign_bit % 32;
+                let neg = self.0.get(sb_idx).cloned().unwrap_or(0) >> sb_off != 0;
+                if neg {
+                    // For signed integers, the high bit has value `-2^(N-1)` instead of `2^(N-1)`.
+                    // So when the high bit is set, the value of `i` needs an adjustment of `-2^N`
+                    // to go from unsigned to signed interpretation.
+                    i -= BigInt::from(1) << sz.bits();
+                }
+                i
+            },
+            _ => panic!("expected an integer type, but got {:?}", ty),
+        }
+    }
+}
+
+pub trait AsBits {
+    /// Convert `self` to `Bits`, interned in circuit `c`.  `width` is the size of the output;
+    /// signed integers should be sign-extended to this width before conversion.
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a>;
+}
+
+impl AsBits for Bits<'_> {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+        c.intern_bits(self.0)
+    }
+}
+
+impl AsBits for BigUint {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+        c.intern_bits(&self.to_u32_digits())
+    }
+}
+
+impl AsBits for u32 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+        c.intern_bits(&[*self])
+    }
+}
+
+impl AsBits for u64 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+        let lo = *self as u32;
+        let hi = (*self >> 32) as u32;
+        c.intern_bits(&[lo, hi])
+    }
+}
+
+impl AsBits for BigInt {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+        let mask = (BigInt::from(1) << width.bits()) - 1;
+        let (sign, val) = (self & &mask).into_parts();
+        assert!(sign != Sign::Minus);
+        val.as_bits(c, width)
+    }
+}
+
+impl AsBits for i32 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+        if width == IntSize(32) {
+            (*self as u32).as_bits(c, width)
+        } else {
+            BigInt::from(*self).as_bits(c, width)
+        }
+    }
+}
+
+impl AsBits for i64 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+        if width == IntSize(64) {
+            (*self as u64).as_bits(c, width)
+        } else {
+            BigInt::from(*self).as_bits(c, width)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BitsToIntError {
+    actual: u16,
+    expected: u16,
+}
+
+impl fmt::Display for BitsToIntError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "too many bits for target type: got {}, but expected at most {}",
+            self.actual, self.expected,
+        )
+    }
+}
+
+impl TryFrom<Bits<'_>> for u32 {
+    type Error = BitsToIntError;
+    fn try_from(bits: Bits) -> Result<u32, BitsToIntError> {
+        if bits.width() > 32 {
+            return Err(BitsToIntError { actual: bits.width(), expected: 32 });
+        }
+        Ok(bits.0[0])
+    }
+}
+
+impl TryFrom<Bits<'_>> for u64 {
+    type Error = BitsToIntError;
+    fn try_from(bits: Bits) -> Result<u64, BitsToIntError> {
+        if bits.width() > 64 {
+            return Err(BitsToIntError { actual: bits.width(), expected: 64 });
+        }
+        Ok(bits.0[0] as u64 | (bits.0[1] as u64) << 32)
     }
 }

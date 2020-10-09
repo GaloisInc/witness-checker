@@ -1,107 +1,214 @@
-use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, BinOp, ShiftOp, CmpOp};
+use num_bigint::BigInt;
+use num_traits::{Zero, One};
+use crate::eval::{self, CachingEvaluator, Evaluator, Value};
+use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
 
-fn get_const<'a>(w: Wire<'a>) -> Option<u64> {
-    match w.kind {
-        GateKind::Lit(val, _) => Some(val),
-        _ => None,
+macro_rules! match_identities {
+    (
+        $op:expr, ($($arg:expr),*);
+        vars $vars:tt;
+        eval $eval:expr;
+        $(
+            $op_pat:pat, $conds:tt $( if $guard:expr )? => $val:expr,
+        )*
+    ) => {{
+        bind_vars!($eval, $vars, ($($arg,)*));
+        match $op {
+            $(
+                $op_pat if apply_conds!($vars, $conds) $( && $guard )? => $val,
+            )*
+            _ => return None,
+        }
+    }};
+}
+
+macro_rules! bind_vars {
+    (
+        $eval:expr,
+        ($var:ident, $($vars:tt)*),
+        ($arg:expr, $($args:tt)*)
+    ) => {
+        #[allow(unused)]
+        let $var = $eval($arg);
+        bind_vars!($eval, ($($vars)*), ($($args)*));
+    };
+
+    (
+        $eval:expr,
+        ($var:ident),
+        ($($args:tt)*)
+    ) => {
+        bind_vars!($eval, ($var,), ($($args)*))
+    };
+
+    ($eval:expr, (), ()) => {};
+}
+
+macro_rules! apply_conds {
+    (
+        ($var:ident, $($vars:tt)*),
+        (_, $($conds:tt)*)
+    ) => {
+        apply_conds!(($($vars)*), ($($conds)*))
+    };
+
+    (
+        ($var:ident, $($vars:tt)*),
+        ($cond:expr, $($conds:tt)*)
+    ) => {
+        $cond(&$var) && apply_conds!(($($vars)*), ($($conds)*))
+    };
+
+    (
+        (),
+        ()
+    ) => {
+        true
+    };
+
+    (
+        ($var:ident),
+        ($($conds:tt)*)
+    ) => {
+        apply_conds!(($var,), ($($conds)*))
+    };
+
+    (
+        ($($vars:tt)*),
+        ($($cond:tt)*)
+    ) => {
+        apply_conds!(($($vars)*), ($($cond)*,))
+    };
+}
+
+fn is_zero(val: &Option<BigInt>) -> bool {
+    val.as_ref().map_or(false, |i| i.is_zero())
+}
+
+fn is_one(val: &Option<BigInt>) -> bool {
+    val.as_ref().map_or(false, |i| i.is_one())
+}
+
+fn is_all_ones<'a>(ty: Ty<'a>) -> impl FnOnce(&Option<BigInt>) -> bool + 'a {
+    move |val| val == &Some(all_ones_value(ty))
+}
+
+fn all_ones_value(ty: Ty) -> BigInt {
+    match *ty {
+        TyKind::Uint(sz) => uint_max(sz),
+        TyKind::Int(_) => BigInt::from(-1),
+        _ => panic!("expected TyKind::Uint or TyKind::Int"),
     }
 }
 
-fn value_mask(ty: Ty) -> Option<u64> {
-    match *ty {
-        TyKind::Int(sz) |
-        TyKind::Uint(sz) => Some(!0 >> (64 - sz.bits())),
-        TyKind::Bundle(_) => None,
-    }
+fn uint_max(sz: IntSize) -> BigInt {
+    (BigInt::from(1) << sz.bits()) - 1
+}
+
+fn eval<'a>(
+    e: &mut CachingEvaluator<'a, '_, eval::Public>,
+    w: Wire<'a>,
+) -> Option<BigInt> {
+    e.eval_wire(w).and_then(Value::unwrap_single)
 }
 
 /// Like `try_const_fold`, but applies specific rules for certain cases where only some inputs are
 /// known.
-fn try_identities<'a>(c: &Circuit<'a>, gk: GateKind<'a>) -> Option<Wire<'a>> {
+fn try_identities<'a>(
+    c: &Circuit<'a>,
+    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    gk: GateKind<'a>,
+) -> Option<Wire<'a>> {
     let ty = gk.ty(c);
     Some(match gk {
-        GateKind::Binary(op, a, b) => match (op, get_const(a), get_const(b)) {
+        GateKind::Binary(op, a, b) => match_identities! {
+            op, (a, b);
+            vars (ac, bc);
+            eval |w| eval(ev, w);
             // x + 0 = 0 + x = x
-            (BinOp::Add, Some(0), None) => b,
-            (BinOp::Add, None, Some(0)) => a,
+            BinOp::Add, (is_zero, _) => b,
+            BinOp::Add, (_, is_zero) => a,
             // x - 0 = x
-            (BinOp::Sub, None, Some(0)) => a,
+            BinOp::Sub, (_, is_zero) => a,
             // x - x = 0
-            (BinOp::Sub, None, None) if a == b => c.lit(ty, 0),
+            BinOp::Sub, (_, _) if a == b => c.lit(ty, 0),
             // 0 * x = x * 0 = 0
-            (BinOp::Mul, Some(0), None) => c.lit(ty, 0),
-            (BinOp::Mul, None, Some(0)) => c.lit(ty, 0),
+            BinOp::Mul, (is_zero, _) => c.lit(ty, 0),
+            BinOp::Mul, (_, is_zero) => c.lit(ty, 0),
+            // 1 * x = x * 1 = 1
+            BinOp::Mul, (is_one, _) => b,
+            BinOp::Mul, (_, is_one) => a,
             // 0 / x = 0
-            (BinOp::Div, Some(0), None) => c.lit(ty, 0),
+            BinOp::Div, (is_zero, _) => c.lit(ty, 0),
             // x / x = 1
-            (BinOp::Div, None, None) if a == b => c.lit(ty, 1),
+            BinOp::Div, (_, _) if a == b => c.lit(ty, 1),
             // 0 % x = 0
-            (BinOp::Mod, Some(0), None) => c.lit(ty, 0),
+            BinOp::Mod, (is_zero, _) => c.lit(ty, 0),
             // x % x = 0
-            (BinOp::Mod, None, None) if a == b => c.lit(ty, 0),
+            BinOp::Mod, (_, _) if a == b => c.lit(ty, 0),
 
             // 0 & x = x & 0 = 0
-            (BinOp::And, Some(0), None) => c.lit(ty, 0),
-            (BinOp::And, None, Some(0)) => c.lit(ty, 0),
+            BinOp::And, (is_zero, _) => c.lit(ty, 0),
+            BinOp::And, (_, is_zero) => c.lit(ty, 0),
             // !0 & x = x & !0 = x
-            (BinOp::And, Some(m), None) if Some(m) == value_mask(ty) => b,
-            (BinOp::And, None, Some(m)) if Some(m) == value_mask(ty) => a,
+            BinOp::And, (is_all_ones(ty), _) => b,
+            BinOp::And, (_, is_all_ones(ty)) => a,
             // x & x = x
-            (BinOp::And, None, None) if a == b => a,
+            BinOp::And, (_, _) if a == b => a,
 
             // 0 | x = x | 0 = x
-            (BinOp::Or, Some(0), None) => b,
-            (BinOp::Or, None, Some(0)) => a,
+            BinOp::Or, (is_zero, _) => b,
+            BinOp::Or, (_, is_zero) => a,
             // !0 | x = x | !0 = !0
-            (BinOp::Or, Some(m), None) if Some(m) == value_mask(ty) =>
-                c.lit(ty, value_mask(ty)?),
-            (BinOp::Or, None, Some(m)) if Some(m) == value_mask(ty) =>
-                c.lit(ty, value_mask(ty)?),
+            BinOp::Or, (is_all_ones(ty), _) => c.lit(ty, all_ones_value(ty)),
+            BinOp::Or, (_, is_all_ones(ty)) => c.lit(ty, all_ones_value(ty)),
             // x | x = x
-            (BinOp::Or, None, None) if a == b => a,
+            BinOp::Or, (_, _) if a == b => a,
 
             // 0 ^ x = x ^ 0 = x
-            (BinOp::Xor, Some(0), None) => b,
-            (BinOp::Xor, None, Some(0)) => a,
+            BinOp::Xor, (is_zero, _) => b,
+            BinOp::Xor, (_, is_zero) => a,
             // !0 ^ x = x ^ !0 = !x
-            (BinOp::Xor, Some(m), None) if Some(m) == value_mask(ty) => c.not(b),
-            (BinOp::Xor, None, Some(m)) if Some(m) == value_mask(ty) => c.not(a),
+            BinOp::Xor, (is_all_ones(ty), _) => c.not(b),
+            BinOp::Xor, (_, is_all_ones(ty)) => c.not(a),
             // x ^ x = 0
-            (BinOp::Xor, None, None) if a == b => c.lit(ty, 0),
-
-            _ => return None,
+            BinOp::Xor, (_, _) if a == b => c.lit(ty, 0),
         },
-        GateKind::Shift(op, a, b) => match (op, get_const(a), get_const(b)) {
+        GateKind::Shift(op, a, b) => match_identities! {
+            op, (a, b);
+            vars (ac, bc);
+            eval |w| eval(ev, w);
             // x << 0 = x >> 0 = x
-            (ShiftOp::Shl, None, Some(0)) => a,
-            (ShiftOp::Shr, None, Some(0)) => a,
-            _ => return None,
+            ShiftOp::Shl, (_, is_zero) => a,
+            ShiftOp::Shr, (_, is_zero) => a,
         },
-        GateKind::Compare(op, a, b) => match (op, *ty, get_const(a), get_const(b)) {
+        GateKind::Compare(op, a, b) => match_identities! {
+            op, (a, b);
+            vars (ac, bc);
+            eval |w| eval(ev, w);
             // x == x, x <= x, x >= x: true
-            (CmpOp::Eq, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
-            (CmpOp::Le, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
-            (CmpOp::Ge, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Eq, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Le, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Ge, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
             // x != x, x < x, x > x: false
-            (CmpOp::Ne, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
-            (CmpOp::Gt, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
-            (CmpOp::Lt, _, None, None) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Ne, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Gt, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Lt, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
 
             // (unsigned) x >= 0, 0 <= x: true
-            (CmpOp::Ge, TyKind::Uint(_), None, Some(0)) => c.lit(c.ty(TyKind::BOOL), 1),
-            (CmpOp::Le, TyKind::Uint(_), Some(0), None) => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Ge, (_, is_zero) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Le, (is_zero, _) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 1),
             // (unsigned) x < 0, 0 > x: false
-            (CmpOp::Gt, TyKind::Uint(_), None, Some(0)) => c.lit(c.ty(TyKind::BOOL), 0),
-            (CmpOp::Lt, TyKind::Uint(_), Some(0), None) => c.lit(c.ty(TyKind::BOOL), 0),
-
-            _ => return None,
+            CmpOp::Lt, (_, is_zero) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Gt, (is_zero, _) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
         },
-        GateKind::Mux(c, t, e) => match get_const(c) {
-            Some(0) => e,
-            Some(1) => t,
-            None if t == e => t,
-            _ => return None,
+        GateKind::Mux(c, t, e) => match_identities! {
+            (), (c);
+            vars (cc);
+            eval |w| eval(ev, w);
+            (), (is_zero) => e,
+            (), (is_one) => e,
+            (), (_) if t == e => t,
         },
         _ => return None,
     })
@@ -116,7 +223,7 @@ pub fn const_fold<'a, 'c>(
             Some(eval::Value::Single(val)) => return c.lit(gk.ty(c), val),
             _ => {},
         }
-        match try_identities(c, gk) {
+        match try_identities(c, &mut e, gk) {
             Some(w) => return w,
             None => {},
         }

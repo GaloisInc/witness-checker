@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::fs;
 use std::fmt;
 use std::io;
@@ -9,7 +10,9 @@ use std::path::Path;
 use std::ptr;
 use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
+use num_traits::One;
 
+use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind};
 use cheesecloth::ir::typed::{Builder, TWire, Repr};
@@ -147,7 +150,7 @@ impl<'a> Context<'a> {
 
     fn eval_u64(&self, w: Wire<'a>) -> Option<u64> {
         let eval = self.eval.as_ref()?;
-        let x = eval.borrow_mut().eval_wire(w)?.as_single()?;
+        let x: u64 = eval.borrow_mut().eval_wire(w)?.as_single()?.try_into().ok()?;
         Some(x)
     }
 
@@ -901,7 +904,7 @@ fn main() -> io::Result<()> {
     {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
         let flag_vals = flags.iter().map(|&w| {
-            ev.eval_wire(w).and_then(|v| v.as_single()).unwrap() == 1
+            ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();
 
         let asserts_ok: u32 = flag_vals[1 .. 1 + num_asserts].iter().map(|&ok| ok as u32).sum();

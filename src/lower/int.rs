@@ -1,3 +1,7 @@
+use std::convert::TryFrom;
+use num_bigint::BigUint;
+use num_traits::Zero;
+
 use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp, UnOp};
 
 // TODO: mod -> div + sub
@@ -116,11 +120,12 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
     if old.ty.is_integer() && old.ty.integer_size() < IntSize(64) && *old.ty != TyKind::BOOL {
         match gk {
             GateKind::Lit(x, ty) => {
+                let x = x.as_u64().unwrap();
                 return c.lit(extend_integer_ty(c, ty), maybe_sign_extend(x, ty));
             }
             GateKind::Secret(s) => {
                 let new_ty = extend_integer_ty(c, s.ty);
-                let new_val = s.val.map(|x| maybe_sign_extend(x, s.ty));
+                let new_val = s.val.map(|x| maybe_sign_extend(x.as_u64().unwrap(), s.ty));
                 return c.new_secret(new_ty, new_val);
             }
             GateKind::Cast(w, ty) => {
@@ -134,40 +139,6 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
                 return normalize_64(c, c.gate(gk), old.ty);
             }
         }
-    }
-    c.gate(gk)
-}
-
-/// Convert 64 bits inputs to 32 bits.
-/// Warning: this pass may change the behaviour of the circuit.
-pub fn downgrade_64_to_32bits<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
-    match gk {
-        GateKind::Lit(val, ty) => match *ty {
-            TyKind::I64 =>
-                return c.lit(c.ty(TyKind::I32), val as i32 as u64),
-            TyKind::U64 =>
-                return c.lit(c.ty(TyKind::U32), val as u32 as u64),
-            _ => {}
-        }
-        GateKind::Secret(secret) => match *secret.ty {
-            TyKind::I64 =>
-                return c.new_secret(
-                    c.ty(TyKind::I32),
-                    secret.val.map(|val| val as i32 as u64)),
-            TyKind::U64 =>
-                return c.new_secret(
-                    c.ty(TyKind::U32),
-                    secret.val.map(|val| val as u32 as u64)),
-            _ => {}
-        }
-        GateKind::Cast(arg, ty) => match *ty {
-            TyKind::I64 =>
-                return c.cast(arg, c.ty(TyKind::I32)),
-            TyKind::U64 =>
-                return c.cast(arg, c.ty(TyKind::U32)),
-            _ => {}
-        }
-        _ => {}
     }
     c.gate(gk)
 }
@@ -272,11 +243,13 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
 /// Replace literals wider than 32 bits with combinations of multiple 32-bit literals.
 pub fn reduce_lit_32<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Lit(x, ty) = gk {
-        if x >> 32 != 0 {
-            if let Some(w) = make_shifted_lit(c, x, ty) {
+        if x.width() > 32 {
+            let x = x.to_biguint();
+            if let Some(w) = make_shifted_lit(c, x.clone(), ty) {
                 return w;
             }
-            if let Some(w) = make_shifted_lit(c, !x, ty) {
+            let mask = (BigUint::from(1_u8) << ty.integer_size().bits()) - 1_u8;
+            if let Some(w) = make_shifted_lit(c, &x ^ mask, ty) {
                 return c.not(w);
             }
             return make_split_lit(c, x, ty);
@@ -285,26 +258,29 @@ pub fn reduce_lit_32<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<
     c.gate(gk)
 }
 
-fn make_shifted_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Option<Wire<'a>> {
+fn make_shifted_lit<'a>(c: &Circuit<'a>, x: BigUint, ty: Ty<'a>) -> Option<Wire<'a>> {
     // When `x == 0`, `x.trailing_zeros()` returns 64, and shifting by 64 triggers an overflow.
-    if x == 0 {
+    if x.is_zero() {
         return Some(c.lit(ty, 0));
     }
 
-    let shift = x.trailing_zeros();
-    let y = x >> shift;
-    if y >> 32 != 0 {
+    // `trailing_zeros` only returns `None` when `x.is_zero()`.
+    let shift = x.trailing_zeros().unwrap();
+    if x.bits() - shift > 32 {
         // Too wide
         return None;
     }
+    let y = u32::try_from(x >> shift).unwrap();
     Some(c.shl(c.lit(ty, y), c.lit(c.ty(TyKind::U8), shift as u64)))
 }
 
-fn make_split_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Wire<'a> {
-    c.or(
-        c.shl(c.lit(ty, x >> 32), c.lit(c.ty(TyKind::U8), 32)),
-        c.lit(ty, x & ((1 << 32) - 1)),
-    )
+fn make_split_lit<'a>(c: &Circuit<'a>, x: BigUint, ty: Ty<'a>) -> Wire<'a> {
+    let parts = x.to_u32_digits();
+    let mut acc = c.lit(ty, 0);
+    for (i, part) in parts.into_iter().enumerate() {
+        acc = c.or(acc, c.shl(c.lit(ty, part), c.lit(c.ty(TyKind::U8), 32 * i as u64)));
+    }
+    acc
 }
 
 
