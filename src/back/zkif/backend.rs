@@ -61,13 +61,13 @@ impl<'a> Backend<'a> {
 
     pub fn enforce_true(&mut self, wire: Wire<'a>) {
         let repr_id = self.wire(wire);
-        let bool = self.representer.mut_repr(repr_id).as_boolean();
+        let bool = self.representer.mut_repr(repr_id).as_boolean(&mut self.cs);
         enforce_true(&mut self.cs, &bool);
     }
 
     pub fn get_bool(&mut self, wire: Wire<'a>) -> Option<bool> {
         let repr_id = self.wire(wire);
-        let bool = self.representer.mut_repr(repr_id).as_boolean();
+        let bool = self.representer.mut_repr(repr_id).as_boolean(&mut self.cs);
         bool.get_value()
     }
 
@@ -96,11 +96,6 @@ impl<'a> Backend<'a> {
         let repr = match wire.kind {
             GateKind::Lit(val, ty) => {
                 match *ty {
-                    TyKind::BOOL => {
-                        let b = Boolean::constant(!val.is_zero());
-                        WireRepr::from(b)
-                    }
-
                     TyKind::Uint(_) | TyKind::Int(_) => {
                         let num = Num::from(val.to_bigint(ty));
                         WireRepr::from(num)
@@ -112,14 +107,6 @@ impl<'a> Backend<'a> {
 
             GateKind::Secret(secret) => {
                 match *secret.ty {
-                    TyKind::BOOL => {
-                        let val = secret.val.map(|v| !v.is_zero());
-                        let b = Boolean::from(
-                            AllocatedBit::alloc::<Scalar, _>(&mut self.cs, val).unwrap()
-                        );
-                        WireRepr::from(b)
-                    }
-
                     TyKind::Uint(sz) | TyKind::Int(sz) => {
                         let int = Int::alloc::<Scalar, _>(
                             &mut self.cs,
@@ -142,7 +129,7 @@ impl<'a> Backend<'a> {
                             UnOp::Neg => return aw, // No op, no new wire.
 
                             UnOp::Not => {
-                                let ab = self.representer.mut_repr(aw).as_boolean();
+                                let ab = self.representer.mut_repr(aw).as_boolean(&mut self.cs);
                                 WireRepr::from(ab.not())
                             }
                         }
@@ -178,8 +165,8 @@ impl<'a> Backend<'a> {
 
                 match *wire.ty {
                     TyKind::BOOL => {
-                        let lb = self.representer.mut_repr(lw).as_boolean();
-                        let rb = self.representer.mut_repr(rw).as_boolean();
+                        let lb = self.representer.mut_repr(lw).as_boolean(&mut self.cs);
+                        let rb = self.representer.mut_repr(rw).as_boolean(&mut self.cs);
 
                         let out_bool = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub =>
@@ -330,9 +317,6 @@ impl<'a> Backend<'a> {
                 let int = self.representer.mut_repr(aw).as_int(&mut self.cs, width);
 
                 match (*a.ty, *ty) {
-                    (TyKind::BOOL, TyKind::Uint(_)) =>
-                        return aw, // No op, no new wire.
-
                     (TyKind::Int(sz1), TyKind::Uint(sz2)) if sz1 == sz2 => return aw,
                     (TyKind::Uint(sz1), TyKind::Int(sz2)) if sz1 == sz2 => return aw,
 
@@ -413,23 +397,12 @@ fn test_zkif() -> Result<()> {
         assert_eq!(value, scalar_from_unsigned::<Scalar>(expect as u64));
     }
 
-    fn check_bool<'a>(b: &Backend<'a>, w: Wire<'a>, expect: bool) {
-        let wi = *b.wire_to_repr.get(&w).unwrap();
-        let wr = &b.representer.wire_reprs[wi.0];
-        let bool = wr.boolean.as_ref().unwrap();
-        let value = bool.get_value().unwrap();
-        assert_eq!(value, expect);
-    }
-
     check_num(&b, lit, 11);
     check_int(&b, sec1, 12);
     check_int(&b, sec2, 13);
     check_num(&b, prod, 12 * 13);
-    check_bool(&b, is_zero, false);
     check_int(&b, diff1, 12 * 13 - 11);
     check_int(&b, diff2, (11 - 12 * 13) as u64);
-    check_bool(&b, is_ge_zero1, true);
-    check_bool(&b, is_ge_zero2, false);
 
     b.finish()
 }
