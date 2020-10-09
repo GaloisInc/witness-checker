@@ -333,6 +333,9 @@ impl<'a> Backend<'a> {
                     (TyKind::BOOL, TyKind::Uint(_)) =>
                         return aw, // No op, no new wire.
 
+                    (TyKind::Int(sz1), TyKind::Uint(sz2)) if sz1 == sz2 => return aw,
+                    (TyKind::Uint(sz1), TyKind::Int(sz2)) if sz1 == sz2 => return aw,
+
                     (TyKind::Uint(sz1), TyKind::Uint(sz2)) |
                     (TyKind::Uint(sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
