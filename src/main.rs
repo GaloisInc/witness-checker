@@ -237,7 +237,7 @@ fn check_step<'a>(
     s1: &TWire<'a, RamState>,
     s2: &TWire<'a, RamState>,
 ) {
-    let _g = b.scoped_label(format_args!("check_step/cycle {:5}", cycle));
+    let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
 
     let mut cases = Vec::new();
     let mut add_case = |op, result, dest, flag| {
@@ -540,7 +540,7 @@ fn check_mem<'a>(
     port1: &TWire<'a, MemPort>,
     port2: &TWire<'a, MemPort>,
 ) {
-    let _g = b.scoped_label(format_args!("check_mem/index {:5}", index));
+    let _g = b.scoped_label(format_args!("check_mem/index {}", index));
     let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     // Whether `port2` is the first memory op for its address.
@@ -611,7 +611,7 @@ fn check_fetch<'a>(
     port1: &TWire<'a, FetchPort>,
     port2: &TWire<'a, FetchPort>,
 ) {
-    let _g = b.scoped_label(format_args!("check_fetch/index {:5}", index));
+    let _g = b.scoped_label(format_args!("check_fetch/index {}", index));
     cx.when(b, b.not(port2.write), |cx| {
         wire_assert!(
             cx, b.eq(port2.addr, port1.addr),
@@ -712,7 +712,8 @@ fn main() -> io::Result<()> {
     };
 
     let mut trace = Vec::new();
-    for state in &exec.trace {
+    for (i, state) in exec.trace.iter().enumerate() {
+        let _g = b.scoped_label(format_args!("state {}", i));
         trace.push(RamState::secret_with_value(&b, state.clone()));
     }
 
@@ -782,7 +783,9 @@ fn main() -> io::Result<()> {
     check_first(&cx, &b, trace.first().unwrap());
 
     for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
-        let instr = b.secret(Some(exec.program[exec.trace[i].pc as usize]));
+        let instr = b.with_label(format_args!("cycle {} instr", i), || {
+            b.secret(Some(exec.program[exec.trace[i].pc as usize]))
+        });
         let port = &mem_ports[i];
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
         check_step(&cx, &b, i as u32, instr, &[port.clone()], advice, s1, s2);

@@ -20,6 +20,10 @@ impl<'a> Builder<'a> {
     pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
         self.c.scoped_label(label)
     }
+
+    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
+        self.c.with_label(label, f)
+    }
 }
 
 pub trait AsBuilder<'a> {

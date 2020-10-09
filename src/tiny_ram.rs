@@ -101,19 +101,19 @@ impl<'a> Secret<'a> for RamInstr {
     fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
         if let Some(a) = a {
             RamInstrRepr {
-                opcode: bld.secret(Some(a.opcode)),
-                dest: bld.secret(Some(a.dest)),
-                op1: bld.secret(Some(a.op1)),
-                op2: bld.secret(Some(a.op2)),
-                imm: bld.secret(Some(a.imm)),
+                opcode: bld.with_label("opcode", || bld.secret(Some(a.opcode))),
+                dest: bld.with_label("dest", || bld.secret(Some(a.dest))),
+                op1: bld.with_label("op1", || bld.secret(Some(a.op1))),
+                op2: bld.with_label("op2", || bld.secret(Some(a.op2))),
+                imm: bld.with_label("imm", || bld.secret(Some(a.imm))),
             }
         } else {
             RamInstrRepr {
-                opcode: bld.secret(None),
-                dest: bld.secret(None),
-                op1: bld.secret(None),
-                op2: bld.secret(None),
-                imm: bld.secret(None),
+                opcode: bld.with_label("opcode", || bld.secret(None)),
+                dest: bld.with_label("dest", || bld.secret(None)),
+                op1: bld.with_label("op1", || bld.secret(None)),
+                op2: bld.with_label("op2", || bld.secret(None)),
+                imm: bld.with_label("imm", || bld.secret(None)),
             }
         }
     }
@@ -206,17 +206,23 @@ impl<'a> Lit<'a> for RamState {
 impl RamState {
     pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.secret(Some(a.pc)),
-            regs: a.regs.iter().map(|&x| bld.secret(Some(x))).collect(),
-            flag: bld.secret(Some(a.flag)),
+            pc: bld.with_label("pc", || bld.secret(Some(a.pc))),
+            regs: bld.with_label("regs", || {
+                a.regs.iter().enumerate().map(|(i, &x)| {
+                    bld.with_label(i, || bld.secret(Some(x)))
+                }).collect()
+            }),
+            flag: bld.with_label("flag", || bld.secret(Some(a.flag))),
         })
     }
 
     pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.secret(None),
-            regs: (0 .. len).map(|_| bld.secret(None)).collect(),
-            flag: bld.secret(None),
+            pc: bld.with_label("pc", || bld.secret(None)),
+            regs: bld.with_label("regs", || (0 .. len).map(|i| {
+                bld.with_label(i, || bld.secret(None))
+            }).collect()),
+            flag: bld.with_label("flag", || bld.secret(None)),
         })
     }
 }
@@ -401,17 +407,17 @@ impl<'a> Secret<'a> for MemPort {
     fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
         if let Some(a) = a {
             MemPortRepr {
-                cycle: bld.secret(Some(a.cycle)),
-                addr: bld.secret(Some(a.addr)),
-                value: bld.secret(Some(a.value)),
-                op: bld.secret(Some(a.op)),
+                cycle: bld.with_label("cycle", || bld.secret(Some(a.cycle))),
+                addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
+                value: bld.with_label("value", || bld.secret(Some(a.value))),
+                op: bld.with_label("op", || bld.secret(Some(a.op))),
             }
         } else {
             MemPortRepr {
-                cycle: bld.secret(None),
-                addr: bld.secret(None),
-                value: bld.secret(None),
-                op: bld.secret(None),
+                cycle: bld.with_label("cycle", || bld.secret(None)),
+                addr: bld.with_label("addr", || bld.secret(None)),
+                value: bld.with_label("value", || bld.secret(None)),
+                op: bld.with_label("op", || bld.secret(None)),
             }
         }
     }
@@ -478,15 +484,15 @@ impl<'a> Secret<'a> for FetchPort {
     fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
         if let Some(a) = a {
             FetchPortRepr {
-                addr: bld.secret(Some(a.addr)),
-                instr: bld.secret(Some(a.instr)),
-                write: bld.secret(Some(a.write)),
+                addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
+                instr: bld.with_label("instr", || bld.secret(Some(a.instr))),
+                write: bld.with_label("write", || bld.secret(Some(a.write))),
             }
         } else {
             FetchPortRepr {
-                addr: bld.secret(None),
-                instr: bld.secret(None),
-                write: bld.secret(None),
+                addr: bld.with_label("addr", || bld.secret(None)),
+                instr: bld.with_label("instr", || bld.secret(None)),
+                write: bld.with_label("write", || bld.secret(None)),
             }
         }
     }

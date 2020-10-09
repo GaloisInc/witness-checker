@@ -364,6 +364,11 @@ impl<'a> Circuit<'a> {
         CellResetGuard::new(&self.current_label, new)
     }
 
+    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
+        let _g = self.scoped_label(label);
+        f()
+    }
+
     pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
         let new = self.intern_str(&label.to_string());
         CellResetGuard::new(&self.current_label, new)
