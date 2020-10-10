@@ -1,3 +1,27 @@
+/// # Wire representations
+///
+/// We use two different representations of wire values: a bitwise representation (`Int`) where a
+/// value is a list of booleans, and a packed representation (`Num`) where a value is encoded as a
+/// single field element.
+///
+/// Conversion from bitwise to packed representation always uses an unsigned interpretation of the
+/// bits.  For example, the packed representation of the signed integer `-1_i8` is `255` - notably,
+/// it is *not* equal to the negation (in the field) of the field element `1`.  Arithmetic on the
+/// packed representation must account for this.  For example, we negate the packed 8-bit value `1`
+/// by computing `256 - 1`, giving the correct result `255`.
+///
+/// Converting from packed back to bitwise representation requires knowing how many bits are needed
+/// to represent the full range of values that the wire might carry.  Some operations on packed
+/// values can increase the range.  For example, negating `0_i8` produces `256 - 0 = 256`, which is
+/// 9 bits wide.  However, this wire still logically carries an 8-bit value; only the lower 8 bits
+/// are meaningful.  The conversion to bitwise representation thus converts to a 9-bit value
+/// (otherwise the conversion could fail for values like `256`), then truncates to 8 bits.
+///
+/// This implies some values may have multiple equivalent packed representations.  Specifically,
+/// these are equivalence classes mod `2^N`.  Field elements `0`, `256`, `512`, etc all represent
+/// the bitwise value `0_u8`.  Since `2^N` does not evenly divide the field modulus, the
+/// highest-valued field elements are not safe to use.  The `Num` type will automatically truncate
+/// if the operation might return a value that is out of range.
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
@@ -23,7 +47,7 @@ use super::{
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
-    num, num::{boolean_lc, scalar_from_unsigned, scalar_from_signed},
+    num, num::{boolean_lc, scalar_from_unsigned},
     field::QuarkScalar,
 };
 
@@ -96,8 +120,8 @@ impl<'a> Backend<'a> {
         let repr = match wire.kind {
             GateKind::Lit(val, ty) => {
                 match *ty {
-                    TyKind::Uint(_) | TyKind::Int(_) => {
-                        let num = Num::from(val.to_bigint(ty));
+                    TyKind::Uint(sz) | TyKind::Int(sz) => {
+                        let num = Num::from_biguint(sz.bits(), &val.to_biguint());
                         WireRepr::from(num)
                     }
 
@@ -108,6 +132,7 @@ impl<'a> Backend<'a> {
             GateKind::Secret(secret) => {
                 match *secret.ty {
                     TyKind::Uint(sz) | TyKind::Int(sz) => {
+                        // TODO: can we use Num::alloc here instead?
                         let int = Int::alloc::<Scalar, _>(
                             &mut self.cs,
                             sz.bits() as usize,
@@ -139,11 +164,11 @@ impl<'a> Backend<'a> {
                         match op {
                             UnOp::Neg => {
                                 let num = self.representer.mut_repr(aw).as_num();
-                                let neg = Num::zero() - &num;
-                                WireRepr::from(neg)
+                                WireRepr::from(num.neg(&mut self.cs))
                             }
 
                             UnOp::Not => {
+                                // TODO: could compute this as `-num - 1`
                                 let int = self.representer.mut_repr(aw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
                                 let not_bits: Vec<Boolean> = int.bits.iter().map(|bit|
@@ -193,24 +218,27 @@ impl<'a> Backend<'a> {
                                 let right = self.representer.mut_repr(rw).as_num();
 
                                 let out_num = match op {
-                                    BinOp::Add => left + &right,
-
-                                    BinOp::Sub => left - &right,
-
+                                    BinOp::Add => left.add(&right, &mut self.cs),
+                                    BinOp::Sub => left.sub(&right, &mut self.cs),
                                     BinOp::Mul => left.mul(&right, &mut self.cs),
-
                                     _ => unreachable!(),
                                 };
+
 
                                 WireRepr::from(out_num)
                             }
 
                             // Ops using both number and bits representations.
                             BinOp::Div | BinOp::Mod => {
-                                let numer_num = self.representer.mut_repr(lw).as_num();
+                                // FIXME: this is incorrect for signed division
+                                // Needs truncated `Num`s, with no bogus high bits that could
+                                // affect the result.
+                                let numer_num = self.representer.mut_repr(lw)
+                                    .as_num_trunc(&mut self.cs);
                                 let numer_int = self.representer.mut_repr(lw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
-                                let denom_num = self.representer.mut_repr(rw).as_num();
+                                let denom_num = self.representer.mut_repr(rw)
+                                    .as_num_trunc(&mut self.cs);
                                 let denom_int = self.representer.mut_repr(rw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
 
@@ -276,7 +304,7 @@ impl<'a> Backend<'a> {
                 let lu = self.representer.mut_repr(lw).as_int(&mut self.cs, width);
                 let shifted = match op {
                     ShiftOp::Shl => lu.shift_left(amount),
-                    ShiftOp::Shr => lu.shift_right(amount),
+                    ShiftOp::Shr => lu.shift_right(amount, left.ty.is_int()),
                 };
 
                 WireRepr::from(shifted)
@@ -293,7 +321,8 @@ impl<'a> Backend<'a> {
 
                 let yes = match op {
                     CmpOp::Eq => {
-                        let left = self.representer.mut_repr(lw).as_num();
+                        // Needs a truncated `Num`, with no bogus high bits.
+                        let left = self.representer.mut_repr(lw).as_num_trunc(&mut self.cs);
                         left.equals_zero(&mut self.cs)
                     }
 

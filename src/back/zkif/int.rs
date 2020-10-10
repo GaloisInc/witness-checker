@@ -3,6 +3,7 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
+use std::cmp;
 use num_bigint::BigUint;
 
 use zkinterface_bellman::{
@@ -103,31 +104,19 @@ impl Int {
         width: usize,
         num: &Num<Scalar>,
     ) -> Int {
+        // `alloc_bits` produces `num.real_bits` bits, but we only care about the valid ones.
         let mut bits = num.alloc_bits(&mut cs);
-        if bits.len() > width {
-            eprintln!("warning: truncating {:?} ({} bits) to {} bits",
-                num.value, bits.len(), width);
+        bits.truncate(cmp::min(width, num.valid_bits as usize));
+
+        if (num.valid_bits as usize) < width {
+            eprintln!(
+                "warning: bogus conversion from {}-valid-bit Num to {}-bit Int",
+                num.valid_bits, width,
+            );
+            bits.resize(width, Boolean::Constant(false));
         }
-        let expand_bit = match num.bit_width {
-            // Unsigned numbers are padded with zeros.
-            BitWidth::Max(_, false) => Boolean::Constant(false),
-            // Signed numbers are padded by copying the sign bit.
-            BitWidth::Max(_, true) => bits[bits.len() - 1].clone(),
-            _ => unreachable!(),
-        };
-        bits.resize(width, expand_bit);
+
         Self::from_bits(&bits)
-    }
-
-    pub fn from_boolean(width: usize, bool: &Boolean) -> Int {
-        let mut bits = Vec::with_capacity(width);
-        bits.push(bool.clone());
-        bits.resize(width, Boolean::constant(false));
-
-        Int {
-            bits,
-            value: bool.get_value().map(|b| BigUint::from(b as u32)),
-        }
     }
 
     pub fn is_negative(&self) -> &Boolean {
@@ -201,11 +190,15 @@ impl Int {
         }
     }
 
-    pub fn shift_right(&self, by: usize) -> Self {
+    pub fn shift_right(&self, by: usize, signed: bool) -> Self {
         let width = self.width();
         let by = by % width;
 
-        let fill = Boolean::constant(false);
+        let fill = if signed {
+            self.bits.last().unwrap().clone()
+        } else {
+            Boolean::constant(false)
+        };
 
         let new_bits = self.bits
             .iter() // The bits are least significant first

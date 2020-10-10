@@ -29,6 +29,7 @@ fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
     let dir = tempfile::tempdir().unwrap();
 
     let workspace = dir.path();
+    //let workspace = Path::new("out/test");
     let files = vec![
         workspace.join("header.zkif"),
         workspace.join("constraints.zkif"),

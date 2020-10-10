@@ -117,7 +117,7 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     );
 
     // Verify that rest < denom.
-    let diff_num = rest_num.clone() - denom_num;
+    let diff_num = rest_num.clone().sub(&denom_num, &mut cs);
     let diff_int = Int::from_num(&mut cs, denom_int.width(), &diff_num);
     let ok = diff_int.is_negative();
     let one = CS::one();

@@ -538,6 +538,13 @@ impl TyKind<'_> {
         }
     }
 
+    pub fn is_int(&self) -> bool {
+        match *self {
+            TyKind::Int(_) => true,
+            _ => false,
+        }
+    }
+
     pub fn is_uint(&self) -> bool {
         match *self {
             TyKind::Uint(_) => true,

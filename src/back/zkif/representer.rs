@@ -74,6 +74,16 @@ impl WireRepr {
         }
     }
 
+    /// Get `self` as a "truncated" num (as by `Num::truncate`), with `real_bits == valid_bits`.
+    pub fn as_num_trunc(&mut self, cs: &mut CS) -> Num {
+        let mut num = self.as_num();
+        if num.valid_bits != num.real_bits {
+            num = num.truncate(cs);
+            self.num = Some(num.clone());
+        }
+        num
+    }
+
     pub fn as_int(&mut self, cs: &mut CS, width: usize) -> Int {
         match &self.int {
             Some(u) => {
