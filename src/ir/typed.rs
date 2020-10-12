@@ -1,7 +1,7 @@
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
-use crate::ir::circuit::{Circuit, Wire, TyKind, CellResetGuard};
+use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
 
 
 pub struct Builder<'a> {
@@ -37,7 +37,7 @@ impl<'a> AsBuilder<'a> for Builder<'a> {
 /// Typed wire, which carries a a representation of `T`.  This is useful for distinguishing wires
 /// with different high-level types, even when they share a low-level representation.
 #[derive(Debug)]
-pub struct TWire<'a, T: Repr<'a>> {
+pub struct TWire<'a, T: Repr<'a> + ?Sized> {
     pub repr: T::Repr,
 }
 
@@ -73,6 +73,18 @@ impl<'a, T: Repr<'a>> Deref for TWire<'a, T> {
 
 pub trait Repr<'a> {
     type Repr;
+}
+
+pub trait Flatten<'a>: Repr<'a>
+where <Self as Repr<'a>>::Repr: Sized {
+    /// Compute a type that can be used to represent `Self` as a single `Wire`.
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a>;
+
+    /// Convert a `TWire<Self>` to a single `Wire`, whose type is given by `wire_type`.
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a>;
+
+    /// Convert a single `Wire` back into a `TWire<Self>`.
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self>;
 }
 
 
@@ -239,6 +251,15 @@ impl<'a> Repr<'a> for bool {
     type Repr = Wire<'a>;
 }
 
+impl<'a> Flatten<'a> for bool {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> { c.ty(TyKind::BOOL) }
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        assert!(*w.ty == TyKind::BOOL);
+        TWire::new(w)
+    }
+}
+
 impl<'a> Lit<'a> for bool {
     fn lit(bld: &Builder<'a>, x: bool) -> Wire<'a> {
         bld.c.lit(bld.c.ty(TyKind::BOOL), x as u64)
@@ -283,6 +304,15 @@ macro_rules! integer_impls {
     ($T:ty, $K:ident) => {
         impl<'a> Repr<'a> for $T {
             type Repr = Wire<'a>;
+        }
+
+        impl<'a> Flatten<'a> for $T {
+            fn wire_type(c: &Circuit<'a>) -> Ty<'a> { c.ty(TyKind::$K) }
+            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
+            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                assert!(*w.ty == TyKind::$K);
+                TWire::new(w)
+            }
         }
 
         impl<'a> Lit<'a> for $T {
@@ -348,6 +378,35 @@ macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {
         impl<'a, $($A: Repr<'a>,)*> Repr<'a> for ($($A,)*) {
             type Repr = ($(TWire<'a, $A>,)*);
+        }
+
+        impl<'a, $($A: Flatten<'a>,)*> Flatten<'a> for ($($A,)*) {
+            fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+                c.ty_bundle(&[$($A::wire_type(c),)*])
+            }
+
+            fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                let ($($A,)*) = w.repr;
+                bld.c.pack(&[$(Flatten::to_wire(bld, $A),)*])
+            }
+
+            fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                #![allow(unused)]       // `bld` in the zero-element case
+                let mut it = 0..;
+                $( let $A = Flatten::from_wire(bld, bld.c.extract(w, it.next().unwrap())); )*
+                let num_elems = it.next().unwrap();
+
+                match *w.ty {
+                    TyKind::Bundle(tys) => assert!(tys.len() == num_elems),
+                    // If num_elems is zero, there are no `bld.c.extract` calls, so the type error
+                    // won't be caught above.
+                    _ => panic!("expected Bundle, not {:?}", w.ty),
+                }
+
+                TWire::new(($($A,)*))
+            }
         }
 
         impl<'a, $($A: Lit<'a>,)*> Lit<'a> for ($($A,)*) {

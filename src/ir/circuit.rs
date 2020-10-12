@@ -551,6 +551,16 @@ impl TyKind<'_> {
             _ => false,
         }
     }
+
+    pub fn transfer<'b>(&self, c: &Circuit<'b>) -> Ty<'b> {
+        match *self {
+            TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
+            TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
+            TyKind::Bundle(tys) => {
+                c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
+            },
+        }
+    }
 }
 
 
@@ -874,6 +884,18 @@ impl AsBits for Bits<'_> {
 impl AsBits for BigUint {
     fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
         c.intern_bits(&self.to_u32_digits())
+    }
+}
+
+impl AsBits for u8 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+        (*self as u32).as_bits(c, width)
+    }
+}
+
+impl AsBits for u16 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+        (*self as u32).as_bits(c, width)
     }
 }
 
