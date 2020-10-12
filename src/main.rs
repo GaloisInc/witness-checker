@@ -20,8 +20,8 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{
-    Execution, RamInstr, RamState, MemPort, MemOpKind, FetchPort, PackedFetchPort, Opcode, Advice,
-    REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
+    Execution, RamInstr, RamState, MemPort, MemOpKind, PackedMemPort, FetchPort, PackedFetchPort,
+    Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 
 
@@ -803,21 +803,14 @@ fn main() -> io::Result<()> {
 
     // Check memory consistency
 
-    let mut sorted_mem = mem_ports.clone();
-    {
+    let sorted_mem = {
         let _g = b.scoped_label("sort mem");
-        sort::sort(&b, &mut sorted_mem, &mut |x, y| {
-            let _g = b.scoped_label("compare");
-            // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
-            // cycles.
-            let x_cyc = b.add(x.cycle, b.lit(1));
-            let y_cyc = b.add(y.cycle, b.lit(1));
-            b.or(
-                b.lt(x.addr, y.addr),
-                b.and(b.eq(x.addr, y.addr), b.lt(x_cyc, y_cyc)),
-            )
-        });
-    }
+        let mut packed = mem_ports.iter().map(|&fp| {
+            PackedMemPort::from_unpacked(&b, fp)
+        }).collect::<Vec<_>>();
+        sort::sort(&b, &mut packed, &mut |&x, &y| b.lt(x, y));
+        packed.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
+    };
     /*
     for port in &sorted_mem {
         eprintln!(
@@ -835,10 +828,10 @@ fn main() -> io::Result<()> {
     // Check instruction-fetch consistency
 
     let sorted_fetch = {
+        let _g = b.scoped_label("sort fetch");
         let mut packed = fetch_ports.iter().map(|&fp| {
             PackedFetchPort::from_unpacked(&b, fp)
         }).collect::<Vec<_>>();
-        let _g = b.scoped_label("sort fetch");
         sort::sort(&b, &mut packed, &mut |&x, &y| b.lt(x, y));
         packed.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
     };

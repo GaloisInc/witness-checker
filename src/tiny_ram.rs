@@ -4,8 +4,8 @@ use std::fmt;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
 use crate::gadget::bit_pack;
-use crate::ir::circuit::Wire;
-use crate::ir::typed::{self, Builder, TWire, Repr, Lit, Secret, Mux};
+use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
+use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -272,6 +272,15 @@ macro_rules! mk_named_enum {
             type Repr = TWire<'a, u8>;
         }
 
+        impl<'a> Flatten<'a> for $Name {
+            fn wire_type(c: &Circuit<'a>) -> Ty<'a> { c.ty(TyKind::U8) }
+            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
+            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                assert!(*w.ty == TyKind::U8);
+                TWire::new(TWire::new(w))
+            }
+        }
+
         impl<'a> Lit<'a> for $Name {
             fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
                 bld.lit(a as u8)
@@ -447,6 +456,66 @@ where
             value: bld.mux(c.clone(), t.value, e.value),
             op: bld.mux(c.clone(), t.op, e.op),
         }
+    }
+}
+
+pub struct PackedMemPort;
+
+#[derive(Clone, Copy)]
+pub struct PackedMemPortRepr<'a> {
+    key: Wire<'a>,
+    data: Wire<'a>,
+}
+
+impl PackedMemPort {
+    pub fn from_unpacked<'a>(
+        bld: &Builder<'a>,
+        mp: TWire<'a, MemPort>,
+    ) -> TWire<'a, PackedMemPort> {
+        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
+        // cycles.
+        let cycle_adj = bld.add(mp.cycle, bld.lit(1));
+        // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
+        // put `addr` last in the list.
+        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, mp.addr)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((mp.value, mp.op)));
+        TWire::new(PackedMemPortRepr { key, data })
+    }
+}
+
+impl<'a> PackedMemPortRepr<'a> {
+    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
+        let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
+        let cycle = bld.sub(cycle_adj, bld.lit(1));
+        let (value, op) = *bit_pack::split_bits::<(_, _)>(bld, self.data);
+        TWire::new(MemPortRepr { cycle, addr, value, op })
+    }
+}
+
+impl<'a> Repr<'a> for PackedMemPort {
+    type Repr = PackedMemPortRepr<'a>;
+}
+
+impl<'a> Mux<'a, bool, PackedMemPort> for PackedMemPort {
+    type Output = PackedMemPort;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: Wire<'a>,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        PackedMemPortRepr {
+            key: bld.circuit().mux(c, t.key, e.key),
+            data: bld.circuit().mux(c, t.data, e.data),
+        }
+    }
+}
+
+impl<'a> typed::Lt<'a, PackedMemPort> for PackedMemPort {
+    type Output = bool;
+    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().lt(a.key, b.key)
     }
 }
 
