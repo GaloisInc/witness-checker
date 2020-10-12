@@ -54,10 +54,9 @@ impl<'a> Iterator for BundleWires<'_, 'a> {
 /// little-endian order - the first input occupies the lowest bits of the output.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct ConcatBits;
+impl_gadget_kind_support!(ConcatBits);
 
 impl<'a> GadgetKind<'a> for ConcatBits {
-    fn name(&self) -> &'static str { "concat_bits" }
-
     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
@@ -93,10 +92,9 @@ pub fn concat_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, x: TWire<'a, T>) -> Wi
 /// indicated type (usually a `Bundle`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct SplitBits<'a>(pub Ty<'a>);
+impl_gadget_kind_support!(<'a> SplitBits<'a>);
 
 impl<'a> GadgetKind<'a> for SplitBits<'a> {
-    fn name(&self) -> &'static str { "split_bits" }
-
     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(SplitBits(self.0.transfer(c)))
     }
@@ -147,10 +145,9 @@ pub struct ExtractBits {
     start: u16,
     end: u16,
 }
+impl_gadget_kind_support!(ExtractBits);
 
 impl<'a> GadgetKind<'a> for ExtractBits {
-    fn name(&self) -> &'static str { "extract_bits" }
-
     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }

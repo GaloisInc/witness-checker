@@ -5,10 +5,9 @@ use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
 /// Add two unsigned integers and check for overflow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct AddWithOverflow;
+impl_gadget_kind_support!(AddWithOverflow);
 
 impl<'a> GadgetKind<'a> for AddWithOverflow {
-    fn name(&self) -> &'static str { "add_with_overflow" }
-
     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
@@ -35,10 +34,9 @@ impl<'a> GadgetKind<'a> for AddWithOverflow {
 /// Subtract two unsigned integers and check for overflow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct SubWithOverflow;
+impl_gadget_kind_support!(SubWithOverflow);
 
 impl<'a> GadgetKind<'a> for SubWithOverflow {
-    fn name(&self) -> &'static str { "sub_with_overflow" }
-
     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
@@ -65,10 +63,9 @@ impl<'a> GadgetKind<'a> for SubWithOverflow {
 /// Perform double-word multiplication (for example, a `32 x 32 -> 64` bit multiply).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct WideMul;
+impl_gadget_kind_support!(WideMul);
 
 impl<'a> GadgetKind<'a> for WideMul {
-    fn name(&self) -> &'static str { "wide_mul" }
-
     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
