@@ -90,8 +90,7 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     let (quot_val, rest_val) = match (numer_int.value.as_ref(), denom_int.value.as_ref()) {
         (Some(numer), Some(denom)) => {
             if denom.is_zero() {
-                panic!("Attempt to divide by zero");
-                //(Some(0), Some(numer))
+                (Some(0_u8.into()), Some(numer.clone()))
             } else {
                 let quot_val = numer / denom;
                 let rest_val = numer % denom;
@@ -116,10 +115,12 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
         |lc| lc + &numer_num.lc - &rest_num.lc,
     );
 
-    // Verify that rest < denom.
+    // Verify that rest < denom || denom == 0.
     let diff_num = rest_num.clone().sub(&denom_num, &mut cs).unwrap();
     let diff_int = Int::from_num(&mut cs, denom_int.width(), &diff_num);
-    let ok = diff_int.is_negative();
+    let diff_ok = diff_int.is_negative();
+    let denom_zero = denom_num.equals_zero(&mut cs);
+    let ok = bool_or(&mut cs, &diff_ok, &denom_zero);
     let one = CS::one();
     cs.enforce(
         || "rest < denom",

@@ -937,6 +937,8 @@ fn main() -> io::Result<()> {
         // Write files.
         backend.finish().unwrap();
 
+        eprintln!("validating zkif...");
+
         // Validate the circuit and witness.
         cli(&Options {
             tool: "simulate".to_string(),
