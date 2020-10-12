@@ -45,6 +45,9 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("expect-zero")
              .long("expect-zero")
              .help("check that r0 == 0 in the final state"))
+        .arg(Arg::with_name("stats")
+             .long("stats")
+             .help("print info about the size of the circuit"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -896,6 +899,11 @@ fn main() -> io::Result<()> {
             .chain(bugs.into_iter())
             .collect::<Vec<_>>();
 
+    if args.is_present("stats") {
+        eprintln!(" ===== stats: before lowering =====");
+        debug::count_gates::count_gates(&flags);
+        eprintln!(" ===== end stats (before lowering) =====");
+    }
 
     let mut arena1 = Bump::new();
     let mut arena2 = Bump::new();
@@ -930,6 +938,12 @@ fn main() -> io::Result<()> {
     passes.run(lower::bool_::compare_to_logic);
     passes.run(lower::bool_::not_to_xor);
     let (c, flags) = passes.finish();
+
+    if args.is_present("stats") {
+        eprintln!(" ===== stats: after lowering =====");
+        debug::count_gates::count_gates(&flags);
+        eprintln!(" ===== end stats (after lowering) =====");
+    }
 
     {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
