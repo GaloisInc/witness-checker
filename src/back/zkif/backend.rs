@@ -164,7 +164,14 @@ impl<'a> Backend<'a> {
                         match op {
                             UnOp::Neg => {
                                 let num = self.representer.mut_repr(aw).as_num();
-                                WireRepr::from(num.neg(&mut self.cs))
+                                let out_num = num.neg(&mut self.cs)
+                                    .or_else(|_| {
+                                        let num = self.representer.mut_repr(aw)
+                                            .as_num_trunc(&mut self.cs);
+                                        num.neg(&mut self.cs)
+                                    })
+                                    .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
+                                WireRepr::from(out_num)
                             }
 
                             UnOp::Not => {
@@ -217,13 +224,27 @@ impl<'a> Backend<'a> {
                                 let left = self.representer.mut_repr(lw).as_num();
                                 let right = self.representer.mut_repr(rw).as_num();
 
-                                let out_num = match op {
-                                    BinOp::Add => left.add(&right, &mut self.cs),
-                                    BinOp::Sub => left.sub(&right, &mut self.cs),
-                                    BinOp::Mul => left.mul(&right, &mut self.cs),
-                                    _ => unreachable!(),
+                                let do_bin_op = |l: Num, r: Num, cs: &mut ZkifCS<Scalar>| {
+                                    match op {
+                                        BinOp::Add => l.add(&r, cs),
+                                        BinOp::Sub => l.sub(&r, cs),
+                                        BinOp::Mul => l.mul(&r, cs),
+                                        _ => unreachable!(),
+                                    }
                                 };
 
+                                // The operation might fail if the `real_bits` of `left` and
+                                // `right` are too big.  In that case, use `as_num_trunc` to reduce
+                                // the `real_bits` as much as possible, then try again.
+                                let out_num = do_bin_op(left, right, &mut self.cs)
+                                    .or_else(|_| {
+                                        let left = self.representer.mut_repr(lw)
+                                            .as_num_trunc(&mut self.cs);
+                                        let right = self.representer.mut_repr(rw)
+                                            .as_num_trunc(&mut self.cs);
+                                        do_bin_op(left, right, &mut self.cs)
+                                    })
+                                    .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
 
                                 WireRepr::from(out_num)
                             }
@@ -423,7 +444,7 @@ fn test_zkif() -> Result<()> {
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
         let value = int.value.unwrap();
-        assert_eq!(value, scalar_from_unsigned::<Scalar>(expect as u64));
+        assert_eq!(Ok(value), scalar_from_unsigned::<Scalar>(expect as u64));
     }
 
     check_num(&b, lit, 11);

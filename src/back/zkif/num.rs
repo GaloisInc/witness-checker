@@ -41,7 +41,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         width: u16,
         value: &BigUint,
     ) -> Num<Scalar> {
-        let element: Scalar = scalar_from_biguint(value);
+        let element: Scalar = scalar_from_biguint(value).unwrap();
         Num {
             value: Some(element.clone()),
             lc: LinearCombination::zero() + (element, ZkifCS::<Scalar>::one()),
@@ -56,7 +56,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         value: Option<BigUint>,
     ) -> Result<Self, SynthesisError>
     {
-        let value = value.map(|val| scalar_from_biguint(&val));
+        let value = value.map(|val| scalar_from_biguint(&val).unwrap());
         let var = cs.alloc(|| "num", ||
             value.ok_or(SynthesisError::AssignmentMissing))?;
         Ok(Num {
@@ -70,7 +70,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn from_int<CS: ConstraintSystem<Scalar>>(
         int: &Int,
     ) -> Num<Scalar> {
-        let value = int.value.as_ref().map(scalar_from_biguint);
+        let value = int.value.as_ref().map(|x| scalar_from_biguint(x).unwrap());
         let lc = Self::lc_from_bits::<CS>(&int.bits);
         let width = int.width() as u16;
 
@@ -140,7 +140,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         other: &Self,
         // `cs` argument will be needed when we add automatic truncation
         _cs: &mut impl ConstraintSystem<Scalar>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (
                 Some(ref mut self_val),
@@ -151,21 +151,22 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         self.lc = self.lc + &other.lc;
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
-        assert!(
-            new_real_bits <= Scalar::CAPACITY as u16,
-            "sum of {} bits and {} bits doesn't fit in a field element ({} bits)",
-            self.real_bits, other.real_bits, Scalar::CAPACITY,
-        );
+        if new_real_bits > Scalar::CAPACITY as u16 {
+            return Err(format!(
+                "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
+                self.real_bits, other.real_bits, Scalar::CAPACITY,
+            ));
+        }
         self.real_bits = new_real_bits;
         self.valid_bits = cmp::min(self.valid_bits, other.valid_bits);
-        self
+        Ok(self)
     }
 
     pub fn sub(
         mut self,
         other: &Self,
         _cs: &mut impl ConstraintSystem<Scalar>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         // `a - b` might underflow in the field, producing garbage.  We compute `a + (2^N - b)`
         // instead, with `N` large enough that `2^N - b` can't underflow.  This makes `a.sub(b)`
         // essentially equivalent to `a.add(b.neg())`, except it saves a bit.  `2^N - b` is at most
@@ -176,7 +177,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // other.real_bits`, then we'll trample on some high bits of `self`, but that's okay
         // because `valid_bits` is the `min` of the two inputs, and will be smaller than
         // `other.real_bits`.
-        let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << other.real_bits));
+        let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << other.real_bits))?;
 
         match (&mut self.value, &other.value) {
             (
@@ -189,21 +190,22 @@ impl<Scalar: PrimeField> Num<Scalar> {
         self.lc = self.lc + (max_value, ZkifCS::<Scalar>::one()) - &other.lc;
 
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
-        assert!(
-            new_real_bits <= Scalar::CAPACITY as u16,
-            "sum of {} bits and {} bits doesn't fit in a field element ({} bits)",
-            self.real_bits, other.real_bits, Scalar::CAPACITY,
-        );
+        if new_real_bits > Scalar::CAPACITY as u16 {
+            return Err(format!(
+                "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
+                self.real_bits, other.real_bits, Scalar::CAPACITY,
+            ));
+        }
         self.real_bits = new_real_bits;
         self.valid_bits = cmp::min(self.valid_bits, other.valid_bits);
-        self
+        Ok(self)
     }
 
     pub fn mul(
         mut self,
         other: &Self,
         cs: &mut impl ConstraintSystem<Scalar>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (
                 Some(ref mut self_val),
@@ -240,29 +242,30 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // NB: This is the one case where `real_bits` is allowed to exactly equal the number of
         // bits in a field element.  The inputs can't exceed `2^b1 - 1` and `2^b2 - 1`, so the
         // product will be less than `2^(b1 + b2)` by at least `2^b1 + 2^b2`; in the worst case
-        // (`b1 = b2 = CAPACITY / 2`), this is a fairly large number, like `2^64`.  We assume the
-        // prime modulus is much closer to `2^CAPACITY` than that, so the product will fit.
-        // FIXME: Check the assumption that the prime modulus is `>= 2^CAPACITY - 2^(CAPACITY/2)`.
-        assert!(
-            new_real_bits <= Scalar::CAPACITY as u16,
-            "product of {} bits and {} bits doesn't fit in a field element ({} bits)",
-            self.real_bits, other.real_bits, Scalar::CAPACITY,
-        );
+        // (`b1 = b2 = NUM_BITS / 2`), this is a fairly large number, like `2^64`.  We assume the
+        // prime modulus is much closer to `2^NUM_BITS` than that, so the product will fit.
+        // FIXME: Check the assumption that the prime modulus is `>= 2^NUM_BITS - 2^(NUM_BITS/2)`.
+        if new_real_bits > Scalar::NUM_BITS as u16 {
+            return Err(format!(
+                "product of {} bits and {} bits doesn't fit in a field element ({} bits)",
+                self.real_bits, other.real_bits, Scalar::NUM_BITS,
+            ));
+        }
         self.real_bits = new_real_bits;
 
         self.valid_bits = cmp::min(self.real_bits, other.real_bits);
         assert!(self.valid_bits <= self.real_bits);
 
-        self
+        Ok(self)
     }
 
     pub fn neg(
         mut self,
         _cs: &mut impl ConstraintSystem<Scalar>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         // Computing `0 - a` in the field could underflow, producing garbage.  We instead compute
         // `2^N - a`, which never underflows, but does increase `real_bits` by one.
-        let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << self.real_bits));
+        let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << self.real_bits))?;
 
         self.value = match self.value {
             Some(val) => Some(max_value - val),
@@ -272,14 +275,15 @@ impl<Scalar: PrimeField> Num<Scalar> {
         self.lc = LinearCombination::zero() + (max_value, ZkifCS::<Scalar>::one()) - &self.lc;
 
         let new_real_bits = self.real_bits + 1;
-        assert!(
-            new_real_bits <= Scalar::CAPACITY as u16,
-            "negation of {} bits doesn't fit in a field element ({} bits)",
-            self.real_bits, Scalar::CAPACITY,
-        );
+        if new_real_bits > Scalar::CAPACITY as u16 {
+            return Err(format!(
+                "negation of {} bits doesn't fit in a field element ({} bits)",
+                self.real_bits, Scalar::CAPACITY,
+            ));
+        }
         self.real_bits = new_real_bits;
         // `valid_bits` remains the same.
-        self
+        Ok(self)
     }
 
     /// Truncate `self` modulo `2^valid_bits`, producing a new `Num` with `real_bits ==
@@ -341,14 +345,14 @@ pub fn boolean_lc<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
 }
 
 
-pub fn scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Scalar {
+pub fn scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Result<Scalar, String> {
     scalar_from_biguint(&BigUint::from(val))
 }
 
-pub fn scalar_from_biguint<Scalar: PrimeField>(val: &BigUint) -> Scalar {
+pub fn scalar_from_biguint<Scalar: PrimeField>(val: &BigUint) -> Result<Scalar, String> {
     let bytes = val.to_bytes_le();
     let mut repr: Scalar::Repr = Default::default();
     repr.as_mut()[..bytes.len()].copy_from_slice(&bytes);
     Scalar::from_repr(repr)
-        .expect("uint out of range for Scalar")
+        .ok_or_else(|| format!("uint {} out of range for Scalar", val))
 }
