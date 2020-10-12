@@ -5,6 +5,7 @@
 
 use std::cmp;
 use num_bigint::BigUint;
+use num_traits::Zero;
 
 use zkinterface_bellman::{
     ff::{Field, PrimeField},
@@ -182,11 +183,14 @@ impl Int {
             .take(by) // Take the least significant zeros.
             .chain(self.bits.iter()) // Append the bits to keep.
             .take(width) // Truncate to SIZE bits.
-            .cloned().collect();
+            .cloned().collect::<Vec<_>>();
 
         Int {
             bits: new_bits,
-            value: self.value.as_ref().map(|v| v << by),
+            value: self.value.as_ref().map(|v| {
+                let mask = (BigUint::from(1_u8) << width) - 1_u8;
+                (v << by) & mask
+            }),
         }
     }
 
@@ -206,11 +210,25 @@ impl Int {
             .chain(Some(&fill).into_iter().cycle()) // Rest will be zeros
             .take(width) // Only SIZE bits needed!
             .cloned()
-            .collect();
+            .collect::<Vec<_>>();
+
+
+        let value = match self.value.as_ref() {
+            Some(v) => {
+                let mut new_v = v >> by;
+                if signed {
+                    if !(v & (BigUint::from(1_u8) << (width - 1))).is_zero() {
+                        new_v |= ((BigUint::from(1_u8) << by) - 1_u8) << (width - by);
+                    }
+                }
+                Some(new_v)
+            },
+            None => None,
+        };
 
         Int {
             bits: new_bits,
-            value: self.value.as_ref().map(|v| v >> by),
+            value,
         }
     }
 

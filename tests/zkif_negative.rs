@@ -95,3 +95,18 @@ fn neg_one_shr() {
 
     finish(&c, w);
 }
+
+#[test]
+fn neg_one_shl() {
+    let arena = Bump::new();
+    let c = Circuit::new(&arena);
+    let t_i8 = c.ty(TyKind::I8);
+    let t_u8 = c.ty(TyKind::U8);
+
+    let w = c.eq(
+        c.shl(c.lit(t_i8, -1), c.lit(t_u8, 1)),
+        c.lit(t_i8, -2),
+    );
+
+    finish(&c, w);
+}
