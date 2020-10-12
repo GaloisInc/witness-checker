@@ -3,6 +3,8 @@ use std::convert::TryFrom;
 use std::fmt;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
+use crate::gadget::bit_pack;
+use crate::ir::circuit::Wire;
 use crate::ir::typed::{self, Builder, TWire, Repr, Lit, Secret, Mux};
 
 
@@ -11,8 +13,8 @@ use crate::ir::typed::{self, Builder, TWire, Repr, Lit, Secret, Mux};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RamInstr {
     pub opcode: u8,
-    pub dest: u64,
-    pub op1: u64,
+    pub dest: u8,
+    pub op1: u8,
     pub op2: u64,
     /// Some opcodes have an operand that can be either a register name or an immediate value.  If
     /// `imm` is set, it's interpreted as an immediate; otherwise, it's a register.
@@ -29,8 +31,8 @@ impl RamInstr {
     ) -> RamInstr {
         RamInstr {
             opcode: opcode as u8,
-            dest: dest as u64,
-            op1: op1 as u64,
+            dest: dest as u8,
+            op1: op1 as u8,
             op2: op2 as u64,
             imm,
         }
@@ -69,14 +71,14 @@ impl RamInstr {
     }
 }
 
-pub const REG_NONE: u64 = 1000;
-pub const REG_PC: u64 = 1001;
+pub const REG_NONE: u8 = 254;
+pub const REG_PC: u8 = 255;
 
 #[derive(Clone, Copy)]
 pub struct RamInstrRepr<'a> {
     pub opcode: TWire<'a, u8>,
-    pub dest: TWire<'a, u64>,
-    pub op1: TWire<'a, u64>,
+    pub dest: TWire<'a, u8>,
+    pub op1: TWire<'a, u8>,
     pub op2: TWire<'a, u64>,
     pub imm: TWire<'a, bool>,
 }
@@ -522,6 +524,74 @@ where
     }
 }
 
+pub struct PackedFetchPort;
+
+#[derive(Clone, Copy)]
+pub struct PackedFetchPortRepr<'a> {
+    key: Wire<'a>,
+    data: Wire<'a>,
+}
+
+impl PackedFetchPort {
+    pub fn from_unpacked<'a>(
+        bld: &Builder<'a>,
+        fp: TWire<'a, FetchPort>,
+    ) -> TWire<'a, PackedFetchPort> {
+        // ConcatBits is little-endian.  To sort by `addr` first and then by `write`, we have to
+        // put `addr` last in the list.
+        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((bld.not(fp.write), fp.addr)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _, _, _)>::new((
+            fp.instr.opcode,
+            fp.instr.dest,
+            fp.instr.op1,
+            fp.instr.op2,
+            fp.instr.imm,
+        )));
+        TWire::new(PackedFetchPortRepr { key, data })
+    }
+}
+
+impl<'a> PackedFetchPortRepr<'a> {
+    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, FetchPort> {
+        let (not_write, addr) = *bit_pack::split_bits::<(_, _)>(bld, self.key);
+        let (opcode, dest, op1, op2, imm) =
+            *bit_pack::split_bits::<(_, _, _, _, _)>(bld, self.data);
+        TWire::new(FetchPortRepr {
+            addr,
+            instr: TWire::new(RamInstrRepr { opcode, dest, op1, op2, imm }),
+            write: bld.not::<bool>(not_write),
+        })
+    }
+}
+
+impl<'a> Repr<'a> for PackedFetchPort {
+    type Repr = PackedFetchPortRepr<'a>;
+}
+
+impl<'a> Mux<'a, bool, PackedFetchPort> for PackedFetchPort {
+    type Output = PackedFetchPort;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: Wire<'a>,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        PackedFetchPortRepr {
+            key: bld.circuit().mux(c, t.key, e.key),
+            data: bld.circuit().mux(c, t.data, e.data),
+        }
+    }
+}
+
+impl<'a> typed::Lt<'a, PackedFetchPort> for PackedFetchPort {
+    type Output = bool;
+    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().lt(a.key, b.key)
+    }
+}
+
+
 
 
 #[derive(Clone, Debug, Deserialize)]
@@ -638,8 +708,8 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
         let mut seq = CountedSeqAccess::new(seq, 5);
         let x = RamInstr {
             opcode: seq.next_element::<Opcode>()? as u8,
-            dest: seq.next_element::<Option<u64>>()?.unwrap_or(0),
-            op1: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+            dest: seq.next_element::<Option<u8>>()?.unwrap_or(0),
+            op1: seq.next_element::<Option<u8>>()?.unwrap_or(0),
             imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
             op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
         };

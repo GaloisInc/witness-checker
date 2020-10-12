@@ -20,8 +20,8 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{
-    Execution, RamInstr, RamState, MemPort, MemOpKind, FetchPort, Opcode, Advice, REG_NONE, REG_PC,
-    MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
+    Execution, RamInstr, RamState, MemPort, MemOpKind, FetchPort, PackedFetchPort, Opcode, Advice,
+    REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 
 
@@ -244,7 +244,7 @@ fn check_step<'a>(
         cases.push(TWire::<(_, _)>::new((op_match, parts)));
     };
 
-    let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u64));
+    let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
     let has_mem_port = mem_ports.iter().fold(
@@ -399,7 +399,7 @@ fn check_step<'a>(
     let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
 
     for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
-        let is_dest = b.eq(b.lit(i as u64), dest);
+        let is_dest = b.eq(b.lit(i as u8), dest);
         let expect_new = b.mux(is_dest, result, v_old);
         wire_assert!(
             cx, b.eq(v_new, expect_new),
@@ -834,18 +834,14 @@ fn main() -> io::Result<()> {
 
     // Check instruction-fetch consistency
 
-    let mut sorted_fetch = fetch_ports.clone();
-    {
+    let sorted_fetch = {
+        let mut packed = fetch_ports.iter().map(|&fp| {
+            PackedFetchPort::from_unpacked(&b, fp)
+        }).collect::<Vec<_>>();
         let _g = b.scoped_label("sort fetch");
-        sort::sort(&b, &mut sorted_fetch, &mut |x, y| {
-            let _g = b.scoped_label("compare");
-            // Sort first by address, then by `!write`.
-            b.or(
-                b.lt(x.addr, y.addr),
-                b.and(b.eq(x.addr, y.addr), x.write),
-            )
-        });
-    }
+        sort::sort(&b, &mut packed, &mut |&x, &y| b.lt(x, y));
+        packed.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
+    };
     check_first_fetch(&cx, &b, &sorted_fetch[0]);
     for (i, (port1, port2)) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)).enumerate() {
         check_fetch(&cx, &b, i, port1, port2);
