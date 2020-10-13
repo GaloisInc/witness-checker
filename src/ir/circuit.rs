@@ -5,7 +5,8 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem;
-use std::ops::Deref;
+use std::ops::{Deref, Range};
+use std::slice;
 use std::str;
 use bumpalo::Bump;
 use num_bigint::{BigUint, BigInt, Sign};
@@ -400,6 +401,99 @@ impl<'a> Circuit<'a> {
 }
 
 
+pub struct WireDeps<'a> {
+    inner: WireDepsInner<'a>,
+}
+
+enum WireDepsInner<'a> {
+    Small(Range<u8>, [Option<Wire<'a>>; 3]),
+    Large(slice::Iter<'a, Wire<'a>>),
+}
+
+impl<'a> WireDeps<'a> {
+    fn zero() -> WireDeps<'a> {
+        Self::small(0, [None, None, None])
+    }
+
+    fn one(a: Wire<'a>) -> WireDeps<'a> {
+        Self::small(1, [Some(a), None, None])
+    }
+
+    fn two(a: Wire<'a>, b: Wire<'a>) -> WireDeps<'a> {
+        Self::small(2, [Some(a), Some(b), None])
+    }
+
+    fn three(a: Wire<'a>, b: Wire<'a>, c: Wire<'a>) -> WireDeps<'a> {
+        Self::small(3, [Some(a), Some(b), Some(c)])
+    }
+
+    fn small(n: u8, arr: [Option<Wire<'a>>; 3]) -> WireDeps<'a> {
+        WireDeps {
+            inner: WireDepsInner::Small(0..n, arr),
+        }
+    }
+
+    fn many(ws: &'a [Wire<'a>]) -> WireDeps<'a> {
+        WireDeps {
+            inner: WireDepsInner::Large(ws.iter()),
+        }
+    }
+}
+
+impl<'a> Iterator for WireDepsInner<'a> {
+    type Item = Wire<'a>;
+    fn next(&mut self) -> Option<Wire<'a>> {
+        match *self {
+            WireDepsInner::Small(ref mut range, ref arr) => {
+                let i = range.next()? as usize;
+                arr.get(i).and_then(|&x| x)
+            },
+            WireDepsInner::Large(ref mut it) => it.next().cloned(),
+        }
+    }
+}
+
+impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
+    fn next_back(&mut self) -> Option<Wire<'a>> {
+        match *self {
+            WireDepsInner::Small(ref mut range, ref arr) => {
+                let i = range.next_back()? as usize;
+                arr.get(i).and_then(|&x| x)
+            },
+            WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
+        }
+    }
+}
+
+impl<'a> Iterator for WireDeps<'a> {
+    type Item = Wire<'a>;
+    fn next(&mut self) -> Option<Wire<'a>> {
+        self.inner.next()
+    }
+}
+
+impl<'a> DoubleEndedIterator for WireDeps<'a> {
+    fn next_back(&mut self) -> Option<Wire<'a>> {
+        self.inner.next_back()
+    }
+}
+
+pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
+    match w.kind {
+        GateKind::Lit(_, _) |
+        GateKind::Secret(_) => WireDeps::zero(),
+        GateKind::Unary(_, a) |
+        GateKind::Cast(a, _) |
+        GateKind::Extract(a, _) => WireDeps::one(a),
+        GateKind::Binary(_, a, b) |
+        GateKind::Shift(_, a, b) |
+        GateKind::Compare(_, a, b) => WireDeps::two(a, b),
+        GateKind::Mux(c, t, e) => WireDeps::three(c, t, e),
+        GateKind::Pack(ws) |
+        GateKind::Gadget(_, ws) => WireDeps::many(ws),
+    }
+}
+
 pub struct PostorderIter<'a, F> {
     stack: Vec<Wire<'a>>,
     /// Wires that have already been yielded.  We avoid processing the same wire twice.
@@ -429,19 +523,7 @@ impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
                 }
             };
 
-            let children_pending = match wire.kind {
-                GateKind::Lit(_, _) |
-                GateKind::Secret(_) => false,
-                GateKind::Unary(_, a) |
-                GateKind::Cast(a, _) |
-                GateKind::Extract(a, _) => maybe_push(a),
-                GateKind::Binary(_, a, b) |
-                GateKind::Shift(_, a, b) |
-                GateKind::Compare(_, a, b) => maybe_push(b) || maybe_push(a),
-                GateKind::Mux(c, t, e) => maybe_push(e) || maybe_push(t) || maybe_push(c),
-                GateKind::Pack(ws) |
-                GateKind::Gadget(_, ws) => ws.iter().rev().cloned().any(maybe_push),
-            };
+            let children_pending = wire_deps(wire).rev().any(maybe_push);
 
             if !children_pending {
                 let result = self.stack.pop();
