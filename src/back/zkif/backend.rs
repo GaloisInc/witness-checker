@@ -358,8 +358,18 @@ impl<'a> Backend<'a> {
                 WireRepr::from(yes)
             }
 
-            GateKind::Mux(cond, then_, else_) =>
-                unimplemented!("mux"),
+            GateKind::Mux(cond, then_, else_) => {
+                let cw = self.wire(cond);
+                let tw = self.wire(then_);
+                let ew = self.wire(else_);
+                let cond = self.representer.mut_repr(cw).as_num_trunc(&mut self.cs);
+                let then_ = self.representer.mut_repr(tw).as_num();
+                let else_ = self.representer.mut_repr(ew).as_num();
+                let out_num = then_.mux(&else_, &cond, &mut self.cs).unwrap_or_else(|e| {
+                    panic!("failed to mux: {}", e);
+                });
+                WireRepr::from(out_num)
+            }
 
             GateKind::Cast(a, ty) => {
                 let aw = self.wire(a);

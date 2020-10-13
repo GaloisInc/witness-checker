@@ -877,7 +877,6 @@ fn main() -> io::Result<()> {
     passes.run(lower::const_fold::const_fold(&c));
     passes.run(lower::int::mod_to_div);
     passes.run(lower::int::non_constant_shift);
-    passes.run(lower::int::mux);
     #[cfg(feature = "bellman")]
     if args.is_present("zkif-out") {
         passes.run(lower::int::compare_to_greater_or_equal_to_zero);
