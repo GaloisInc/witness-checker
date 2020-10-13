@@ -877,6 +877,12 @@ impl<'a> GadgetKindRef<'a> {
     pub fn name(self) -> &'static str {
         self.type_name().split("::").last().unwrap_or("")
     }
+
+    // TODO: there's probably some way to break memory safety with this, exploiting
+    // co/contravariance of lifetimes
+    pub fn cast<T: GadgetKind<'a>>(self) -> Option<&'a T> {
+        unsafe { downcast_gadget_kind(self.0) }
+    }
 }
 
 impl<'a> fmt::Debug for GadgetKindRef<'a> {

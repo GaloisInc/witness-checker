@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::iter;
 use crate::ir::circuit::{self, Circuit, Wire, GateKind, Ty, TyKind};
 
+pub mod bit_pack;
 pub mod bool_;
 pub mod int;
 pub mod bundle;
