@@ -60,7 +60,7 @@ trace:
   - [6, [ 0, 7, 100], true]
 
   - [7, [ 0, 7, 100], true]
-  - [8, [ 0, 7, 100], false]
+  - [8, [ 0, 7, 100], true]
 
 advice:
   2:  [[MemOp, 4, 2, poison]]

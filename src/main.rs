@@ -263,68 +263,65 @@ fn check_step<'a>(
 
     {
         let result = b.and(x, y);
-        add_case(Opcode::And, result, instr.dest, b.eq(result, b.lit(0)));
+        add_case(Opcode::And, result, instr.dest, s1.flag);
     }
 
     {
         let result = b.or(x, y);
-        add_case(Opcode::Or, result, instr.dest, b.eq(result, b.lit(0)));
+        add_case(Opcode::Or, result, instr.dest, s1.flag);
     }
 
     {
         let result = b.xor(x, y);
-        add_case(Opcode::Xor, result, instr.dest, b.eq(result, b.lit(0)));
+        add_case(Opcode::Xor, result, instr.dest, s1.flag);
     }
 
     {
         let result = b.not(y);
-        add_case(Opcode::Not, result, instr.dest, b.eq(result, b.lit(0)));
+        add_case(Opcode::Not, result, instr.dest, s1.flag);
     }
 
     {
-        let (result, overflow) = b.add_with_overflow(x, y);
-        add_case(Opcode::Add, result, instr.dest, overflow);
+        add_case(Opcode::Add, b.add(x, y), instr.dest, s1.flag);
     }
 
     {
-        let (result, overflow) = b.sub_with_overflow(x, y);
-        add_case(Opcode::Sub, result, instr.dest, overflow);
+        add_case(Opcode::Sub, b.sub(x, y), instr.dest, s1.flag);
     }
 
     {
-        let (low, high) = *b.wide_mul(x, y);
-        add_case(Opcode::Mull, low, instr.dest, b.ne(high, b.lit(0)));
+        add_case(Opcode::Mull, b.mul(x, y), instr.dest, s1.flag);
     }
 
     {
         let (_, high) = *b.wide_mul(x, y);
-        add_case(Opcode::Umulh, high, instr.dest, b.ne(high, b.lit(0)));
+        add_case(Opcode::Umulh, high, instr.dest, s1.flag);
     }
 
     {
         let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
         // TODO: not sure this gives the right overflow value - what if high = -1?
-        add_case(Opcode::Smulh, b.cast::<_, u64>(high_s), instr.dest, b.ne(high_s, b.lit(0)));
+        add_case(Opcode::Smulh, b.cast::<_, u64>(high_s), instr.dest, s1.flag);
     }
 
     {
         let result = b.div(x, y);
-        add_case(Opcode::Udiv, result, instr.dest, b.eq(y, b.lit(0)));
+        add_case(Opcode::Udiv, result, instr.dest, s1.flag);
     }
 
     {
         let result = b.mod_(x, y);
-        add_case(Opcode::Umod, result, instr.dest, b.eq(y, b.lit(0)));
+        add_case(Opcode::Umod, result, instr.dest, s1.flag);
     }
 
     {
         let result = b.shl(x, b.cast::<_, u8>(y));
-        add_case(Opcode::Shl, result, instr.dest, b.ne(b.and(y, b.lit(1 << 63)), b.lit(0)));
+        add_case(Opcode::Shl, result, instr.dest, s1.flag);
     }
 
     {
         let result = b.shr(x, b.cast::<_, u8>(y));
-        add_case(Opcode::Shr, result, instr.dest, b.ne(b.and(y, b.lit(1)), b.lit(0)));
+        add_case(Opcode::Shr, result, instr.dest, s1.flag);
     }
 
 
