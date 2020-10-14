@@ -713,8 +713,12 @@ fn main() -> io::Result<()> {
 
     let mut mem_ports: Vec<TWire<MemPort>> = Vec::new();
     let mut advices = HashMap::new();
-    for _ in 1..trace.len() {
+    for i in 1..trace.len() {
         mem_ports.push(b.secret(Some(MemPort {
+            // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
+            // correspondence between `MemPort`s and steps.  We make unused ports distinct too, so
+            // we can just check that all ports are distinct.
+            addr: i as u64,
             cycle: MEM_PORT_UNUSED_CYCLE,
             ..MemPort::default()
         })));
@@ -809,7 +813,9 @@ fn main() -> io::Result<()> {
         let mut packed = mem_ports.iter().map(|&fp| {
             PackedMemPort::from_unpacked(&b, fp)
         }).collect::<Vec<_>>();
-        let sorted = sort::sort(&b, &mut packed, &mut |&x, &y| b.le(x, y));
+        // Using `lt` instead of `le` for the comparison here means the sortedness check will also
+        // ensure that every `MemPort` is distinct.
+        let sorted = sort::sort(&b, &mut packed, &mut |&x, &y| b.lt(x, y));
         wire_assert!(&cx, sorted, "memory op sorting failed");
         packed.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
     };
