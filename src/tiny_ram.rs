@@ -512,10 +512,24 @@ impl<'a> Mux<'a, bool, PackedMemPort> for PackedMemPort {
     }
 }
 
+impl<'a> typed::Eq<'a, PackedMemPort> for PackedMemPort {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a.key, b.key)
+    }
+}
+
 impl<'a> typed::Lt<'a, PackedMemPort> for PackedMemPort {
     type Output = bool;
     fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().lt(a.key, b.key)
+    }
+}
+
+impl<'a> typed::Le<'a, PackedMemPort> for PackedMemPort {
+    type Output = bool;
+    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().le(a.key, b.key)
     }
 }
 
@@ -653,10 +667,24 @@ impl<'a> Mux<'a, bool, PackedFetchPort> for PackedFetchPort {
     }
 }
 
+impl<'a> typed::Eq<'a, PackedFetchPort> for PackedFetchPort {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a.key, b.key)
+    }
+}
+
 impl<'a> typed::Lt<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
     fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().lt(a.key, b.key)
+    }
+}
+
+impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
+    type Output = bool;
+    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().le(a.key, b.key)
     }
 }
 

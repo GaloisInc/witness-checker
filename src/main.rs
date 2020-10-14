@@ -10,6 +10,7 @@ use std::path::Path;
 use std::ptr;
 use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
+use log::*;
 use num_traits::One;
 
 use cheesecloth::debug;
@@ -808,18 +809,24 @@ fn main() -> io::Result<()> {
         let mut packed = mem_ports.iter().map(|&fp| {
             PackedMemPort::from_unpacked(&b, fp)
         }).collect::<Vec<_>>();
-        sort::sort(&b, &mut packed, &mut |&x, &y| b.lt(x, y));
+        let sorted = sort::sort(&b, &mut packed, &mut |&x, &y| b.le(x, y));
+        wire_assert!(&cx, sorted, "memory op sorting failed");
         packed.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
     };
-    /*
-    for port in &sorted_mem {
-        eprintln!(
-            "mem op: {:5} {:x}, value {}, cycle {}",
-            cx.eval(port.write).map(|x| if x == 0 { "read" } else { "write" }),
-            cx.eval(port.addr), cx.eval(port.value), cx.eval(port.cycle),
+    trace!("mem ops:");
+    for (i, port) in mem_ports.iter().enumerate() {
+        trace!(
+            "mem op {:3}: op{}, {:x}, value {}, cycle {}",
+            i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value), cx.eval(port.cycle),
         );
     }
-    */
+    trace!("sorted mem ops:");
+    for (i, port) in sorted_mem.iter().enumerate() {
+        trace!(
+            "mem op {:3}: op{}, {:x}, value {}, cycle {}",
+            i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value), cx.eval(port.cycle),
+        );
+    }
     check_first_mem(&cx, &b, &sorted_mem[0]);
     for (i, (port1, port2)) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)).enumerate() {
         check_mem(&cx, &b, i, port1, port2);
@@ -832,9 +839,28 @@ fn main() -> io::Result<()> {
         let mut packed = fetch_ports.iter().map(|&fp| {
             PackedFetchPort::from_unpacked(&b, fp)
         }).collect::<Vec<_>>();
-        sort::sort(&b, &mut packed, &mut |&x, &y| b.lt(x, y));
+        let sorted = sort::sort(&b, &mut packed, &mut |&x, &y| b.le(x, y));
+        wire_assert!(&cx, sorted, "instruction fetch sorting failed");
         packed.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
     };
+    trace!("fetches:");
+    for (i, port) in fetch_ports.iter().enumerate() {
+        trace!(
+            "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
+            i, cx.eval(port.write).0.map_or("??", |x| if x == 0 { "read" } else { "write" }),
+            cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
+            cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+        );
+    }
+    trace!("sorted fetches:");
+    for (i, port) in sorted_fetch.iter().enumerate() {
+        trace!(
+            "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
+            i, cx.eval(port.write).0.map_or("??", |x| if x == 0 { "read" } else { "write" }),
+            cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
+            cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+        );
+    }
     check_first_fetch(&cx, &b, &sorted_fetch[0]);
     for (i, (port1, port2)) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)).enumerate() {
         check_fetch(&cx, &b, i, port1, port2);
