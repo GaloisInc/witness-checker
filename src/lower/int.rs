@@ -101,6 +101,14 @@ fn normalize_64<'a>(c: &Circuit<'a>, w: Wire<'a>, ty: Ty) -> Wire<'a> {
     if bits >= 64 {
         return w;
     }
+
+    // Truncate wider inputs to 64 bits before masking.
+    let w = if w.ty.integer_size().bits() > 64 {
+        c.cast(w, c.ty(TyKind::U64))
+    } else {
+        w
+    };
+
     match *ty {
         TyKind::Uint(_) => {
             let mask = !(!0_u64 << bits);
@@ -203,7 +211,7 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
                     //   would be produced by sign extension.
                     // - Mask out the shifted sign bit, producing 0b00100000.  Negate: 0b11100000.
                     //   This fills in the missing high bits, but only when the sign bit is 1.
-                    let sign_mask = c.lit(new_ty, 1 << (sz.bits() - 1));
+                    let sign_mask = c.lit(new_ty, BigUint::from(1_u8) << (sz.bits() - 1));
                     let sign = c.and(a, sign_mask);
                     let sign_fill = c.neg(c.shr(sign, b));
                     return c.or(c.shr(a, b), sign_fill);
@@ -216,7 +224,7 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
                     // Shift everything up by 2^(n-1). For 8-bit values, this maps  0..128 to
                     // 128..256 and maps -128..0 (= 128..256) to 0..128, so comparisons work.  The
                     // mapping amounts to just flipping the sign bit.
-                    let sign_mask = c.lit(new_ty, 1 << (sz.bits() - 1));
+                    let sign_mask = c.lit(new_ty, BigUint::from(1_u8) << (sz.bits() - 1));
                     return c.compare(op, c.xor(a, sign_mask), c.xor(b, sign_mask));
                 }
             },
