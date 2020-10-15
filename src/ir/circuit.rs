@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::mem;
 use std::ops::Deref;
 use std::str;
 use bumpalo::Bump;
@@ -32,7 +33,7 @@ pub struct Circuit<'a> {
     intern_ty: RefCell<HashSet<&'a TyKind<'a>>>,
     intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
-    intern_gadget_kind: RefCell<HashMap<String, &'a dyn GadgetKind<'a>>>,
+    intern_gadget_kind: RefCell<HashSet<&'a HashDynGadgetKind<'a>>>,
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
 
@@ -47,7 +48,7 @@ impl<'a> Circuit<'a> {
             intern_ty: RefCell::new(HashSet::new()),
             intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
-            intern_gadget_kind: RefCell::new(HashMap::new()),
+            intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
@@ -107,22 +108,13 @@ impl<'a> Circuit<'a> {
     /// (among other things).
     pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
         let mut intern = self.intern_gadget_kind.borrow_mut();
-        match intern.get(g.name()) {
+        match intern.get(HashDynGadgetKind::new(&g)) {
             Some(&x) => {
-                // Check that the interned gadget has the same concrete type as `g`.  If not, then
-                // the user has accidentally defined two different gadgets with the same name.
-                // Note that if `G` contains data (is non-zero-sized), it may still be possible to
-                // have multiple distinct gadget kinds that are not caught by this check.
-                assert!(
-                    g.type_name() == x.type_name(),
-                    "defined multiple distinct gadgets named {:?}: {:?} != {:?}",
-                    g.name(), g.type_name(), x.type_name(),
-                );
-                GadgetKindRef(x)
+                GadgetKindRef(&x.0)
             },
             None => {
                 let g = self.arena.alloc(g);
-                intern.insert(g.name().to_owned(), g);
+                intern.insert(HashDynGadgetKind::new(g));
                 GadgetKindRef(g)
             },
         }
@@ -551,6 +543,16 @@ impl TyKind<'_> {
             _ => false,
         }
     }
+
+    pub fn transfer<'b>(&self, c: &Circuit<'b>) -> Ty<'b> {
+        match *self {
+            TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
+            TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
+            TyKind::Bundle(tys) => {
+                c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
+            },
+        }
+    }
 }
 
 
@@ -728,13 +730,41 @@ declare_interned_pointer! {
 }
 
 
+pub unsafe trait GadgetKindSupport<'a> {
+    fn type_name(&self) -> &'static str;
+    fn eq_dyn(&self, other: &dyn GadgetKind<'a>) -> bool;
+    fn hash_dyn(&self, state: &mut dyn Hasher);
+}
+
+macro_rules! impl_gadget_kind_support {
+    (<$lt:lifetime> $T:ty) => {
+        unsafe impl<$lt> $crate::ir::circuit::GadgetKindSupport<$lt> for $T {
+            fn type_name(&self) -> &'static str { std::any::type_name::<$T>() }
+
+            fn eq_dyn(&self, other: &dyn $crate::ir::circuit::GadgetKind<'a>) -> bool {
+                unsafe {
+                    let other = match $crate::ir::circuit::downcast_gadget_kind(other) {
+                        Some(x) => x,
+                        None => return false,
+                    };
+                    self == other
+                }
+            }
+
+            fn hash_dyn(&self, mut state: &mut dyn core::hash::Hasher) {
+                // Hash the type name first.  Otherwise all empty structs would have the same hash.
+                core::hash::Hash::hash(self.type_name(), &mut state);
+                core::hash::Hash::hash(self, &mut state);
+            }
+        }
+    };
+
+    ($T:ty) => { impl_gadget_kind_support! { <'a> $T } }
+}
+
 /// Defines a kind of gadget.  Instances of a gadget can be added to a `Circuit` using
 /// `define_gadget_kind` and the `Circuit::gadget` constructor.
-pub trait GadgetKind<'a>: 'a {
-    /// The name of this kind of gadget.  This must be unique among all gadget kinds, as it's used
-    /// by backends to recognize supported gadgets.
-    fn name(&self) -> &str;
-
+pub trait GadgetKind<'a>: GadgetKindSupport<'a> + 'a {
     /// Intern this `GadgetKind` into a new `Circuit`.  This should usually be implemented as
     ///
     /// ```Rust,ignore
@@ -755,22 +785,57 @@ pub trait GadgetKind<'a>: 'a {
     /// Decompose this gadget into primitive gates.  This may be called if the backend doesn't
     /// support this gadget.
     fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a>;
-
-    /// Returns `std::any::type_name::<Self>()`.  Should not be implemented manually.  This is used
-    /// only for debugging, to check for accidental collisions between `name()`s of distinct
-    /// `GadgetKind`s.
-    fn type_name(&self) -> &'static str {
-        any::type_name::<Self>()
-    }
 }
 
 declare_interned_pointer! {
     pub struct GadgetKindRef<'a> => dyn GadgetKind<'a>;
 }
 
+impl<'a> GadgetKindRef<'a> {
+    pub fn name(self) -> &'static str {
+        self.type_name().split("::").last().unwrap_or("")
+    }
+}
+
 impl<'a> fmt::Debug for GadgetKindRef<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "GadgetKindRef({})", self.name())
+    }
+}
+
+pub unsafe fn downcast_gadget_kind<'a, 'b, T: GadgetKind<'a>>(
+    gk: &'b dyn GadgetKind<'a>,
+) -> Option<&'b T> {
+    if gk.type_name() != any::type_name::<T>() {
+        None
+    } else {
+        Some(mem::transmute(gk as *const _ as *const u8))
+    }
+}
+
+
+/// Helper type for making `dyn GadgetKind` hashable, so it can be stored in the `Circuit`'s
+/// interning tables.
+#[repr(transparent)]
+struct HashDynGadgetKind<'a>(dyn GadgetKind<'a>);
+
+impl<'a> HashDynGadgetKind<'a> {
+    pub fn new<'b>(gk: &'b dyn GadgetKind<'a>) -> &'b HashDynGadgetKind<'a> {
+        unsafe { mem::transmute(gk) }
+    }
+}
+
+impl PartialEq for HashDynGadgetKind<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_dyn(&other.0)
+    }
+}
+
+impl Eq for HashDynGadgetKind<'_> {}
+
+impl Hash for HashDynGadgetKind<'_> {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.0.hash_dyn(h)
     }
 }
 
@@ -874,6 +939,18 @@ impl AsBits for Bits<'_> {
 impl AsBits for BigUint {
     fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
         c.intern_bits(&self.to_u32_digits())
+    }
+}
+
+impl AsBits for u8 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+        (*self as u32).as_bits(c, width)
+    }
+}
+
+impl AsBits for u16 {
+    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+        (*self as u32).as_bits(c, width)
     }
 }
 

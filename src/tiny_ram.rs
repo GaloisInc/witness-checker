@@ -3,7 +3,9 @@ use std::convert::TryFrom;
 use std::fmt;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
-use crate::ir::typed::{self, Builder, TWire, Repr, Lit, Secret, Mux};
+use crate::gadget::bit_pack;
+use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
+use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -11,8 +13,8 @@ use crate::ir::typed::{self, Builder, TWire, Repr, Lit, Secret, Mux};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RamInstr {
     pub opcode: u8,
-    pub dest: u64,
-    pub op1: u64,
+    pub dest: u8,
+    pub op1: u8,
     pub op2: u64,
     /// Some opcodes have an operand that can be either a register name or an immediate value.  If
     /// `imm` is set, it's interpreted as an immediate; otherwise, it's a register.
@@ -29,8 +31,8 @@ impl RamInstr {
     ) -> RamInstr {
         RamInstr {
             opcode: opcode as u8,
-            dest: dest as u64,
-            op1: op1 as u64,
+            dest: dest as u8,
+            op1: op1 as u8,
             op2: op2 as u64,
             imm,
         }
@@ -69,14 +71,14 @@ impl RamInstr {
     }
 }
 
-pub const REG_NONE: u64 = 1000;
-pub const REG_PC: u64 = 1001;
+pub const REG_NONE: u8 = 254;
+pub const REG_PC: u8 = 255;
 
 #[derive(Clone, Copy)]
 pub struct RamInstrRepr<'a> {
     pub opcode: TWire<'a, u8>,
-    pub dest: TWire<'a, u64>,
-    pub op1: TWire<'a, u64>,
+    pub dest: TWire<'a, u8>,
+    pub op1: TWire<'a, u8>,
     pub op2: TWire<'a, u64>,
     pub imm: TWire<'a, bool>,
 }
@@ -270,6 +272,15 @@ macro_rules! mk_named_enum {
             type Repr = TWire<'a, u8>;
         }
 
+        impl<'a> Flatten<'a> for $Name {
+            fn wire_type(c: &Circuit<'a>) -> Ty<'a> { c.ty(TyKind::U8) }
+            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
+            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                assert!(*w.ty == TyKind::U8);
+                TWire::new(TWire::new(w))
+            }
+        }
+
         impl<'a> Lit<'a> for $Name {
             fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
                 bld.lit(a as u8)
@@ -448,6 +459,66 @@ where
     }
 }
 
+pub struct PackedMemPort;
+
+#[derive(Clone, Copy)]
+pub struct PackedMemPortRepr<'a> {
+    key: Wire<'a>,
+    data: Wire<'a>,
+}
+
+impl PackedMemPort {
+    pub fn from_unpacked<'a>(
+        bld: &Builder<'a>,
+        mp: TWire<'a, MemPort>,
+    ) -> TWire<'a, PackedMemPort> {
+        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
+        // cycles.
+        let cycle_adj = bld.add(mp.cycle, bld.lit(1));
+        // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
+        // put `addr` last in the list.
+        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, mp.addr)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((mp.value, mp.op)));
+        TWire::new(PackedMemPortRepr { key, data })
+    }
+}
+
+impl<'a> PackedMemPortRepr<'a> {
+    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
+        let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
+        let cycle = bld.sub(cycle_adj, bld.lit(1));
+        let (value, op) = *bit_pack::split_bits::<(_, _)>(bld, self.data);
+        TWire::new(MemPortRepr { cycle, addr, value, op })
+    }
+}
+
+impl<'a> Repr<'a> for PackedMemPort {
+    type Repr = PackedMemPortRepr<'a>;
+}
+
+impl<'a> Mux<'a, bool, PackedMemPort> for PackedMemPort {
+    type Output = PackedMemPort;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: Wire<'a>,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        PackedMemPortRepr {
+            key: bld.circuit().mux(c, t.key, e.key),
+            data: bld.circuit().mux(c, t.data, e.data),
+        }
+    }
+}
+
+impl<'a> typed::Lt<'a, PackedMemPort> for PackedMemPort {
+    type Output = bool;
+    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().lt(a.key, b.key)
+    }
+}
+
 
 /// A simplified version of `MemPort` used for instruction fetch.  Since all accesses after
 /// initialization are reads, we don't need to track the cycle number - we sort by `(addr, !write)`
@@ -521,6 +592,74 @@ where
         }
     }
 }
+
+pub struct PackedFetchPort;
+
+#[derive(Clone, Copy)]
+pub struct PackedFetchPortRepr<'a> {
+    key: Wire<'a>,
+    data: Wire<'a>,
+}
+
+impl PackedFetchPort {
+    pub fn from_unpacked<'a>(
+        bld: &Builder<'a>,
+        fp: TWire<'a, FetchPort>,
+    ) -> TWire<'a, PackedFetchPort> {
+        // ConcatBits is little-endian.  To sort by `addr` first and then by `write`, we have to
+        // put `addr` last in the list.
+        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((bld.not(fp.write), fp.addr)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _, _, _)>::new((
+            fp.instr.opcode,
+            fp.instr.dest,
+            fp.instr.op1,
+            fp.instr.op2,
+            fp.instr.imm,
+        )));
+        TWire::new(PackedFetchPortRepr { key, data })
+    }
+}
+
+impl<'a> PackedFetchPortRepr<'a> {
+    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, FetchPort> {
+        let (not_write, addr) = *bit_pack::split_bits::<(_, _)>(bld, self.key);
+        let (opcode, dest, op1, op2, imm) =
+            *bit_pack::split_bits::<(_, _, _, _, _)>(bld, self.data);
+        TWire::new(FetchPortRepr {
+            addr,
+            instr: TWire::new(RamInstrRepr { opcode, dest, op1, op2, imm }),
+            write: bld.not::<bool>(not_write),
+        })
+    }
+}
+
+impl<'a> Repr<'a> for PackedFetchPort {
+    type Repr = PackedFetchPortRepr<'a>;
+}
+
+impl<'a> Mux<'a, bool, PackedFetchPort> for PackedFetchPort {
+    type Output = PackedFetchPort;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: Wire<'a>,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        PackedFetchPortRepr {
+            key: bld.circuit().mux(c, t.key, e.key),
+            data: bld.circuit().mux(c, t.data, e.data),
+        }
+    }
+}
+
+impl<'a> typed::Lt<'a, PackedFetchPort> for PackedFetchPort {
+    type Output = bool;
+    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().lt(a.key, b.key)
+    }
+}
+
 
 
 
@@ -638,8 +777,8 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
         let mut seq = CountedSeqAccess::new(seq, 5);
         let x = RamInstr {
             opcode: seq.next_element::<Opcode>()? as u8,
-            dest: seq.next_element::<Option<u64>>()?.unwrap_or(0),
-            op1: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+            dest: seq.next_element::<Option<u8>>()?.unwrap_or(0),
+            op1: seq.next_element::<Option<u8>>()?.unwrap_or(0),
             imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
             op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
         };
