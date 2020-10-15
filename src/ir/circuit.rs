@@ -707,9 +707,11 @@ pub trait GadgetKind<'a>: 'a {
 
     /// Intern this `GadgetKind` into a new `Circuit`.  This should usually be implemented as
     ///
-    ///     fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
-    ///         c.intern_gadget_kind(self.clone())
-    ///     }
+    /// ```Rust,ignore
+    /// fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    ///     c.intern_gadget_kind(self.clone())
+    /// }
+    /// ```
     ///
     /// However, this can't be provided automatically because it requires `Self: Clone + 'static`.
     /// The `Clone` bound implies `Sized`, which would make this trait non-object-safe, and
