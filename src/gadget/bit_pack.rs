@@ -142,8 +142,8 @@ pub fn split_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'
 /// Extract a range of bits from an unsigned integer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct ExtractBits {
-    start: u16,
-    end: u16,
+    pub start: u16,
+    pub end: u16,
 }
 impl_gadget_kind_support!(ExtractBits);
 

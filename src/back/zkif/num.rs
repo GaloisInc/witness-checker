@@ -286,6 +286,60 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
+    pub fn mux<CS: ConstraintSystem<Scalar>>(
+        mut self,
+        else_: &Self,
+        cond: &Self,
+        cs: &mut CS,
+    ) -> Result<Self, String> {
+        if cond.real_bits == 0 || cond.valid_bits == 0 {
+            // This probably won't ever happen, but if it does, we know the logical value of `self`
+            // must be zero.
+            return Ok(else_.clone());
+        }
+        if cond.real_bits != 1 || cond.valid_bits != 1 {
+            return Err(format!(
+                "mux requires a truncated boolean, but got {} real bits",
+                cond.real_bits,
+            ));
+        }
+
+        // `Some(true)` if the mux selects the `then_` branch, `Some(false)` for `else_`, `None`
+        // for unknown.
+        let select = cond.value.as_ref().map(|x| !x.is_zero());
+        self.value = match select {
+            Some(true) => self.value.clone(),
+            Some(false) => else_.value.clone(),
+            None => None,
+        };
+
+        let out_var = cs.alloc(
+            || "mux",
+            || self.value.ok_or(SynthesisError::AssignmentMissing),
+        ).unwrap();
+        let out_lc = LinearCombination::<Scalar>::zero() + out_var;
+
+        // cond * (then - else) + else = out
+        // Or, rewritten:
+        // cond * (then - else) = out - else
+        cs.enforce(
+            || "mux_then",
+            |lc| lc + &cond.lc,
+            |lc| lc + &self.lc - &else_.lc,
+            |lc| lc + &out_lc - &else_.lc,
+        );
+
+        self.lc = out_lc;
+
+        // We know from the check above that `self` has `real_bits == 1`, meaning its value is
+        // either 0 or 1.  This means the result is either exactly `then_` or exactly `else_`, and
+        // there's no need to increment `real_bits`.
+        self.real_bits = cmp::max(self.real_bits, else_.real_bits);
+        self.valid_bits = cmp::min(self.valid_bits, else_.valid_bits);
+        Ok(self)
+    }
+
+
     /// Truncate `self` modulo `2^valid_bits`, producing a new `Num` with `real_bits ==
     /// valid_bits`.
     pub fn truncate<CS: ConstraintSystem<Scalar>>(

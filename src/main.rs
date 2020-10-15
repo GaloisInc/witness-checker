@@ -14,7 +14,7 @@ use num_traits::One;
 
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, Wire, GateKind};
+use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire, Repr};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
@@ -869,18 +869,27 @@ fn main() -> io::Result<()> {
     let mut arena2 = Bump::new();
     let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags);
 
+    let gadget_supported = |g: GadgetKindRef| {
+        use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
+        let mut ok = false;
+        if args.is_present("zkif-out") {
+            ok = ok || g.cast::<ConcatBits>().is_some();
+            ok = ok || g.cast::<ExtractBits>().is_some();
+        }
+        if args.is_present("scale-out") {
+        }
+        ok
+    };
+
+    passes.run(lower::bit_pack::concat_bits_flat);
     // TODO: need a better way to handle passes that must be run to fixpoint
-    passes.run(lower::gadget::decompose_all_gadgets);
-    passes.run(lower::gadget::decompose_all_gadgets);
+    passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
+    passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
     passes.run(lower::bundle::unbundle_mux);
     passes.run(lower::bundle::simplify);
     passes.run(lower::const_fold::const_fold(&c));
     passes.run(lower::int::mod_to_div);
     passes.run(lower::int::non_constant_shift);
-    passes.run(lower::int::extend_to_64);
-    passes.run(lower::int::int_to_uint);
-    passes.run(lower::int::reduce_lit_32);
-    passes.run(lower::int::mux);
     #[cfg(feature = "bellman")]
     if args.is_present("zkif-out") {
         passes.run(lower::int::compare_to_greater_or_equal_to_zero);

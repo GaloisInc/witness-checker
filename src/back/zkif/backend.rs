@@ -30,6 +30,7 @@ use std::ops::Sub;
 use num_bigint::BigUint;
 use num_traits::{Zero, One};
 
+use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit,
 };
@@ -358,8 +359,18 @@ impl<'a> Backend<'a> {
                 WireRepr::from(yes)
             }
 
-            GateKind::Mux(cond, then_, else_) =>
-                unimplemented!("mux"),
+            GateKind::Mux(cond, then_, else_) => {
+                let cw = self.wire(cond);
+                let tw = self.wire(then_);
+                let ew = self.wire(else_);
+                let cond = self.representer.mut_repr(cw).as_num_trunc(&mut self.cs);
+                let then_ = self.representer.mut_repr(tw).as_num();
+                let else_ = self.representer.mut_repr(ew).as_num();
+                let out_num = then_.mux(&else_, &cond, &mut self.cs).unwrap_or_else(|e| {
+                    panic!("failed to mux: {}", e);
+                });
+                WireRepr::from(out_num)
+            }
 
             GateKind::Cast(a, ty) => {
                 let aw = self.wire(a);
@@ -395,8 +406,28 @@ impl<'a> Backend<'a> {
             GateKind::Extract(a, _index) =>
                 unimplemented!("EXTRACT {:?}", a.ty),
 
-            GateKind::Gadget(gk, _wires) =>
-                unimplemented!("GADGET {:?}", gk),
+            GateKind::Gadget(gk, ws) => {
+                if let Some(g) = gk.cast::<ConcatBits>() {
+                    let mut bits = Vec::new();
+                    for &a in ws {
+                        let aw = self.wire(a);
+                        let width = a.ty.integer_size().bits() as usize;
+                        let int = self.representer.mut_repr(aw).as_int(&mut self.cs, width);
+                        bits.extend_from_slice(&int.bits);
+                    }
+                    WireRepr::from(Int::from_bits(&bits))
+                } else if let Some(g) = gk.cast::<ExtractBits>() {
+                    assert!(ws.len() == 1);
+                    let a = ws[0];
+                    let aw = self.wire(a);
+                    let width = a.ty.integer_size().bits() as usize;
+                    let int = self.representer.mut_repr(aw).as_int(&mut self.cs, width);
+                    let bits = &int.bits[g.start as usize .. g.end as usize];
+                    WireRepr::from(Int::from_bits(bits))
+                } else {
+                    unimplemented!("GADGET {}", gk.name());
+                }
+            },
         };
 
         self.representer.new_repr(repr)
