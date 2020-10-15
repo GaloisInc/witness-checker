@@ -116,8 +116,10 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     );
 
     // Verify that rest < denom || denom == 0.
-    let diff_num = rest_num.clone().sub(&denom_num, &mut cs).unwrap();
-    let diff_int = Int::from_num(&mut cs, denom_int.width(), &diff_num);
+    let width = denom_int.width();
+    let diff_num = rest_num.zero_extend(width as u16 + 1).unwrap()
+        .sub(&denom_num.zero_extend(width as u16 + 1).unwrap(), &mut cs).unwrap();
+    let diff_int = Int::from_num(&mut cs, width + 1, &diff_num);
     let diff_ok = diff_int.is_negative();
     let denom_zero = denom_num.equals_zero(&mut cs);
     let ok = bool_or(&mut cs, &diff_ok, &denom_zero);

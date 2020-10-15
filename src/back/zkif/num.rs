@@ -335,6 +335,26 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // TODO: should be doable without the boolean constraint of AllocatedBit.
         is_zero
     }
+
+    pub fn zero_extend(&self, new_width: u16) -> Result<Self, String> {
+        assert!(new_width >= self.valid_bits);
+
+        // It's only safe to extend if we know all high bits are zero.
+        if self.real_bits > self.valid_bits {
+            return Err(format!(
+                "zero_extend requires a truncated input, \
+                    but real_bits ({}) exceeds valid_bits ({})",
+                self.real_bits, self.valid_bits,
+            ));
+        }
+
+        let mut extended = self.clone();
+        // TODO: once we remove the `real_bits >= valid_bits` invariant, we won't need to adjust
+        // `real_bits` here.
+        extended.real_bits = new_width;
+        extended.valid_bits = new_width;
+        Ok(extended)
+    }
 }
 
 

@@ -81,6 +81,22 @@ fn add_neg_one_u64() {
     finish(&c, w);
 }
 
+/// Divide a number by a large denominator.  A case like this can occur when dividing by negative
+/// one.
+#[test]
+fn div_large() {
+    let arena = Bump::new();
+    let c = Circuit::new(&arena);
+    let t_u8 = c.ty(TyKind::U8);
+
+    let w = c.eq(
+        c.div(c.lit(t_u8, 100), c.lit(t_u8, 229)),
+        c.lit(t_u8, 0),
+    );
+
+    finish(&c, w);
+}
+
 #[test]
 fn neg_one() {
     let arena = Bump::new();
