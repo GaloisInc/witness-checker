@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::iter;
 use num_bigint::{BigUint, BigInt, Sign};
 use num_traits::{Signed, Zero};
 
 use crate::ir::circuit::{
-    Circuit, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
+    self, Circuit, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp,
+    CmpOp,
 };
 
 use self::Value::Single;
@@ -138,9 +140,15 @@ impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, 
             return opt_val.clone();
         }
 
-        let opt_val = eval_gate(self, w.kind);
-        self.cache.insert(w, opt_val.clone());
-        opt_val
+        let order = circuit::walk_wires_filtered(
+            iter::once(w),
+            |w| !self.cache.contains_key(&w),
+        ).collect::<Vec<_>>();
+        for w in order {
+            let opt_val = eval_gate(self, w.kind);
+            self.cache.insert(w, opt_val.clone());
+        }
+        self.cache.get(&w).unwrap().clone()
     }
 
     fn eval_gadget(&mut self, k: GadgetKindRef<'a>, ws: &[Wire<'a>]) -> Option<Value> {
