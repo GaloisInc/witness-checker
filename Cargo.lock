@@ -79,15 +79,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bimap"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "783204f24fd7724ea274d327619cfa6a6018047bb0561a68aadff6f56787591b"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -408,12 +399,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8dd5a6d5999d9907cda8ed67bbd137d3af8085216c2ac62de5be860bd41f304a"
 
 [[package]]
-name = "matches"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
-
-[[package]]
 name = "maybe-uninit"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -489,15 +474,6 @@ name = "ppv-lite86"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c36fa947111f5c62a733b652544dd0016a43ce89619538a8ef92724a6f501a20"
-
-[[package]]
-name = "pretty"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60c0d9f6fc88ecdd245d90c1920ff76a430ab34303fc778d33b1d0a4c3bf6d3"
-dependencies = [
- "typed-arena",
-]
 
 [[package]]
 name = "proc-macro-error"
@@ -615,12 +591,6 @@ checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
 [[package]]
 name = "scale_isa"
 version = "0.1.0"
-dependencies = [
- "bimap",
- "byteorder",
- "matches",
- "pretty",
-]
 
 [[package]]
 name = "scopeguard"
@@ -757,12 +727,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "typed-arena"
-version = "1.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9b2228007eba4120145f785df0f6c92ea538f5a3635a612ecf4e334c8c1446d"
-
-[[package]]
 name = "unicode-segmentation"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -837,9 +801,9 @@ dependencies = [
 
 [[package]]
 name = "zkinterface"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eae995c6055811b99401f77f444eb26e535ae0f370da4aa6aa8d97fb76a49fc4"
+checksum = "4b46f89862350d17cc4381525786d2c023453cfb8b526b4e535b4ec08db955a3"
 dependencies = [
  "colored",
  "flatbuffers",
@@ -854,9 +818,9 @@ dependencies = [
 
 [[package]]
 name = "zkinterface_bellman"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c91df9ca5daab490fba8a41515dba8e1d98d3df616c21b0cbea40bede612d6ff"
+checksum = "e577b1f8d9270b4885f9ad67c07fe9c1f60f7798e4bc7dcc91bd27b06f82e1c6"
 dependencies = [
  "bellman",
  "bls12_381",
