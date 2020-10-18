@@ -801,9 +801,9 @@ dependencies = [
 
 [[package]]
 name = "zkinterface"
-version = "1.2.1"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b46f89862350d17cc4381525786d2c023453cfb8b526b4e535b4ec08db955a3"
+checksum = "d56f428ae0ceeb13786da2c59d1c6c5c14648aa191e01bb807ff9e99c2e5b9d0"
 dependencies = [
  "colored",
  "flatbuffers",
@@ -818,9 +818,9 @@ dependencies = [
 
 [[package]]
 name = "zkinterface_bellman"
-version = "1.2.1"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e577b1f8d9270b4885f9ad67c07fe9c1f60f7798e4bc7dcc91bd27b06f82e1c6"
+checksum = "f8677d66928d0cdf68046ee55939fb0cc9465ab3bfcb120f95c4e410b3dca833"
 dependencies = [
  "bellman",
  "bls12_381",

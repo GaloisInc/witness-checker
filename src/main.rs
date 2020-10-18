@@ -932,7 +932,7 @@ fn main() -> io::Result<()> {
     if let Some(dest) = args.value_of_os("zkif-out") {
         use cheesecloth::back::zkif::backend::{Backend, Scalar};
         use std::fs::remove_file;
-        use zkinterface::{Reader, cli, workspace::clean_workspace};
+        use zkinterface::{cli::{cli, Options}, clean_workspace};
 
         let accepted = flags[0];
 
@@ -945,24 +945,21 @@ fn main() -> io::Result<()> {
 
         backend.enforce_true(accepted);
 
-        /* Print individual assertions.
-        for flag in flags.iter().take(num_asserts) {
-            eprintln!("ASSERT {}", backend.get_bool(*flag).unwrap());
-        }
-        for flag in flags.iter().skip(num_asserts) {
-            eprintln!("BUG {}", backend.get_bool(*flag).unwrap());
-        } */
-
         // Write files.
         backend.finish().unwrap();
 
         // Validate the circuit and witness.
-        cli::cli(&cli::Options {
+        cli(&Options {
             tool: "simulate".to_string(),
             paths: vec![workspace.to_path_buf()],
         }).unwrap();
 
-}
+        // Print statistics.
+        cli(&Options {
+            tool: "stats".to_string(),
+            paths: vec![workspace.to_path_buf()],
+        }).unwrap();
+    }
 
     #[cfg(feature = "scale")]
     if let Some(dest) = args.value_of_os("scale-out") {
