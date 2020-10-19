@@ -1,6 +1,7 @@
 program:
   - [mov, 1, null, true, 2]          # mov r1, 2
   - [advise, 1, null, false, null]   # advise
+  - [mov, 0, null, true, 2]          # mov r1, 2
 
 params:
   num_regs: 2
@@ -11,6 +12,7 @@ trace:
   - [1, [ 0, 2], false]
 
   - [2, [ 0, 42], false]
+  - [3, [ 2, 42], false]
 
 advice:
   2:  [[Advise, 63]]
