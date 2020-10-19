@@ -118,6 +118,10 @@ impl<'a> CyclePorts<'a> {
     pub fn get_instr(&self, i: usize) -> TWire<'a, RamInstr> {
         self.ports[i].instr
     }
+
+    pub fn iter<'b>(&'b self) -> impl Iterator<Item = TWire<'a, FetchPort>> + 'b {
+        self.ports.iter().cloned()
+    }
 }
 
 

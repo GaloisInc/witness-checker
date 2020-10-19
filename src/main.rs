@@ -536,15 +536,7 @@ fn main() -> io::Result<()> {
         if i % check_steps == 0 {
             check_state(&cx, &b, i as u32, &calc_s, s2);
             prev_s = s2.clone();
-        }
-        else {
-            // TODO: Drop this pc check once `FetchPort` is refactored.
-            wire_assert!(
-                &cx, b.eq(s2.pc, calc_s.pc),
-                "cycle {} sets pc to {} (expected {})",
-                i, cx.eval(s2.pc), cx.eval(calc_s.pc),
-            );
-
+        } else {
             prev_s = calc_s.clone();
         }
         check_step(&cx, &b, i as u32, instr, &[port.clone()], &calc_im);
@@ -564,6 +556,16 @@ fn main() -> io::Result<()> {
             ),
             "port {} is active on cycle {} (expected {})",
             i, cx.eval(port.cycle), i,
+        );
+    }
+
+    // Check that the fetch ports are consistent with the steps taken.
+    for (i, port) in cycle_fetch_ports.iter().enumerate() {
+        wire_assert!(
+            &cx,
+            b.eq(port.addr, trace[i].pc),
+            "fetch on cycle {} accesses address {:x} (expected {:x})",
+            i, cx.eval(port.addr), cx.eval(trace[i].pc),
         );
     }
 
