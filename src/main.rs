@@ -552,11 +552,10 @@ fn main() -> io::Result<()> {
 
     check_last(&cx, &b, trace.last().unwrap(), args.is_present("expect-zero"));
 
-    // Check the memory ports
-    for i in 0 .. exec.params.trace_len - 1 {
+    // Check that the memory ports are consistent with the steps taken.
+    for (i, port) in cycle_mem_ports.iter().enumerate() {
         // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
         // in its corresponding cycle, or it isn't used at all.
-        let port = cycle_mem_ports.get(i);
         wire_assert!(
             &cx,
             b.or(

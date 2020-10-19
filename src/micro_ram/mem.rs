@@ -167,8 +167,16 @@ pub struct CyclePorts<'a> {
 }
 
 impl<'a> CyclePorts<'a> {
+    pub fn sparsity(&self) -> usize {
+        self.sparsity
+    }
+
     pub fn get(&self, i: usize) -> TWire<'a, MemPort> {
         self.ports[i / self.sparsity]
+    }
+
+    pub fn iter<'b>(&'b self) -> impl Iterator<Item = TWire<'a, MemPort>> + 'b {
+        self.ports.iter().cloned()
     }
 }
 
