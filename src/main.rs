@@ -7,7 +7,6 @@ use std::path::Path;
 use std::ptr;
 use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
-use log::*;
 use num_traits::One;
 
 use cheesecloth::wire_assert;
@@ -17,12 +16,12 @@ use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
-use cheesecloth::sort;
 use cheesecloth::micro_ram::context::Context;
+use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::types::{
-    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, FetchPort, PackedFetchPort,
-    Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE,
+    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE,
+    REG_PC, MEM_PORT_UNUSED_CYCLE,
 };
 
 
@@ -398,41 +397,6 @@ fn check_last<'a>(
     }
 }
 
-fn check_first_fetch<'a>(
-    cx: &Context<'a>,
-    b: &Builder<'a>,
-    port: &TWire<'a, FetchPort>,
-) {
-    let _g = b.scoped_label("check_first_fetch");
-    wire_assert!(
-        cx, port.write,
-        "uninit fetch from program address {:x}",
-        cx.eval(port.addr),
-    );
-}
-
-fn check_fetch<'a>(
-    cx: &Context<'a>,
-    b: &Builder<'a>,
-    index: usize,
-    port1: &TWire<'a, FetchPort>,
-    port2: &TWire<'a, FetchPort>,
-) {
-    let _g = b.scoped_label(format_args!("check_fetch/index {}", index));
-    cx.when(b, b.not(port2.write), |cx| {
-        wire_assert!(
-            cx, b.eq(port2.addr, port1.addr),
-            "fetch from uninitialized program address {:x}",
-            cx.eval(port2.addr),
-        );
-        wire_assert!(
-            cx, b.eq(port2.instr, port1.instr),
-            "fetch from program address {:x} produced wrong instruction",
-            cx.eval(port2.addr),
-        );
-    });
-}
-
 struct PassRunner<'a> {
     // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have
     // overlapping `&` and `&mut` references.
@@ -545,27 +509,16 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // Set up instruction-fetch ports
-    let mut fetch_ports: Vec<TWire<FetchPort>> = Vec::new();
-    for (i, x) in exec.program.iter().enumerate() {
-        fetch_ports.push(b.secret(Some(FetchPort {
-            addr: i as u64,
-            instr: *x,
-            write: true,
-        })));
-    }
-    for s in &exec.trace[..exec.trace.len() - 1] {
-        let idx = s.pc as usize;
-        assert!(
-            idx < exec.program.len(),
-            "program executes out of bounds: {} >= {}", idx, exec.program.len(),
-        );
-        fetch_ports.push(b.secret(Some(FetchPort {
-            addr: s.pc,
-            instr: exec.program[s.pc as usize],
-            write: false,
-        })));
-    }
+    // Set up instruction-fetch ports and check consistency.
+    let mut fetch = Fetch::new(false);
+    fetch.init_program(&b, &exec.program);
+    let cycle_fetch_ports = fetch.add_cycles(
+        &b,
+        exec.params.trace_len - 1,
+        &exec.program,
+        |i| exec.trace[i].pc,
+    );
+    fetch.assert_consistent(&cx, &b);
 
     // Generate IR code to check the trace
 
@@ -574,9 +527,7 @@ fn main() -> io::Result<()> {
     let check_steps = args.value_of("check-steps").and_then(|c| c.parse().ok()).map(|c| if c <= 0 {1} else {c}).unwrap_or(1);
     let mut prev_s = trace[0].clone();
     for (i, s2) in trace.iter().skip(1).enumerate() {
-        let instr = b.with_label(format_args!("cycle {} instr", i), || {
-            b.secret(Some(exec.program[exec.trace[i].pc as usize]))
-        });
+        let instr = cycle_fetch_ports.get_instr(i);
         let port = cycle_mem_ports.get(i);
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
         let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &[port.clone()], advice, &prev_s);
@@ -615,40 +566,6 @@ fn main() -> io::Result<()> {
             "port {} is active on cycle {} (expected {})",
             i, cx.eval(port.cycle), i,
         );
-    }
-
-    // Check instruction-fetch consistency
-
-    let sorted_fetch = {
-        let _g = b.scoped_label("sort fetch");
-        let mut packed = fetch_ports.iter().map(|&fp| {
-            PackedFetchPort::from_unpacked(&b, fp)
-        }).collect::<Vec<_>>();
-        let sorted = sort::sort(&b, &mut packed, &mut |&x, &y| b.le(x, y));
-        wire_assert!(&cx, sorted, "instruction fetch sorting failed");
-        packed.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
-    };
-    trace!("fetches:");
-    for (i, port) in fetch_ports.iter().enumerate() {
-        trace!(
-            "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-            i, cx.eval(port.write).0.map_or("??", |x| if x == 0 { "read" } else { "write" }),
-            cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-            cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
-        );
-    }
-    trace!("sorted fetches:");
-    for (i, port) in sorted_fetch.iter().enumerate() {
-        trace!(
-            "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-            i, cx.eval(port.write).0.map_or("??", |x| if x == 0 { "read" } else { "write" }),
-            cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-            cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
-        );
-    }
-    check_first_fetch(&cx, &b, &sorted_fetch[0]);
-    for (i, (port1, port2)) in sorted_fetch.iter().zip(sorted_fetch.iter().skip(1)).enumerate() {
-        check_fetch(&cx, &b, i, port1, port2);
     }
 
     // Collect assertions and bugs.

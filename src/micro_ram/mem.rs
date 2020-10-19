@@ -124,8 +124,8 @@ impl<'a> Memory<'a> {
         // handled by the `typed::Lt` impl for `PackedMemPort`.
         let sorted_ports = {
             let _g = b.scoped_label("sort mem");
-            let mut packed_ports = self.ports.iter().map(|&fp| {
-                PackedMemPort::from_unpacked(&b, fp)
+            let mut packed_ports = self.ports.iter().map(|&mp| {
+                PackedMemPort::from_unpacked(&b, mp)
             }).collect::<Vec<_>>();
             // Using `lt` instead of `le` for the comparison here means the sortedness check will
             // also ensure that every `MemPort` is distinct.
