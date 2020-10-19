@@ -20,9 +20,10 @@ use cheesecloth::ir::typed::{Builder, TWire, Repr};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
-use cheesecloth::tiny_ram::{
-    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, PackedMemPort, FetchPort, PackedFetchPort,
-    Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
+use cheesecloth::micro_ram::types::{
+    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, PackedMemPort, FetchPort,
+    PackedFetchPort, Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE,
+    MEM_PORT_PRELOAD_CYCLE,
 };
 
 
