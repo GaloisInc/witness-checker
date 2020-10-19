@@ -21,7 +21,7 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::tiny_ram::{
-    Execution, RamInstr, RamState, MemPort, MemOpKind, PackedMemPort, FetchPort, PackedFetchPort,
+    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, PackedMemPort, FetchPort, PackedFetchPort,
     Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, MEM_PORT_PRELOAD_CYCLE,
 };
 
@@ -48,6 +48,11 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("stats")
              .long("stats")
              .help("print info about the size of the circuit"))
+        .arg(Arg::with_name("check-steps")
+             .long("check-steps")
+             .takes_value(true)
+             .value_name("1")
+             .help("check state against the trace every D steps"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -229,18 +234,26 @@ fn operand_value<'a>(
     b.mux(imm, op, reg_val)
 }
 
-fn check_step<'a>(
-    cx: &Context<'a>,
+pub struct CalcIntermediate<'a> {
+    pub x: TWire<'a,u64>,
+    pub y: TWire<'a,u64>,
+    pub result: TWire<'a,u64>,
+    pub mem_port: TWire<'a,MemPort>,
+}
+
+
+fn calc_step<'a>(
     b: &Builder<'a>,
     cycle: u32,
     instr: TWire<'a, RamInstr>,
     mem_ports: &[TWire<'a, MemPort>],
     advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
-    s2: &TWire<'a, RamState>,
-) {
-    let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
+) -> (TWire<'a, RamState>,CalcIntermediate<'a>) {
+    let _g = b.scoped_label(format_args!("calc_step/cycle {}", cycle));
 
+    // TODO: Where do we get instr from? PC wire of s1? Or still advice?
+    
     let mut cases = Vec::new();
     let mut add_case = |op, result, dest, flag| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
@@ -251,10 +264,6 @@ fn check_step<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
-    let has_mem_port = mem_ports.iter().fold(
-        b.lit(false),
-        |acc, port| b.or(acc, b.eq(port.cycle, b.lit(cycle))),
-    );
     let mem_port = b.select(
         mem_ports,
         b.lit(MemPort::default()),
@@ -397,32 +406,71 @@ fn check_step<'a>(
         add_case(Opcode::Advise, advice, instr.dest, s1.flag);
     }
 
-    let (result, dest, expect_flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
+    let (result, dest, flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
 
-    for (i, (&v_old, &v_new)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
+    let mut regs = Vec::with_capacity(s1.regs.len());
+    for (i, &v_old) in s1.regs.iter().enumerate() {
         let is_dest = b.eq(b.lit(i as u8), dest);
-        let expect_new = b.mux(is_dest, result, v_old);
-        wire_assert!(
-            cx, b.eq(v_new, expect_new),
-            "cycle {} sets reg {} to {} (expected {})",
-            cycle, i, cx.eval(v_new), cx.eval(expect_new),
-        );
+        regs.push(b.mux(is_dest, result, v_old));
     }
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
-    let expect_pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
+    let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
+
+    let s2 = RamStateRepr{pc, regs, flag};
+    let im = CalcIntermediate{x,y, result, mem_port};
+    (TWire::new(s2),im)
+}
+
+fn check_state<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    cycle: u32,
+    calc_s: &TWire<'a, RamState>,
+    trace_s: &TWire<'a, RamState>,
+) {
+    let _g = b.scoped_label(format_args!("check_state/cycle {}", cycle));
+
+    for (i, (&v_calc, &v_new)) in calc_s.regs.iter().zip(trace_s.regs.iter()).enumerate() {
+        wire_assert!(
+            cx, b.eq(v_new, v_calc),
+            "cycle {} sets reg {} to {} (expected {})",
+            cycle, i, cx.eval(v_new), cx.eval(v_calc),
+        );
+    }
+
     wire_assert!(
-        cx, b.eq(s2.pc, expect_pc),
+        cx, b.eq(trace_s.pc, calc_s.pc),
         "cycle {} sets pc to {} (expected {})",
-        cycle, cx.eval(s2.pc), cx.eval(expect_pc),
+        cycle, cx.eval(trace_s.pc), cx.eval(calc_s.pc),
     );
 
     wire_assert!(
-        cx, b.eq(s2.flag, expect_flag),
+        cx, b.eq(trace_s.flag, calc_s.flag),
         "cycle {} sets flag to {} (expected {})",
-        cycle, cx.eval(s2.flag), cx.eval(expect_flag),
+        cycle, cx.eval(trace_s.flag), cx.eval(calc_s.flag),
+    );
+}
+
+fn check_step<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    cycle: u32,
+    instr: TWire<'a, RamInstr>,
+    mem_ports: &[TWire<'a, MemPort>],
+    calc_im: &CalcIntermediate<'a>,
+) {
+    let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
+
+    let has_mem_port = mem_ports.iter().fold(
+        b.lit(false),
+        |acc, port| b.or(acc, b.eq(port.cycle, b.lit(cycle))),
     );
 
+    let x = calc_im.x;
+    let y = calc_im.y;
+    let result = calc_im.result;
+    let mem_port = calc_im.mem_port;
 
     // If the instruction is a store, load, or poison, we need additional checks to make sure the
     // fields of `mem_port` match the instruction operands.
@@ -430,7 +478,7 @@ fn check_step<'a>(
     let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
     let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
     let is_store_like = b.or(is_store, is_poison);
-    let is_mem = b.or(is_load, b.or(is_store, is_poison));
+    let is_mem = b.or(is_load, is_store_like);
 
     let expect_value = b.mux(is_store_like, x, result);
     cx.when(b, is_mem, |cx| {
@@ -780,13 +828,32 @@ fn main() -> io::Result<()> {
 
     check_first(&cx, &b, trace.first().unwrap());
 
-    for (i, (s1, s2)) in trace.iter().zip(trace.iter().skip(1)).enumerate() {
+    let check_steps = args.value_of("check-steps").and_then(|c| c.parse().ok()).map(|c| if c <= 0 {1} else {c}).unwrap_or(1);
+    let mut prev_s = trace[0].clone();
+    for (i, s2) in trace.iter().skip(1).enumerate() {
         let instr = b.with_label(format_args!("cycle {} instr", i), || {
             b.secret(Some(exec.program[exec.trace[i].pc as usize]))
         });
         let port = &mem_ports[i];
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
-        check_step(&cx, &b, i as u32, instr, &[port.clone()], advice, s1, s2);
+        let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &[port.clone()], advice, &prev_s);
+
+        // Check trace every D steps. 
+        if i % check_steps == 0 {
+            check_state(&cx, &b, i as u32, &calc_s, s2);
+            prev_s = s2.clone();
+        }
+        else {
+            // TODO: Drop this pc check once `FetchPort` is refactored.
+            wire_assert!(
+                &cx, b.eq(s2.pc, calc_s.pc),
+                "cycle {} sets pc to {} (expected {})",
+                i, cx.eval(s2.pc), cx.eval(calc_s.pc),
+            );
+
+            prev_s = calc_s.clone();
+        }
+        check_step(&cx, &b, i as u32, instr, &[port.clone()], &calc_im);
     }
 
     check_last(&cx, &b, trace.last().unwrap(), args.is_present("expect-zero"));
