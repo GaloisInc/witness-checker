@@ -932,44 +932,33 @@ fn main() -> io::Result<()> {
     if let Some(dest) = args.value_of_os("zkif-out") {
         use cheesecloth::back::zkif::backend::{Backend, Scalar};
         use std::fs::remove_file;
-        use zkinterface::Reader;
-        use zkinterface_bellman::zkif_backend::validate;
+        use zkinterface::{cli::{cli, Options}, clean_workspace};
 
         let accepted = flags[0];
 
         // Clean workspace.
         let workspace = Path::new(dest);
-        let files = vec![
-            workspace.join("header.zkif"),
-            workspace.join("constraints.zkif"),
-            workspace.join("witness.zkif"),
-        ];
-        for f in &files {
-            let _ = remove_file(f);
-        }
+        clean_workspace(workspace).unwrap();
 
         // Generate the circuit and witness.
         let mut backend = Backend::new(workspace, true);
 
         backend.enforce_true(accepted);
 
-        /* Print individual assertions.
-        for flag in flags.iter().take(num_asserts) {
-            eprintln!("ASSERT {}", backend.get_bool(*flag).unwrap());
-        }
-        for flag in flags.iter().skip(num_asserts) {
-            eprintln!("BUG {}", backend.get_bool(*flag).unwrap());
-        } */
-
         // Write files.
         backend.finish().unwrap();
 
         // Validate the circuit and witness.
-        let mut reader = Reader::new();
-        for f in &files {
-            reader.read_file(f).unwrap();
-        }
-        validate::<Scalar>(&reader, false).unwrap();
+        cli(&Options {
+            tool: "simulate".to_string(),
+            paths: vec![workspace.to_path_buf()],
+        }).unwrap();
+
+        // Print statistics.
+        cli(&Options {
+            tool: "stats".to_string(),
+            paths: vec![workspace.to_path_buf()],
+        }).unwrap();
     }
 
     #[cfg(feature = "scale")]
