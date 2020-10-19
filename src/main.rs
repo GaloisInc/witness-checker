@@ -1,8 +1,5 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::fs;
-use std::fmt;
 use std::io;
 use std::iter;
 use std::mem::{self, MaybeUninit};
@@ -13,13 +10,15 @@ use clap::{App, Arg, ArgMatches};
 use log::*;
 use num_traits::One;
 
+use cheesecloth::{wire_assert, wire_bug_if};
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
-use cheesecloth::ir::typed::{Builder, TWire, Repr};
+use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
+use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::types::{
     Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, PackedMemPort, FetchPort,
     PackedFetchPort, Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE,
@@ -58,171 +57,6 @@ fn parse_args() -> ArgMatches<'static> {
         .get_matches()
 }
 
-
-macro_rules! wire_assert {
-    ($cx:expr, $cond:expr, $($args:tt)*) => {
-        {
-            let cx = $cx;
-            let cond = $cond;
-            if cx.assert_triggered(cond) == Some(true) {
-                eprintln!("invalid trace: {}", format_args!($($args)*));
-            }
-            $cx.assert($cond);
-        }
-    };
-}
-
-macro_rules! wire_bug_if {
-    ($cx:expr, $cond:expr, $($args:tt)*) => {
-        {
-            let cx = $cx;
-            let cond = $cond;
-            if cx.bug_triggered(cond) == Some(true) {
-                eprintln!("found bug: {}", format_args!($($args)*));
-            }
-            $cx.bug_if($cond);
-        }
-    };
-}
-
-struct SecretValue<T>(Option<T>);
-
-impl<T: fmt::Display> fmt::Display for SecretValue<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self.0 {
-            Some(ref x) => fmt::Display::fmt(x, fmt),
-            None => write!(fmt, "??"),
-        }
-    }
-}
-
-impl<T: fmt::LowerHex> fmt::LowerHex for SecretValue<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self.0 {
-            Some(ref x) => fmt::LowerHex::fmt(x, fmt),
-            None => write!(fmt, "??"),
-        }
-    }
-}
-
-impl<T: fmt::UpperHex> fmt::UpperHex for SecretValue<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self.0 {
-            Some(ref x) => fmt::UpperHex::fmt(x, fmt),
-            None => write!(fmt, "??"),
-        }
-    }
-}
-
-
-struct Context<'a> {
-    asserts: RefCell<Vec<TWire<'a, bool>>>,
-    bugs: RefCell<Vec<TWire<'a, bool>>>,
-    eval: Option<RefCell<CachingEvaluator<'a, 'a, eval::RevealSecrets>>>,
-}
-
-impl<'a> Context<'a> {
-    fn new(c: &'a Circuit<'a>) -> Context<'a> {
-        Context {
-            asserts: RefCell::new(Vec::new()),
-            bugs: RefCell::new(Vec::new()),
-            eval: Some(RefCell::new(CachingEvaluator::new(c))),
-        }
-    }
-
-    fn finish(self) -> (Vec<TWire<'a, bool>>, Vec<TWire<'a, bool>>) {
-        (
-            self.asserts.into_inner(),
-            self.bugs.into_inner(),
-        )
-    }
-
-    /// Mark the execution as invalid if `cond` is false.  A failed assertion represents
-    /// misbehavior on the part of the prover.
-    fn assert(&self, cond: TWire<'a, bool>) {
-        self.asserts.borrow_mut().push(cond);
-    }
-
-    /// Signal an error condition of `cond` is true.  This should be used for situations like
-    /// buffer overflows, which indicate a bug in the subject program.
-    fn bug_if(&self, cond: TWire<'a, bool>) {
-        self.bugs.borrow_mut().push(cond);
-    }
-
-    fn when<R>(
-        &self,
-        b: &Builder<'a>,
-        path_cond: TWire<'a, bool>,
-        f: impl FnOnce(&ContextWhen<'a, '_>) -> R,
-    ) -> R {
-        f(&ContextWhen { cx: self, b, path_cond })
-    }
-
-    fn eval_u64(&self, w: Wire<'a>) -> Option<u64> {
-        let eval = self.eval.as_ref()?;
-        let x: u64 = eval.borrow_mut().eval_wire(w)?.as_single()?.try_into().ok()?;
-        Some(x)
-    }
-
-    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        Some(self.eval_u64(cond.repr)? == 0)
-    }
-
-    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        Some(self.eval_u64(cond.repr)? != 0)
-    }
-
-    fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
-        SecretValue(self.eval_u64(w.repr))
-    }
-}
-
-struct ContextWhen<'a, 'b> {
-    cx: &'b Context<'a>,
-    b: &'b Builder<'a>,
-    path_cond: TWire<'a, bool>,
-}
-
-impl<'a, 'b> ContextWhen<'a, 'b> {
-    fn assert_cond(&self, cond: TWire<'a, bool>) -> TWire<'a, bool> {
-        // The assertion passes if either this `when` block is not taken, or `cond` is satisfied.
-        self.b.or(self.b.not(self.path_cond), cond)
-    }
-
-    fn bug_cond(&self, cond: TWire<'a, bool>) -> TWire<'a, bool> {
-        // The bug occurs if this `when` block is taken and `cond` is satisfied.
-        self.b.and(self.path_cond, cond)
-    }
-
-    fn assert(&self, cond: TWire<'a, bool>) {
-        self.cx.assert(self.assert_cond(cond));
-    }
-
-    fn bug_if(&self, cond: TWire<'a, bool>) {
-        self.cx.bug_if(self.bug_cond(cond));
-    }
-
-    fn when<R>(
-        &self,
-        b: &Builder<'a>,
-        path_cond: TWire<'a, bool>,
-        f: impl FnOnce(&ContextWhen<'a, '_>) -> R,
-    ) -> R {
-        self.cx.when(b, b.and(self.path_cond, path_cond), f)
-    }
-
-    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        self.cx.assert_triggered(self.assert_cond(cond))
-    }
-
-    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        self.cx.bug_triggered(self.bug_cond(cond))
-    }
-
-    fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
-        self.cx.eval(w)
-    }
-}
 
 
 fn operand_value<'a>(
