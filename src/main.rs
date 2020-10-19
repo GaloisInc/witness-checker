@@ -10,7 +10,7 @@ use clap::{App, Arg, ArgMatches};
 use log::*;
 use num_traits::One;
 
-use cheesecloth::{wire_assert, wire_bug_if};
+use cheesecloth::wire_assert;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
@@ -19,10 +19,10 @@ use cheesecloth::gadget::arith::BuilderExt as _;
 use cheesecloth::lower::{self, run_pass};
 use cheesecloth::sort;
 use cheesecloth::micro_ram::context::Context;
+use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::types::{
-    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, PackedMemPort, FetchPort,
-    PackedFetchPort, Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE,
-    MEM_PORT_PRELOAD_CYCLE,
+    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, FetchPort, PackedFetchPort,
+    Opcode, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE,
 };
 
 
@@ -398,81 +398,6 @@ fn check_last<'a>(
     }
 }
 
-fn check_first_mem<'a>(
-    cx: &Context<'a>,
-    b: &Builder<'a>,
-    port: &TWire<'a, MemPort>,
-) {
-    let _g = b.scoped_label("check_first_mem");
-    // If the first memory port is active, then it must not be a read, since there are no previous
-    // writes to read from.
-    let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-    wire_bug_if!(
-        cx, b.mux(active, b.eq(port.op, b.lit(MemOpKind::Read)), b.lit(false)),
-        "uninit read from {:x} on cycle {}",
-        cx.eval(port.addr), cx.eval(port.cycle),
-    );
-}
-
-/// Check that memory operation `port2` can follow operation `port1`.
-fn check_mem<'a>(
-    cx: &Context<'a>,
-    b: &Builder<'a>,
-    index: usize,
-    port1: &TWire<'a, MemPort>,
-    port2: &TWire<'a, MemPort>,
-) {
-    let _g = b.scoped_label(format_args!("check_mem/index {}", index));
-    let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-
-    // Whether `port2` is the first memory op for its address.
-    let is_first = b.or(
-        b.ne(port1.addr, port2.addr),
-        b.eq(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
-    );
-
-    cx.when(b, b.and(active, b.not(is_first)), |cx| {
-        cx.when(b, b.eq(port1.op, b.lit(MemOpKind::Poison)), |cx| {
-            let is_poison = b.eq(port2.op, b.lit(MemOpKind::Poison));
-
-            // Poison -> Poison is invalid.
-            wire_assert!(
-                cx, b.not(is_poison),
-                "double poison of address {:x} on cycle {}",
-                cx.eval(port2.addr), cx.eval(port2.cycle),
-            );
-
-            // Poison -> Read/Write is a bug.
-            wire_bug_if!(
-                cx, b.not(is_poison),
-                "access of poisoned address {:x} on cycle {}",
-                cx.eval(port2.addr), cx.eval(port2.cycle),
-            );
-        });
-
-        // A Read must have the same value as the previous Read/Write.  (Write and Poison values
-        // are unconstrained.)
-        cx.when(b, b.eq(port2.op, b.lit(MemOpKind::Read)), |cx| {
-            wire_assert!(
-                cx, b.eq(port1.value, port2.value),
-                "read from {:x} on cycle {} produced {} (expected {})",
-                cx.eval(port2.addr), cx.eval(port2.cycle),
-                cx.eval(port2.value), cx.eval(port1.value),
-            );
-        });
-    });
-
-    cx.when(b, b.and(active, is_first), |cx| {
-        // The first operation for an address can't be a Read, since there is no previous Write for
-        // it to read from.
-        wire_assert!(
-            cx, b.ne(port2.op, b.lit(MemOpKind::Read)),
-            "uninit read from {:x} on cycle {}",
-            cx.eval(port2.addr), cx.eval(port2.cycle),
-        );
-    });
-}
-
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
@@ -594,50 +519,33 @@ fn main() -> io::Result<()> {
         trace.push(RamState::secret_with_value(&b, state.clone()));
     }
 
-    let mut mem_ports: Vec<TWire<MemPort>> = Vec::new();
-    let mut advices = HashMap::new();
-    for i in 1..trace.len() {
-        mem_ports.push(b.secret(Some(MemPort {
-            // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
-            // correspondence between `MemPort`s and steps.  We make unused ports distinct too, so
-            // we can just check that all ports are distinct.
-            addr: i as u64,
-            cycle: MEM_PORT_UNUSED_CYCLE,
-            ..MemPort::default()
-        })));
+    // Set up memory ports and check consistency.
+    let mut mem = Memory::new(false);
+    for seg in &exec.init_mem {
+        mem.init_segment(&b, seg);
     }
+    let cycle_mem_ports = mem.add_cycles(
+        &b,
+        exec.params.trace_len - 1,
+        1,
+        |i| {
+            let advs = exec.advice.get(&(i as u64 + 1)).map_or(&[] as &[_], |x| x);
+            (advs, i as u32)
+        },
+    );
+    mem.assert_consistent(&cx, &b);
+
+    // Gather advice values for `advise` instruction
+    let mut advices = HashMap::new();
     for (&i, advs) in &exec.advice {
         for adv in advs {
-            match *adv {
-                Advice::MemOp { addr, value, op } => {
-                    // It should be fine to replace the old `Secret` gates with new ones here.  The
-                    // shape of the circuit will be the same either way.
-                    mem_ports[i as usize - 1] = b.secret(Some(MemPort {
-                        cycle: i as u32 - 1,
-                        addr, value, op,
-                    }));
-                },
-                Advice::Stutter => {},
-                Advice::Advise { advise } => {
-                    advices.insert(i as u32 - 1, advise);
-                },
+            if let Advice::Advise { advise } = *adv {
+                advices.insert(i as u32 - 1, advise);
             }
         }
     }
-    for seg in &exec.init_mem {
-        for i in 0 .. seg.len {
-            let x = seg.data.get(i as usize).cloned().unwrap_or(0);
-            let mp = MemPort {
-                cycle: MEM_PORT_PRELOAD_CYCLE,
-                addr: seg.start + i as u64,
-                value: x,
-                op: MemOpKind::Write,
-            };
-            let wire = if seg.secret { b.secret(Some(mp)) } else { b.lit(mp) };
-            mem_ports.push(wire);
-        }
-    }
 
+    // Set up instruction-fetch ports
     let mut fetch_ports: Vec<TWire<FetchPort>> = Vec::new();
     for (i, x) in exec.program.iter().enumerate() {
         fetch_ports.push(b.secret(Some(FetchPort {
@@ -669,7 +577,7 @@ fn main() -> io::Result<()> {
         let instr = b.with_label(format_args!("cycle {} instr", i), || {
             b.secret(Some(exec.program[exec.trace[i].pc as usize]))
         });
-        let port = &mem_ports[i];
+        let port = cycle_mem_ports.get(i);
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
         let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &[port.clone()], advice, &prev_s);
 
@@ -694,9 +602,10 @@ fn main() -> io::Result<()> {
     check_last(&cx, &b, trace.last().unwrap(), args.is_present("expect-zero"));
 
     // Check the memory ports
-    for (i, port) in mem_ports.iter().enumerate().take(trace.len() - 1) {
+    for i in 0 .. exec.params.trace_len - 1 {
         // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
         // in its corresponding cycle, or it isn't used at all.
+        let port = cycle_mem_ports.get(i);
         wire_assert!(
             &cx,
             b.or(
@@ -706,38 +615,6 @@ fn main() -> io::Result<()> {
             "port {} is active on cycle {} (expected {})",
             i, cx.eval(port.cycle), i,
         );
-    }
-
-    // Check memory consistency
-
-    let sorted_mem = {
-        let _g = b.scoped_label("sort mem");
-        let mut packed = mem_ports.iter().map(|&fp| {
-            PackedMemPort::from_unpacked(&b, fp)
-        }).collect::<Vec<_>>();
-        // Using `lt` instead of `le` for the comparison here means the sortedness check will also
-        // ensure that every `MemPort` is distinct.
-        let sorted = sort::sort(&b, &mut packed, &mut |&x, &y| b.lt(x, y));
-        wire_assert!(&cx, sorted, "memory op sorting failed");
-        packed.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
-    };
-    trace!("mem ops:");
-    for (i, port) in mem_ports.iter().enumerate() {
-        trace!(
-            "mem op {:3}: op{}, {:x}, value {}, cycle {}",
-            i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value), cx.eval(port.cycle),
-        );
-    }
-    trace!("sorted mem ops:");
-    for (i, port) in sorted_mem.iter().enumerate() {
-        trace!(
-            "mem op {:3}: op{}, {:x}, value {}, cycle {}",
-            i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value), cx.eval(port.cycle),
-        );
-    }
-    check_first_mem(&cx, &b, &sorted_mem[0]);
-    for (i, (port1, port2)) in sorted_mem.iter().zip(sorted_mem.iter().skip(1)).enumerate() {
-        check_mem(&cx, &b, i, port1, port2);
     }
 
     // Check instruction-fetch consistency

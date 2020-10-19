@@ -1,6 +1,6 @@
 use std::fmt;
 use std::mem::MaybeUninit;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
 
 
@@ -66,6 +66,12 @@ impl<'a, T: Repr<'a>> Deref for TWire<'a, T> {
     type Target = T::Repr;
     fn deref(&self) -> &T::Repr {
         &self.repr
+    }
+}
+
+impl<'a, T: Repr<'a>> DerefMut for TWire<'a, T> {
+    fn deref_mut(&mut self) -> &mut T::Repr {
+        &mut self.repr
     }
 }
 
