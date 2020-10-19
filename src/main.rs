@@ -30,11 +30,6 @@ fn parse_args() -> ArgMatches<'static> {
              .value_name("TRACE.CBOR")
              .help("MicroRAM execution trace")
              .required(true))
-        .arg(Arg::with_name("scale-out")
-             .long("scale-out")
-             .takes_value(true)
-             .value_name("OUT.BC")
-             .help("output SCALE bytecode circuit representation in this directory"))
         .arg(Arg::with_name("zkif-out")
              .long("zkif-out")
              .takes_value(true)
@@ -689,11 +684,6 @@ fn main() -> io::Result<()> {
         eprintln!("error: zkinterface output is not supported - build with `--features bellman`");
         std::process::exit(1);
     }
-    #[cfg(not(feature = "scale"))]
-    if args.is_present("scale-out") {
-        eprintln!("error: scale output is not supported - build with `--features scale`");
-        std::process::exit(1);
-    }
 
 
     let arena = Bump::new();
@@ -899,10 +889,6 @@ fn main() -> io::Result<()> {
     passes.run(lower::int::int_to_uint);
     passes.run(lower::int::reduce_lit_32);
     passes.run(lower::int::mux);
-    #[cfg(feature = "scale")]
-    if args.is_present("scale-out") {
-        passes.run(lower::int::compare_to_zero);
-    }
     #[cfg(feature = "bellman")]
     if args.is_present("zkif-out") {
         passes.run(lower::int::compare_to_greater_or_equal_to_zero);
@@ -959,38 +945,6 @@ fn main() -> io::Result<()> {
             tool: "stats".to_string(),
             paths: vec![workspace.to_path_buf()],
         }).unwrap();
-    }
-
-    #[cfg(feature = "scale")]
-    if let Some(dest) = args.value_of_os("scale-out") {
-        use std::fs::File;
-        use std::io::BufWriter;
-        use cheesecloth::back::scale::Backend;
-
-        // Generate SCALE
-        let mut backend = Backend::new();
-
-        backend.print_str("asserts: ");
-        for w in flags.iter().skip(1).take(num_asserts) {
-            let sbit = backend.wire(w.clone());
-            let bit = backend.reveal(sbit);
-            backend.print(bit);
-        }
-        backend.print_str("\n");
-
-        backend.print_str("bugs: ");
-        for w in flags.iter().skip(1 + num_asserts) {
-            let sbit = backend.wire(w.clone());
-            let bit = backend.reveal(sbit);
-            backend.print(bit);
-        }
-
-        // Write out the generated SCALE program
-        let instrs = backend.finish();
-        let mut f = BufWriter::new(File::create(dest)?);
-        for i in instrs {
-            scale_isa::functions::write_instruction(&mut f, i)?;
-        }
     }
 
     // Unused in some configurations.
