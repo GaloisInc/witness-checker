@@ -234,16 +234,27 @@ macro_rules! mk_named_enum {
     (
         $(#[$attr:meta])*
         $vis:vis enum $Name:ident {
-            $($Variant:ident = $value:expr,)*
+            $(
+                $(#[$var_attr:meta])*
+                $Variant:ident = $value:expr,
+            )*
         }
     ) => {
         $(#[$attr])*
         #[repr(u8)]
         $vis enum $Name {
-            $($Variant = $value,)*
+            $(
+                $(#[$var_attr])*
+                $Variant = $value,
+            )*
         }
 
         impl $Name {
+            const COUNT: usize = 0 $( + {
+                #[allow(bad_style)] let $Variant = 1;
+                $Variant
+            } )*;
+
             pub fn from_raw(x: u8) -> Option<$Name> {
                 Some(match x {
                     $($value => $Name::$Variant,)*
@@ -251,12 +262,9 @@ macro_rules! mk_named_enum {
                 })
             }
 
-            pub fn count() -> usize {
-                0 $(+ { drop($Name::$Variant); 1})*
-            }
-
             pub fn iter() -> impl Iterator<Item = $Name> {
-                (0 .. Self::count() as u8).map(|i| Self::from_raw(i).unwrap())
+                const ALL: [$Name; $Name::COUNT] = [ $( $Name::$Variant, )* ];
+                ALL.iter().cloned()
             }
 
             pub fn from_str(s: &str) -> Option<$Name> {
@@ -310,6 +318,7 @@ macro_rules! mk_named_enum {
 }
 
 mk_named_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub enum Opcode {
         And = 0,
         Or = 1,
@@ -346,6 +355,10 @@ mk_named_enum! {
         Answer = 27,
 
         Advise = 28,
+
+        /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
+        /// this instruction to be used in place of the one that was fetched.
+        Stutter = 255,
     }
 }
 

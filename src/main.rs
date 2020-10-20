@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::iter;
@@ -231,6 +231,12 @@ fn calc_step<'a>(
 
     {
         add_case(Opcode::Advise, advice, instr.dest, s1.flag);
+    }
+
+    {
+        // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
+        // current `pc`.
+        add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC), s1.flag);
     }
 
     let (result, dest, flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
@@ -482,12 +488,19 @@ fn main() -> io::Result<()> {
     );
     mem.assert_consistent(&cx, &b);
 
-    // Gather advice values for `advise` instruction
+    // Gather `Advise` and `Stutter` advice values
     let mut advices = HashMap::new();
+    let mut stutters = HashSet::new();
     for (&i, advs) in &exec.advice {
         for adv in advs {
-            if let Advice::Advise { advise } = *adv {
-                advices.insert(i as u32 - 1, advise);
+            match *adv {
+                Advice::Advise { advise } => {
+                    advices.insert(i as u32 - 1, advise);
+                },
+                Advice::Stutter => {
+                    stutters.insert(i as u32 - 1);
+                },
+                _ => {},
             }
         }
     }
@@ -513,9 +526,16 @@ fn main() -> io::Result<()> {
     for (i, s2) in trace.iter().skip(1).enumerate() {
         max_i = i;
 
-        let instr = cycle_fetch_ports.get_instr(i);
+        // Fetch the instruction to execute.  If the `Stutter` advice is present, the instruction
+        // opcode is actually replaced by `Opcode::Stutter`.
+        let mut instr = cycle_fetch_ports.get_instr(i);
+        let stutter = b.secret(Some(stutters.contains(&(i as u32))));
+        instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
+        let instr = instr;
+
         let port = cycle_mem_ports.get(&b, i);
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
+
         let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &port, advice, &prev_s);
 
         // Check trace every D steps. 
