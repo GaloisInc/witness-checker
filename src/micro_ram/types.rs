@@ -750,6 +750,26 @@ pub struct MemSegment {
 pub struct Params {
     pub num_regs: usize,
     pub trace_len: usize,
+    #[serde(alias = "sparcity", default)]
+    pub sparsity: Sparsity,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Sparsity {
+    #[serde(alias = "KmemOp", default = "one")]
+    pub mem_op: usize,
+}
+
+fn one() -> usize {
+    1
+}
+
+impl Default for Sparsity {
+    fn default() -> Sparsity {
+        Sparsity {
+            mem_op: 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

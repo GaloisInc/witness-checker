@@ -24,6 +24,8 @@ init_mem:
 params:
   num_regs: 3
   trace_len: 29
+  sparsity:
+    mem_op: 5
 
 trace:
   - [0, [ 0, 0,   0], false]

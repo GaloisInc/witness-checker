@@ -474,7 +474,7 @@ fn main() -> io::Result<()> {
     let cycle_mem_ports = mem.add_cycles(
         &cx, &b,
         exec.params.trace_len - 1,
-        1,
+        exec.params.sparsity.mem_op,
         |i| {
             let advs = exec.advice.get(&(i as u64 + 1)).map_or(&[] as &[_], |x| x);
             (advs, i as u32)
