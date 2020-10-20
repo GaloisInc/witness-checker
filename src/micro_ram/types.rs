@@ -472,7 +472,7 @@ impl PackedMemPort {
         bld: &Builder<'a>,
         mp: TWire<'a, MemPort>,
     ) -> TWire<'a, PackedMemPort> {
-        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_PRELOAD (-1) comes before all real
+        // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_CYCLE (-1) comes before all real
         // cycles.
         let cycle_adj = bld.add(mp.cycle, bld.lit(1));
         // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
