@@ -1,10 +1,9 @@
 use std::cell::RefCell;
-use std::convert::TryInto;
 use std::fmt;
 
-use crate::eval::{self, Evaluator, CachingEvaluator};
-use crate::ir::circuit::{Circuit, Wire};
-use crate::ir::typed::{Builder, TWire, Repr};
+use crate::eval::{self, CachingEvaluator};
+use crate::ir::circuit::Circuit;
+use crate::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
 
 #[macro_export]
 macro_rules! wire_assert {
@@ -107,22 +106,21 @@ impl<'a> Context<'a> {
         f(&ContextWhen { cx: self, b, path_cond })
     }
 
-    fn eval_u64(&self, w: Wire<'a>) -> Option<u64> {
-        let eval = self.eval.as_ref()?;
-        let x: u64 = eval.borrow_mut().eval_wire(w)?.as_single()?.try_into().ok()?;
-        Some(x)
-    }
-
     pub fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        Some(self.eval_u64(cond.repr)? == 0)
+        self.eval_raw(cond).map(|ok| !ok)
     }
 
     pub fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        Some(self.eval_u64(cond.repr)? != 0)
+        self.eval_raw(cond)
     }
 
-    pub fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
-        SecretValue(self.eval_u64(w.repr))
+    fn eval_raw<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> Option<T> {
+        let eval = self.eval.as_ref()?;
+        eval.borrow_mut().eval_typed(w)
+    }
+
+    pub fn eval<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> SecretValue<T> {
+        SecretValue(self.eval_raw(w))
     }
 }
 
@@ -168,7 +166,7 @@ impl<'a, 'b> ContextWhen<'a, 'b> {
         self.cx.bug_triggered(self.bug_cond(cond))
     }
 
-    pub fn eval<T: Repr<'a, Repr = Wire<'a>>>(&self, w: TWire<'a, T>) -> SecretValue<u64> {
+    pub fn eval<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> SecretValue<T> {
         self.cx.eval(w)
     }
 }
