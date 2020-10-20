@@ -304,11 +304,6 @@ fn check_step<'a>(
     let expect_value = b.mux(is_store_like, x, result);
     cx.when(b, is_mem, |cx| {
         wire_assert!(
-            cx, b.eq(mem_port.cycle, b.lit(cycle)),
-            "cycle {}'s mem port has bad cycle number {}",
-            cycle, cx.eval(mem_port.cycle),
-        );
-        wire_assert!(
             cx, b.eq(mem_port.addr, y),
             "cycle {}'s mem port has address {} (expected {})",
             cycle, cx.eval(mem_port.addr), cx.eval(y),
