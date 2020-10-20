@@ -72,7 +72,6 @@ pub struct CalcIntermediate<'a> {
     pub x: TWire<'a,u64>,
     pub y: TWire<'a,u64>,
     pub result: TWire<'a,u64>,
-    pub mem_port: TWire<'a,MemPort>,
 }
 
 
@@ -80,7 +79,7 @@ fn calc_step<'a>(
     b: &Builder<'a>,
     cycle: u32,
     instr: TWire<'a, RamInstr>,
-    mem_ports: &[TWire<'a, MemPort>],
+    mem_port: &TWire<'a, MemPort>,
     advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
 ) -> (TWire<'a, RamState>,CalcIntermediate<'a>) {
@@ -97,12 +96,6 @@ fn calc_step<'a>(
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
-
-    let mem_port = b.select(
-        mem_ports,
-        b.lit(MemPort::default()),
-        |port| b.eq(port.cycle, b.lit(cycle)),
-    );
 
     {
         let result = b.and(x, y);
@@ -251,8 +244,8 @@ fn calc_step<'a>(
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
-    let s2 = RamStateRepr{pc, regs, flag};
-    let im = CalcIntermediate{x,y, result, mem_port};
+    let s2 = RamStateRepr { pc, regs, flag };
+    let im = CalcIntermediate { x, y, result };
     (TWire::new(s2),im)
 }
 
@@ -291,20 +284,14 @@ fn check_step<'a>(
     b: &Builder<'a>,
     cycle: u32,
     instr: TWire<'a, RamInstr>,
-    mem_ports: &[TWire<'a, MemPort>],
+    mem_port: &TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
     let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
 
-    let has_mem_port = mem_ports.iter().fold(
-        b.lit(false),
-        |acc, port| b.or(acc, b.eq(port.cycle, b.lit(cycle))),
-    );
-
     let x = calc_im.x;
     let y = calc_im.y;
     let result = calc_im.result;
-    let mem_port = calc_im.mem_port;
 
     // If the instruction is a store, load, or poison, we need additional checks to make sure the
     // fields of `mem_port` match the instruction operands.
@@ -347,12 +334,13 @@ fn check_step<'a>(
         );
     });
 
-    // Non-memory ops must not use a memory port.  This prevents a malicious prover from
-    // introducing fake stores on non-store instructions.
+    // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
+    // MEM_PORT_UNUSED_CYCLE` and this is not a mem op.  Other `mem_port.cycle` values are invalid.
+    let expect_cycle = b.mux(is_mem, b.lit(cycle), b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_assert!(
-        cx, b.eq(has_mem_port, is_mem),
-        "cycle {} mem port usage is {} (expected {})",
-        cycle, cx.eval(has_mem_port), cx.eval(is_mem),
+        cx, b.eq(mem_port.cycle, expect_cycle),
+        "cycle {} mem port cycle number is {} (expected {}; mem op? {})",
+        cycle, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
 }
 
@@ -530,7 +518,7 @@ fn main() -> io::Result<()> {
         let instr = cycle_fetch_ports.get_instr(i);
         let port = cycle_mem_ports.get(i);
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
-        let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &[port.clone()], advice, &prev_s);
+        let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &port, advice, &prev_s);
 
         // Check trace every D steps. 
         if i % check_steps == 0 {
@@ -539,7 +527,7 @@ fn main() -> io::Result<()> {
         } else {
             prev_s = calc_s.clone();
         }
-        check_step(&cx, &b, i as u32, instr, &[port.clone()], &calc_im);
+        check_step(&cx, &b, i as u32, instr, &port, &calc_im);
     }
 
     check_last(&cx, &b, trace.last().unwrap(), args.is_present("expect-zero"));
