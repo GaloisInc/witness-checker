@@ -89,17 +89,18 @@ impl<'a> Memory<'a> {
         for i in 0 .. num_ports {
             // Find the `MemOp` advice in this block (if any) and build the mem port.
             let mut mp = None;
-            let mut found_j = u8::MAX as usize;
+            let mut found_j = None;
             for j in i * sparsity .. (i + 1) * sparsity {
                 let (advs, cycle) = get_advice(j);
                 for adv in advs {
                     if let Advice::MemOp { addr, value, op } = *adv {
-                        assert!(
-                            mp.is_none(),
-                            "multiple mem ports in block {}: cycle {}, cycle {}",
-                            i, found_j, j,
-                        );
-                        found_j = j;
+                        if let Some(found_j) = found_j {
+                            panic!(
+                                "multiple mem ports in block {}: cycle {}, cycle {}",
+                                i, found_j, j,
+                            );
+                        }
+                        found_j = Some(j);
                         mp = Some(MemPort { cycle, addr, value, op });
                     }
                 }
@@ -114,7 +115,10 @@ impl<'a> Memory<'a> {
                 value: 0,
                 op: MemOpKind::Write,
             });
-            let user = u8::try_from(found_j % sparsity).unwrap();
+            let user = match found_j {
+                Some(j) => u8::try_from(j % sparsity).unwrap(),
+                None => u8::MAX,
+            };
 
             cp.ports.push(SparseMemPort {
                 mp: b.secret(Some(mp)),
