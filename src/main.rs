@@ -477,7 +477,7 @@ fn main() -> io::Result<()> {
         mem.init_segment(&b, seg);
     }
     let cycle_mem_ports = mem.add_cycles(
-        &b,
+        &cx, &b,
         exec.params.trace_len - 1,
         1,
         |i| {
@@ -514,9 +514,12 @@ fn main() -> io::Result<()> {
 
     let check_steps = args.value_of("check-steps").and_then(|c| c.parse().ok()).map(|c| if c <= 0 {1} else {c}).unwrap_or(1);
     let mut prev_s = trace[0].clone();
+    let mut max_i = 0;
     for (i, s2) in trace.iter().skip(1).enumerate() {
+        max_i = i;
+
         let instr = cycle_fetch_ports.get_instr(i);
-        let port = cycle_mem_ports.get(i);
+        let port = cycle_mem_ports.get(&b, i);
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
         let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &port, advice, &prev_s);
 
@@ -529,23 +532,10 @@ fn main() -> io::Result<()> {
         }
         check_step(&cx, &b, i as u32, instr, &port, &calc_im);
     }
+    // We rely on the loop running once for every `i` in `0 .. num_steps`.
+    assert_eq!(max_i + 1, exec.params.trace_len as usize - 1);
 
     check_last(&cx, &b, trace.last().unwrap(), args.is_present("expect-zero"));
-
-    // Check that the memory ports are consistent with the steps taken.
-    for (i, port) in cycle_mem_ports.iter().enumerate() {
-        // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
-        // in its corresponding cycle, or it isn't used at all.
-        wire_assert!(
-            &cx,
-            b.or(
-                b.eq(port.cycle, b.lit(i as u32)),
-                b.eq(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
-            ),
-            "port {} is active on cycle {} (expected {})",
-            i, cx.eval(port.cycle), i,
-        );
-    }
 
     // Check that the fetch ports are consistent with the steps taken.
     for (i, port) in cycle_fetch_ports.iter().enumerate() {

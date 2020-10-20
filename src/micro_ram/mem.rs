@@ -2,6 +2,7 @@
 //!
 //! This includes setting up initial memory, adding `MemPort`s for each cycle, sorting, and
 //! checking the sorted list.
+use std::convert::TryFrom;
 use log::*;
 use crate::ir::typed::{TWire, Builder};
 use crate::micro_ram::context::Context;
@@ -59,6 +60,7 @@ impl<'a> Memory<'a> {
 
     pub fn add_cycles<'b>(
         &mut self,
+        cx: &Context<'a>,
         b: &Builder<'a>,
         len: usize,
         sparsity: usize,
@@ -68,22 +70,26 @@ impl<'a> Memory<'a> {
 
         let mut cp = CyclePorts {
             ports: Vec::with_capacity(num_ports),
-            sparsity,
+            sparsity: u8::try_from(sparsity).unwrap(),
         };
 
         if self.verifier {
             // Simple case: everything is secret.
             for _ in 0 .. num_ports {
-                cp.ports.push(b.secret(None));
+                cp.ports.push(SparseMemPort {
+                    mp: b.secret(None),
+                    user: b.secret(None),
+                });
             }
-            self.ports.extend_from_slice(&cp.ports);
+            cp.assert_valid(cx, b, len);
+            self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
             return cp;
         }
 
         for i in 0 .. num_ports {
             // Find the `MemOp` advice in this block (if any) and build the mem port.
             let mut mp = None;
-            let mut old_j = 0;
+            let mut found_j = u8::MAX as usize;
             for j in i * sparsity .. (i + 1) * sparsity {
                 let (advs, cycle) = get_advice(j);
                 for adv in advs {
@@ -91,9 +97,9 @@ impl<'a> Memory<'a> {
                         assert!(
                             mp.is_none(),
                             "multiple mem ports in block {}: cycle {}, cycle {}",
-                            i, old_j, j,
+                            i, found_j, j,
                         );
-                        old_j = j;
+                        found_j = j;
                         mp = Some(MemPort { cycle, addr, value, op });
                     }
                 }
@@ -108,11 +114,16 @@ impl<'a> Memory<'a> {
                 value: 0,
                 op: MemOpKind::Write,
             });
+            let user = u8::try_from(found_j % sparsity).unwrap();
 
-            cp.ports.push(b.secret(Some(mp)));
+            cp.ports.push(SparseMemPort {
+                mp: b.secret(Some(mp)),
+                user: b.secret(Some(user)),
+            });
         }
 
-        self.ports.extend_from_slice(&cp.ports);
+        cp.assert_valid(cx, b, len);
+        self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
         cp
     }
 
@@ -161,22 +172,74 @@ impl<'a> Memory<'a> {
     }
 }
 
+/// A `MemPort` that is potentially shared by several steps.
+#[derive(Clone, Copy)]
+pub struct SparseMemPort<'a> {
+    mp: TWire<'a, MemPort>,
+    /// Which of the steps actually uses this `MemPort`.  If no step uses it, the value will be out
+    /// of range (`>= sparsity`).
+    user: TWire<'a, u8>,
+}
+
 pub struct CyclePorts<'a> {
-    ports: Vec<TWire<'a, MemPort>>,
-    sparsity: usize,
+    ports: Vec<SparseMemPort<'a>>,
+    sparsity: u8,
 }
 
 impl<'a> CyclePorts<'a> {
     pub fn sparsity(&self) -> usize {
-        self.sparsity
+        self.sparsity as usize
     }
 
-    pub fn get(&self, i: usize) -> TWire<'a, MemPort> {
-        self.ports[i / self.sparsity]
+    /// Get the `MemPort` used by step `i`.  Returns `MemPort::default()` if step `i` does not have
+    /// a `MemPort` assigned to it.
+    pub fn get(&self, b: &Builder<'a>, i: usize) -> TWire<'a, MemPort> {
+        if self.sparsity == 1 {
+            // Avoid an extra mux when sparsity is disabled.
+            return self.ports[i].mp;
+        }
+
+        let base = i / self.sparsity as usize;
+        let offset = i % self.sparsity as usize;
+        let smp = &self.ports[base];
+        b.mux(
+            b.eq(smp.user, b.lit(offset as u8)),
+            smp.mp,
+            b.lit(MemPort {
+                cycle: MEM_PORT_UNUSED_CYCLE,
+                .. MemPort::default()
+            }),
+        )
     }
 
-    pub fn iter<'b>(&'b self) -> impl Iterator<Item = TWire<'a, MemPort>> + 'b {
+    pub fn iter<'b>(&'b self) -> impl Iterator<Item = SparseMemPort<'a>> + 'b {
         self.ports.iter().cloned()
+    }
+
+    /// Perform validity checks, as described in `docs/memory_sparsity.md`.
+    fn assert_valid(&self, cx: &Context<'a>, b: &Builder<'a>, len: usize) {
+        for (i, smp) in self.ports.iter().enumerate() {
+            // If `user >= sparsity`, then `mp.cycle` must be `MEM_PORT_UNUSED_CYCLE`.
+            cx.when(b, b.ge(smp.user, b.lit(self.sparsity)), |cx| {
+                wire_assert!(
+                    cx, b.eq(smp.mp.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
+                    "block {} cycle number {} invalid for user index {} (sparsity = {})",
+                    i, cx.eval(smp.mp.cycle), cx.eval(smp.mp.cycle), self.sparsity,
+                );
+            });
+        }
+
+        // For the final block, `user` must not be in the range `len % sparsity .. sparsity`.
+        if len % self.sparsity as usize != 0 {
+            if let Some(smp) = self.ports.last() {
+                let low = u8::try_from(len % self.sparsity as usize).unwrap();
+                wire_assert!(
+                    cx, b.or(b.lt(smp.user, b.lit(low)), b.ge(smp.user, b.lit(self.sparsity))),
+                    "block {} has invalid user index {} (expected < {} or >= {})",
+                    self.ports.len() - 1, cx.eval(smp.user), low, self.sparsity,
+                );
+            }
+        }
     }
 }
 
