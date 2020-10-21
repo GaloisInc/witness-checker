@@ -61,3 +61,21 @@ Under this scheme,
   single step identified by `user` will receive an active `MemPort`.  The other
   step will receive an unused placeholder `MemPort`, and the checks in (2) will
   fail.
+
+
+## Fractional sparsity
+
+We may eventually wish to extend the memory sparsity system to support
+*fractional sparsity*, in which there are `N` memory ports shared by each block
+of `D` steps, for an average of `N/D` memory ports per step.  (In the current
+design, `N` is always 1.)  This would require a few adjustments to preserve the
+central property that every `MemPort` is passed to some step:
+
+* We would need to track a separate `user` for each `MemPort`, and require that
+  all `user` indices are distinct.  The least expensive way to do this would be
+  to require that they be sorted: `user0 < user1 < sparsity`.
+* We would need a slightly more clever scheme for setting the `user` index for
+  unused `MemPort`s.  With multiple `MemPort`s in a block, they can't all have
+  `user == 0`.
+* The last block could have fewer than `N` steps in it, in which case it would
+  need to have fewer than `N` `MemPort`s as well.
