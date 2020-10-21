@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use num_bigint::{BigUint, BigInt, Sign};
+use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 
 use crate::ir::circuit::{

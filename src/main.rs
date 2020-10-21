@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::iter;
@@ -72,7 +72,6 @@ pub struct CalcIntermediate<'a> {
     pub x: TWire<'a,u64>,
     pub y: TWire<'a,u64>,
     pub result: TWire<'a,u64>,
-    pub mem_port: TWire<'a,MemPort>,
 }
 
 
@@ -80,7 +79,7 @@ fn calc_step<'a>(
     b: &Builder<'a>,
     cycle: u32,
     instr: TWire<'a, RamInstr>,
-    mem_ports: &[TWire<'a, MemPort>],
+    mem_port: &TWire<'a, MemPort>,
     advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
 ) -> (TWire<'a, RamState>,CalcIntermediate<'a>) {
@@ -97,12 +96,6 @@ fn calc_step<'a>(
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
-
-    let mem_port = b.select(
-        mem_ports,
-        b.lit(MemPort::default()),
-        |port| b.eq(port.cycle, b.lit(cycle)),
-    );
 
     {
         let result = b.and(x, y);
@@ -240,6 +233,12 @@ fn calc_step<'a>(
         add_case(Opcode::Advise, advice, instr.dest, s1.flag);
     }
 
+    {
+        // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
+        // current `pc`.
+        add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC), s1.flag);
+    }
+
     let (result, dest, flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
 
     let mut regs = Vec::with_capacity(s1.regs.len());
@@ -251,8 +250,8 @@ fn calc_step<'a>(
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
-    let s2 = RamStateRepr{pc, regs, flag};
-    let im = CalcIntermediate{x,y, result, mem_port};
+    let s2 = RamStateRepr { pc, regs, flag };
+    let im = CalcIntermediate { x, y, result };
     (TWire::new(s2),im)
 }
 
@@ -291,20 +290,14 @@ fn check_step<'a>(
     b: &Builder<'a>,
     cycle: u32,
     instr: TWire<'a, RamInstr>,
-    mem_ports: &[TWire<'a, MemPort>],
+    mem_port: &TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
     let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
 
-    let has_mem_port = mem_ports.iter().fold(
-        b.lit(false),
-        |acc, port| b.or(acc, b.eq(port.cycle, b.lit(cycle))),
-    );
-
     let x = calc_im.x;
     let y = calc_im.y;
     let result = calc_im.result;
-    let mem_port = calc_im.mem_port;
 
     // If the instruction is a store, load, or poison, we need additional checks to make sure the
     // fields of `mem_port` match the instruction operands.
@@ -316,11 +309,6 @@ fn check_step<'a>(
 
     let expect_value = b.mux(is_store_like, x, result);
     cx.when(b, is_mem, |cx| {
-        wire_assert!(
-            cx, b.eq(mem_port.cycle, b.lit(cycle)),
-            "cycle {}'s mem port has bad cycle number {}",
-            cycle, cx.eval(mem_port.cycle),
-        );
         wire_assert!(
             cx, b.eq(mem_port.addr, y),
             "cycle {}'s mem port has address {} (expected {})",
@@ -347,12 +335,13 @@ fn check_step<'a>(
         );
     });
 
-    // Non-memory ops must not use a memory port.  This prevents a malicious prover from
-    // introducing fake stores on non-store instructions.
+    // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
+    // MEM_PORT_UNUSED_CYCLE` and this is not a mem op.  Other `mem_port.cycle` values are invalid.
+    let expect_cycle = b.mux(is_mem, b.lit(cycle), b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_assert!(
-        cx, b.eq(has_mem_port, is_mem),
-        "cycle {} mem port usage is {} (expected {})",
-        cycle, cx.eval(has_mem_port), cx.eval(is_mem),
+        cx, b.eq(mem_port.cycle, expect_cycle),
+        "cycle {} mem port cycle number is {} (expected {}; mem op? {})",
+        cycle, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
 }
 
@@ -489,9 +478,9 @@ fn main() -> io::Result<()> {
         mem.init_segment(&b, seg);
     }
     let cycle_mem_ports = mem.add_cycles(
-        &b,
+        &cx, &b,
         exec.params.trace_len - 1,
-        1,
+        exec.params.sparsity.mem_op,
         |i| {
             let advs = exec.advice.get(&(i as u64 + 1)).map_or(&[] as &[_], |x| x);
             (advs, i as u32)
@@ -499,12 +488,19 @@ fn main() -> io::Result<()> {
     );
     mem.assert_consistent(&cx, &b);
 
-    // Gather advice values for `advise` instruction
+    // Gather `Advise` and `Stutter` advice values
     let mut advices = HashMap::new();
+    let mut stutters = HashSet::new();
     for (&i, advs) in &exec.advice {
         for adv in advs {
-            if let Advice::Advise { advise } = *adv {
-                advices.insert(i as u32 - 1, advise);
+            match *adv {
+                Advice::Advise { advise } => {
+                    advices.insert(i as u32 - 1, advise);
+                },
+                Advice::Stutter => {
+                    stutters.insert(i as u32 - 1);
+                },
+                _ => {},
             }
         }
     }
@@ -526,11 +522,21 @@ fn main() -> io::Result<()> {
 
     let check_steps = args.value_of("check-steps").and_then(|c| c.parse().ok()).map(|c| if c <= 0 {1} else {c}).unwrap_or(1);
     let mut prev_s = trace[0].clone();
+    let mut max_i = 0;
     for (i, s2) in trace.iter().skip(1).enumerate() {
-        let instr = cycle_fetch_ports.get_instr(i);
-        let port = cycle_mem_ports.get(i);
+        max_i = i;
+
+        // Fetch the instruction to execute.  If the `Stutter` advice is present, the instruction
+        // opcode is actually replaced by `Opcode::Stutter`.
+        let mut instr = cycle_fetch_ports.get_instr(i);
+        let stutter = b.secret(Some(stutters.contains(&(i as u32))));
+        instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
+        let instr = instr;
+
+        let port = cycle_mem_ports.get(&b, i);
         let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
-        let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &[port.clone()], advice, &prev_s);
+
+        let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &port, advice, &prev_s);
 
         // Check trace every D steps. 
         if i % check_steps == 0 {
@@ -539,25 +545,12 @@ fn main() -> io::Result<()> {
         } else {
             prev_s = calc_s.clone();
         }
-        check_step(&cx, &b, i as u32, instr, &[port.clone()], &calc_im);
+        check_step(&cx, &b, i as u32, instr, &port, &calc_im);
     }
+    // We rely on the loop running once for every `i` in `0 .. num_steps`.
+    assert_eq!(max_i + 1, exec.params.trace_len as usize - 1);
 
     check_last(&cx, &b, trace.last().unwrap(), args.is_present("expect-zero"));
-
-    // Check that the memory ports are consistent with the steps taken.
-    for (i, port) in cycle_mem_ports.iter().enumerate() {
-        // Currently, ports have a 1-to-1 mapping to steps.  We check that either the port is used
-        // in its corresponding cycle, or it isn't used at all.
-        wire_assert!(
-            &cx,
-            b.or(
-                b.eq(port.cycle, b.lit(i as u32)),
-                b.eq(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
-            ),
-            "port {} is active on cycle {} (expected {})",
-            i, cx.eval(port.cycle), i,
-        );
-    }
 
     // Check that the fetch ports are consistent with the steps taken.
     for (i, port) in cycle_fetch_ports.iter().enumerate() {

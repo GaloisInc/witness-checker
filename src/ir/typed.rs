@@ -1,6 +1,9 @@
+use std::convert::TryFrom;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
+use num_traits::Zero;
+use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
 
 
@@ -112,6 +115,11 @@ impl<'a> Builder<'a> {
     pub fn secret<T: Secret<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
         TWire::new(Secret::secret(self, x))
     }
+}
+
+pub trait FromEval<'a>
+where Self: Repr<'a> + Sized {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self>;
 }
 
 
@@ -278,6 +286,13 @@ impl<'a> Secret<'a> for bool {
     }
 }
 
+impl<'a> FromEval<'a> for bool {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        let val = ev.eval_single_wire(a)?;
+        Some(!val.is_zero())
+    }
+}
+
 primitive_unary_impl!(Not::not(bool));
 primitive_binary_impl!(And::and(bool, bool) -> bool);
 primitive_binary_impl!(Or::or(bool, bool) -> bool);
@@ -330,6 +345,14 @@ macro_rules! integer_impls {
         impl<'a> Secret<'a> for $T {
             fn secret(bld: &Builder<'a>, x: Option<$T>) -> Wire<'a> {
                 bld.c.new_secret(bld.c.ty(TyKind::$K), x.map(|x| x as u64))
+            }
+        }
+
+        impl<'a> FromEval<'a> for $T {
+            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+                let val = ev.eval_single_wire(a)?;
+                // Conversion should succeed, assuming `a` really carries a value of type `$T`.
+                Some(<$T as TryFrom<_>>::try_from(val).unwrap())
             }
         }
 
@@ -436,6 +459,18 @@ macro_rules! tuple_impl {
             }
         }
 
+        impl<'a, $($A: FromEval<'a>,)*> FromEval<'a> for ($($A,)*) {
+            fn from_eval<E: Evaluator<'a>>(
+                ev: &mut E,
+                a: ($(TWire<'a, $A>,)*),
+            ) -> Option<($($A,)*)> {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                #![allow(unused)]       // `ev` in the zero-element case
+                let ($($A,)*) = a;
+                Some(($($A::from_eval(ev, $A.repr)?,)*))
+            }
+        }
+
         impl<'a, C, $($A,)* $($B,)*> Mux<'a, C, ($($B,)*)> for ($($A,)*)
         where
             C: Repr<'a>,
@@ -530,6 +565,30 @@ macro_rules! array_impls {
                 }
             }
 
+            impl<'a, A: FromEval<'a>> FromEval<'a> for [A; $n] {
+                fn from_eval<E: Evaluator<'a>>(
+                    ev: &mut E,
+                    a: [TWire<'a, A>; $n],
+                ) -> Option<[A; $n]> {
+                    // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
+                    // to implement without unnecessary allocation.
+                    unsafe {
+                        let a = MaybeUninit::new(a);
+                        let mut o = MaybeUninit::uninit();
+
+                        for i in 0 .. $n {
+                            let a_val = (a.as_ptr() as *const TWire<'a, A>).add(i).read();
+                            // If this panics, the remaining elements of `a` and `b` will leak.
+                            let o_val = A::from_eval(ev, a_val.repr)?;
+
+                            (o.as_mut_ptr() as *mut A).add(i).write(o_val);
+                        }
+
+                        Some(o.assume_init())
+                    }
+                }
+            }
+
             impl<'a, C, A, B> Mux<'a, C, [B; $n]> for [A; $n]
             where
                 C: Repr<'a>,
@@ -587,6 +646,12 @@ impl<'a, A: Repr<'a>> Repr<'a> for Vec<A> {
 impl<'a, A: Lit<'a>> Lit<'a> for Vec<A> {
     fn lit(bld: &Builder<'a>, a: Vec<A>) -> Vec<TWire<'a, A>> {
         a.into_iter().map(|x| bld.lit(x)).collect()
+    }
+}
+
+impl<'a, A: FromEval<'a>> FromEval<'a> for Vec<A> {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Vec<TWire<'a, A>>) -> Option<Vec<A>> {
+        a.into_iter().map(|x| A::from_eval(ev, x.repr)).collect()
     }
 }
 
@@ -677,5 +742,16 @@ impl<'a> Builder<'a> {
             acc = self.mux(cond, val.clone(), acc);
         }
         acc
+    }
+}
+
+
+pub trait EvaluatorExt<'a> {
+    fn eval_typed<T: FromEval<'a>>(&mut self, w: TWire<'a, T>) -> Option<T>;
+}
+
+impl<'a, E: Evaluator<'a>> EvaluatorExt<'a> for E {
+    fn eval_typed<T: FromEval<'a>>(&mut self, w: TWire<'a, T>) -> Option<T> {
+        T::from_eval(self, w.repr)
     }
 }

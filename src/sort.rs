@@ -1,9 +1,8 @@
 use std::cmp::Ordering;
 use log::*;
-use num_traits::Zero;
-use crate::eval::{self, Evaluator, CachingEvaluator};
+use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::Circuit;
-use crate::ir::typed::{Builder, TWire, Repr, Mux};
+use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 
 
 /// Compute the routing information to implement a permutation with a Benes network.  Each entry of
@@ -309,8 +308,7 @@ where
 
     let mut r2l = (0 .. xs.len()).collect::<Vec<_>>();
     let mut try_compare = |x, y| -> Option<bool> {
-        let val = ev.eval_wire(compare(x, y).repr)?.unwrap_single()?;
-        Some(!val.is_zero())
+        ev.eval_typed(compare(x, y))
     };
     // We can't bail out from inside `sort_by` closure, so we record failures separately.
     let mut ok = true;
@@ -480,7 +478,7 @@ mod test {
         let outputs = benes_build(&b, Some(&routing), inputs);
 
         let output_vals = outputs.iter()
-            .map(|&w| ev.eval_wire(w.repr).unwrap().unwrap_single().unwrap().try_into().unwrap())
+            .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())
             .collect::<Vec<usize>>();
         trace!("outputs: {:?}", output_vals);
         for (j, i) in output_vals.into_iter().enumerate() {
@@ -522,7 +520,7 @@ mod test {
         sort(&b, &mut ws, &mut |&x, &y| b.lt(x, y));
 
         let vals = ws.iter()
-            .map(|&w| ev.eval_wire(w.repr).unwrap().unwrap_single().unwrap().try_into().unwrap())
+            .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())
             .collect::<Vec<usize>>();
         for (&x, &y) in vals.iter().zip(vals.iter().skip(1)) {
             assert!(x <= y);

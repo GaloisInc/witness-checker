@@ -82,7 +82,7 @@ impl<'a> Fetch<'a> {
         for (i, port) in self.ports.iter().enumerate() {
             trace!(
                 "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                i, cx.eval(port.write).0.map_or("??", |x| if x == 0 { "read" } else { "write" }),
+                i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
                 cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
                 cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
             );
@@ -91,7 +91,7 @@ impl<'a> Fetch<'a> {
         for (i, port) in sorted_ports.iter().enumerate() {
             trace!(
                 "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                i, cx.eval(port.write).0.map_or("??", |x| if x == 0 { "read" } else { "write" }),
+                i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
                 cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
                 cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
             );
