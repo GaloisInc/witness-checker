@@ -117,7 +117,7 @@ impl<'a> Memory<'a> {
             });
             let user = match found_j {
                 Some(j) => u8::try_from(j % sparsity).unwrap(),
-                None => u8::MAX,
+                None => 0,
             };
 
             cp.ports.push(SparseMemPort {
@@ -222,27 +222,25 @@ impl<'a> CyclePorts<'a> {
 
     /// Perform validity checks, as described in `docs/memory_sparsity.md`.
     fn assert_valid(&self, cx: &Context<'a>, b: &Builder<'a>, len: usize) {
-        for (i, smp) in self.ports.iter().enumerate() {
-            // If `user >= sparsity`, then `mp.cycle` must be `MEM_PORT_UNUSED_CYCLE`.
-            cx.when(b, b.ge(smp.user, b.lit(self.sparsity)), |cx| {
-                wire_assert!(
-                    cx, b.eq(smp.mp.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
-                    "block {} cycle number {} invalid for user index {} (sparsity = {})",
-                    i, cx.eval(smp.mp.cycle), cx.eval(smp.mp.cycle), self.sparsity,
-                );
-            });
-        }
+        // The last block may have fewer than `sparsity` steps in it.  In that case, we need to
+        // lower the limit on `user` for the final block.
+        let last_block_size = if len % self.sparsity as usize == 0 {
+            self.sparsity
+        } else {
+            (len % self.sparsity as usize) as u8
+        };
 
-        // For the final block, `user` must not be in the range `len % sparsity .. sparsity`.
-        if len % self.sparsity as usize != 0 {
-            if let Some(smp) = self.ports.last() {
-                let low = u8::try_from(len % self.sparsity as usize).unwrap();
-                wire_assert!(
-                    cx, b.or(b.lt(smp.user, b.lit(low)), b.ge(smp.user, b.lit(self.sparsity))),
-                    "block {} has invalid user index {} (expected < {} or >= {})",
-                    self.ports.len() - 1, cx.eval(smp.user), low, self.sparsity,
-                );
-            }
+        for (i, smp) in self.ports.iter().enumerate() {
+            let block_size = if i == self.ports.len() - 1 {
+                last_block_size
+            } else {
+                self.sparsity
+            };
+            wire_assert!(
+                cx, b.lt(smp.user, b.lit(block_size)),
+                "block {} user index {} is out of range (expected < {})",
+                i, cx.eval(smp.user), block_size,
+            );
         }
     }
 }
