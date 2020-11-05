@@ -45,7 +45,11 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
 
             let old_gate = &*old_wire;
             let new_gate_kind = match old_gate.kind {
-                GateKind::Lit(val, ty) => GateKind::Lit(val, self.ty(ty)),
+                GateKind::Lit(val, ty) => {
+                    let new_ty = self.ty(ty);
+                    let new_val = self.c.bits(new_ty, val);
+                    GateKind::Lit(new_val, new_ty)
+                },
                 // TODO: avoid unnecessary duplication of Secrets
                 GateKind::Secret(s) => self.c.new_secret(self.ty(s.ty), s.val).kind,
                 GateKind::Unary(op, a) => GateKind::Unary(op, get(a)),
@@ -75,7 +79,6 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
         }
 
         let new_ty = match *old_ty {
-            TyKind::Bool => self.c.ty(TyKind::Bool),
             TyKind::Uint(sz) => self.c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => self.c.ty(TyKind::Int(sz)),
             TyKind::Bundle(tys) =>

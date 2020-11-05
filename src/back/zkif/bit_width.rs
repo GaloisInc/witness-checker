@@ -1,7 +1,8 @@
 use std::ops::{Add, Sub, Mul};
 use std::cmp::max;
+use num_bigint::{BigUint, BigInt, Sign};
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
-use crate::back::zkif::int64::Int64;
+use crate::back::zkif::int::Int;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BitWidth {
@@ -42,6 +43,22 @@ impl From<i64> for BitWidth {
     }
 }
 
+impl From<&BigUint> for BitWidth {
+    fn from(literal: &BigUint) -> Self {
+        Max(literal.bits() as usize, false)
+    }
+}
+
+impl From<&BigInt> for BitWidth {
+    fn from(literal: &BigInt) -> Self {
+        let (sign, mag) = literal.clone().into_parts();
+        match sign {
+            Sign::Minus => Self::zero() - BitWidth::from(&mag),
+            Sign::Plus | Sign::NoSign => BitWidth::from(&mag),
+        }
+    }
+}
+
 impl From<&Boolean> for BitWidth {
     /// This is a type-safe way to show that we have a validated boolean.
     fn from(_: &Boolean) -> Self {
@@ -49,9 +66,9 @@ impl From<&Boolean> for BitWidth {
     }
 }
 
-impl From<&Int64> for BitWidth {
+impl From<&Int> for BitWidth {
     /// This is a type-safe way to show that we have a validated integer.
-    fn from(_: &Int64) -> Self {
+    fn from(_: &Int) -> Self {
         Max(32, false)
     }
 }

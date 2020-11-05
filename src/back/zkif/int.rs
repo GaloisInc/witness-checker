@@ -3,6 +3,10 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
+use std::cmp;
+use num_bigint::BigUint;
+use num_traits::Zero;
+
 use zkinterface_bellman::{
     ff::{Field, PrimeField},
     bellman::{
@@ -17,61 +21,67 @@ use super::{
     bit_width::BitWidth,
 };
 
-/// The size of integer representations in bits.
-const SIZE: usize = 64;
-
 /// Represents an interpretation of SIZE `Boolean` objects as a
 /// unsigned integer, or two-complement signed integer.
 #[derive(Clone)]
-pub struct Int64 {
-    // Least significant bit first
+pub struct Int {
+    /// Least significant bit first.
     pub bits: Vec<Boolean>,
-    pub value: Option<u64>,
+    /// The value, if known.
+    ///
+    /// Invariant: if `value` is `Some(x)`, then `x.bits() <= self.bits.len()`.
+    pub value: Option<BigUint>,
 }
 
-impl Int64 {
-    /// Construct a constant `Int64` from a `u64`
-    pub fn constant(value: u64) -> Self
+impl Int {
+    pub fn width(&self) -> usize {
+        self.bits.len()
+    }
+
+    /// Construct a constant `Int` from a `BigUint`
+    pub fn constant(width: usize, value: BigUint) -> Self
     {
-        let mut bits = Vec::with_capacity(SIZE);
+        let mut bits = Vec::with_capacity(width);
 
-        let mut tmp = value;
-        for _ in 0..SIZE {
-            if tmp & 1 == 1 {
-                bits.push(Boolean::constant(true))
-            } else {
-                bits.push(Boolean::constant(false))
-            }
-
-            tmp >>= 1;
+        let digits = value.to_u32_digits();
+        for i in 0..width {
+            let idx = i / 32;
+            let off = i % 32;
+            let set = digits[idx] & (1 << off) != 0;
+            bits.push(Boolean::constant(set))
         }
 
-        Int64 {
+        Int {
             bits: bits,
             value: Some(value),
         }
     }
 
-    /// Allocate a `Int64` in the constraint system
+    /// Allocate an `Int` in the constraint system
     pub fn alloc<Scalar, CS>(
         mut cs: CS,
-        value: Option<u64>,
+        width: usize,
+        value: Option<BigUint>,
     ) -> Result<Self, SynthesisError>
         where Scalar: PrimeField,
               CS: ConstraintSystem<Scalar>
     {
         let values = match value {
-            Some(mut val) => {
-                let mut v = Vec::with_capacity(SIZE);
+            Some(ref val) => {
+                let mut v = Vec::with_capacity(width);
 
-                for _ in 0..SIZE {
-                    v.push(Some(val & 1 == 1));
-                    val >>= 1;
+                let digits = val.to_u32_digits();
+                for i in 0..width {
+                    let idx = i / 32;
+                    let off = i % 32;
+                    let digit = digits.get(i / 32).cloned().unwrap_or(0);
+                    let set = digit & (1 << (i % 32)) != 0;
+                    v.push(Some(set));
                 }
 
                 v
             }
-            None => vec![None; SIZE]
+            None => vec![None; width]
         };
 
         let bits = values.into_iter()
@@ -84,7 +94,7 @@ impl Int64 {
             })
             .collect::<Result<Vec<_>, SynthesisError>>()?;
 
-        Ok(Int64 {
+        Ok(Int {
             bits: bits,
             value: value,
         })
@@ -92,29 +102,22 @@ impl Int64 {
 
     pub fn from_num<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
+        width: usize,
         num: &Num<Scalar>,
-    ) -> Int64 {
+    ) -> Int {
+        // `alloc_bits` produces `num.real_bits` bits, but we only care about the valid ones.
         let mut bits = num.alloc_bits(&mut cs);
-        let expand_bit = match num.bit_width {
-            // Unsigned numbers are padded with zeros.
-            BitWidth::Max(_, false) => Boolean::Constant(false),
-            // Signed numbers are padded by copying the sign bit.
-            BitWidth::Max(_, true) => bits[bits.len() - 1].clone(),
-            _ => unreachable!(),
-        };
-        bits.resize(SIZE, expand_bit);
-        Self::from_bits(&bits)
-    }
+        bits.truncate(cmp::min(width, num.valid_bits as usize));
 
-    pub fn from_boolean(bool: &Boolean) -> Int64 {
-        let mut bits = Vec::with_capacity(SIZE);
-        bits.push(bool.clone());
-        bits.resize(SIZE, Boolean::constant(false));
-
-        Int64 {
-            bits,
-            value: bool.get_value().map(|b| b as u64),
+        if (num.valid_bits as usize) < width {
+            eprintln!(
+                "warning: bogus conversion from {}-valid-bit Num to {}-bit Int",
+                num.valid_bits, width,
+            );
+            bits.resize(width, Boolean::Constant(false));
         }
+
+        Self::from_bits(&bits)
     }
 
     pub fn is_negative(&self) -> &Boolean {
@@ -126,89 +129,110 @@ impl Int64 {
         self.is_negative().not()
     }
 
-    /// Turns this `Int64` into its little-endian byte order representation.
+    /// Turns this `Int` into its little-endian byte order representation.
     pub fn into_bits(&self) -> Vec<Boolean> {
         self.bits.clone()
     }
 
     /// Converts a little-endian byte order representation of bits into a
-    /// `Int64`.
+    /// `Int`.
     pub fn from_bits(bits: &[Boolean]) -> Self
     {
-        assert_eq!(bits.len(), SIZE);
-
         let new_bits = bits.to_vec();
 
-        let mut value = Some(0u64);
-        for b in new_bits.iter().rev() {
-            value.as_mut().map(|v| *v <<= 1);
-
+        let mut digits = Some(vec![0_u32; (bits.len() + 31) / 32]);
+        for (i, b) in new_bits.iter().enumerate() {
+            let idx = i / 32;
+            let off = i % 32;
             match b {
                 &Boolean::Constant(b) => {
                     if b {
-                        value.as_mut().map(|v| *v |= 1);
+                        digits.as_mut().map(|ds| { ds[idx] |= 1 << off; });
                     }
                 }
                 &Boolean::Is(ref b) => {
                     match b.get_value() {
-                        Some(true) => { value.as_mut().map(|v| *v |= 1); }
+                        Some(true) => { digits.as_mut().map(|ds| { ds[idx] |= 1 << off; }); }
                         Some(false) => {}
-                        None => { value = None }
+                        None => { digits = None }
                     }
                 }
                 &Boolean::Not(ref b) => {
                     match b.get_value() {
-                        Some(false) => { value.as_mut().map(|v| *v |= 1); }
+                        Some(false) => { digits.as_mut().map(|ds| { ds[idx] |= 1 << off; }); }
                         Some(true) => {}
-                        None => { value = None }
+                        None => { digits = None }
                     }
                 }
             }
         }
 
-        Int64 {
-            value: value,
+        Int {
+            value: digits.as_ref().map(|ds| BigUint::from_slice(ds)),
             bits: new_bits,
         }
     }
 
     pub fn shift_left(&self, by: usize) -> Self {
-        let by = by % SIZE;
+        let width = self.width();
+        let by = by % width;
 
         let fill = Boolean::constant(false);
 
         let new_bits = Some(&fill).into_iter().cycle() // Generate zeros to insert.
             .take(by) // Take the least significant zeros.
             .chain(self.bits.iter()) // Append the bits to keep.
-            .take(SIZE) // Truncate to SIZE bits.
-            .cloned().collect();
+            .take(width) // Truncate to SIZE bits.
+            .cloned().collect::<Vec<_>>();
 
-        Int64 {
+        Int {
             bits: new_bits,
-            value: self.value.map(|v| v << by as u64),
+            value: self.value.as_ref().map(|v| {
+                let mask = (BigUint::from(1_u8) << width) - 1_u8;
+                (v << by) & mask
+            }),
         }
     }
 
-    pub fn shift_right(&self, by: usize) -> Self {
-        let by = by % SIZE;
+    pub fn shift_right(&self, by: usize, signed: bool) -> Self {
+        let width = self.width();
+        let by = by % width;
 
-        let fill = Boolean::constant(false);
+        let fill = if signed {
+            self.bits.last().unwrap().clone()
+        } else {
+            Boolean::constant(false)
+        };
 
         let new_bits = self.bits
             .iter() // The bits are least significant first
             .skip(by) // Skip the bits that will be lost during the shift
             .chain(Some(&fill).into_iter().cycle()) // Rest will be zeros
-            .take(SIZE) // Only SIZE bits needed!
+            .take(width) // Only SIZE bits needed!
             .cloned()
-            .collect();
+            .collect::<Vec<_>>();
 
-        Int64 {
+
+        let value = match self.value.as_ref() {
+            Some(v) => {
+                let mut new_v = v >> by;
+                if signed {
+                    if !(v & (BigUint::from(1_u8) << (width - 1))).is_zero() {
+                        new_v |= ((BigUint::from(1_u8) << by) - 1_u8) << (width - by);
+                    }
+                }
+                Some(new_v)
+            },
+            None => None,
+        };
+
+        Int {
             bits: new_bits,
-            value: self.value.map(|v| v >> by as u64),
+            value,
         }
     }
 
-    /// XOR this `Int64` with another `Int64`
+    /// XOR this `Int` with another `Int`
     pub fn xor<Scalar, CS>(
         &self,
         mut cs: CS,
@@ -217,7 +241,7 @@ impl Int64 {
         where Scalar: PrimeField,
               CS: ConstraintSystem<Scalar>
     {
-        let new_value = match (self.value, other.value) {
+        let new_value = match (self.value.as_ref(), other.value.as_ref()) {
             (Some(a), Some(b)) => {
                 Some(a ^ b)
             }
@@ -236,7 +260,7 @@ impl Int64 {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(Int64 {
+        Ok(Int {
             bits: bits,
             value: new_value,
         })

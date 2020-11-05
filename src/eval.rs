@@ -1,20 +1,65 @@
 use std::collections::HashMap;
+use std::convert::TryFrom;
+use num_bigint::{BigUint, BigInt, Sign};
+use num_traits::{Signed, Zero};
 
 use crate::ir::circuit::{
-    Circuit, Ty, Wire, Secret, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
+    Circuit, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
 };
 
 use self::Value::Single;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Value {
-    Single(u64),
+    /// The value of an integer-typed wire, in arbitrary precision.  For `Uint` wires, this is in
+    /// the range `0 .. 2^N`; for `Int`, it's in the range `-2^(N-1) .. 2^(N-1)`.
+    Single(BigInt),
     Bundle(Vec<Value>),
 }
 
 impl Value {
-    pub fn as_single(&self) -> Option<u64> {
+    pub fn from_lit(ty: Ty, bits: Bits) -> Value {
+        Value::Single(bits.to_bigint(ty))
+    }
+
+    /// Truncate an arbitrary-precision value `i` to the appropriate range for `ty`.
+    pub fn trunc(ty: Ty, i: BigInt) -> Value {
+        match *ty {
+            TyKind::Uint(sz) => {
+                let i = if i.is_negative() || i.bits() > sz.bits() as u64 {
+                    let mask = (BigInt::from(1) << sz.bits()) - 1;
+                    i & mask
+                } else {
+                    i
+                };
+                Single(i)
+            },
+            TyKind::Int(sz) => {
+                let out_of_range =
+                    (i.is_positive() && i.bits() > sz.bits() as u64) ||
+                        (i.is_negative() && i.bits() >= sz.bits() as u64);
+                let i = if out_of_range {
+                    let mask = (BigInt::from(1) << sz.bits()) - 1;
+                    let step = BigInt::from(1) << (sz.bits() - 1);
+                    ((i + &step) & mask) - &step
+                } else {
+                    i
+                };
+                Single(i)
+            },
+            _ => panic!("can't construct a Bundle from a single integer"),
+        }
+    }
+
+    pub fn as_single(&self) -> Option<&BigInt> {
         match *self {
+            Value::Single(ref x) => Some(x),
+            _ => None,
+        }
+    }
+
+    pub fn unwrap_single(self) -> Option<BigInt> {
+        match self {
             Value::Single(x) => Some(x),
             _ => None,
         }
@@ -33,7 +78,7 @@ pub trait Evaluator<'a>: SecretEvaluator<'a> {
 
     fn eval_gadget(&mut self, k: GadgetKindRef<'a>, ws: &[Wire<'a>]) -> Option<Value>;
 
-    fn eval_single_wire(&mut self, w: Wire<'a>) -> Option<u64> {
+    fn eval_single_wire(&mut self, w: Wire<'a>) -> Option<BigInt> {
         match self.eval_wire(w) {
             Some(Single(x)) => Some(x),
             _ => None,
@@ -58,7 +103,7 @@ impl<'a> SecretEvaluator<'a> for Public {
 pub struct RevealSecrets;
 impl<'a> SecretEvaluator<'a> for RevealSecrets {
     fn eval_secret(&mut self, s: Secret<'a>) -> Option<Value> {
-        Some(Single(s.val?))
+        Some(Value::from_lit(s.ty, s.val?))
     }
 }
 
@@ -106,42 +151,17 @@ impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, 
 
 
 
-fn value_mask(ty: Ty) -> Option<u64> {
-    match *ty {
-        TyKind::Bool => Some(1),
-        TyKind::Int(sz) |
-        TyKind::Uint(sz) => Some(!0 >> (64 - sz.bits())),
-        TyKind::Bundle(_) => None,
-    }
+fn safe_div(x: BigInt, y: BigInt) -> BigInt {
+    if y.is_zero() { 0.into() } else { x / y }
 }
 
-fn sign_extend(ty: Ty, val: u64) -> Option<i64> {
-    let shift = match *ty {
-        TyKind::Int(sz) | TyKind::Uint(sz) => 64 - sz.bits(),
-        _ => return None,
-    };
-    Some(((val << shift) as i64) >> shift)
-}
-
-fn safe_div(x: u64, y: u64) -> u64 {
-    if y == 0 { 0 } else { x / y }
-}
-
-fn safe_sdiv(x: i64, y: i64) -> i64 {
-    if y == 0 { 0 } else { x / y }
-}
-
-fn safe_mod(x: u64, y: u64) -> u64 {
-    if y == 0 { 0 } else { x % y }
-}
-
-fn safe_smod(x: i64, y: i64) -> i64 {
-    if y == 0 { 0 } else { x % y }
+fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
+    if y.is_zero() { 0.into() } else { x % y }
 }
 
 pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Value> {
     Some(match gk {
-        GateKind::Lit(x, _) => Single(x),
+        GateKind::Lit(bits, ty) => Value::from_lit(ty, bits),
 
         GateKind::Secret(s) => return e.eval_secret(s),
 
@@ -150,80 +170,64 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Va
             let ty = a.ty;
             let val = match op {
                 UnOp::Not => !a_val,
-                UnOp::Neg => sign_extend(ty, a_val)?.wrapping_neg() as u64,
+                UnOp::Neg => -a_val,
             };
-            Single(val & value_mask(ty)?)
+            Value::trunc(ty, val)
         },
 
         GateKind::Binary(op, a, b) => {
             let a_val = e.eval_single_wire(a)?;
             let b_val = e.eval_single_wire(b)?;
             let ty = a.ty;
-            let val = match (op, *ty) {
-                (BinOp::Add, _) => a_val.wrapping_add(b_val),
-                (BinOp::Sub, _) => a_val.wrapping_sub(b_val),
-                (BinOp::Mul, _) => a_val.wrapping_mul(b_val),
-                (BinOp::Div, TyKind::Uint(_)) => safe_div(a_val, b_val),
-                (BinOp::Div, TyKind::Int(_)) =>
-                    safe_sdiv(sign_extend(ty, a_val)?, sign_extend(ty, b_val)?) as u64,
-                (BinOp::Div, _) => return None,
-                (BinOp::Mod, TyKind::Uint(_)) => safe_mod(a_val, b_val),
-                (BinOp::Mod, TyKind::Int(_)) =>
-                    safe_smod(sign_extend(ty, a_val)?, sign_extend(ty, b_val)?) as u64,
-                (BinOp::Mod, _) => return None,
-                (BinOp::And, _) => a_val & b_val,
-                (BinOp::Or, _) => a_val | b_val,
-                (BinOp::Xor, _) => a_val ^ b_val,
+            let val = match op {
+                BinOp::Add => a_val + b_val,
+                BinOp::Sub => a_val - b_val,
+                BinOp::Mul => a_val * b_val,
+                BinOp::Div => safe_div(a_val, b_val),
+                BinOp::Mod => safe_mod(a_val, b_val),
+                BinOp::And => a_val & b_val,
+                BinOp::Or => a_val | b_val,
+                BinOp::Xor => a_val ^ b_val,
             };
-            Single(val & value_mask(ty)?)
+            Value::trunc(ty, val)
         },
 
         GateKind::Shift(op, a, b) => {
             let a_val = e.eval_single_wire(a)?;
             let b_val = e.eval_single_wire(b)?;
+            let b_val = u16::try_from(b_val).ok()?;
             let ty = a.ty;
-            let val = match (op, *ty) {
-                (ShiftOp::Shl, _) => a_val << b_val,
-                (ShiftOp::Shr, TyKind::Uint(_)) => a_val >> b_val,
-                (ShiftOp::Shr, TyKind::Int(_)) =>
-                    (sign_extend(ty, a_val)? >> b_val) as u64,
-                (ShiftOp::Shr, _) => return None,
+            let val = match op {
+                ShiftOp::Shl => a_val << b_val,
+                ShiftOp::Shr => a_val >> b_val,
             };
-            Single(val & value_mask(ty)?)
+            Value::trunc(ty, val)
         },
 
         GateKind::Compare(op, a, b) => {
             let a_val = e.eval_single_wire(a)?;
             let b_val = e.eval_single_wire(b)?;
             let ty = a.ty;
-            let val: bool = match (op, *ty) {
-                (CmpOp::Eq, _) => (a_val & value_mask(ty)?) == (b_val & value_mask(ty)?),
-                (CmpOp::Ne, _) => (a_val & value_mask(ty)?) != (b_val & value_mask(ty)?),
-                (CmpOp::Lt, TyKind::Int(_)) => sign_extend(ty, a_val)? < sign_extend(ty, b_val)?,
-                (CmpOp::Lt, _) => a_val < b_val,
-                (CmpOp::Le, TyKind::Int(_)) => sign_extend(ty, a_val)? <= sign_extend(ty, b_val)?,
-                (CmpOp::Le, _) => a_val <= b_val,
-                (CmpOp::Gt, TyKind::Int(_)) => sign_extend(ty, a_val)? > sign_extend(ty, b_val)?,
-                (CmpOp::Gt, _) => a_val > b_val,
-                (CmpOp::Ge, TyKind::Int(_)) => sign_extend(ty, a_val)? >= sign_extend(ty, b_val)?,
-                (CmpOp::Ge, _) => a_val >= b_val,
+            let val: bool = match op {
+                CmpOp::Eq => a_val == b_val,
+                CmpOp::Ne => a_val != b_val,
+                CmpOp::Lt => a_val < b_val,
+                CmpOp::Le => a_val <= b_val,
+                CmpOp::Gt => a_val > b_val,
+                CmpOp::Ge => a_val >= b_val,
             };
-            Single(val as u64)
+            Value::trunc(ty, BigInt::from(val as u8))
         },
 
         GateKind::Mux(c, x, y) => {
             let c_val = e.eval_single_wire(c)?;
             // Avoid evaluating inputs that don't contribute to the output.
-            if c_val != 0 { e.eval_wire(x)? } else { e.eval_wire(y)? }
+            if !c_val.is_zero() { e.eval_wire(x)? } else { e.eval_wire(y)? }
         },
 
         GateKind::Cast(a, new_ty) => {
             let a_val = e.eval_single_wire(a)?;
-            let val = match *a.ty {
-                TyKind::Int(_) => sign_extend(a.ty, a_val)? as u64,
-                _ => a_val,
-            };
-            Single(val & value_mask(new_ty)?)
+            Value::trunc(new_ty, a_val)
         },
 
         GateKind::Pack(ws) => {

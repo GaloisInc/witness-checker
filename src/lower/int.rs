@@ -1,18 +1,37 @@
+use std::convert::TryFrom;
+use num_bigint::BigUint;
+use num_traits::Zero;
+
 use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp, UnOp};
 
 // TODO: mod -> div + sub
 
 pub fn compare_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
-        if a.ty.is_integer() {
+        if a.ty.is_integer() && *a.ty != TyKind::BOOL {
             let zero = c.lit(a.ty, 0);
+
+            // For Lt/Gt comparisons, we have to extend the inputs by 1 bit, then do a signed
+            // comparison (regardless of input signedness).
+            //
+            // Signed case: consider 8-bit inputs `-128 < 1` (true).  This becomes `-128 - 1 < 0`,
+            // but `-128 - 1` underflows to `127`, and `127 < 0` is false.  But if the inputs are
+            // first extended to 9 bits, then `-128 - 1 = -129`, and `-129 < 0` is true.
+            //
+            // Unsigned case: `x < 0` is always false for unsigned `x`.
+            //
+            // These are all lazy evaluated.
+            let ext_ty = c.ty(TyKind::Int(IntSize(a.ty.integer_size().bits() + 1)));
+            let ext_zero = c.lit(ext_ty, 0);
+            let ext = |w| c.cast(w, ext_ty);
+
             return match op {
                 CmpOp::Eq => c.eq(c.sub(a, b), zero),
                 CmpOp::Ne => c.not(c.eq(c.sub(a, b), zero)),
-                CmpOp::Lt => c.lt(c.sub(a, b), zero),
-                CmpOp::Le => c.not(c.lt(c.sub(b, a), zero)),
-                CmpOp::Gt => c.lt(c.sub(b, a), zero),
-                CmpOp::Ge => c.not(c.lt(c.sub(a, b), zero)),
+                CmpOp::Lt => c.lt(c.sub(ext(a), ext(b)), ext_zero),
+                CmpOp::Le => c.not(c.lt(c.sub(ext(b), ext(a)), ext_zero)),
+                CmpOp::Gt => c.lt(c.sub(ext(b), ext(a)), ext_zero),
+                CmpOp::Ge => c.not(c.lt(c.sub(ext(a), ext(b)), ext_zero)),
             };
         }
     }
@@ -21,19 +40,22 @@ pub fn compare_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wir
 
 pub fn compare_to_greater_or_equal_to_zero<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
-        if a.ty.is_integer() {
+        if a.ty.is_integer() && *a.ty != TyKind::BOOL {
             let zero = c.lit(a.ty, 0);
+            let ext_ty = c.ty(TyKind::Int(IntSize(a.ty.integer_size().bits() + 1)));
+            let ext_zero = c.lit(ext_ty, 0);
+            let ext = |w| c.cast(w, ext_ty);
             return match op {
                 CmpOp::Eq => c.eq(c.sub(a, b), zero),
                 CmpOp::Ne => c.not(c.eq(c.sub(a, b), zero)),
                 // Greater or equal: a - b >= 0.
-                CmpOp::Ge => c.ge(c.sub(a, b), zero),
+                CmpOp::Ge => c.ge(c.sub(ext(a), ext(b)), ext_zero),
                 // Lesser or equal: swap a and b.
-                CmpOp::Le => c.ge(c.sub(b, a), zero),
+                CmpOp::Le => c.ge(c.sub(ext(b), ext(a)), ext_zero),
                 // Lesser than: not greater or equal.
-                CmpOp::Lt => c.not(c.ge(c.sub(a, b), zero)),
+                CmpOp::Lt => c.not(c.ge(c.sub(ext(a), ext(b)), ext_zero)),
                 // Greater or equal: not lesser or equal.
-                CmpOp::Gt => c.not(c.ge(c.sub(b, a), zero)),
+                CmpOp::Gt => c.not(c.ge(c.sub(ext(b), ext(a)), ext_zero)),
             };
         }
     }
@@ -95,14 +117,15 @@ fn normalize_64<'a>(c: &Circuit<'a>, w: Wire<'a>, ty: Ty) -> Wire<'a> {
 /// Extend all integers to 64 bits.  That is, all `Uint`s will be extended to `U64`, and all `Int`s
 /// will be extended to `I64`.
 pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a> {
-    if old.ty.is_integer() && old.ty.integer_size() != IntSize::I64 {
+    if old.ty.is_integer() && old.ty.integer_size() < IntSize(64) && *old.ty != TyKind::BOOL {
         match gk {
             GateKind::Lit(x, ty) => {
+                let x = x.as_u64().unwrap();
                 return c.lit(extend_integer_ty(c, ty), maybe_sign_extend(x, ty));
             }
             GateKind::Secret(s) => {
                 let new_ty = extend_integer_ty(c, s.ty);
-                let new_val = s.val.map(|x| maybe_sign_extend(x, s.ty));
+                let new_val = s.val.map(|x| maybe_sign_extend(x.as_u64().unwrap(), s.ty));
                 return c.new_secret(new_ty, new_val);
             }
             GateKind::Cast(w, ty) => {
@@ -116,40 +139,6 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
                 return normalize_64(c, c.gate(gk), old.ty);
             }
         }
-    }
-    c.gate(gk)
-}
-
-/// Convert 64 bits inputs to 32 bits.
-/// Warning: this pass may change the behaviour of the circuit.
-pub fn downgrade_64_to_32bits<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
-    match gk {
-        GateKind::Lit(val, ty) => match *ty {
-            TyKind::I64 =>
-                return c.lit(c.ty(TyKind::I32), val as i32 as u64),
-            TyKind::U64 =>
-                return c.lit(c.ty(TyKind::U32), val as u32 as u64),
-            _ => {}
-        }
-        GateKind::Secret(secret) => match *secret.ty {
-            TyKind::I64 =>
-                return c.new_secret(
-                    c.ty(TyKind::I32),
-                    secret.val.map(|val| val as i32 as u64)),
-            TyKind::U64 =>
-                return c.new_secret(
-                    c.ty(TyKind::U32),
-                    secret.val.map(|val| val as u32 as u64)),
-            _ => {}
-        }
-        GateKind::Cast(arg, ty) => match *ty {
-            TyKind::I64 =>
-                return c.cast(arg, c.ty(TyKind::I32)),
-            TyKind::U64 =>
-                return c.cast(arg, c.ty(TyKind::U32)),
-            _ => {}
-        }
-        _ => {}
     }
     c.gate(gk)
 }
@@ -254,11 +243,13 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
 /// Replace literals wider than 32 bits with combinations of multiple 32-bit literals.
 pub fn reduce_lit_32<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Lit(x, ty) = gk {
-        if x >> 32 != 0 {
-            if let Some(w) = make_shifted_lit(c, x, ty) {
+        if x.width() > 32 {
+            let x = x.to_biguint();
+            if let Some(w) = make_shifted_lit(c, x.clone(), ty) {
                 return w;
             }
-            if let Some(w) = make_shifted_lit(c, !x, ty) {
+            let mask = (BigUint::from(1_u8) << ty.integer_size().bits()) - 1_u8;
+            if let Some(w) = make_shifted_lit(c, &x ^ mask, ty) {
                 return c.not(w);
             }
             return make_split_lit(c, x, ty);
@@ -267,26 +258,29 @@ pub fn reduce_lit_32<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<
     c.gate(gk)
 }
 
-fn make_shifted_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Option<Wire<'a>> {
+fn make_shifted_lit<'a>(c: &Circuit<'a>, x: BigUint, ty: Ty<'a>) -> Option<Wire<'a>> {
     // When `x == 0`, `x.trailing_zeros()` returns 64, and shifting by 64 triggers an overflow.
-    if x == 0 {
+    if x.is_zero() {
         return Some(c.lit(ty, 0));
     }
 
-    let shift = x.trailing_zeros();
-    let y = x >> shift;
-    if y >> 32 != 0 {
+    // `trailing_zeros` only returns `None` when `x.is_zero()`.
+    let shift = x.trailing_zeros().unwrap();
+    if x.bits() - shift > 32 {
         // Too wide
         return None;
     }
+    let y = u32::try_from(x >> shift).unwrap();
     Some(c.shl(c.lit(ty, y), c.lit(c.ty(TyKind::U8), shift as u64)))
 }
 
-fn make_split_lit<'a>(c: &Circuit<'a>, x: u64, ty: Ty<'a>) -> Wire<'a> {
-    c.or(
-        c.shl(c.lit(ty, x >> 32), c.lit(c.ty(TyKind::U8), 32)),
-        c.lit(ty, x & ((1 << 32) - 1)),
-    )
+fn make_split_lit<'a>(c: &Circuit<'a>, x: BigUint, ty: Ty<'a>) -> Wire<'a> {
+    let parts = x.to_u32_digits();
+    let mut acc = c.lit(ty, 0);
+    for (i, part) in parts.into_iter().enumerate() {
+        acc = c.or(acc, c.shl(c.lit(ty, part), c.lit(c.ty(TyKind::U8), 32 * i as u64)));
+    }
+    acc
 }
 
 

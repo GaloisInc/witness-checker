@@ -1,0 +1,10 @@
+program:
+  - [add, 0, 0, true, 18446744073709551615]   # add r1, r0, -1
+
+params:
+  num_regs: 1
+  trace_len: 2
+
+trace:
+  - [0, [100], false]
+  - [1, [99], true]
