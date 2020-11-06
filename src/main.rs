@@ -162,27 +162,27 @@ fn calc_step<'a>(
 
 
     {
-        let result = b.eq(x, y);
+        let result = b.cast::<_, u64>(b.eq(x, y));
         add_case(Opcode::Cmpe, result, instr.dest);
     }
 
     {
-        let result = b.gt(x, y);
+        let result = b.cast::<_, u64>(b.gt(x, y));
         add_case(Opcode::Cmpa, result, instr.dest);
     }
 
     {
-        let result = b.ge(x, y);
+        let result = b.cast::<_, u64>(b.ge(x, y));
         add_case(Opcode::Cmpae, result, instr.dest);
     }
 
     {
-        let result = b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        let result = b.cast::<_, u64>(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y)));
         add_case(Opcode::Cmpg, result, instr.dest);
     }
 
     {
-        let result = b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        let result = b.cast::<_, u64>(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y)));
         add_case(Opcode::Cmpge, result, instr.dest);
     }
 
@@ -192,7 +192,7 @@ fn calc_step<'a>(
     }
 
     {
-        let dest = b.mux(x, instr.dest, b.lit(REG_NONE));
+        let dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
         add_case(Opcode::Cmov, y, dest);
     }
 
@@ -204,12 +204,12 @@ fn calc_step<'a>(
     // TODO: Double check. Is this `x`?
     // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
     {
-        let dest = b.mux(x, b.lit(REG_PC), b.lit(REG_NONE));
+        let dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
         add_case(Opcode::Cjmp, y, dest);
     }
 
     {
-        let dest = b.mux(x, b.lit(REG_NONE), b.lit(REG_PC));
+        let dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
         add_case(Opcode::Cnjmp, y, dest);
     }
 

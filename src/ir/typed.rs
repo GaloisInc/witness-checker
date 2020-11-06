@@ -115,6 +115,20 @@ impl<'a> Builder<'a> {
     pub fn secret<T: Secret<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
         TWire::new(Secret::secret(self, x))
     }
+
+    pub fn neq_zero<T>(&self, x: TWire<'a, T>) -> TWire<'a, bool>
+    where
+    T: Repr<'a>,
+    T: Eq<'a, Output=bool>,
+    T: Lit<'a>,
+    T: Not<'a>,
+    T: From<u64>,
+    {
+        // TODO: Use custom gate.
+        let z : T = T::from(0 as u64);
+        let c : TWire<'a, bool> = self.eq(x,self.lit(z));
+        self.not(c)
+    }
 }
 
 pub trait FromEval<'a>
@@ -379,6 +393,12 @@ macro_rules! integer_impls {
             type Output = $T;
             fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
                 bld.c.mux(c, t, e)
+            }
+        }
+
+        impl<'a> Cast<'a, $T> for bool {
+            fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+                bld.c.cast(x, bld.c.ty(TyKind::$K))
             }
         }
 
