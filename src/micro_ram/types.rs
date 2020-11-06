@@ -171,15 +171,13 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
-    pub flag: bool,
 }
 
 impl RamState {
-    pub fn new(pc: u32, regs: Vec<u32>, flag: bool) -> RamState {
+    pub fn new(pc: u32, regs: Vec<u32>) -> RamState {
         RamState {
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
-            flag,
         }
     }
 }
@@ -188,7 +186,6 @@ impl RamState {
 pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
-    pub flag: TWire<'a, bool>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -200,7 +197,6 @@ impl<'a> Lit<'a> for RamState {
         RamStateRepr {
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
-            flag: bld.lit(a.flag),
         }
     }
 }
@@ -214,7 +210,6 @@ impl RamState {
                     bld.with_label(i, || bld.secret(Some(x)))
                 }).collect()
             }),
-            flag: bld.with_label("flag", || bld.secret(Some(a.flag))),
         })
     }
 
@@ -224,7 +219,6 @@ impl RamState {
             regs: bld.with_label("regs", || (0 .. len).map(|i| {
                 bld.with_label(i, || bld.secret(None))
             }).collect()),
-            flag: bld.with_label("flag", || bld.secret(None)),
         })
     }
 }

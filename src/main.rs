@@ -88,9 +88,9 @@ fn calc_step<'a>(
     // TODO: Where do we get instr from? PC wire of s1? Or still advice?
     
     let mut cases = Vec::new();
-    let mut add_case = |op, result, dest, flag| {
+    let mut add_case = |op, result, dest| {
         let op_match = b.eq(b.lit(op as u8), instr.opcode);
-        let parts = TWire::<(_, _, _)>::new((result, dest, flag));
+        let parts = TWire::<(_, _)>::new((result, dest));
         cases.push(TWire::<(_, _)>::new((op_match, parts)));
     };
 
@@ -99,147 +99,149 @@ fn calc_step<'a>(
 
     {
         let result = b.and(x, y);
-        add_case(Opcode::And, result, instr.dest, s1.flag);
+        add_case(Opcode::And, result, instr.dest);
     }
 
     {
         let result = b.or(x, y);
-        add_case(Opcode::Or, result, instr.dest, s1.flag);
+        add_case(Opcode::Or, result, instr.dest);
     }
 
     {
         let result = b.xor(x, y);
-        add_case(Opcode::Xor, result, instr.dest, s1.flag);
+        add_case(Opcode::Xor, result, instr.dest);
     }
 
     {
         let result = b.not(y);
-        add_case(Opcode::Not, result, instr.dest, s1.flag);
+        add_case(Opcode::Not, result, instr.dest);
     }
 
     {
-        add_case(Opcode::Add, b.add(x, y), instr.dest, s1.flag);
+        add_case(Opcode::Add, b.add(x, y), instr.dest);
     }
 
     {
-        add_case(Opcode::Sub, b.sub(x, y), instr.dest, s1.flag);
+        add_case(Opcode::Sub, b.sub(x, y), instr.dest);
     }
 
     {
-        add_case(Opcode::Mull, b.mul(x, y), instr.dest, s1.flag);
+        add_case(Opcode::Mull, b.mul(x, y), instr.dest);
     }
 
     {
         let (_, high) = *b.wide_mul(x, y);
-        add_case(Opcode::Umulh, high, instr.dest, s1.flag);
+        add_case(Opcode::Umulh, high, instr.dest);
     }
 
     {
         let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
         // TODO: not sure this gives the right overflow value - what if high = -1?
-        add_case(Opcode::Smulh, b.cast::<_, u64>(high_s), instr.dest, s1.flag);
+        add_case(Opcode::Smulh, b.cast::<_, u64>(high_s), instr.dest);
     }
 
     {
         let result = b.div(x, y);
-        add_case(Opcode::Udiv, result, instr.dest, s1.flag);
+        add_case(Opcode::Udiv, result, instr.dest);
     }
 
     {
         let result = b.mod_(x, y);
-        add_case(Opcode::Umod, result, instr.dest, s1.flag);
+        add_case(Opcode::Umod, result, instr.dest);
     }
 
     {
         let result = b.shl(x, b.cast::<_, u8>(y));
-        add_case(Opcode::Shl, result, instr.dest, s1.flag);
+        add_case(Opcode::Shl, result, instr.dest);
     }
 
     {
         let result = b.shr(x, b.cast::<_, u8>(y));
-        add_case(Opcode::Shr, result, instr.dest, s1.flag);
+        add_case(Opcode::Shr, result, instr.dest);
     }
 
 
     {
-        let flag = b.eq(x, y);
-        add_case(Opcode::Cmpe, b.lit(0), b.lit(REG_NONE), flag);
+        let result = b.eq(x, y);
+        add_case(Opcode::Cmpe, result, instr.dest);
     }
 
     {
-        let flag = b.gt(x, y);
-        add_case(Opcode::Cmpa, b.lit(0), b.lit(REG_NONE), flag);
+        let result = b.gt(x, y);
+        add_case(Opcode::Cmpa, result, instr.dest);
     }
 
     {
-        let flag = b.ge(x, y);
-        add_case(Opcode::Cmpae, b.lit(0), b.lit(REG_NONE), flag);
+        let result = b.ge(x, y);
+        add_case(Opcode::Cmpae, result, instr.dest);
     }
 
     {
-        let flag = b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
-        add_case(Opcode::Cmpg, b.lit(0), b.lit(REG_NONE), flag);
+        let result = b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        add_case(Opcode::Cmpg, result, instr.dest);
     }
 
     {
-        let flag = b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
-        add_case(Opcode::Cmpge, b.lit(0), b.lit(REG_NONE), flag);
-    }
-
-
-    {
-        add_case(Opcode::Mov, y, instr.dest, s1.flag);
-    }
-
-    {
-        let dest = b.mux(s1.flag, instr.dest, b.lit(REG_NONE));
-        add_case(Opcode::Cmov, y, dest, s1.flag);
+        let result = b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        add_case(Opcode::Cmpge, result, instr.dest);
     }
 
 
     {
-        add_case(Opcode::Jmp, y, b.lit(REG_PC), s1.flag);
+        add_case(Opcode::Mov, y, instr.dest);
     }
 
     {
-        let dest = b.mux(s1.flag, b.lit(REG_PC), b.lit(REG_NONE));
-        add_case(Opcode::Cjmp, y, dest, s1.flag);
+        let dest = b.mux(x, instr.dest, b.lit(REG_NONE));
+        add_case(Opcode::Cmov, y, dest);
+    }
+
+
+    {
+        add_case(Opcode::Jmp, y, b.lit(REG_PC));
+    }
+
+    // TODO: Double check. Is this `x`?
+    // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
+    {
+        let dest = b.mux(x, b.lit(REG_PC), b.lit(REG_NONE));
+        add_case(Opcode::Cjmp, y, dest);
     }
 
     {
-        let dest = b.mux(s1.flag, b.lit(REG_NONE), b.lit(REG_PC));
-        add_case(Opcode::Cnjmp, y, dest, s1.flag);
+        let dest = b.mux(x, b.lit(REG_NONE), b.lit(REG_PC));
+        add_case(Opcode::Cnjmp, y, dest);
     }
 
     {
         let result = mem_port.value;
-        add_case(Opcode::Load, result, instr.dest, s1.flag);
+        add_case(Opcode::Load, result, instr.dest);
     }
 
     {
-        add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE), s1.flag);
+        add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE));
     }
 
     {
-        add_case(Opcode::Poison, b.lit(0), b.lit(REG_NONE), s1.flag);
+        add_case(Opcode::Poison, b.lit(0), b.lit(REG_NONE));
     }
 
     {
         // TODO: dummy implementation of `Answer` as a no-op infinite loop
-        add_case(Opcode::Answer, s1.pc, b.lit(REG_PC), s1.flag);
+        add_case(Opcode::Answer, s1.pc, b.lit(REG_PC));
     }
 
     {
-        add_case(Opcode::Advise, advice, instr.dest, s1.flag);
+        add_case(Opcode::Advise, advice, instr.dest);
     }
 
     {
         // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
         // current `pc`.
-        add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC), s1.flag);
+        add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
     }
 
-    let (result, dest, flag) = *b.mux_multi(&cases, b.lit((0, REG_NONE, false)));
+    let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));
 
     let mut regs = Vec::with_capacity(s1.regs.len());
     for (i, &v_old) in s1.regs.iter().enumerate() {
@@ -250,7 +252,7 @@ fn calc_step<'a>(
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
-    let s2 = RamStateRepr { pc, regs, flag };
+    let s2 = RamStateRepr { pc, regs };
     let im = CalcIntermediate { x, y, result };
     (TWire::new(s2),im)
 }
@@ -276,12 +278,6 @@ fn check_state<'a>(
         cx, b.eq(trace_s.pc, calc_s.pc),
         "cycle {} sets pc to {} (expected {})",
         cycle, cx.eval(trace_s.pc), cx.eval(calc_s.pc),
-    );
-
-    wire_assert!(
-        cx, b.eq(trace_s.flag, calc_s.flag),
-        "cycle {} sets flag to {} (expected {})",
-        cycle, cx.eval(trace_s.flag), cx.eval(calc_s.flag),
     );
 }
 
@@ -363,11 +359,6 @@ fn check_first<'a>(
             i, cx.eval(r), 0,
         );
     }
-    wire_assert!(
-        cx, b.not(s.flag),
-        "initial flag is {} (expected {})",
-        cx.eval(s.flag), 0,
-    );
 }
 
 fn check_last<'a>(
