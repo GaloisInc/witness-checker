@@ -7,10 +7,10 @@ params:
   trace_len: 3
 
 trace:
-  - [0, [ 0, 0], false]
-  - [1, [ 0, 2], false]
+  - [0, [ 0, 0]]
+  - [1, [ 0, 2]]
 
-  - [2, [ 0, 63], false]
+  - [2, [ 0, 63]]
 
 advice:
   2:  [[Advise, 63]]
