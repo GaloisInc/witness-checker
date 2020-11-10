@@ -121,12 +121,10 @@ impl<'a> Builder<'a> {
     T: Repr<'a>,
     T: Eq<'a, Output=bool>,
     T: Lit<'a>,
-    T: Not<'a>,
-    T: From<u64>,
+    T: num_traits::Zero,
     {
         // TODO: Use custom gate.
-        let z : T = T::from(0 as u64);
-        let c : TWire<'a, bool> = self.eq(x,self.lit(z));
+        let c : TWire<'a, bool> = self.eq(x,self.lit(T::zero()));
         self.not(c)
     }
 }
