@@ -350,6 +350,9 @@ mk_named_enum! {
 
         Advise = 28,
 
+        /// Fake instruction that signifies a value is written to a sink.
+        Sink = 29,
+
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
         Stutter = 255,

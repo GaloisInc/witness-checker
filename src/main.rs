@@ -23,6 +23,7 @@ use cheesecloth::micro_ram::types::{
     Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE,
     REG_PC, MEM_PORT_UNUSED_CYCLE,
 };
+use cheesecloth::mode;
 
 
 fn parse_args() -> ArgMatches<'static> {
@@ -47,6 +48,10 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("stats")
              .long("stats")
              .help("print info about the size of the circuit"))
+        .arg(Arg::with_name("mode")
+             .long("mode")
+             .takes_value(true)
+             .help("Mode to run the checker in. Valid options include:\n    leak-uninitialized - Detect an information leak when uninitialized memory is output."))
         .arg(Arg::with_name("check-steps")
              .long("check-steps")
              .takes_value(true)
@@ -240,6 +245,8 @@ fn calc_step<'a>(
         // current `pc`.
         add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
     }
+
+    // Opcode::Sink is a no-op so we let if fall through.
 
     let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));
 
@@ -457,6 +464,8 @@ fn main() -> io::Result<()> {
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
 
+    let mut mode = mode::initialize(&args, &b, &exec);
+
     let mut trace = Vec::new();
     for (i, state) in exec.trace.iter().enumerate() {
         let _g = b.scoped_label(format_args!("state {}", i));
@@ -537,6 +546,8 @@ fn main() -> io::Result<()> {
             prev_s = calc_s.clone();
         }
         check_step(&cx, &b, i as u32, instr, &port, &calc_im);
+
+        mode::check_step(&cx, &b, i as u32, instr, &port, &mut mode);
     }
     // We rely on the loop running once for every `i` in `0 .. num_steps`.
     assert_eq!(max_i + 1, exec.params.trace_len as usize - 1);
