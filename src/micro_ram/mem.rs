@@ -7,7 +7,7 @@ use log::*;
 use crate::ir::typed::{TWire, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, PackedMemPort, Advice, MemSegment, MEM_PORT_PRELOAD_CYCLE,
+    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Advice, MemSegment, MEM_PORT_PRELOAD_CYCLE,
     MEM_PORT_UNUSED_CYCLE,
 };
 use crate::sort;
@@ -39,6 +39,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
+                width: MemOpWidth::WORD,
             });
 
             if self.verifier && seg.secret {
@@ -93,7 +94,7 @@ impl<'a> Memory<'a> {
             for j in i * sparsity .. (i + 1) * sparsity {
                 let (advs, cycle) = get_advice(j);
                 for adv in advs {
-                    if let Advice::MemOp { addr, value, op } = *adv {
+                    if let Advice::MemOp { addr, value, op, width } = *adv {
                         if let Some(found_j) = found_j {
                             panic!(
                                 "multiple mem ports in block {}: cycle {}, cycle {}",
@@ -101,7 +102,7 @@ impl<'a> Memory<'a> {
                             );
                         }
                         found_j = Some(j);
-                        mp = Some(MemPort { cycle, addr, value, op });
+                        mp = Some(MemPort { cycle, addr, value, op, width });
                     }
                 }
             }
@@ -114,6 +115,7 @@ impl<'a> Memory<'a> {
                 addr: (self.ports.len() + i) as u64,
                 value: 0,
                 op: MemOpKind::Write,
+                width: MemOpWidth::WORD,
             });
             let user = match found_j {
                 Some(j) => u8::try_from(j % sparsity).unwrap(),

@@ -365,7 +365,9 @@ pub struct MemPort {
     pub addr: u64,
     pub value: u64,
     pub op: MemOpKind,
+    pub width: MemOpWidth,
 }
+
 
 mk_named_enum! {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -397,12 +399,50 @@ where
     }
 }
 
+
+mk_named_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum MemOpWidth {
+        W1 = 0,
+        W2 = 1,
+        W4 = 2,
+        W8 = 3,
+    }
+}
+
+impl MemOpWidth {
+    pub const WORD: MemOpWidth = MemOpWidth::W8;
+}
+
+impl Default for MemOpWidth {
+    fn default() -> MemOpWidth { MemOpWidth::WORD }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, MemOpWidth> for MemOpWidth
+where
+    C::Repr: Clone,
+    u8: Mux<'a, C, u8, Output = u8>,
+{
+    type Output = MemOpWidth;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: TWire<'a, u8>,
+        e: TWire<'a, u8>,
+    ) -> TWire<'a, u8> {
+        bld.mux(TWire::new(c), t, e)
+    }
+}
+
+
 #[derive(Clone, Copy)]
 pub struct MemPortRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
+    pub width: TWire<'a, MemOpWidth>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -416,6 +456,7 @@ impl<'a> Lit<'a> for MemPort {
             addr: bld.lit(a.addr),
             value: bld.lit(a.value),
             op: bld.lit(a.op),
+            width: bld.lit(a.width),
         }
     }
 }
@@ -428,6 +469,7 @@ impl<'a> Secret<'a> for MemPort {
                 addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
                 value: bld.with_label("value", || bld.secret(Some(a.value))),
                 op: bld.with_label("op", || bld.secret(Some(a.op))),
+                width: bld.with_label("width", || bld.secret(Some(a.width))),
             }
         } else {
             MemPortRepr {
@@ -435,6 +477,7 @@ impl<'a> Secret<'a> for MemPort {
                 addr: bld.with_label("addr", || bld.secret(None)),
                 value: bld.with_label("value", || bld.secret(None)),
                 op: bld.with_label("op", || bld.secret(None)),
+                width: bld.with_label("width", || bld.secret(None)),
             }
         }
     }
@@ -446,6 +489,7 @@ where
     u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
     MemOpKind: Mux<'a, C, MemOpKind, Output = MemOpKind>,
+    MemOpWidth: Mux<'a, C, MemOpWidth, Output = MemOpWidth>,
 {
     type Output = MemPort;
 
@@ -461,6 +505,7 @@ where
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
             op: bld.mux(c.clone(), t.op, e.op),
+            width: bld.mux(c.clone(), t.width, e.width),
         }
     }
 }
@@ -484,7 +529,7 @@ impl PackedMemPort {
         // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
         // put `addr` last in the list.
         let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, mp.addr)));
-        let data = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((mp.value, mp.op)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _)>::new((mp.value, mp.op, mp.width)));
         TWire::new(PackedMemPortRepr { key, data })
     }
 }
@@ -493,8 +538,8 @@ impl<'a> PackedMemPortRepr<'a> {
     pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
         let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
-        let (value, op) = *bit_pack::split_bits::<(_, _)>(bld, self.data);
-        TWire::new(MemPortRepr { cycle, addr, value, op })
+        let (value, op, width) = *bit_pack::split_bits::<(_, _, _)>(bld, self.data);
+        TWire::new(MemPortRepr { cycle, addr, value, op, width })
     }
 }
 
@@ -789,7 +834,12 @@ impl Default for Sparsity {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, op: MemOpKind },
+    MemOp {
+        addr: u64,
+        value: u64,
+        op: MemOpKind,
+        width: MemOpWidth,
+    },
     Stutter,
     Advise { advise: u64 },
 }
