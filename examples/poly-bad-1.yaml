@@ -1,3 +1,5 @@
+## FLAGS: --validate-only --expect-zero
+
 program:
   - [mull, 2, 0, false, 0]    # mull r2, r0, r0
   - [mull, 1, 0, true, 3]     # mull r1, r0, 3
