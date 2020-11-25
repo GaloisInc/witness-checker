@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::iter;
+use crate::eval::{self, Evaluator, CachingEvaluator};
 use crate::ir::circuit::{self, Circuit, Wire, GateKind, Ty, TyKind};
 
 pub mod bit_pack;
@@ -97,4 +98,38 @@ pub fn run_pass<'old, 'new>(
 ) -> Vec<Wire<'new>> {
     let mut rp = RunPass::new(c, f);
     wire.into_iter().map(|w| rp.wire(w)).collect()
+}
+
+/// Run a transformation pass, with extra checks to detect if a pass changes the behavior of the
+/// circuit.
+pub fn run_pass_debug<'new>(
+    c: &Circuit<'new>,
+    wire: Vec<Wire>,
+    mut f: impl FnMut(&Circuit<'new>, Wire, GateKind<'new>) -> Wire<'new>,
+) -> Vec<Wire<'new>> {
+    let arena = bumpalo::Bump::new();
+    let old_c = Circuit::new(&arena);
+    let wire = run_pass(&old_c, wire, |c, _, gk| c.gate(gk));
+    let mut old_ev = CachingEvaluator::<eval::RevealSecrets>::new(&old_c);
+    let mut new_ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+    run_pass(c, wire, |c, old, gk| {
+        let old_val = old_ev.eval_wire(old);
+        let new = f(c, old, gk);
+        let new_val = new_ev.eval_wire(new);
+        if old.ty.transfer(c) == new.ty && old_val != new_val {
+            let old_g = crate::debug::graphviz::make_graph(&old_c, vec![old].into_iter()).unwrap();
+            let new_g = crate::debug::graphviz::make_graph(&c, vec![new].into_iter()).unwrap();
+            std::fs::write("pass_debug_old.dot", old_g).unwrap();
+            std::fs::write("pass_debug_new.dot", new_g).unwrap();
+            panic!(
+                "pass changed gate value:\n\
+                \x20 old gate: {:?}\n\
+                \x20 new gate: {:?}\n\
+                \x20 old value: {:?}\n\
+                \x20 new value: {:?}\n",
+                old, new, old_val, new_val,
+            );
+        }
+        new
+    })
 }

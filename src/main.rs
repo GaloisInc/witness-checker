@@ -15,7 +15,7 @@ use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
-use cheesecloth::lower::{self, run_pass};
+use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::Memory;
@@ -388,6 +388,8 @@ struct PassRunner<'a> {
     wires: MaybeUninit<Vec<Wire<'a>>>,
 }
 
+const DEBUG_PASSES: bool = false;
+
 impl<'a> PassRunner<'a> {
     pub fn new(a: &'a mut Bump, b: &'a mut Bump, wires: Vec<Wire>) -> PassRunner<'a> {
         a.reset();
@@ -414,7 +416,11 @@ impl<'a> PassRunner<'a> {
                 let arena: &Bump = &**self.next.as_ptr();
                 let c = Circuit::new(arena);
                 let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
-                let wires = run_pass(&c, wires, f);
+                let wires = if DEBUG_PASSES {
+                    run_pass_debug(&c, wires, f)
+                } else {
+                    run_pass(&c, wires, f)
+                };
                 *self.wires.as_mut_ptr() = wires;
             }
             // All `wires` are now allocated from `self.next`, leaving `self.cur` unused.
