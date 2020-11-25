@@ -296,6 +296,7 @@ fn make_split_lit<'a>(c: &Circuit<'a>, x: BigUint, ty: Ty<'a>) -> Wire<'a> {
 /// not support `Mod`.
 pub fn mod_to_div<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Binary(BinOp::Mod, x, y) = gk {
+        // FIXME: changes behavior on division by zero (returns `x` for `x % 0`, not `0`)
         return c.sub(
             x,
             c.mul(c.div(x, y), y),

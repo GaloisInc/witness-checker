@@ -207,7 +207,7 @@ fn try_identities<'a>(
             vars (cc);
             eval |w| eval(ev, w);
             (), (is_zero) => e,
-            (), (is_one) => e,
+            (), (is_one) => t,
             (), (_) if t == e => t,
         },
         _ => return None,
