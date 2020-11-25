@@ -29,12 +29,13 @@ impl<'a> Memory<'a> {
         self.ports.reserve(seg.len as usize);
 
         for i in 0 .. seg.len {
-            let addr = seg.start + i;
+            // Initial memory values are given in terms of words, not bytes.
+            let waddr = seg.start + i;
 
             // Most of the MemPort is public.  Only the value is secret, if `seg.secret` is set.
             let mut mp = b.lit(MemPort {
                 cycle: MEM_PORT_PRELOAD_CYCLE,
-                addr,
+                addr: waddr * MemOpWidth::WORD.bytes() as u64,
                 // Dummy value for now.  We fill in this field differently depending on `verifier`
                 // and `seg.secret`.
                 value: 0,

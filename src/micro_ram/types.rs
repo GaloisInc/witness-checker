@@ -412,6 +412,14 @@ mk_named_enum! {
 
 impl MemOpWidth {
     pub const WORD: MemOpWidth = MemOpWidth::W8;
+
+    pub fn bytes(self) -> usize {
+        1_usize << (self as u8)
+    }
+
+    pub fn bits(self) -> usize {
+        self.bytes() * 8
+    }
 }
 
 impl Default for MemOpWidth {

@@ -217,11 +217,19 @@ impl<'de> Visitor<'de> for AdviceVisitor {
         let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
                 seq.expect += 3;
-                Advice::MemOp {
-                    addr: seq.next_element()?,
-                    value: seq.next_element()?,
-                    op: seq.next_element()?,
-                    width: seq.opt_next_element()?.unwrap_or_else(Default::default),
+                let addr = seq.next_element()?;
+                let value = seq.next_element()?;
+                let op = seq.next_element()?;
+                match seq.opt_next_element()? {
+                    Some(width) => Advice::MemOp { addr, value, op, width },
+                    // If the `width` field is absent, this is an old-style `MemOp`, using word
+                    // addressing, so convert it to the new byte-addressed style.
+                    None => Advice::MemOp {
+                        addr: addr * MemOpWidth::WORD.bytes() as u64,
+                        value,
+                        op,
+                        width: MemOpWidth::WORD,
+                    },
                 }
             },
             "Stutter" => {

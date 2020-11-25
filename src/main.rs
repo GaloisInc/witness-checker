@@ -303,13 +303,17 @@ fn check_step<'a>(
     let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
     let is_store_like = b.or(is_store, is_poison);
     let is_mem = b.or(is_load, is_store_like);
+    // Is this an old-style memory op, using word addressing?
+    let is_old_style = b.lit(true);
+
+    let addr = b.mux(is_old_style, b.mul(y, b.lit(8)), y);
 
     let expect_value = b.mux(is_store_like, x, result);
     cx.when(b, is_mem, |cx| {
         wire_assert!(
-            cx, b.eq(mem_port.addr, y),
+            cx, b.eq(mem_port.addr, addr),
             "cycle {}'s mem port has address {} (expected {})",
-            cycle, cx.eval(mem_port.addr), cx.eval(y),
+            cycle, cx.eval(mem_port.addr), cx.eval(addr),
         );
         let flag_ops = [
             (is_load, MemOpKind::Read),
