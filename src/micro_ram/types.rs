@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use serde::Deserialize;
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
+use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
 use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
 use crate::micro_ram::feature::{Feature, Version};
 
@@ -420,6 +420,10 @@ impl MemOpWidth {
     pub fn bits(self) -> usize {
         self.bytes() * 8
     }
+
+    pub fn log_bytes(self) -> usize {
+        self as u8 as usize
+    }
 }
 
 impl Default for MemOpWidth {
@@ -518,6 +522,49 @@ where
     }
 }
 
+
+pub struct ByteOffset;
+
+impl<'a> Repr<'a> for ByteOffset {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for ByteOffset {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
+
+pub struct WordAddr;
+
+impl<'a> Repr<'a> for WordAddr {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for WordAddr {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(
+            MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
+
+
 pub struct PackedMemPort;
 
 #[derive(Clone, Copy)]
@@ -534,19 +581,24 @@ impl PackedMemPort {
         // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_CYCLE (-1) comes before all real
         // cycles.
         let cycle_adj = bld.add(mp.cycle, bld.lit(1));
+        // Split the address into word (upper 61 bits) and offset (lower 3 bits) parts.
+        let (offset, waddr) = *bit_pack::split_bits::<(ByteOffset, WordAddr)>(bld, mp.addr.repr);
         // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
         // put `addr` last in the list.
-        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, mp.addr)));
-        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _)>::new((mp.value, mp.op, mp.width)));
+        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, waddr)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _, _)>::new((
+            mp.value, mp.op, mp.width, offset)));
         TWire::new(PackedMemPortRepr { key, data })
     }
 }
 
 impl<'a> PackedMemPortRepr<'a> {
     pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
-        let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
+        let (cycle_adj, waddr) = *bit_pack::split_bits::<(u32, WordAddr)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
-        let (value, op, width) = *bit_pack::split_bits::<(_, _, _)>(bld, self.data);
+        let (value, op, width, offset) =
+            *bit_pack::split_bits::<(_, _, _, ByteOffset)>(bld, self.data);
+        let addr = TWire::new(bit_pack::concat_bits(bld, TWire::<(_, _)>::new((offset, waddr))));
         TWire::new(MemPortRepr { cycle, addr, value, op, width })
     }
 }

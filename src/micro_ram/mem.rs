@@ -113,7 +113,7 @@ impl<'a> Memory<'a> {
                 // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
                 // correspondence between `MemPort`s and steps.  We make unused ports distinct too,
                 // so we can just check that all ports are distinct.
-                addr: (self.ports.len() + i) as u64,
+                addr: (self.ports.len() + i) as u64 * MemOpWidth::WORD.bytes() as u64,
                 value: 0,
                 op: MemOpKind::Write,
                 width: MemOpWidth::WORD,
