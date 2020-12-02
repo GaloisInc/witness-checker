@@ -523,7 +523,18 @@ where
 }
 
 
-pub struct ByteOffset;
+pub struct ByteOffset(u8);
+
+impl ByteOffset {
+    pub fn new(x: u8) -> ByteOffset {
+        assert!((x as usize) < MemOpWidth::WORD.bytes());
+        ByteOffset(x)
+    }
+
+    pub fn raw(self) -> u8 {
+        self.0
+    }
+}
 
 impl<'a> Repr<'a> for ByteOffset {
     type Repr = Wire<'a>;
@@ -540,6 +551,28 @@ impl<'a> Flatten<'a> for ByteOffset {
 
     fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
+    }
+}
+
+impl<'a> Lit<'a> for ByteOffset {
+    fn lit(bld: &Builder<'a>, x: Self) -> Wire<'a> {
+        let c = bld.circuit();
+        c.lit(Self::wire_type(c), x.raw() as u64)
+    }
+}
+
+impl<'a> Mux<'a, bool, ByteOffset> for ByteOffset {
+    type Output = ByteOffset;
+    fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+        bld.circuit().mux(c, t, e)
+    }
+}
+
+
+impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a, b)
     }
 }
 

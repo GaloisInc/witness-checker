@@ -4,11 +4,12 @@
 //! checking the sorted list.
 use std::convert::TryFrom;
 use log::*;
-use crate::ir::typed::{TWire, Builder};
+use crate::gadget::bit_pack;
+use crate::ir::typed::{TWire, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Advice, MemSegment, MEM_PORT_PRELOAD_CYCLE,
-    MEM_PORT_UNUSED_CYCLE,
+    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Advice, MemSegment, ByteOffset,
+    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE,
 };
 use crate::sort;
 
@@ -171,6 +172,10 @@ impl<'a> Memory<'a> {
         }
 
         // Run the consistency check.
+        for port in sorted_ports.iter() {
+            check_single_mem(&cx, &b, port);
+        }
+
         check_first_mem(&cx, &b, &sorted_ports[0]);
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
         for (i, (port1, port2)) in it {
@@ -248,6 +253,43 @@ impl<'a> CyclePorts<'a> {
     }
 }
 
+
+/// Get the "misalignment" of an address, equal to `addr % width.bytes()`.  The result is zero for
+/// well-aligned addresses.
+fn addr_misalignment<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    addr: TWire<'a, u64>,
+    width: TWire<'a, MemOpWidth>,
+) -> TWire<'a, ByteOffset> {
+    let mut offset = b.lit(ByteOffset::new(0));
+    for lit_width in MemOpWidth::iter() {
+        let cond = b.eq(width, b.lit(lit_width));
+        let new_offset = TWire::<ByteOffset>::new(b.circuit().cast(
+            bit_pack::extract_bits(b.circuit(), addr.repr, 0, lit_width.log_bytes() as u16),
+            ByteOffset::wire_type(b.circuit()),
+        ));
+        offset = b.mux(cond, new_offset, offset);
+    }
+    offset
+}
+
+/// Single-port validity check.  This must hold on every port.
+fn check_single_mem<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    port: &TWire<'a, MemPort>,
+) {
+    let _g = b.scoped_label("check_single_mem");
+
+    // Alignment: `addr` must be a multiple of `width.bytes()`.
+    let misalign = addr_misalignment(cx, b, port.addr, port.width);
+    wire_assert!(
+        cx, b.eq(misalign, b.lit(ByteOffset::new(0))),
+        "unaligned access of {:x} with width {} on cycle {}",
+        cx.eval(port.addr), cx.eval(port.width.repr), cx.eval(port.cycle),
+    );
+}
 
 /// Check that memory operation `port` is valid as the first memory op.
 fn check_first_mem<'a>(

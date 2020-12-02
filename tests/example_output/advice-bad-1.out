@@ -1,2 +1,2 @@
 invalid trace: cycle 1 sets reg 1 to 42 (expected 63)
-internal evaluator: 53 asserts passed, 1 failed; found 0 bugs; overall status: BAD
+internal evaluator: 56 asserts passed, 1 failed; found 0 bugs; overall status: BAD
