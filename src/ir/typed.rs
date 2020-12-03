@@ -535,6 +535,55 @@ macro_rules! array_impls {
                 type Repr = [TWire<'a, A>; $n];
             }
 
+            impl<'a, A: Flatten<'a>> Flatten<'a> for [A; $n] {
+                fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+                    c.ty_bundle(&[A::wire_type(c); $n])
+                }
+
+                fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+                    // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
+                    // to implement without unnecessary allocation.
+                    unsafe {
+                        let a = MaybeUninit::<[TWire<A>; $n]>::new(w.repr);
+                        let mut o = MaybeUninit::<[Wire; $n]>::uninit();
+
+                        for i in 0 .. $n {
+                            let a_val = (a.as_ptr() as *const TWire<A>).add(i).read();
+                            // If this panics, the remaining elements of `a` and `b` will leak.
+                            let o_val = Flatten::to_wire(bld, a_val);
+
+                            (o.as_mut_ptr() as *mut Wire).add(i).write(o_val);
+                        }
+
+                        bld.c.pack(&o.assume_init())
+                    }
+                }
+
+                fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                    match *w.ty {
+                        TyKind::Bundle(tys) => assert!(tys.len() == $n),
+                        // If num_elems is zero, there are no `bld.c.extract` calls, so the type error
+                        // won't be caught above.
+                        _ => panic!("expected Bundle, not {:?}", w.ty),
+                    }
+
+                    // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
+                    // to implement without unnecessary allocation.
+                    unsafe {
+                        let mut o = MaybeUninit::<[TWire<A>; $n]>::uninit();
+
+                        for i in 0 .. $n {
+                            // If this panics, the remaining elements of `a` and `b` will leak.
+                            let o_val = A::from_wire(bld, bld.c.extract(w, i));
+
+                            (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
+                        }
+
+                        TWire::new(o.assume_init())
+                    }
+                }
+            }
+
             impl<'a, A: Lit<'a>> Lit<'a> for [A; $n] {
                 fn lit(bld: &Builder<'a>, a: [A; $n]) -> [TWire<'a, A>; $n] {
                     // Can't `collect()` or `into_iter()` an array yet, which makes this difficult

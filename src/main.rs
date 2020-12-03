@@ -15,14 +15,15 @@ use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
+use cheesecloth::gadget::bit_pack;
 use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::types::{
-    RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE, REG_PC,
-    MEM_PORT_UNUSED_CYCLE,
+    RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, MemOpWidth, ByteOffset, Opcode, Advice,
+    REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 
 
@@ -219,8 +220,22 @@ fn calc_step<'a>(
         add_case(Opcode::Load, result, instr.dest);
     }
 
+    // Load1, Load2, Load4, Load8
+    for w in MemOpWidth::iter() {
+        let result = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+        add_case(w.load_opcode(), result, instr.dest);
+    }
+
     {
+        // Store operations have no effect on the registers, so their `calc_step` portion is a
+        // no-op.  Consistency between the stored value and the `MemPort` is handled in
+        // `check_step`.
         add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE));
+    }
+
+    // Store1, Store2, Store4, Store8
+    for w in MemOpWidth::iter() {
+        add_case(w.store_opcode(), b.lit(0), b.lit(REG_NONE));
     }
 
     {
@@ -294,21 +309,25 @@ fn check_step<'a>(
 
     let x = calc_im.x;
     let y = calc_im.y;
-    let result = calc_im.result;
 
     // If the instruction is a store, load, or poison, we need additional checks to make sure the
     // fields of `mem_port` match the instruction operands.
-    let is_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
-    let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
+    let is_new_load = MemOpWidth::iter().map(|w| w.load_opcode())
+        .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
+    let is_old_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
+    let is_load = b.or(is_new_load, is_old_load);
+    let is_new_store = MemOpWidth::iter().map(|w| w.store_opcode())
+        .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
+    let is_old_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
+    let is_store = b.or(is_new_store, is_old_store);
     let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
     let is_store_like = b.or(is_store, is_poison);
     let is_mem = b.or(is_load, is_store_like);
     // Is this an old-style memory op, using word addressing?
-    let is_old_style = b.lit(true);
+    let is_old_style = b.or(b.or(is_old_load, is_old_store), is_poison);
 
     let addr = b.mux(is_old_style, b.mul(y, b.lit(8)), y);
 
-    let expect_value = b.mux(is_store_like, x, result);
     cx.when(b, is_mem, |cx| {
         wire_assert!(
             cx, b.eq(mem_port.addr, addr),
@@ -329,11 +348,29 @@ fn check_step<'a>(
                 );
             });
         }
-        wire_assert!(
-            cx, b.eq(mem_port.value, expect_value),
-            "cycle {}'s mem port (op {}) has value {} (expected {})",
-            cycle, cx.eval(mem_port.op.repr), cx.eval(mem_port.value), cx.eval(expect_value),
-        );
+    });
+
+    cx.when(b, is_store, |cx| {
+        for w in MemOpWidth::iter() {
+            cx.when(b, b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), |cx| {
+                let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+                wire_assert!(
+                    cx, b.eq(stored_value, x),
+                    "cycle {}'s mem port stores value {} at {:x} (expected value {})",
+                    cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+                );
+            });
+        }
+
+        cx.when(b, is_old_store, |cx| {
+            let w = MemOpWidth::WORD;
+            let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+            wire_assert!(
+                cx, b.eq(stored_value, x),
+                "cycle {}'s mem port stores value {} at {:x} (expected value {})",
+                cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+            );
+        });
     });
 
     // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
@@ -381,6 +418,37 @@ fn check_last<'a>(
         );
     }
 }
+
+fn extract_bytes_at_offset<'a>(
+    b: &Builder<'a>,
+    value: TWire<'a, u64>,
+    addr: TWire<'a, u64>,
+    width: MemOpWidth,
+) -> TWire<'a, u64> {
+    // Hard to write this as a function without const generics
+    macro_rules! go {
+        ($T:ty, $divisor:expr) => {{
+            let value_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value.repr);
+            let offset = bit_pack::extract_low::<ByteOffset>(b, addr.repr);
+            // The `* d` multiply means that if `offset` is `i * d`, then `result` is
+            // `value_parts[i]`.  If `offset` is not a multiple of `d`, then we return an arbitrary
+            // value, on the assumption that the memory consistency alignment check will fail later
+            // on.
+            let result = b.index(&*value_parts, offset, |b, idx| {
+                b.lit(ByteOffset::new(idx as u8 * $divisor))
+            });
+            b.cast(result)
+        }};
+    }
+
+    match width {
+        MemOpWidth::W1 => go!(u8, 1),
+        MemOpWidth::W2 => go!(u16, 2),
+        MemOpWidth::W4 => go!(u32, 4),
+        MemOpWidth::W8 => value,
+    }
+}
+
 
 struct PassRunner<'a> {
     // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have

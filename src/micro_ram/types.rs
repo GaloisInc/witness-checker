@@ -344,10 +344,19 @@ mk_named_enum! {
         Load = 24,
         Poison = 25,
 
-        Read = 26,
-        Answer = 27,
+        Store1 = 26,
+        Store2 = 27,
+        Store4 = 28,
+        Store8 = 29,
+        Load1 = 30,
+        Load2 = 31,
+        Load4 = 32,
+        Load8 = 33,
 
-        Advise = 28,
+        Read = 34,
+        Answer = 35,
+
+        Advise = 36,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
@@ -413,18 +422,40 @@ mk_named_enum! {
 impl MemOpWidth {
     pub const WORD: MemOpWidth = MemOpWidth::W8;
 
-    pub fn bytes(self) -> usize {
+    pub const fn bytes(self) -> usize {
         1_usize << (self as u8)
     }
 
-    pub fn bits(self) -> usize {
+    pub const fn bits(self) -> usize {
         self.bytes() * 8
     }
 
-    pub fn log_bytes(self) -> usize {
+    pub const fn log_bytes(self) -> usize {
         self as u8 as usize
     }
+
+    pub const fn load_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Load1,
+            MemOpWidth::W2 => Opcode::Load2,
+            MemOpWidth::W4 => Opcode::Load4,
+            MemOpWidth::W8 => Opcode::Load8,
+        }
+    }
+
+    pub const fn store_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Store1,
+            MemOpWidth::W2 => Opcode::Store2,
+            MemOpWidth::W4 => Opcode::Store4,
+            MemOpWidth::W8 => Opcode::Store8,
+        }
+    }
 }
+
+pub const WORD_BYTES: usize = MemOpWidth::WORD.bytes();
+pub const WORD_BITS: usize = MemOpWidth::WORD.bits();
+pub const WORD_LOG_BYTES: usize = MemOpWidth::WORD.log_bytes();
 
 impl Default for MemOpWidth {
     fn default() -> MemOpWidth { MemOpWidth::WORD }

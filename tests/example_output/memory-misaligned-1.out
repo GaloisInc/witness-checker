@@ -1,18 +1,8 @@
-invalid trace: unaligned access of 7 with width 3 on cycle 0
-invalid trace: unaligned access of 7 with width 3 on cycle 1
-invalid trace: unaligned access of 7 with width 3 on cycle 2
+invalid trace: unaligned access of 7 with width 1 on cycle 1
+invalid trace: unaligned access of 7 with width 2 on cycle 2
 invalid trace: unaligned access of 7 with width 3 on cycle 3
-invalid trace: unaligned access of 7 with width 3 on cycle 4
-invalid trace: unaligned access of 7 with width 3 on cycle 5
-invalid trace: unaligned access of 7 with width 3 on cycle 6
+invalid trace: unaligned access of 7 with width 1 on cycle 5
+invalid trace: unaligned access of 7 with width 2 on cycle 6
 invalid trace: unaligned access of 7 with width 3 on cycle 7
 invalid trace: uninit read from 7 on cycle 0
-invalid trace: cycle 0's mem port has address 7 (expected 56)
-invalid trace: cycle 1's mem port has address 7 (expected 56)
-invalid trace: cycle 2's mem port has address 7 (expected 56)
-invalid trace: cycle 3's mem port has address 7 (expected 56)
-invalid trace: cycle 4's mem port has address 7 (expected 56)
-invalid trace: cycle 5's mem port has address 7 (expected 56)
-invalid trace: cycle 6's mem port has address 7 (expected 56)
-invalid trace: cycle 7's mem port has address 7 (expected 56)
-internal evaluator: 158 asserts passed, 17 failed; found 0 bugs; overall status: BAD
+internal evaluator: 200 asserts passed, 7 failed; found 0 bugs; overall status: BAD
