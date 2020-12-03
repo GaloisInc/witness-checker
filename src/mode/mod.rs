@@ -40,3 +40,12 @@ pub fn check_step<'a>(
     }
 }
 
+pub fn init_mem_taint<'a>(mode: &Option<Mode<'a>>) -> Option<u64> {
+    // TODO
+    unimplemented!{}
+}
+
+pub fn uses_tainted_mem<'a>(mode: &Option<Mode<'a>>) -> bool {
+    // TODO
+    unimplemented!{}
+}

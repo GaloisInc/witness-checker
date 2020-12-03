@@ -475,7 +475,7 @@ fn main() -> io::Result<()> {
     // Set up memory ports and check consistency.
     let mut mem = Memory::new(false);
     for seg in &exec.init_mem {
-        mem.init_segment(&b, seg);
+        mem.init_segment(&b, &mode, seg);
     }
     let cycle_mem_ports = mem.add_cycles(
         &cx, &b,

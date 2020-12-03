@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
 use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
+use crate::mode::{Mode, init_mem_taint, uses_tainted_mem};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -369,6 +370,7 @@ pub struct MemPort {
     pub addr: u64,
     pub value: u64,
     pub op: MemOpKind,
+    pub tainted: Option<u64>, // TODO: Could refactor so that this field is parametric.
 }
 
 mk_named_enum! {
@@ -407,6 +409,7 @@ pub struct MemPortRepr<'a> {
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
+    pub tainted: Option<TWire<'a, u64>>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -420,6 +423,7 @@ impl<'a> Lit<'a> for MemPort {
             addr: bld.lit(a.addr),
             value: bld.lit(a.value),
             op: bld.lit(a.op),
+            tainted: a.tainted.map(|t| bld.lit(t)),
         }
     }
 }
@@ -432,6 +436,7 @@ impl<'a> Secret<'a> for MemPort {
                 addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
                 value: bld.with_label("value", || bld.secret(Some(a.value))),
                 op: bld.with_label("op", || bld.secret(Some(a.op))),
+                tainted: bld.with_label("tainted", || a.tainted.map(|t| bld.secret(Some(t)))),
             }
         } else {
             MemPortRepr {
@@ -439,6 +444,7 @@ impl<'a> Secret<'a> for MemPort {
                 addr: bld.with_label("addr", || bld.secret(None)),
                 value: bld.with_label("value", || bld.secret(None)),
                 op: bld.with_label("op", || bld.secret(None)),
+                tainted: bld.with_label("tainted", || if uses_tainted_mem( &mode) {Some(bld.secret(None))} else {None} ),
             }
         }
     }
@@ -460,11 +466,17 @@ where
         e: MemPortRepr<'a>,
     ) -> MemPortRepr<'a> {
         let c: TWire<C> = TWire::new(c);
+        let tainted = match (t.tainted, e.tainted) {
+            (Some(tt), Some(et)) => Some(bld.mux(c.clone(), tt, et)),
+            (None, None) => None,
+            _ => unreachable!(),
+        };
         MemPortRepr {
             cycle: bld.mux(c.clone(), t.cycle, e.cycle),
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
             op: bld.mux(c.clone(), t.op, e.op),
+            tainted,
         }
     }
 }
@@ -488,17 +500,34 @@ impl PackedMemPort {
         // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
         // put `addr` last in the list.
         let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, mp.addr)));
-        let data = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((mp.value, mp.op)));
+        let data = match mp.tainted {
+            None => {
+                bit_pack::concat_bits(bld, TWire::<(_, _)>::new((mp.value, mp.op)))
+            }
+            Some(tainted) => {
+                bit_pack::concat_bits(bld, TWire::<(_, _, _)>::new((mp.value, mp.op, tainted)))
+            }
+        };
         TWire::new(PackedMemPortRepr { key, data })
     }
 }
 
 impl<'a> PackedMemPortRepr<'a> {
-    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
+    pub fn unpack(&self, bld: &Builder<'a>, mode:&Option<Mode<'a>>) -> TWire<'a, MemPort> {
         let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
-        let (value, op) = *bit_pack::split_bits::<(_, _)>(bld, self.data);
-        TWire::new(MemPortRepr { cycle, addr, value, op })
+        // TODO: Can we inspect the wire length so we don't need to pass in the mode?
+        let (value, op, tainted) = match mode {
+            Some(_) => {
+                let (value, op, tainted) = *bit_pack::split_bits::<(_, _, _)>(bld, self.data);
+                (value, op, Some(tainted))
+            }
+            None => {
+                let (value, op) = *bit_pack::split_bits::<(_, _)>(bld, self.data);
+                (value, op, None)
+            }
+        };
+        TWire::new(MemPortRepr { cycle, addr, value, op, tainted})
     }
 }
 

@@ -10,6 +10,7 @@ use crate::micro_ram::types::{
     MemPort, MemOpKind, PackedMemPort, Advice, MemSegment, MEM_PORT_PRELOAD_CYCLE,
     MEM_PORT_UNUSED_CYCLE,
 };
+use crate::mode::{Mode, init_mem_taint};
 use crate::sort;
 
 pub struct Memory<'a> {
@@ -25,7 +26,7 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn init_segment(&mut self, b: &Builder<'a>, seg: &MemSegment) {
+    pub fn init_segment(&mut self, b: &Builder<'a>, mode: &Option<Mode>, seg: &MemSegment) {
         self.ports.reserve(seg.len as usize);
 
         for i in 0 .. seg.len {
@@ -39,6 +40,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
+                tainted: init_mem_taint( &mode),
             });
 
             if self.verifier && seg.secret {
@@ -65,6 +67,7 @@ impl<'a> Memory<'a> {
         len: usize,
         sparsity: usize,
         mut get_advice: impl FnMut(usize) -> (&'b [Advice], u32),
+        mode: &Option<Mode<'a>>,
     ) -> CyclePorts<'a> {
         let num_ports = (len + sparsity - 1) / sparsity;
 
@@ -101,7 +104,7 @@ impl<'a> Memory<'a> {
                             );
                         }
                         found_j = Some(j);
-                        mp = Some(MemPort { cycle, addr, value, op });
+                        mp = Some(MemPort { cycle, addr, value, op, tainted: init_mem_taint( &mode) });
                     }
                 }
             }
@@ -114,6 +117,7 @@ impl<'a> Memory<'a> {
                 addr: (self.ports.len() + i) as u64,
                 value: 0,
                 op: MemOpKind::Write,
+                tainted: init_mem_taint( &mode),
             });
             let user = match found_j {
                 Some(j) => u8::try_from(j % sparsity).unwrap(),
@@ -134,7 +138,7 @@ impl<'a> Memory<'a> {
     /// Assert that this set of memory operations is internally consistent.
     ///
     /// This takes `self` by value to prevent adding more `MemPort`s after the consistency check.
-    pub fn assert_consistent(self, cx: &Context<'a>, b: &Builder<'a>) {
+    pub fn assert_consistent(self, cx: &Context<'a>, b: &Builder<'a>, mode: &Option<Mode<'a>>) {
         // Sort the memory ports by addres and then by cycle.  Most of the ordering logic is
         // handled by the `typed::Lt` impl for `PackedMemPort`.
         let sorted_ports = {
@@ -146,7 +150,7 @@ impl<'a> Memory<'a> {
             // also ensure that every `MemPort` is distinct.
             let sorted = sort::sort(&b, &mut packed_ports, &mut |&x, &y| b.lt(x, y));
             wire_assert!(&cx, sorted, "memory op sorting failed");
-            packed_ports.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
+            packed_ports.iter().map(|pmp| pmp.unpack(&b, mode)).collect::<Vec<_>>()
         };
 
         // Debug logging, showing the state before and after sorting.
