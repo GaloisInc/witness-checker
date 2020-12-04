@@ -7,7 +7,7 @@ use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
 use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
 use crate::mode::{Mode, init_mem_taint, uses_tainted_mem};
-use crate::mode::if_mode::{IfMode, AnyLeakUninit};
+use crate::mode::if_mode::{IfMode, AnyTainted};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -371,7 +371,7 @@ pub struct MemPort {
     pub addr: u64,
     pub value: u64,
     pub op: MemOpKind,
-    pub tainted: IfMode<AnyLeakUninit, u64>,
+    pub tainted: IfMode<AnyTainted, u64>,
 }
 
 mk_named_enum! {
@@ -410,7 +410,7 @@ pub struct MemPortRepr<'a> {
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
-    pub tainted: TWire<'a, IfMode<AnyLeakUninit, u64>>,
+    pub tainted: TWire<'a, IfMode<AnyTainted, u64>>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -503,7 +503,7 @@ impl PackedMemPort {
 }
 
 impl<'a> PackedMemPortRepr<'a> {
-    pub fn unpack(&self, bld: &Builder<'a>, mode:&Option<Mode<'a>>) -> TWire<'a, MemPort> {
+    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
         let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
         let (value, op, tainted) = *bit_pack::split_bits::<(_, _, _)>(bld, self.data);
@@ -763,6 +763,7 @@ pub struct MemSegment {
     pub secret: bool,
     #[serde(default)]
     pub data: Vec<u64>,
+    pub tainted: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -793,7 +794,7 @@ impl Default for Sparsity {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, op: MemOpKind },
+    MemOp { addr: u64, value: u64, op: MemOpKind, tainted: u64 },
     Stutter,
     Advise { advise: u64 },
 }
@@ -873,11 +874,12 @@ impl<'de> Visitor<'de> for AdviceVisitor {
         let mut seq = CountedSeqAccess::new(seq, 1);
         let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
-                seq.expect += 3;
+                seq.expect += 4;
                 Advice::MemOp {
                     addr: seq.next_element()?,
                     value: seq.next_element()?,
                     op: seq.next_element()?,
+                    tainted: seq.next_element()?, // Make this optional too?
                 }
             },
             "Stutter" => {

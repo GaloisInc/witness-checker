@@ -52,7 +52,7 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("mode")
              .long("mode")
              .takes_value(true)
-             .help("Mode to run the checker in. Valid options include:\n    leak-uninitialized - Detect an information leak when uninitialized memory is output."))
+             .help("Mode to run the checker in. Valid options include:\n    leak-uninitialized - Detect an information leak when uninitialized memory is output.\n    leak-tainted - Detect an information leak when a tainted value is output."))
         .arg(Arg::with_name("check-steps")
              .long("check-steps")
              .takes_value(true)
@@ -695,6 +695,7 @@ fn main() -> io::Result<()> {
 
     let mode = match args.value_of("mode") {
         Some("leak-uninitialized") => Mode::LeakUninit1,
+        Some("leak-tainted") => Mode::LeakTainted,
         None => Mode::MemorySafety,
         Some(m) => {
             eprintln!("error: unknown mode `{}`", m);
@@ -702,6 +703,6 @@ fn main() -> io::Result<()> {
         },
     };
 
-    with_mode(mode, || real_main(args))
+    unsafe { with_mode(mode, || real_main(args)) }
 }
 

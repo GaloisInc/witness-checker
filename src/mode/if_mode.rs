@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 pub enum Mode {
     MemorySafety,
     LeakUninit1,
-    LeakUninit2,
+    LeakTainted,
 }
 
 
@@ -49,8 +49,8 @@ pub fn get_mode() -> Mode {
 
 pub struct MemorySafety;
 pub struct LeakUninit1;
-pub struct LeakUninit2;
-pub struct AnyLeakUninit;
+pub struct LeakTainted;
+pub struct AnyTainted;
 
 pub trait ModePred {
     fn check(m: Mode) -> bool;
@@ -64,14 +64,14 @@ impl ModePred for LeakUninit1 {
     fn check(m: Mode) -> bool { m == Mode::LeakUninit1 }
 }
 
-impl ModePred for LeakUninit2 {
-    fn check(m: Mode) -> bool { m == Mode::LeakUninit2 }
+impl ModePred for LeakTainted {
+    fn check(m: Mode) -> bool { m == Mode::LeakTainted }
 }
 
-impl ModePred for AnyLeakUninit {
+impl ModePred for AnyTainted {
     fn check(m: Mode) -> bool {
         m == Mode::LeakUninit1 ||
-        m == Mode::LeakUninit2
+        m == Mode::LeakTainted
     }
 }
 
@@ -119,14 +119,14 @@ pub fn check_mode<M: ModePred>() -> Option<ModeProof<M>> {
     unsafe { ModeProof::new_checked(get_mode()) }
 }
 
-unsafe impl IsModeProof<AnyLeakUninit> for ModeProof<LeakUninit1> {
-    fn as_mode_proof(self) -> ModeProof<AnyLeakUninit> {
+unsafe impl IsModeProof<AnyTainted> for ModeProof<LeakUninit1> {
+    fn as_mode_proof(self) -> ModeProof<AnyTainted> {
         unsafe { ModeProof::new_unchecked() }
     }
 }
 
-unsafe impl IsModeProof<AnyLeakUninit> for ModeProof<LeakUninit2> {
-    fn as_mode_proof(self) -> ModeProof<AnyLeakUninit> {
+unsafe impl IsModeProof<AnyTainted> for ModeProof<LeakTainted> {
+    fn as_mode_proof(self) -> ModeProof<AnyTainted> {
         unsafe { ModeProof::new_unchecked() }
     }
 }
