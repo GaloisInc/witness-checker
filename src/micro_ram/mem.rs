@@ -40,7 +40,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: init_mem_taint( &mode),
+                tainted: unimplemented!(),
             });
 
             if self.verifier && seg.secret {
@@ -104,7 +104,7 @@ impl<'a> Memory<'a> {
                             );
                         }
                         found_j = Some(j);
-                        mp = Some(MemPort { cycle, addr, value, op, tainted: init_mem_taint( &mode) });
+                        mp = Some(MemPort { cycle, addr, value, op, tainted: unimplemented!() });
                     }
                 }
             }
@@ -117,7 +117,7 @@ impl<'a> Memory<'a> {
                 addr: (self.ports.len() + i) as u64,
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: init_mem_taint( &mode),
+                tainted: unimplemented!(),
             });
             let user = match found_j {
                 Some(j) => u8::try_from(j % sparsity).unwrap(),

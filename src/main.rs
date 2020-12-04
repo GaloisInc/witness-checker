@@ -24,6 +24,7 @@ use cheesecloth::micro_ram::types::{
     REG_PC, MEM_PORT_UNUSED_CYCLE,
 };
 use cheesecloth::mode;
+use cheesecloth::mode::if_mode::{Mode, with_mode};
 
 
 fn parse_args() -> ArgMatches<'static> {
@@ -439,9 +440,7 @@ impl<'a> PassRunner<'a> {
     }
 }
 
-fn main() -> io::Result<()> {
-    let args = parse_args();
-
+fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     #[cfg(not(feature = "bellman"))]
     if args.is_present("zkif-out") {
         eprintln!("error: zkinterface output is not supported - build with `--features bellman`");
@@ -690,3 +689,19 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
+
+fn main() -> io::Result<()> {
+    let args = parse_args();
+
+    let mode = match args.value_of("mode") {
+        Some("leak-uninitialized") => Mode::LeakUninit1,
+        None => Mode::MemorySafety,
+        Some(m) => {
+            eprintln!("error: unknown mode `{}`", m);
+            std::process::exit(1);
+        },
+    };
+
+    with_mode(mode, || real_main(args))
+}
+

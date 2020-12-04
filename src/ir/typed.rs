@@ -5,6 +5,7 @@ use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
+use crate::mode::if_mode::{IfMode, ModePred, check_mode};
 
 
 pub struct Builder<'a> {
@@ -672,6 +673,65 @@ impl<'a, A: FromEval<'a>> FromEval<'a> for Vec<A> {
         a.into_iter().map(|x| A::from_eval(ev, x.repr)).collect()
     }
 }
+
+
+impl<'a, M: ModePred, A: Repr<'a>> Repr<'a> for IfMode<M, A> {
+    type Repr = IfMode<M, A::Repr>;
+}
+
+impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        if check_mode::<M>().is_some() {
+            A::wire_type(c)
+        } else {
+            <()>::wire_type(c)
+        }
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        if let Some(w) = w.repr.try_unwrap() {
+            A::to_wire(bld, TWire::<A>::new(w))
+        } else {
+            <()>::to_wire(bld, TWire::<()>::new(()))
+        }
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(IfMode::new(|_| A::from_wire(bld, w).repr))
+    }
+}
+
+impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
+    fn lit(bld: &Builder<'a>, x: IfMode<M, A>) -> IfMode<M, A::Repr> {
+        x.map(|x| A::lit(bld, x))
+    }
+}
+
+impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
+    fn secret(bld: &Builder<'a>, x: Option<IfMode<M, A>>) -> IfMode<M, A::Repr> {
+        IfMode::new(|pf| A::secret(bld, x.map(|x| x.unwrap(pf))))
+    }
+}
+
+impl<'a, M: ModePred, C, T, E> Mux<'a, C, IfMode<M, E>> for IfMode<M, T>
+where
+    C: Repr<'a>,
+    C::Repr: Clone,
+    T: Mux<'a, C, E>,
+    E: Repr<'a>,
+{
+    type Output = IfMode<M, <T as Mux<'a, C, E>>::Output>;
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: IfMode<M, T::Repr>,
+        e: IfMode<M, E::Repr>,
+    ) -> IfMode<M, <<T as Mux<'a, C, E>>::Output as Repr<'a>>::Repr> {
+        t.zip(e, |t, e| T::mux(bld, c, t, e))
+    }
+}
+
+
 
 // No `impl Secret for Vec<A>`, since we can't determine how many wires to create in the case where
 // the value is unknown.

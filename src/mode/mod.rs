@@ -6,6 +6,8 @@ use crate::micro_ram::types::{
     Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice,
 };
 
+pub mod if_mode;
+
 mod leak_uninitialized;
 
 // A checker mode and its respective state.
