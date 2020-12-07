@@ -1,3 +1,6 @@
+# Check that we detect when a sub-word-sized write modifies bytes outside its
+# offset+width window.
+
 program:
   - [mov, 0, null, true, 0x01]      # mov r0, 0x01
   - [store1, null, 0, true, 0]      # store1 0, r0

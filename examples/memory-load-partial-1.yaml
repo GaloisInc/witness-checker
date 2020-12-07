@@ -1,0 +1,44 @@
+# Check handling of sub-word-sized reads.
+
+program:
+  - [mov, 0, null, true, 0xf1f2f3f4f5f6f7f8]
+  - [store8, null, 0, true, 0]
+  - [load1, 0, null, true, 7]
+  - [load1, 0, null, true, 0]
+  - [load2, 0, null, true, 6]
+  - [load2, 0, null, true, 0]
+  - [load4, 0, null, true, 4]
+  - [load4, 0, null, true, 0]
+  - [load8, 0, null, true, 0]
+
+init_mem:
+  - start: 0
+    len: 8
+    read_only: true
+    secret: false
+
+params:
+  num_regs: 1
+  trace_len: 10
+
+trace:
+  - [0, [0]]
+  - [1, [0xf1f2f3f4f5f6f7f8]]
+  - [2, [0xf1f2f3f4f5f6f7f8]]
+  - [3, [0xf1]]
+  - [4, [0xf8]]
+  - [5, [0xf1f2]]
+  - [6, [0xf7f8]]
+  - [7, [0xf1f2f3f4]]
+  - [8, [0xf5f6f7f8]]
+  - [9, [0xf1f2f3f4f5f6f7f8]]
+
+advice:
+  2: [[MemOp, 0, 0xf1f2f3f4f5f6f7f8, write, 8]]
+  3: [[MemOp, 7, 0xf1f2f3f4f5f6f7f8, read, 1]]
+  4: [[MemOp, 0, 0xf1f2f3f4f5f6f7f8, read, 1]]
+  5: [[MemOp, 6, 0xf1f2f3f4f5f6f7f8, read, 2]]
+  6: [[MemOp, 0, 0xf1f2f3f4f5f6f7f8, read, 2]]
+  7: [[MemOp, 4, 0xf1f2f3f4f5f6f7f8, read, 4]]
+  8: [[MemOp, 0, 0xf1f2f3f4f5f6f7f8, read, 4]]
+  9: [[MemOp, 0, 0xf1f2f3f4f5f6f7f8, read, 8]]

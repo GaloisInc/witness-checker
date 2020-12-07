@@ -19,7 +19,7 @@ use cheesecloth::gadget::bit_pack;
 use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::fetch::Fetch;
-use cheesecloth::micro_ram::mem::{Memory, extract_bytes_at_offset};
+use cheesecloth::micro_ram::mem::{Memory, extract_bytes_at_offset, extract_low_bytes};
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::types::{
     RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, MemOpWidth, ByteOffset, Opcode, Advice,
@@ -354,8 +354,9 @@ fn check_step<'a>(
         for w in MemOpWidth::iter() {
             cx.when(b, b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), |cx| {
                 let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+                let x_low = extract_low_bytes(b, x, w);
                 wire_assert!(
-                    cx, b.eq(stored_value, x),
+                    cx, b.eq(stored_value, x_low),
                     "cycle {}'s mem port stores value {} at {:x} (expected value {})",
                     cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
                 );
@@ -365,8 +366,9 @@ fn check_step<'a>(
         cx.when(b, is_old_store, |cx| {
             let w = MemOpWidth::WORD;
             let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+            let x_low = extract_low_bytes(b, x, w);
             wire_assert!(
-                cx, b.eq(stored_value, x),
+                cx, b.eq(stored_value, x_low),
                 "cycle {}'s mem port stores value {} at {:x} (expected value {})",
                 cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
             );

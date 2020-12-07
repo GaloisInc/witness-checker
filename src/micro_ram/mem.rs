@@ -357,6 +357,8 @@ fn check_mem<'a>(
 }
 
 
+/// Extract `width` bytes from `value`, starting at the offset indicated by the low bits of `addr`.
+/// The result is zero-extended to 64 bits.
 pub fn extract_bytes_at_offset<'a>(
     b: &Builder<'a>,
     value: TWire<'a, u64>,
@@ -383,6 +385,28 @@ pub fn extract_bytes_at_offset<'a>(
         MemOpWidth::W1 => go!(u8, 1),
         MemOpWidth::W2 => go!(u16, 2),
         MemOpWidth::W4 => go!(u32, 4),
+        MemOpWidth::W8 => value,
+    }
+}
+
+/// Extract the low `width` bytes of `value`, zero-extended to 64 bits.
+pub fn extract_low_bytes<'a>(
+    b: &Builder<'a>,
+    value: TWire<'a, u64>,
+    width: MemOpWidth,
+) -> TWire<'a, u64> {
+    // Hard to write this as a function without const generics
+    macro_rules! go {
+        ($T:ty) => {{
+            let low = bit_pack::extract_low::<$T>(b, value.repr);
+            b.cast(low)
+        }};
+    }
+
+    match width {
+        MemOpWidth::W1 => go!(u8),
+        MemOpWidth::W2 => go!(u16),
+        MemOpWidth::W4 => go!(u32),
         MemOpWidth::W8 => value,
     }
 }
