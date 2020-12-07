@@ -4,4 +4,4 @@ invalid trace: unaligned access of 7 with width W8 on cycle 3
 invalid trace: unaligned access of 7 with width W2 on cycle 5
 invalid trace: unaligned access of 7 with width W4 on cycle 6
 invalid trace: unaligned access of 7 with width W8 on cycle 7
-internal evaluator: 204 asserts passed, 6 failed; found 0 bugs; overall status: BAD
+internal evaluator: 252 asserts passed, 6 failed; found 0 bugs; overall status: BAD

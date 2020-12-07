@@ -367,11 +367,12 @@ mk_named_enum! {
         Load2 = 31,
         Load4 = 32,
         Load8 = 33,
+        Poison8 = 34,
 
-        Read = 34,
-        Answer = 35,
+        Read = 35,
+        Answer = 36,
 
-        Advise = 36,
+        Advise = 37,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
