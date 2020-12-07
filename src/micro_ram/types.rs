@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use serde::Deserialize;
+use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
-use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
+use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux, FromEval};
 use crate::micro_ram::feature::{Feature, Version};
 
 
@@ -305,6 +306,20 @@ macro_rules! mk_named_enum {
             type Output = bool;
             fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
                 bld.ne(a, b).repr
+            }
+        }
+
+        impl<'a> FromEval<'a> for $Name {
+            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+                let raw = u8::from_eval(ev, a.repr)?;
+                let result = Self::from_raw(raw);
+                if result.is_none() {
+                    eprintln!(
+                        "warning: evaluation of {} produced out-of-range value {}",
+                        stringify!($Name), raw,
+                    );
+                }
+                result
             }
         }
     };
@@ -625,6 +640,13 @@ impl<'a> Flatten<'a> for WordAddr {
 
     fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
+    }
+}
+
+impl<'a> typed::Eq<'a, WordAddr> for WordAddr {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a, b)
     }
 }
 

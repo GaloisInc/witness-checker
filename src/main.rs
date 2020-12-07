@@ -19,7 +19,7 @@ use cheesecloth::gadget::bit_pack;
 use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::fetch::Fetch;
-use cheesecloth::micro_ram::mem::Memory;
+use cheesecloth::micro_ram::mem::{Memory, extract_bytes_at_offset};
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::types::{
     RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, MemOpWidth, ByteOffset, Opcode, Advice,
@@ -416,36 +416,6 @@ fn check_last<'a>(
             "final r0 is {} (expected {})",
             cx.eval(s.regs[0]), 0,
         );
-    }
-}
-
-fn extract_bytes_at_offset<'a>(
-    b: &Builder<'a>,
-    value: TWire<'a, u64>,
-    addr: TWire<'a, u64>,
-    width: MemOpWidth,
-) -> TWire<'a, u64> {
-    // Hard to write this as a function without const generics
-    macro_rules! go {
-        ($T:ty, $divisor:expr) => {{
-            let value_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value.repr);
-            let offset = bit_pack::extract_low::<ByteOffset>(b, addr.repr);
-            // The `* d` multiply means that if `offset` is `i * d`, then `result` is
-            // `value_parts[i]`.  If `offset` is not a multiple of `d`, then we return an arbitrary
-            // value, on the assumption that the memory consistency alignment check will fail later
-            // on.
-            let result = b.index(&*value_parts, offset, |b, idx| {
-                b.lit(ByteOffset::new(idx as u8 * $divisor))
-            });
-            b.cast(result)
-        }};
-    }
-
-    match width {
-        MemOpWidth::W1 => go!(u8, 1),
-        MemOpWidth::W2 => go!(u16, 2),
-        MemOpWidth::W4 => go!(u32, 4),
-        MemOpWidth::W8 => value,
     }
 }
 

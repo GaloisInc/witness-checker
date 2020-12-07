@@ -44,6 +44,15 @@ impl<T: fmt::Display> fmt::Display for SecretValue<T> {
     }
 }
 
+impl<T: fmt::Debug> fmt::Debug for SecretValue<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some(ref x) => fmt::Debug::fmt(x, fmt),
+            None => write!(fmt, "??"),
+        }
+    }
+}
+
 impl<T: fmt::LowerHex> fmt::LowerHex for SecretValue<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {

@@ -8,8 +8,8 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{TWire, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Advice, MemSegment, ByteOffset,
-    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE,
+    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Advice, MemSegment, ByteOffset, WordAddr,
+    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 use crate::sort;
 
@@ -172,14 +172,13 @@ impl<'a> Memory<'a> {
         }
 
         // Run the consistency check.
-        for port in sorted_ports.iter() {
-            check_single_mem(&cx, &b, port);
-        }
+        // The first port has no previous port.  Supply a dummy port and set `prev_valid = false`.
+        check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), &sorted_ports[0]);
 
-        check_first_mem(&cx, &b, &sorted_ports[0]);
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
-        for (i, (port1, port2)) in it {
-            check_mem(&cx, &b, i, port1, port2);
+        for (i, (prev, port)) in it {
+            let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
+            check_mem(&cx, &b, i + 1, prev, prev_valid, port);
         }
     }
 }
@@ -274,96 +273,156 @@ fn addr_misalignment<'a>(
     offset
 }
 
-/// Single-port validity check.  This must hold on every port.
-fn check_single_mem<'a>(
+fn check_mem<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    index: usize,
+    prev: &TWire<'a, MemPort>,
+    prev_valid: TWire<'a, bool>,
     port: &TWire<'a, MemPort>,
 ) {
-    let _g = b.scoped_label("check_single_mem");
+    let _g = b.scoped_label(format_args!("check_mem/index {}", index));
+    let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     // Alignment: `addr` must be a multiple of `width.bytes()`.
     let misalign = addr_misalignment(cx, b, port.addr, port.width);
     wire_assert!(
         cx, b.eq(misalign, b.lit(ByteOffset::new(0))),
-        "unaligned access of {:x} with width {} on cycle {}",
-        cx.eval(port.addr), cx.eval(port.width.repr), cx.eval(port.cycle),
-    );
-}
-
-/// Check that memory operation `port` is valid as the first memory op.
-fn check_first_mem<'a>(
-    cx: &Context<'a>,
-    b: &Builder<'a>,
-    port: &TWire<'a, MemPort>,
-) {
-    let _g = b.scoped_label("check_first_mem");
-    // If the first memory port is active, then it must not be a read, since there are no previous
-    // writes to read from.
-    let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-    wire_bug_if!(
-        cx, b.mux(active, b.eq(port.op, b.lit(MemOpKind::Read)), b.lit(false)),
-        "uninit read from {:x} on cycle {}",
-        cx.eval(port.addr), cx.eval(port.cycle),
-    );
-}
-
-/// Check that memory operation `port2` can follow operation `port1`.
-fn check_mem<'a>(
-    cx: &Context<'a>,
-    b: &Builder<'a>,
-    index: usize,
-    port1: &TWire<'a, MemPort>,
-    port2: &TWire<'a, MemPort>,
-) {
-    let _g = b.scoped_label(format_args!("check_mem/index {}", index));
-    let active = b.ne(port2.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-
-    // Whether `port2` is the first memory op for its address.
-    let is_first = b.or(
-        b.ne(port1.addr, port2.addr),
-        b.eq(port1.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
+        "unaligned access of {:x} with width {:?} on cycle {}",
+        cx.eval(port.addr), cx.eval(port.width), cx.eval(port.cycle),
     );
 
-    cx.when(b, b.and(active, b.not(is_first)), |cx| {
-        cx.when(b, b.eq(port1.op, b.lit(MemOpKind::Poison)), |cx| {
-            let is_poison = b.eq(port2.op, b.lit(MemOpKind::Poison));
+    let is_read = b.eq(port.op, b.lit(MemOpKind::Read));
+    let is_write = b.eq(port.op, b.lit(MemOpKind::Write));
+    let is_poison = b.eq(port.op, b.lit(MemOpKind::Poison));
 
+    cx.when(b, prev_valid, |cx| {
+        cx.when(b, b.eq(prev.op, b.lit(MemOpKind::Poison)), |cx| {
             // Poison -> Poison is invalid.
             wire_assert!(
                 cx, b.not(is_poison),
                 "double poison of address {:x} on cycle {}",
-                cx.eval(port2.addr), cx.eval(port2.cycle),
+                cx.eval(port.addr), cx.eval(port.cycle),
             );
 
             // Poison -> Read/Write is a bug.
             wire_bug_if!(
                 cx, b.not(is_poison),
                 "access of poisoned address {:x} on cycle {}",
-                cx.eval(port2.addr), cx.eval(port2.cycle),
-            );
-        });
-
-        // A Read must have the same value as the previous Read/Write.  (Write and Poison values
-        // are unconstrained.)
-        cx.when(b, b.eq(port2.op, b.lit(MemOpKind::Read)), |cx| {
-            wire_assert!(
-                cx, b.eq(port1.value, port2.value),
-                "read from {:x} on cycle {} produced {} (expected {})",
-                cx.eval(port2.addr), cx.eval(port2.cycle),
-                cx.eval(port2.value), cx.eval(port1.value),
+                cx.eval(port.addr), cx.eval(port.cycle),
             );
         });
     });
 
-    cx.when(b, b.and(active, is_first), |cx| {
-        // The first operation for an address can't be a Read, since there is no previous Write for
-        // it to read from.
+    // When there is no previous op for this address (`!prev_valid`), we set `prev_value =
+    // port.value`, so all the `value` equality checks below will pass.  This means uninitialized
+    // reads will succeed, but the prover can provide arbitrary data for any uninitialized bytes.
+    let prev_value = b.mux(prev_valid, prev.value, port.value);
+
+    cx.when(b, b.and(is_read, active), |cx| {
+        // Reads must produce the same value as the previous operation.
         wire_assert!(
-            cx, b.ne(port2.op, b.lit(MemOpKind::Read)),
-            "uninit read from {:x} on cycle {}",
-            cx.eval(port2.addr), cx.eval(port2.cycle),
+            cx, b.eq(port.value, prev_value),
+            "read from {:x} on cycle {} produced {} (expected {})",
+            cx.eval(port.addr), cx.eval(port.cycle),
+            cx.eval(port.value), cx.eval(prev_value),
+        );
+    });
+
+    cx.when(b, b.or(is_write, is_poison), |cx| {
+        // Writes (and poison) may only modify the bytes identified by the `addr` offset and the
+        // `width`.
+        let mut mostly_eq_acc = b.lit(false);
+        for w in MemOpWidth::iter() {
+            let mostly_eq = compare_except_bytes_at_offset(
+                b,
+                port.value,
+                prev_value,
+                port.addr,
+                w,
+            );
+            mostly_eq_acc = b.mux(
+                b.eq(port.width, b.lit(w)),
+                mostly_eq,
+                mostly_eq_acc,
+            );
+        }
+        wire_assert!(
+            cx, mostly_eq_acc,
+            "{:?} to {:x} on cycle {} modified outside width {:?}: 0x{:x} != 0x{:x}",
+            cx.eval(port.op), cx.eval(port.addr), cx.eval(port.cycle), cx.eval(port.width),
+            cx.eval(port.value), cx.eval(prev_value),
         );
     });
 }
 
+
+pub fn extract_bytes_at_offset<'a>(
+    b: &Builder<'a>,
+    value: TWire<'a, u64>,
+    addr: TWire<'a, u64>,
+    width: MemOpWidth,
+) -> TWire<'a, u64> {
+    // Hard to write this as a function without const generics
+    macro_rules! go {
+        ($T:ty, $divisor:expr) => {{
+            let value_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value.repr);
+            let offset = bit_pack::extract_low::<ByteOffset>(b, addr.repr);
+            // The `* d` multiply means that if `offset` is `i * d`, then `result` is
+            // `value_parts[i]`.  If `offset` is not a multiple of `d`, then we return an arbitrary
+            // value, on the assumption that the memory consistency alignment check will fail later
+            // on.
+            let result = b.index(&*value_parts, offset, |b, idx| {
+                b.lit(ByteOffset::new(idx as u8 * $divisor))
+            });
+            b.cast(result)
+        }};
+    }
+
+    match width {
+        MemOpWidth::W1 => go!(u8, 1),
+        MemOpWidth::W2 => go!(u16, 2),
+        MemOpWidth::W4 => go!(u32, 4),
+        MemOpWidth::W8 => value,
+    }
+}
+
+/// Compare `value1` and `value2` for equality, except the bytes identified by `addr` and `width`
+/// may vary.
+pub fn compare_except_bytes_at_offset<'a>(
+    b: &Builder<'a>,
+    value1: TWire<'a, u64>,
+    value2: TWire<'a, u64>,
+    addr: TWire<'a, u64>,
+    width: MemOpWidth,
+) -> TWire<'a, bool> {
+    // Hard to write this as a function without const generics
+    macro_rules! go {
+        ($T:ty, $divisor:expr) => {{
+            let value1_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value1.repr);
+            let value2_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value2.repr);
+            let offset = bit_pack::extract_low::<ByteOffset>(b, addr.repr);
+            let mut acc = b.lit(true);
+            for (idx, (&v1, &v2)) in value1_parts.iter().zip(value2_parts.iter()).enumerate() {
+                let ignored = b.eq(offset, b.lit(ByteOffset::new(idx as u8 * $divisor)));
+                acc = b.and(acc, b.mux(ignored, b.lit(true), b.eq(v1, v2)));
+            }
+            acc
+        }};
+    }
+
+    match width {
+        MemOpWidth::W1 => go!(u8, 1),
+        MemOpWidth::W2 => go!(u16, 2),
+        MemOpWidth::W4 => go!(u32, 4),
+        MemOpWidth::W8 => b.lit(true),
+    }
+}
+
+pub fn word_addr<'a>(
+    b: &Builder<'a>,
+    addr: TWire<'a, u64>,
+) -> TWire<'a, WordAddr> {
+    let (_offset, waddr) = *bit_pack::split_bits::<(ByteOffset, WordAddr)>(b, addr.repr);
+    waddr
+}
