@@ -58,9 +58,11 @@ impl<'a> Memory<'a> {
                 }
             }
 
-            mp.tainted = TWire::new(IfMode::new(|pf| {
-                let t = seg.tainted.get(i as usize).cloned().unwrap_or(0);
-                let w = if seg.secret {
+            mp.tainted = {
+                let t: IfMode<_, u64> = IfMode::new(|pf| {
+                    seg.tainted.get(i as usize).cloned().unwrap_or(0)
+                });
+                if seg.secret {
                     if self.verifier {
                         b.secret(None)
                     } else {
@@ -68,9 +70,8 @@ impl<'a> Memory<'a> {
                     }
                 } else {
                     b.lit(t)
-                };
-                u64::to_wire(b, w) // JP: Change types so we don't need to do this?
-            }));
+                }
+            };
 
             self.ports.push(mp);
         }
