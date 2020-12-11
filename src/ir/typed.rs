@@ -676,7 +676,7 @@ impl<'a, A: FromEval<'a>> FromEval<'a> for Vec<A> {
 
 
 impl<'a, M: ModePred, A: Repr<'a>> Repr<'a> for IfMode<M, A> {
-    type Repr = IfMode<M, A::Repr>;
+    type Repr = IfMode<M, TWire<'a, A>>;
 }
 
 impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
@@ -690,26 +690,26 @@ impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
 
     fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         if let Some(w) = w.repr.try_unwrap() {
-            A::to_wire(bld, TWire::<A>::new(w))
+            A::to_wire(bld, w)
         } else {
             <()>::to_wire(bld, TWire::<()>::new(()))
         }
     }
 
     fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
-        TWire::new(IfMode::new(|_| A::from_wire(bld, w).repr))
+        TWire::new(IfMode::new(|_| A::from_wire(bld, w)))
     }
 }
 
 impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
-    fn lit(bld: &Builder<'a>, x: IfMode<M, A>) -> IfMode<M, A::Repr> {
-        x.map(|x| A::lit(bld, x))
+    fn lit(bld: &Builder<'a>, x: IfMode<M, A>) -> IfMode<M, TWire<'a, A>> {
+        x.map(|x| bld.lit(x))
     }
 }
 
 impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
-    fn secret(bld: &Builder<'a>, x: Option<IfMode<M, A>>) -> IfMode<M, A::Repr> {
-        IfMode::new(|pf| A::secret(bld, x.map(|x| x.unwrap(&pf))))
+    fn secret(bld: &Builder<'a>, x: Option<IfMode<M, A>>) -> IfMode<M, TWire<'a, A>> {
+        IfMode::new(|pf| bld.secret(x.map(|x| x.unwrap(&pf))))
     }
 }
 
@@ -724,10 +724,10 @@ where
     fn mux(
         bld: &Builder<'a>,
         c: C::Repr,
-        t: IfMode<M, T::Repr>,
-        e: IfMode<M, E::Repr>,
-    ) -> IfMode<M, <<T as Mux<'a, C, E>>::Output as Repr<'a>>::Repr> {
-        t.zip(e, |t, e| T::mux(bld, c, t, e))
+        t: IfMode<M, TWire<'a, T>>,
+        e: IfMode<M, TWire<'a, E>>,
+    ) -> IfMode<M, TWire<'a, <T as Mux<'a, C, E>>::Output>> {
+        t.zip(e, |t, e| bld.mux(TWire::<C>::new(c), t, e))
     }
 }
 
