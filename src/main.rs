@@ -19,9 +19,10 @@ use cheesecloth::lower::{self, run_pass};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::Memory;
+use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::types::{
-    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE,
-    REG_PC, MEM_PORT_UNUSED_CYCLE,
+    RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE, REG_PC,
+    MEM_PORT_UNUSED_CYCLE,
 };
 
 
@@ -450,12 +451,13 @@ fn main() -> io::Result<()> {
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
     let content = fs::read(trace_path).unwrap();
-    let exec: Execution = match trace_path.extension().and_then(|os| os.to_str()) {
+    let parse_exec: ParseExecution = match trace_path.extension().and_then(|os| os.to_str()) {
         Some("yaml") => serde_yaml::from_slice(&content).unwrap(),
         Some("cbor") => serde_cbor::from_slice(&content).unwrap(),
         Some("json") => serde_json::from_slice(&content).unwrap(),
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
+    let exec = parse_exec.into_inner();
 
     let mut trace = Vec::new();
     for (i, state) in exec.trace.iter().enumerate() {

@@ -1,7 +1,19 @@
 use std::fmt;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
-use crate::micro_ram::types::{Opcode, MemOpKind, RamInstr, Advice};
+use crate::micro_ram::types::{Execution, Opcode, MemOpKind, RamInstr, Advice};
+
+
+/// A wrapper around `Execution` to support custom parsing logic.
+#[derive(Deserialize)]
+#[serde(transparent)]
+pub struct ParseExecution(Execution);
+
+impl ParseExecution {
+    pub fn into_inner(self) -> Execution {
+        self.0
+    }
+}
 
 
 impl<'de> Deserialize<'de> for Opcode {
