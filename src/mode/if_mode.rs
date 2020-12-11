@@ -1,3 +1,6 @@
+use crate::eval::Evaluator;
+use crate::ir::typed::{self, Builder, FromEval, Lit, Repr};
+use serde::{Deserialize, Deserializer};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -159,6 +162,10 @@ impl<M: ModePred, T> IfMode<M, T> {
         unsafe { Self::new_unchecked(Some(x)) }
     }
 
+    pub fn none() -> IfMode<M, T> {
+        unsafe { Self::new_unchecked(None) }
+    }
+
 
     pub fn proof(&self) -> Option<ModeProof<M>> {
         unsafe {
@@ -171,15 +178,15 @@ impl<M: ModePred, T> IfMode<M, T> {
     }
 
 
-    pub fn get<'a>(&'a self, _pf: impl IsModeProof<M>) -> &'a T {
+    pub fn get<'a>(&'a self, _pf: &impl IsModeProof<M>) -> &'a T {
         self.inner.as_ref().unwrap()
     }
 
-    pub fn get_mut<'a>(&'a mut self, _pf: impl IsModeProof<M>) -> &'a mut T {
+    pub fn get_mut<'a>(&'a mut self, _pf: &impl IsModeProof<M>) -> &'a mut T {
         self.inner.as_mut().unwrap()
     }
 
-    pub fn unwrap(self, _pf: impl IsModeProof<M>) -> T {
+    pub fn unwrap(self, _pf: &impl IsModeProof<M>) -> T {
         self.inner.unwrap()
     }
 
@@ -221,7 +228,7 @@ impl<M: ModePred, T> IfMode<M, T> {
     }
 
     pub fn zip<U, V>(self, other: IfMode<M, U>, f: impl FnOnce(T, U) -> V) -> IfMode<M, V> {
-        self.map_with(|p, x| f(x, other.unwrap(p)))
+        self.map_with(|p, x| f(x, other.unwrap(&p)))
     }
 }
 
@@ -257,3 +264,57 @@ impl<M: ModePred, T: fmt::Debug> fmt::Debug for IfMode<M, T> {
         <Option<T> as fmt::Debug>::fmt(&self.inner, fmt)
     }
 }
+
+impl<M: ModePred, T: fmt::Display> fmt::Display for IfMode<M, T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(x) = self.try_get() {
+            x.fmt( fmt)
+        } else {
+            write!(fmt, "()")
+        }
+    }
+}
+
+impl<'de, M: ModePred, A: Deserialize<'de>> Deserialize<'de> for IfMode<M, A> {
+    fn deserialize<D>(deserializer: D) -> Result<IfMode<M, A>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if let Some(p) = check_mode() {
+            Deserialize::deserialize(deserializer).map(|x| IfMode::some(p, x))
+        } else {
+            // JP: Better combinator for this? map_with_or?
+            Ok(IfMode::none())
+        }
+    }
+}
+
+impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        if let Some(pf) = check_mode() {
+            let x = a.unwrap(&pf);
+            A::from_eval(ev, x).map(|r| IfMode::some(pf, r))
+        } else {
+            Some(IfMode::none())
+        }
+    }
+}
+
+impl<'a, M: ModePred, T: typed::Eq<'a, Output = bool>> typed::Eq<'a, IfMode<M, T>> for IfMode<M, T> {
+    type Output = bool;
+
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        if let Some(pf) = check_mode::<M>() {
+            let a = a.unwrap(&pf);
+            let b = b.unwrap(&pf);
+            T::eq(bld, a, b)
+        } else {
+            // bool::lit(bld, true)
+            // This should be unreachable, otherwise the mode is influencing the circuit when it
+            // shouldn't.
+            // Maybe it doesn't make sense to implement an Eq impl.
+            unreachable!{}
+        }
+    }
+}
+

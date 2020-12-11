@@ -11,7 +11,7 @@ use crate::micro_ram::types::{
     MEM_PORT_UNUSED_CYCLE,
 };
 use crate::mode::if_mode::{IfMode};
-use crate::mode::{Mode, init_mem_taint};
+use crate::mode::{Mode, init_mem_taint, tainted};
 use crate::sort;
 
 pub struct Memory<'a> {
@@ -27,7 +27,7 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn init_segment(&mut self, b: &Builder<'a>, mode: &Option<Mode>, seg: &MemSegment) {
+    pub fn init_segment(&mut self, b: &Builder<'a>, seg: &MemSegment) {
         self.ports.reserve(seg.len as usize);
 
         for i in 0 .. seg.len {
@@ -328,6 +328,8 @@ fn check_mem<'a>(
                 cx.eval(port2.addr), cx.eval(port2.cycle),
                 cx.eval(port2.value), cx.eval(port1.value),
             );
+
+            tainted::check_memports(cx, b, port1, port2);
         });
     });
 

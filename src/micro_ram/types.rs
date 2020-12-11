@@ -173,13 +173,15 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<u64>>,
 }
 
 impl RamState {
-    pub fn new(pc: u32, regs: Vec<u32>) -> RamState {
+    pub fn new(pc: u32, regs: Vec<u32>, tainted_regs: IfMode<AnyTainted, Vec<u64>>) -> RamState {
         RamState {
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
+            tainted_regs,
         }
     }
 }
@@ -188,6 +190,7 @@ impl RamState {
 pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, u64>>>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -199,6 +202,7 @@ impl<'a> Lit<'a> for RamState {
         RamStateRepr {
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
+            tainted_regs: bld.lit(a.tainted_regs).repr,
         }
     }
 }
@@ -212,6 +216,11 @@ impl RamState {
                     bld.with_label(i, || bld.secret(Some(x)))
                 }).collect()
             }),
+            tainted_regs: bld.with_label("tainted_regs", || {
+                a.tainted_regs.map(|v| v.iter().enumerate().map(|(i, &t)| {
+                    bld.with_label(i, || bld.secret(Some(t)))
+                }).collect())
+            }),
         })
     }
 
@@ -221,6 +230,9 @@ impl RamState {
             regs: bld.with_label("regs", || (0 .. len).map(|i| {
                 bld.with_label(i, || bld.secret(None))
             }).collect()),
+            tainted_regs: IfMode::new(|_| bld.with_label("tainted_regs", || (0 .. len).map(|i| {
+                bld.with_label(i, || bld.secret(None))
+            }).collect())),
         })
     }
 }
@@ -411,6 +423,7 @@ pub struct MemPortRepr<'a> {
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
     pub tainted: TWire<'a, IfMode<AnyTainted, u64>>,
+    // pub tainted: IfMode<AnyTainted, TWire<'a, u64>>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -941,3 +954,14 @@ impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
         }
     }
 }
+
+pub fn operand_value<'a>(
+    b: &Builder<'a>,
+    regs: &Vec<TWire<'a, u64>>,
+    op: TWire<'a, u64>,
+    imm: TWire<'a, bool>,
+) -> TWire<'a, u64> {
+    let reg_val = b.index(&regs, op, |b, i| b.lit(i as u64));
+    b.mux(imm, op, reg_val)
+}
+

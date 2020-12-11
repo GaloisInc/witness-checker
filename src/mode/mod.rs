@@ -7,6 +7,7 @@ use crate::micro_ram::types::{
 };
 
 pub mod if_mode;
+pub mod tainted;
 
 mod leak_uninitialized;
 

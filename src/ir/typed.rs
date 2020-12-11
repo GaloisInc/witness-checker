@@ -709,7 +709,7 @@ impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
 
 impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
     fn secret(bld: &Builder<'a>, x: Option<IfMode<M, A>>) -> IfMode<M, A::Repr> {
-        IfMode::new(|pf| A::secret(bld, x.map(|x| x.unwrap(pf))))
+        IfMode::new(|pf| A::secret(bld, x.map(|x| x.unwrap(&pf))))
     }
 }
 

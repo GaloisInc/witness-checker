@@ -22,9 +22,11 @@ use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::types::{
     Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE,
     REG_PC, MEM_PORT_UNUSED_CYCLE,
+    operand_value,
 };
 use cheesecloth::mode;
-use cheesecloth::mode::if_mode::{Mode, with_mode};
+use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, with_mode};
+use cheesecloth::mode::tainted;
 
 
 fn parse_args() -> ArgMatches<'static> {
@@ -63,21 +65,11 @@ fn parse_args() -> ArgMatches<'static> {
 }
 
 
-
-fn operand_value<'a>(
-    b: &Builder<'a>,
-    s: &TWire<'a, RamState>,
-    op: TWire<'a, u64>,
-    imm: TWire<'a, bool>,
-) -> TWire<'a, u64> {
-    let reg_val = b.index(&s.regs, op, |b, i| b.lit(i as u64));
-    b.mux(imm, op, reg_val)
-}
-
 pub struct CalcIntermediate<'a> {
     pub x: TWire<'a,u64>,
     pub y: TWire<'a,u64>,
     pub result: TWire<'a,u64>,
+    pub tainted: IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>,
 }
 
 
@@ -101,7 +93,7 @@ fn calc_step<'a>(
     };
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
-    let y = operand_value(b, s1, instr.op2, instr.imm);
+    let y = operand_value(b, &s1.regs, instr.op2, instr.imm);
 
     {
         let result = b.and(x, y);
@@ -257,11 +249,13 @@ fn calc_step<'a>(
         regs.push(b.mux(is_dest, result, v_old));
     }
 
+    let (tainted_regs, tainted_im) = tainted::calc_step(b, cycle, instr, mem_port, &s1.tainted_regs);
+
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
-    let s2 = RamStateRepr { pc, regs };
-    let im = CalcIntermediate { x, y, result };
+    let s2 = RamStateRepr { pc, regs, tainted_regs };
+    let im = CalcIntermediate { x, y, result, tainted: tainted_im };
     (TWire::new(s2),im)
 }
 
@@ -287,6 +281,8 @@ fn check_state<'a>(
         "cycle {} sets pc to {} (expected {})",
         cycle, cx.eval(trace_s.pc), cx.eval(calc_s.pc),
     );
+
+    tainted::check_state(cx, b, cycle, &calc_s.tainted_regs, &trace_s.tainted_regs);
 }
 
 fn check_step<'a>(
@@ -337,6 +333,7 @@ fn check_step<'a>(
             "cycle {}'s mem port (op {}) has value {} (expected {})",
             cycle, cx.eval(mem_port.op.repr), cx.eval(mem_port.value), cx.eval(expect_value),
         );
+        tainted::check_step_mem(cx, b, cycle, mem_port, &is_store_like, calc_im.tainted);
     });
 
     // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
@@ -367,6 +364,8 @@ fn check_first<'a>(
             i, cx.eval(r), 0,
         );
     }
+
+    tainted::check_first(cx, b, &s.tainted_regs);
 }
 
 fn check_last<'a>(
@@ -474,7 +473,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // Set up memory ports and check consistency.
     let mut mem = Memory::new(false);
     for seg in &exec.init_mem {
-        mem.init_segment(&b, &mode, seg);
+        mem.init_segment(&b, seg);
     }
     let cycle_mem_ports = mem.add_cycles(
         &cx, &b,

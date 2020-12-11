@@ -2,7 +2,7 @@
 use crate::ir::typed::{TWire, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice,
+    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, operand_value,
 };
 use crate::{wire_assert, wire_bug_if};
 
@@ -78,16 +78,5 @@ pub fn check_step<'a>(
         "leak of uninitialized data from abstract register {:x} on cycle {}",
         cx.eval(y), cycle,
     );
-}
-
-// TODO: Move this somewhere usable by main.
-fn operand_value<'a>(
-    b: &Builder<'a>,
-    regs: &Vec<TWire<'a, u64>>,
-    op: TWire<'a, u64>,
-    imm: TWire<'a, bool>,
-) -> TWire<'a, u64> {
-    let reg_val = b.index(&regs, op, |b, i| b.lit(i as u64));
-    b.mux(imm, op, reg_val)
 }
 
