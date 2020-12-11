@@ -698,6 +698,8 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Execution {
+    #[serde(default)]
+    pub version: Version,
     pub program: Vec<RamInstr>,
     #[serde(default)]
     pub init_mem: Vec<MemSegment>,
@@ -740,6 +742,20 @@ impl Execution {
         Ok(self)
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default, Deserialize)]
+pub struct Version {
+    pub major: u8,
+    pub minor: u8,
+}
+
+impl Version {
+    pub const fn new(major: u8, minor: u8) -> Version {
+        Version { major, minor }
+    }
+}
+
+pub const DEFAULT_VERSION: Version = Version::new(1, 0);
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MemSegment {

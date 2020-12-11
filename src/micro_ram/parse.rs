@@ -1,17 +1,113 @@
+use std::cell::Cell;
 use std::fmt;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
-use crate::micro_ram::types::{Execution, Opcode, MemOpKind, RamInstr, Advice};
+use crate::micro_ram::types::{
+    Execution, Version, Opcode, MemOpKind, RamInstr, Advice, DEFAULT_VERSION,
+};
+
+
+thread_local! {
+    static VERSION: Cell<Version> = Cell::new(DEFAULT_VERSION);
+}
+
+pub fn version() -> Version {
+    VERSION.with(|c| c.get())
+}
+
+struct VersionGuard {
+    old: Version,
+}
+
+impl VersionGuard {
+    pub fn set(v: Version) -> VersionGuard {
+        VERSION.with(|c| {
+            let old = c.replace(v);
+            VersionGuard { old }
+        })
+    }
+}
+
+impl Drop for VersionGuard {
+    fn drop(&mut self) {
+        VERSION.with(|c| c.set(self.old))
+    }
+}
+
+pub fn with_version<R>(v: Version, f: impl FnOnce() -> R) -> R {
+    let _g = VersionGuard::set(v);
+    f()
+}
 
 
 /// A wrapper around `Execution` to support custom parsing logic.
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub struct ParseExecution(Execution);
+pub struct ParseExecution(AnyExecution);
 
 impl ParseExecution {
     pub fn into_inner(self) -> Execution {
-        self.0
+        match self.0 {
+            AnyExecution::Versioned(e) => e.0,
+            AnyExecution::Unversioned(e) => e.0,
+        }
+    }
+}
+
+
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AnyExecution {
+    Versioned(VersionedExecution),
+    Unversioned(UnversionedExecution),
+}
+
+
+/// Newtype wrapper around `Execution` that reads a version number and then deserializes according
+/// to that version.
+pub struct VersionedExecution(Execution);
+
+impl<'de> Deserialize<'de> for VersionedExecution {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_tuple(3, VersionedExecutionVisitor)
+    }
+}
+
+struct VersionedExecutionVisitor;
+impl<'de> Visitor<'de> for VersionedExecutionVisitor {
+    type Value = VersionedExecution;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a sequence of 3 items")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<VersionedExecution, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 3);
+        let major = seq.next_element::<u8>()?;
+        let minor = seq.next_element::<u8>()?;
+        let ver = Version::new(major, minor);
+        let exec = with_version(ver, || {
+            seq.next_element::<Execution>()
+        })?;
+        seq.finish()?;
+        Ok(VersionedExecution(Execution {
+            version: ver,
+            .. exec
+        }))
+    }
+}
+
+
+/// Newtype wrapper around `Execution` that expects no version number wrapper and deserializes
+/// according to the current version.
+pub struct UnversionedExecution(Execution);
+
+impl<'de> Deserialize<'de> for UnversionedExecution {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut exec = Execution::deserialize(d)?;
+        exec.version = version();
+        Ok(UnversionedExecution(exec))
     }
 }
 
