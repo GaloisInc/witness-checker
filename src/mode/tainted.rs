@@ -100,15 +100,9 @@ pub fn check_step_mem<'a, 'b>(
     imm: IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
-        // TODO: Improve this.
-        // Is there a good way to convert a `TWire<IfMode<M, u64>>` to a `TWire<u64>` if I have a proof of `M`?
         let (x_taint, result_taint) = imm.get(&pf);
         let expect_tainted = b.mux(*is_store_like, *x_taint, *result_taint);
-        // let expect_value = b.mux(is_store_like, x, result);
-        //
-        //
-
-        let port_tainted : &TWire<u64> = mem_port.tainted.get(&pf);
+        let port_tainted : TWire<u64> = mem_port.tainted.unwrap(&pf);
 
         wire_assert!(
             cx, b.eq(port_tainted, expect_tainted),
@@ -126,11 +120,8 @@ pub fn check_memports<'a, 'b>(
     port2: &TWire<'a, MemPort>, 
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
-        let tainted1 = port1.tainted;
-        let tainted2 = port2.tainted;
-        // TODO: Improve this.
-        // let tainted1 = port1.tainted.get(&pf);
-        // let tainted2 = port2.tainted.get(&pf);
+        let tainted1 = port1.tainted.unwrap(&pf);
+        let tainted2 = port2.tainted.unwrap(&pf);
 
         wire_assert!(
             cx, b.eq(tainted1, tainted2),

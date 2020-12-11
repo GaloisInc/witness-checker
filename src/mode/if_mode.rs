@@ -1,5 +1,5 @@
 use crate::eval::Evaluator;
-use crate::ir::typed::{self, Builder, FromEval, Lit, Repr};
+use crate::ir::typed::{self, Builder, FromEval, EvaluatorExt, Lit, Repr, TWire};
 use serde::{Deserialize, Deserializer};
 use std::cell::Cell;
 use std::fmt;
@@ -293,28 +293,29 @@ impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> 
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
         if let Some(pf) = check_mode() {
             let x = a.unwrap(&pf);
-            A::from_eval(ev, x).map(|r| IfMode::some(pf, r))
+            ev.eval_typed(x).map(|r| IfMode::some(pf, r))
         } else {
+            // JP: Better combinator for this? map_with_or?
             Some(IfMode::none())
         }
     }
 }
 
-impl<'a, M: ModePred, T: typed::Eq<'a, Output = bool>> typed::Eq<'a, IfMode<M, T>> for IfMode<M, T> {
-    type Output = bool;
-
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        if let Some(pf) = check_mode::<M>() {
-            let a = a.unwrap(&pf);
-            let b = b.unwrap(&pf);
-            T::eq(bld, a, b)
-        } else {
-            // bool::lit(bld, true)
-            // This should be unreachable, otherwise the mode is influencing the circuit when it
-            // shouldn't.
-            // Maybe it doesn't make sense to implement an Eq impl.
-            unreachable!{}
-        }
-    }
-}
+// impl<'a, M: ModePred, T: typed::Eq<'a, Output = bool>> typed::Eq<'a, IfMode<M, T>> for IfMode<M, T> {
+//     type Output = bool;
+// 
+//     fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+//         if let Some(pf) = check_mode::<M>() {
+//             let a = a.unwrap(&pf);
+//             let b = b.unwrap(&pf);
+//             T::eq(bld, a, b)
+//         } else {
+//             // bool::lit(bld, true)
+//             // This should be unreachable, otherwise the mode is influencing the circuit when it
+//             // shouldn't.
+//             // Maybe it doesn't make sense to implement an Eq impl.
+//             unreachable!{}
+//         }
+//     }
+// }
 
