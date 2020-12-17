@@ -386,10 +386,20 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
 #[derive(Clone, Copy, Default)]
 pub struct MemPort {
+    /// The cycle on which this operation occurs.
     pub cycle: u32,
+    /// The address accessed in this operation.  Must be well aligned; that is, `addr` must be a
+    /// multiple of the `width.bytes()`.
     pub addr: u64,
+    /// The value of the aligned word that contains `addr` after the execution of this operation.
+    /// For example, if `addr` is `0x13`, then `value` is the value of the word starting at `0x10`.
     pub value: u64,
     pub op: MemOpKind,
+    /// The width of this memory access.  For `Write` and `Poison` operations, only the
+    /// `width.bytes()` bytes starting at `addr` may be modified; if `width < MemOpWidth::WORD`,
+    /// then all other bytes of `value` must be copied from the previous value of the modified
+    /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
+    /// `value` must exactly match the previous value of the accessed word.
     pub width: MemOpWidth,
 }
 
