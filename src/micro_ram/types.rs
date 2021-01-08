@@ -366,7 +366,11 @@ mk_named_enum! {
         /// Instruction used for taint analysis that signifies a value is written to a sink.
         /// The first argument is the value being output and the second is the label of the output
         /// channel.
+        /// JP: Use dest as register being output?
         Sink = 29,
+        /// Instruction used for taint analysis that taints a value is with a given label.
+        /// The destination is the register being tainted, the first argument is unused, and the second is the label.
+        Taint = 30,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.

@@ -231,7 +231,7 @@ fn calc_step<'a>(
         add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
     }
 
-    // Opcode::Sink is a no-op so we let if fall through.
+    // Opcode::Sink and Taint are no-ops so we let if fall through.
 
     let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));
 
@@ -241,7 +241,7 @@ fn calc_step<'a>(
         regs.push(b.mux(is_dest, result, v_old));
     }
 
-    let (tainted_regs, tainted_im) = tainted::calc_step(b, cycle, instr, mem_port, &s1.tainted_regs, dest);
+    let (tainted_regs, tainted_im) = tainted::calc_step(b, cycle, instr, mem_port, &s1.tainted_regs, y, dest);
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));

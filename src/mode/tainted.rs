@@ -16,6 +16,7 @@ pub fn calc_step<'a>(
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
     regs0: &IfMode<AnyTainted, Vec<TWire<'a,u64>>>,
+    concrete_y: TWire<'a, u64>,
     concrete_dest: TWire<'a, u8>,
 ) -> (IfMode<AnyTainted, Vec<TWire<'a,u64>>>, IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>) {
     if let Some(pf) = check_mode::<AnyTainted>() {
@@ -48,7 +49,10 @@ pub fn calc_step<'a>(
             let result = mem_port.tainted.unwrap(&pf);
             add_case(Opcode::Load, result);
         }
-        // TODO: Add Taint opcode
+
+        {
+            add_case(Opcode::Taint, concrete_y);
+        }
         // TODO: Disable read before write checks?
 
 
@@ -82,7 +86,7 @@ pub fn calc_step<'a>(
         */
 
         // Fall through to mark destination as untainted.
-        let result: TWire<u64> = b.mux_multi(&cases, b.lit(UNTAINTED));
+        let result = b.mux_multi(&cases, b.lit(UNTAINTED));
 
         let mut regs = Vec::with_capacity(regs0.len());
         for (i, &v_old) in regs0.iter().enumerate() {
