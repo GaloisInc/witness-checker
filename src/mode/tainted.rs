@@ -2,10 +2,10 @@
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{MemPort, Opcode, RamInstr, operand_value}
+    types::{CalcIntermediate, MemPort, Opcode, RamInstr, REG_NONE, operand_value}
 };
-use crate::mode::if_mode::{self, IfMode, AnyTainted};
-use crate::wire_assert;
+use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
+use crate::{wire_assert, wire_bug_if};
 
 pub const UNTAINTED: u64 = u64::MAX;
 
@@ -15,40 +15,87 @@ pub fn calc_step<'a>(
     cycle: u32,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
-    regs0: &IfMode<AnyTainted, Vec<TWire<'a,u64>>>
+    regs0: &IfMode<AnyTainted, Vec<TWire<'a,u64>>>,
+    concrete_dest: TWire<'a, u8>,
 ) -> (IfMode<AnyTainted, Vec<TWire<'a,u64>>>, IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>) {
-    unimplemented!{};
-    // regs0.as_ref().map_with(|pf, regs0| {
-    //     let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", cycle));
+    if let Some(pf) = check_mode::<AnyTainted>() {
+        let regs0 = regs0.as_ref().unwrap(&pf);
+        let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", cycle));
 
-    //     let mut cases = Vec::new();
-    //     let mut add_case = |op, result, dest| {
-    //         let op_match = b.eq(b.lit(op as u8), instr.opcode);
-    //         let parts = TWire::<(_, _)>::new((result, dest));
-    //         cases.push(TWire::<(_, _)>::new((op_match, parts)));
-    //     };
+        let mut cases = Vec::new();
+        let mut add_case = |op, result, dest| {
+            let op_match = b.eq(b.lit(op as u8), instr.opcode);
+            let parts = TWire::<(_, _)>::new((result, dest));
+            cases.push(TWire::<(_, _)>::new((op_match, parts)));
+        };
 
-    //     let x = b.index(&regs0, instr.op1, |b, i| b.lit(i as u8));
-    //     let y = operand_value(b, regs0, instr.op2, instr.imm);
+        // Extract the tainted of x, y.
+        let tx = b.index(&regs0, instr.op1, |b, i| b.lit(i as u8));
+        let ty = operand_value(b, &regs0, instr.op2, instr.imm);
 
-    //     // TODO: On load, check if port is tainted.
-    //     // TODO: Add required asserts (in mem?). 
+        // TODO: Add required asserts (in mem?). 
 
-    //     {
-    //         add_case(Opcode::Mov, y, instr.dest);
-    //     }
+        // JP: Should we drop this dest?
+        {
+            add_case(Opcode::Mov, ty, instr.dest);
+        }
 
-    //     // Fall through to not tainted.
-    //     let (result, dest) = *b.mux_multi(&cases, TWire::<(_, _)>::new((b.lit(UNTAINTED), instr.dest)));
+        {
+            // Reuse concrete computed dest.
+            add_case(Opcode::Cmov, ty, concrete_dest);
+        }
 
-    //     let mut regs = Vec::with_capacity(regs0.len());
-    //     for (i, &v_old) in regs0.iter().enumerate() {
-    //         let is_dest = b.eq(b.lit(i as u8), dest);
-    //         regs.push(b.mux(is_dest, result, v_old));
-    //     }
+        {
+            let result = mem_port.tainted.unwrap(&pf);
+            add_case(Opcode::Load, result, instr.dest);
+        }
+        // TODO: Add Taint opcode
+        // TODO: Disable read before write checks?
 
-    //     regs
-    // })
+
+        /*
+        // Don't taint REG_PC. Handles the cases where instruction destinations are REG_PC. 
+        // JP: Is this necessary?
+
+        {
+            add_case(Opcode::Jmp, b.lit(UNTAINTED), b.lit(REG_NONE));
+        }
+
+        {
+            add_case(Opcode::Cjmp, b.lit(UNTAINTED), b.lit(REG_NONE));
+        }
+
+        {
+            add_case(Opcode::Cnjmp, b.lit(UNTAINTED), b.lit(REG_NONE));
+        }
+
+        {
+            add_case(Opcode::Sink, b.lit(UNTAINTED), b.lit(REG_NONE));
+        }
+
+        {
+            add_case(Opcode::Answer, b.lit(UNTAINTED), b.lit(REG_NONE));
+        }
+
+        {
+            add_case(Opcode::Stutter, b.lit(UNTAINTED), b.lit(REG_NONE));
+        }
+        */
+
+        // Fall through to mark destination as untainted.
+        let (result, dest) = *b.mux_multi(&cases, TWire::<(_, _)>::new((b.lit(UNTAINTED), instr.dest)));
+
+        let mut regs = Vec::with_capacity(regs0.len());
+        for (i, &v_old) in regs0.iter().enumerate() {
+            let is_dest = b.eq(b.lit(i as u8), dest);
+            regs.push(b.mux(is_dest, result, v_old));
+        }
+
+        (IfMode::some(&pf, regs), IfMode::some(&pf, (tx, result)))
+    } else {
+        // JP: Better combinator for this? map_with_or?
+        (IfMode::none(), IfMode::none())
+    }
 }
 
 pub fn check_state<'a>(
@@ -90,7 +137,29 @@ pub fn check_first<'a>(
     }
 }
 
-// Circuit for checking memory operations.
+pub fn check_step<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    cycle: u32,
+    instr: TWire<'a, RamInstr>,
+    calc_im: &CalcIntermediate<'a>,
+) {
+    if let Some(pf) = check_mode::<AnyTainted>() {
+        let y = calc_im.y;
+        let (xt, _) = calc_im.tainted.unwrap(&pf);
+
+        // A leak is detected if the label of data being output to a sink does not match the label of
+        // the sink.
+        wire_bug_if!(
+            cx, b.and(b.eq(instr.opcode, b.lit(Opcode::Sink as u8)), b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED)))),
+            "leak of tainted data from register {:x} with label {:x} does not match output channel label {:x} on cycle {}",
+            cx.eval(instr.op1), cx.eval(xt), cx.eval(y), cycle,
+        );
+    }
+}
+
+// Circuit for checking memory operations. Only called when an operation is a memory operation
+// (read, write, poison).
 pub fn check_step_mem<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
@@ -112,7 +181,8 @@ pub fn check_step_mem<'a, 'b>(
     }
 }
 
-// Circuit when port2 is a read.
+// Circuit that checks memory when port2 is a read. Since it is a read, port2's tainted must be the same as
+// port1's tainted.
 pub fn check_memports<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
@@ -131,6 +201,7 @@ pub fn check_memports<'a, 'b>(
         );
     }
 }
+// TODO: Need to check that reads/writes to tainted match op.
 
 // check_mem, check_last, and check_first_mem are not needed???
 

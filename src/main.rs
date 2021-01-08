@@ -20,7 +20,7 @@ use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::types::{
-    Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE,
+    CalcIntermediate, Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE,
     REG_PC, MEM_PORT_UNUSED_CYCLE,
     operand_value,
 };
@@ -62,14 +62,6 @@ fn parse_args() -> ArgMatches<'static> {
              .help("check state against the trace every D steps"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
-}
-
-
-pub struct CalcIntermediate<'a> {
-    pub x: TWire<'a,u64>,
-    pub y: TWire<'a,u64>,
-    pub result: TWire<'a,u64>,
-    pub tainted: IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>,
 }
 
 
@@ -249,7 +241,7 @@ fn calc_step<'a>(
         regs.push(b.mux(is_dest, result, v_old));
     }
 
-    let (tainted_regs, tainted_im) = tainted::calc_step(b, cycle, instr, mem_port, &s1.tainted_regs);
+    let (tainted_regs, tainted_im) = tainted::calc_step(b, cycle, instr, mem_port, &s1.tainted_regs, dest);
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
@@ -344,6 +336,8 @@ fn check_step<'a>(
         "cycle {} mem port cycle number is {} (expected {}; mem op? {})",
         cycle, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
+
+    tainted::check_step(cx, b, cycle, instr, calc_im);
 }
 
 fn check_first<'a>(
@@ -462,8 +456,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
 
-    let mut mode = mode::initialize(&args, &b, &exec);
-
     let mut trace = Vec::new();
     for (i, state) in exec.trace.iter().enumerate() {
         let _g = b.scoped_label(format_args!("state {}", i));
@@ -544,8 +536,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             prev_s = calc_s.clone();
         }
         check_step(&cx, &b, i as u32, instr, &port, &calc_im);
-
-        mode::check_step(&cx, &b, i as u32, instr, &port, &mut mode);
     }
     // We rely on the loop running once for every `i` in `0 .. num_steps`.
     assert_eq!(max_i + 1, exec.params.trace_len as usize - 1);

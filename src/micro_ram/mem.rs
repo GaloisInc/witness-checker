@@ -11,7 +11,7 @@ use crate::micro_ram::types::{
     MEM_PORT_UNUSED_CYCLE,
 };
 use crate::mode::if_mode::{IfMode};
-use crate::mode::{Mode, init_mem_taint, tainted};
+use crate::mode::{tainted};
 use crate::sort;
 
 pub struct Memory<'a> {

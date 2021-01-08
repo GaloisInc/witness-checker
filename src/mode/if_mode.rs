@@ -158,7 +158,7 @@ impl<M: ModePred, T> IfMode<M, T> {
         unsafe { Self::new_unchecked(check_mode::<M>().map(f)) }
     }
 
-    pub fn some(_pf: impl IsModeProof<M>, x: T) -> IfMode<M, T> {
+    pub fn some(_pf: &(impl IsModeProof<M>), x: T) -> IfMode<M, T> {
         unsafe { Self::new_unchecked(Some(x)) }
     }
 
@@ -281,7 +281,7 @@ impl<'de, M: ModePred, A: Deserialize<'de>> Deserialize<'de> for IfMode<M, A> {
         D: Deserializer<'de>,
     {
         if let Some(p) = check_mode() {
-            Deserialize::deserialize(deserializer).map(|x| IfMode::some(p, x))
+            Deserialize::deserialize(deserializer).map(|x| IfMode::some(&p, x))
         } else {
             // JP: Better combinator for this? map_with_or?
             Ok(IfMode::none())
@@ -293,7 +293,7 @@ impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> 
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
         if let Some(pf) = check_mode() {
             let x = a.unwrap(&pf);
-            ev.eval_typed(x).map(|r| IfMode::some(pf, r))
+            ev.eval_typed(x).map(|r| IfMode::some(&pf, r))
         } else {
             // JP: Better combinator for this? map_with_or?
             Some(IfMode::none())

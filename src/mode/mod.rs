@@ -9,6 +9,7 @@ use crate::micro_ram::types::{
 pub mod if_mode;
 pub mod tainted;
 
+/*
 mod leak_uninitialized;
 
 // A checker mode and its respective state.
@@ -52,3 +53,4 @@ pub fn uses_tainted_mem<'a>(mode: &Option<Mode<'a>>) -> bool {
     // TODO
     unimplemented!{}
 }
+*/

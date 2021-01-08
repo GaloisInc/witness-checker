@@ -6,7 +6,6 @@ use serde::Deserialize;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
 use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
-use crate::mode::{Mode, init_mem_taint, uses_tainted_mem};
 use crate::mode::if_mode::{IfMode, AnyTainted};
 
 
@@ -202,7 +201,7 @@ impl<'a> Lit<'a> for RamState {
         RamStateRepr {
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
-            tainted_regs: bld.lit(a.tainted_regs).repr,
+            tainted_regs: a.tainted_regs.map(|regs| bld.lit(regs).repr),
         }
     }
 }
@@ -364,7 +363,9 @@ mk_named_enum! {
 
         Advise = 28,
 
-        /// Fake instruction that signifies a value is written to a sink.
+        /// Instruction used for taint analysis that signifies a value is written to a sink.
+        /// The first argument is the value being output and the second is the label of the output
+        /// channel.
         Sink = 29,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
@@ -963,5 +964,12 @@ pub fn operand_value<'a>(
 ) -> TWire<'a, u64> {
     let reg_val = b.index(&regs, op, |b, i| b.lit(i as u64));
     b.mux(imm, op, reg_val)
+}
+
+pub struct CalcIntermediate<'a> {
+    pub x: TWire<'a,u64>,
+    pub y: TWire<'a,u64>,
+    pub result: TWire<'a,u64>,
+    pub tainted: IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>,
 }
 
