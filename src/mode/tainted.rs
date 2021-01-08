@@ -23,10 +23,10 @@ pub fn calc_step<'a>(
         let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", cycle));
 
         let mut cases = Vec::new();
-        let mut add_case = |op, result, dest| {
+        let mut add_case = |op, result| {
             let op_match = b.eq(b.lit(op as u8), instr.opcode);
-            let parts = TWire::<(_, _)>::new((result, dest));
-            cases.push(TWire::<(_, _)>::new((op_match, parts)));
+            let parts = result;
+            cases.push(TWire::<_>::new((op_match, parts)));
         };
 
         // Extract the tainted of x, y.
@@ -35,19 +35,18 @@ pub fn calc_step<'a>(
 
         // TODO: Add required asserts (in mem?). 
 
-        // JP: Should we drop this dest?
         {
-            add_case(Opcode::Mov, ty, instr.dest);
+            add_case(Opcode::Mov, ty);
         }
 
         {
             // Reuse concrete computed dest.
-            add_case(Opcode::Cmov, ty, concrete_dest);
+            add_case(Opcode::Cmov, ty);
         }
 
         {
             let result = mem_port.tainted.unwrap(&pf);
-            add_case(Opcode::Load, result, instr.dest);
+            add_case(Opcode::Load, result);
         }
         // TODO: Add Taint opcode
         // TODO: Disable read before write checks?
@@ -83,11 +82,11 @@ pub fn calc_step<'a>(
         */
 
         // Fall through to mark destination as untainted.
-        let (result, dest) = *b.mux_multi(&cases, TWire::<(_, _)>::new((b.lit(UNTAINTED), instr.dest)));
+        let result: TWire<u64> = b.mux_multi(&cases, b.lit(UNTAINTED));
 
         let mut regs = Vec::with_capacity(regs0.len());
         for (i, &v_old) in regs0.iter().enumerate() {
-            let is_dest = b.eq(b.lit(i as u8), dest);
+            let is_dest = b.eq(b.lit(i as u8), concrete_dest);
             regs.push(b.mux(is_dest, result, v_old));
         }
 
