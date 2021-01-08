@@ -53,8 +53,6 @@ pub fn calc_step<'a>(
         {
             add_case(Opcode::Taint, concrete_y);
         }
-        // TODO: Disable read before write checks?
-
 
         /*
         // Don't taint REG_PC. Handles the cases where instruction destinations are REG_PC. 

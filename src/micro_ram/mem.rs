@@ -10,7 +10,7 @@ use crate::micro_ram::types::{
     MemPort, MemOpKind, PackedMemPort, Advice, MemSegment, MEM_PORT_PRELOAD_CYCLE,
     MEM_PORT_UNUSED_CYCLE,
 };
-use crate::mode::if_mode::{IfMode};
+use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
 use crate::mode::{tainted};
 use crate::sort;
 
@@ -276,11 +276,14 @@ fn check_first_mem<'a>(
     // If the first memory port is active, then it must not be a read, since there are no previous
     // writes to read from.
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-    wire_bug_if!(
-        cx, b.mux(active, b.eq(port.op, b.lit(MemOpKind::Read)), b.lit(false)),
-        "uninit read from {:x} on cycle {}",
-        cx.eval(port.addr), cx.eval(port.cycle),
-    );
+    // Skip this check if we're running in tainted mode.
+    if !is_mode::<AnyTainted>() {
+        wire_bug_if!(
+            cx, b.mux(active, b.eq(port.op, b.lit(MemOpKind::Read)), b.lit(false)),
+            "uninit read from {:x} on cycle {}",
+            cx.eval(port.addr), cx.eval(port.cycle),
+        );
+    }
 }
 
 /// Check that memory operation `port2` can follow operation `port1`.

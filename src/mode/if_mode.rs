@@ -122,6 +122,10 @@ pub fn check_mode<M: ModePred>() -> Option<ModeProof<M>> {
     unsafe { ModeProof::new_checked(get_mode()) }
 }
 
+pub fn is_mode<M: ModePred>() -> bool {
+    check_mode::<M>().is_some()
+}
+
 unsafe impl IsModeProof<AnyTainted> for ModeProof<LeakUninit1> {
     fn as_mode_proof(self) -> ModeProof<AnyTainted> {
         unsafe { ModeProof::new_unchecked() }
