@@ -356,27 +356,8 @@ fn check_step<'a>(
         }
     });
 
-    cx.when(b, is_store, |cx| {
-        for w in MemOpWidth::iter() {
-            cx.when(b, b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), |cx| {
-                wire_assert!(
-                    cx, b.eq(mem_port.width, b.lit(w)),
-                    "cycle {}'s mem port has width {:?} (expected {:?})",
-                    cycle, cx.eval(mem_port.width), w,
-                );
-
-                let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
-                let x_low = extract_low_bytes(b, x, w);
-                wire_assert!(
-                    cx, b.eq(stored_value, x_low),
-                    "cycle {}'s mem port stores value {} at {:x} (expected value {})",
-                    cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
-                );
-            });
-        }
-
-        cx.when(b, is_old_store, |cx| {
-            let w = MemOpWidth::WORD;
+    for w in MemOpWidth::iter() {
+        cx.when(b, b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), |cx| {
             wire_assert!(
                 cx, b.eq(mem_port.width, b.lit(w)),
                 "cycle {}'s mem port has width {:?} (expected {:?})",
@@ -391,6 +372,23 @@ fn check_step<'a>(
                 cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
             );
         });
+    }
+
+    cx.when(b, is_old_store, |cx| {
+        let w = MemOpWidth::WORD;
+        wire_assert!(
+            cx, b.eq(mem_port.width, b.lit(w)),
+            "cycle {}'s mem port has width {:?} (expected {:?})",
+            cycle, cx.eval(mem_port.width), w,
+        );
+
+        let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+        let x_low = extract_low_bytes(b, x, w);
+        wire_assert!(
+            cx, b.eq(stored_value, x_low),
+            "cycle {}'s mem port stores value {} at {:x} (expected value {})",
+            cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+        );
     });
 
     cx.when(b, is_poison, |cx| {
