@@ -1,11 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt;
-use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
 use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
+use crate::micro_ram::feature::{Feature, Version};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -700,6 +699,15 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Execution {
+    #[serde(default)]
+    pub version: Version,
+    #[serde(default)]
+    pub features: HashSet<Feature>,
+    /// The set of features explicitly declared in the version header.  This is built by combining
+    /// `features` with the baseline features implied by `version`.
+    #[serde(default)]
+    pub declared_features: HashSet<Feature>,
+
     pub program: Vec<RamInstr>,
     #[serde(default)]
     pub init_mem: Vec<MemSegment>,
@@ -784,146 +792,4 @@ pub enum Advice {
     MemOp { addr: u64, value: u64, op: MemOpKind },
     Stutter,
     Advise { advise: u64 },
-}
-
-
-impl<'de> Deserialize<'de> for Opcode {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        match Opcode::from_str(&s) {
-            Some(x) => Ok(x),
-            None => Err(de::Error::invalid_value(
-                de::Unexpected::Str(&s),
-                &"a MicroRAM opcode mnemonic",
-            )),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for MemOpKind {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        match MemOpKind::from_str(&s) {
-            Some(x) => Ok(x),
-            None => Err(de::Error::invalid_value(
-                de::Unexpected::Str(&s),
-                &"a memory op kind",
-            )),
-        }
-    }
-}
-
-
-impl<'de> Deserialize<'de> for RamInstr {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_tuple(5, RamInstrVisitor)
-    }
-}
-
-struct RamInstrVisitor;
-impl<'de> Visitor<'de> for RamInstrVisitor {
-    type Value = RamInstr;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a sequence of 5 values")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<RamInstr, A::Error> {
-        let mut seq = CountedSeqAccess::new(seq, 5);
-        let x = RamInstr {
-            opcode: seq.next_element::<Opcode>()? as u8,
-            dest: seq.next_element::<Option<u8>>()?.unwrap_or(0),
-            op1: seq.next_element::<Option<u8>>()?.unwrap_or(0),
-            imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
-            op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
-        };
-        seq.finish()?;
-        Ok(x)
-    }
-}
-
-
-impl<'de> Deserialize<'de> for Advice {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_seq(AdviceVisitor)
-    }
-}
-
-struct AdviceVisitor;
-impl<'de> Visitor<'de> for AdviceVisitor {
-    type Value = Advice;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "an advice object")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Advice, A::Error> {
-        let mut seq = CountedSeqAccess::new(seq, 1);
-        let x = match &seq.next_element::<String>()? as &str {
-            "MemOp" => {
-                seq.expect += 3;
-                Advice::MemOp {
-                    addr: seq.next_element()?,
-                    value: seq.next_element()?,
-                    op: seq.next_element()?,
-                }
-            },
-            "Stutter" => {
-                Advice::Stutter
-            },
-            "Advise" => {
-                seq.expect += 1;
-                Advice::Advise {
-                    advise: seq.next_element()?,
-                }
-            },
-            kind => return Err(de::Error::custom(
-                format_args!("unknown advice kind {}", kind),
-            )),
-        };
-        seq.finish()?;
-        Ok(x)
-    }
-}
-
-
-struct CountedSeqAccess<A> {
-    seq: A,
-    expect: usize,
-    seen: usize,
-}
-
-impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
-    fn new(seq: A, expect: usize) -> CountedSeqAccess<A> {
-        CountedSeqAccess { seq, expect, seen: 0 }
-    }
-
-    fn next_element<T: Deserialize<'de>>(&mut self) -> Result<T, A::Error> {
-        assert!(self.seen < self.expect);
-        match self.seq.next_element::<T>()? {
-            Some(x) => {
-                self.seen += 1;
-                Ok(x)
-            },
-            None => {
-                return Err(de::Error::invalid_length(
-                    self.seen, 
-                    &(&format!("a sequence of length {}", self.expect) as &str),
-                ));
-            },
-        }
-    }
-
-    fn finish(mut self) -> Result<(), A::Error> {
-        match self.seq.next_element::<()>() {
-            Ok(None) => Ok(()),
-            // A parse error indicates there was some data left to parse - there shouldn't be.
-            Ok(Some(_)) | Err(_) => {
-                return Err(de::Error::invalid_length(
-                    self.seen + 1,
-                    &(&format!("a sequence of length {}", self.expect) as &str),
-                ));
-            },
-        }
-    }
 }

@@ -1,22 +1,25 @@
-program:
-  - [mov, 0, null, true, 10]      # mov r0, 100
-  - [store, null, 0, true, 100]   # store [100], r0
-  - [load, 1, null, true, 100]    # load r1, [100]
+- [0,1,0,0]
+- []
+-
+  program:
+    - [mov, 0, null, true, 10]      # mov r0, 100
+    - [store, null, 0, true, 100]   # store [100], r0
+    - [load, 1, null, true, 100]    # load r1, [100]
 
-params:
-  num_regs: 2
-  trace_len: 5
-  sparsity:
-    mem_op: 3
+  params:
+    num_regs: 2
+    trace_len: 5
+    sparsity:
+      mem_op: 3
 
-trace:
-  - [0, [ 0,  0]]
-  - [1, [10,  0]]
-  - [2, [10,  0]]
-  - [2, [10,  0]]
-  - [3, [10, 10]]
+  trace:
+    - [0, [ 0,  0]]
+    - [1, [10,  0]]
+    - [2, [10,  0]]
+    - [2, [10,  0]]
+    - [3, [10, 10]]
 
-advice:
-  2: [[MemOp, 100, 10, write]]
-  3: [[Stutter]]
-  4: [[MemOp, 100, 10, read]]
+  advice:
+    2: [[MemOp, 100, 10, write]]
+    3: [[Stutter]]
+    4: [[MemOp, 100, 10, read]]
