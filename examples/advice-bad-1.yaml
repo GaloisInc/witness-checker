@@ -1,18 +1,21 @@
-program:
-  - [mov, 1, null, true, 2]          # mov r1, 2
-  - [advise, 1, null, false, null]   # advise
-  - [mov, 0, null, true, 2]          # mov r1, 2
+- [0,1,0,0]
+- []
+-
+  program:
+    - [mov, 1, null, true, 2]          # mov r1, 2
+    - [advise, 1, null, false, null]   # advise
+    - [mov, 0, null, true, 2]          # mov r1, 2
 
-params:
-  num_regs: 2
-  trace_len: 4
+  params:
+    num_regs: 2
+    trace_len: 4
 
-trace:
-  - [0, [ 0, 0]]
-  - [1, [ 0, 2]]
+  trace:
+    - [0, [ 0, 0]]
+    - [1, [ 0, 2]]
 
-  - [2, [ 0, 42]]
-  - [3, [ 2, 42]]
+    - [2, [ 0, 42]]
+    - [3, [ 2, 42]]
 
-advice:
-  2:  [[Advise, 63]]
+  advice:
+    2:  [[Advise, 63]]
