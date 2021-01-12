@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use serde::Deserialize;
+use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
-use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
+use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
+use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux, FromEval};
 use crate::micro_ram::feature::{Feature, Version};
 
 
@@ -307,6 +308,20 @@ macro_rules! mk_named_enum {
                 bld.ne(a, b).repr
             }
         }
+
+        impl<'a> FromEval<'a> for $Name {
+            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+                let raw = u8::from_eval(ev, a.repr)?;
+                let result = Self::from_raw(raw);
+                if result.is_none() {
+                    eprintln!(
+                        "warning: evaluation of {} produced out-of-range value {}",
+                        stringify!($Name), raw,
+                    );
+                }
+                result
+            }
+        }
     };
 }
 
@@ -344,10 +359,20 @@ mk_named_enum! {
         Load = 24,
         Poison = 25,
 
-        Read = 26,
-        Answer = 27,
+        Store1 = 26,
+        Store2 = 27,
+        Store4 = 28,
+        Store8 = 29,
+        Load1 = 30,
+        Load2 = 31,
+        Load4 = 32,
+        Load8 = 33,
+        Poison8 = 34,
 
-        Advise = 28,
+        Read = 35,
+        Answer = 36,
+
+        Advise = 37,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
@@ -361,11 +386,23 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
 #[derive(Clone, Copy, Default)]
 pub struct MemPort {
+    /// The cycle on which this operation occurs.
     pub cycle: u32,
+    /// The address accessed in this operation.  Must be well aligned; that is, `addr` must be a
+    /// multiple of the `width.bytes()`.
     pub addr: u64,
+    /// The value of the aligned word that contains `addr` after the execution of this operation.
+    /// For example, if `addr` is `0x13`, then `value` is the value of the word starting at `0x10`.
     pub value: u64,
     pub op: MemOpKind,
+    /// The width of this memory access.  For `Write` and `Poison` operations, only the
+    /// `width.bytes()` bytes starting at `addr` may be modified; if `width < MemOpWidth::WORD`,
+    /// then all other bytes of `value` must be copied from the previous value of the modified
+    /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
+    /// `value` must exactly match the previous value of the accessed word.
+    pub width: MemOpWidth,
 }
+
 
 mk_named_enum! {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -397,12 +434,84 @@ where
     }
 }
 
+
+mk_named_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum MemOpWidth {
+        W1 = 0,
+        W2 = 1,
+        W4 = 2,
+        W8 = 3,
+    }
+}
+
+impl MemOpWidth {
+    pub const WORD: MemOpWidth = MemOpWidth::W8;
+
+    pub const fn bytes(self) -> usize {
+        1_usize << (self as u8)
+    }
+
+    pub const fn bits(self) -> usize {
+        self.bytes() * 8
+    }
+
+    pub const fn log_bytes(self) -> usize {
+        self as u8 as usize
+    }
+
+    pub const fn load_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Load1,
+            MemOpWidth::W2 => Opcode::Load2,
+            MemOpWidth::W4 => Opcode::Load4,
+            MemOpWidth::W8 => Opcode::Load8,
+        }
+    }
+
+    pub const fn store_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Store1,
+            MemOpWidth::W2 => Opcode::Store2,
+            MemOpWidth::W4 => Opcode::Store4,
+            MemOpWidth::W8 => Opcode::Store8,
+        }
+    }
+}
+
+pub const WORD_BYTES: usize = MemOpWidth::WORD.bytes();
+pub const WORD_BITS: usize = MemOpWidth::WORD.bits();
+pub const WORD_LOG_BYTES: usize = MemOpWidth::WORD.log_bytes();
+
+impl Default for MemOpWidth {
+    fn default() -> MemOpWidth { MemOpWidth::WORD }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, MemOpWidth> for MemOpWidth
+where
+    C::Repr: Clone,
+    u8: Mux<'a, C, u8, Output = u8>,
+{
+    type Output = MemOpWidth;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: TWire<'a, u8>,
+        e: TWire<'a, u8>,
+    ) -> TWire<'a, u8> {
+        bld.mux(TWire::new(c), t, e)
+    }
+}
+
+
 #[derive(Clone, Copy)]
 pub struct MemPortRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
+    pub width: TWire<'a, MemOpWidth>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -416,6 +525,7 @@ impl<'a> Lit<'a> for MemPort {
             addr: bld.lit(a.addr),
             value: bld.lit(a.value),
             op: bld.lit(a.op),
+            width: bld.lit(a.width),
         }
     }
 }
@@ -428,6 +538,7 @@ impl<'a> Secret<'a> for MemPort {
                 addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
                 value: bld.with_label("value", || bld.secret(Some(a.value))),
                 op: bld.with_label("op", || bld.secret(Some(a.op))),
+                width: bld.with_label("width", || bld.secret(Some(a.width))),
             }
         } else {
             MemPortRepr {
@@ -435,6 +546,7 @@ impl<'a> Secret<'a> for MemPort {
                 addr: bld.with_label("addr", || bld.secret(None)),
                 value: bld.with_label("value", || bld.secret(None)),
                 op: bld.with_label("op", || bld.secret(None)),
+                width: bld.with_label("width", || bld.secret(None)),
             }
         }
     }
@@ -446,6 +558,7 @@ where
     u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
     MemOpKind: Mux<'a, C, MemOpKind, Output = MemOpKind>,
+    MemOpWidth: Mux<'a, C, MemOpWidth, Output = MemOpWidth>,
 {
     type Output = MemPort;
 
@@ -461,9 +574,93 @@ where
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
             op: bld.mux(c.clone(), t.op, e.op),
+            width: bld.mux(c.clone(), t.width, e.width),
         }
     }
 }
+
+
+pub struct ByteOffset(u8);
+
+impl ByteOffset {
+    pub fn new(x: u8) -> ByteOffset {
+        assert!((x as usize) < MemOpWidth::WORD.bytes());
+        ByteOffset(x)
+    }
+
+    pub fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl<'a> Repr<'a> for ByteOffset {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for ByteOffset {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
+
+impl<'a> Lit<'a> for ByteOffset {
+    fn lit(bld: &Builder<'a>, x: Self) -> Wire<'a> {
+        let c = bld.circuit();
+        c.lit(Self::wire_type(c), x.raw() as u64)
+    }
+}
+
+impl<'a> Mux<'a, bool, ByteOffset> for ByteOffset {
+    type Output = ByteOffset;
+    fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+        bld.circuit().mux(c, t, e)
+    }
+}
+
+
+impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a, b)
+    }
+}
+
+pub struct WordAddr;
+
+impl<'a> Repr<'a> for WordAddr {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for WordAddr {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(
+            MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
+
+impl<'a> typed::Eq<'a, WordAddr> for WordAddr {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a, b)
+    }
+}
+
 
 pub struct PackedMemPort;
 
@@ -481,20 +678,25 @@ impl PackedMemPort {
         // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_CYCLE (-1) comes before all real
         // cycles.
         let cycle_adj = bld.add(mp.cycle, bld.lit(1));
+        // Split the address into word (upper 61 bits) and offset (lower 3 bits) parts.
+        let (offset, waddr) = *bit_pack::split_bits::<(ByteOffset, WordAddr)>(bld, mp.addr.repr);
         // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
         // put `addr` last in the list.
-        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, mp.addr)));
-        let data = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((mp.value, mp.op)));
+        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, waddr)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _, _)>::new((
+            mp.value, mp.op, mp.width, offset)));
         TWire::new(PackedMemPortRepr { key, data })
     }
 }
 
 impl<'a> PackedMemPortRepr<'a> {
     pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
-        let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
+        let (cycle_adj, waddr) = *bit_pack::split_bits::<(u32, WordAddr)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
-        let (value, op) = *bit_pack::split_bits::<(_, _)>(bld, self.data);
-        TWire::new(MemPortRepr { cycle, addr, value, op })
+        let (value, op, width, offset) =
+            *bit_pack::split_bits::<(_, _, _, ByteOffset)>(bld, self.data);
+        let addr = TWire::new(bit_pack::concat_bits(bld, TWire::<(_, _)>::new((offset, waddr))));
+        TWire::new(MemPortRepr { cycle, addr, value, op, width })
     }
 }
 
@@ -789,7 +991,12 @@ impl Default for Sparsity {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, op: MemOpKind },
+    MemOp {
+        addr: u64,
+        value: u64,
+        op: MemOpKind,
+        width: MemOpWidth,
+    },
     Stutter,
     Advise { advise: u64 },
 }

@@ -1,0 +1,40 @@
+program:
+  - [load1, 0, null, true, 7]       # load1 r1, 7
+  - [load2, 0, null, true, 7]       # load2 r1, 7
+  - [load4, 0, null, true, 7]       # load4 r1, 7
+  - [load8, 0, null, true, 7]       # load8 r1, 7
+  - [store1, null, 0, true, 7]      # store1 7, r1
+  - [store2, null, 0, true, 7]      # store2 7, r1
+  - [store4, null, 0, true, 7]      # store4 7, r1
+  - [store8, null, 0, true, 7]      # store8 7, r1
+
+init_mem:
+  - start: 0
+    len: 8
+    read_only: true
+    secret: false
+
+params:
+  num_regs: 1
+  trace_len: 9
+
+trace:
+  - [0, [0]]
+  - [1, [0]]
+  - [2, [0]]
+  - [3, [0]]
+  - [4, [0]]
+  - [5, [0]]
+  - [6, [0]]
+  - [7, [0]]
+  - [8, [0]]
+
+advice:
+  1: [[MemOp, 7, 0, read, 1]]
+  2: [[MemOp, 7, 0, read, 2]]
+  3: [[MemOp, 7, 0, read, 4]]
+  4: [[MemOp, 7, 0, read, 8]]
+  5: [[MemOp, 7, 0, write, 1]]
+  6: [[MemOp, 7, 0, write, 2]]
+  7: [[MemOp, 7, 0, write, 4]]
+  8: [[MemOp, 7, 0, write, 8]]

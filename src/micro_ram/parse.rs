@@ -4,7 +4,7 @@ use std::fmt;
 use std::mem;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
-use crate::micro_ram::types::{Execution, Opcode, MemOpKind, RamInstr, Advice};
+use crate::micro_ram::types::{Execution, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice};
 use crate::micro_ram::feature::{self, Feature, Version};
 
 
@@ -152,6 +152,22 @@ impl<'de> Deserialize<'de> for MemOpKind {
     }
 }
 
+impl<'de> Deserialize<'de> for MemOpWidth {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let w = u8::deserialize(d)?;
+        match w {
+            1 => Ok(MemOpWidth::W1),
+            2 => Ok(MemOpWidth::W2),
+            4 => Ok(MemOpWidth::W4),
+            8 => Ok(MemOpWidth::W8),
+            _ => Err(de::Error::invalid_value(
+                de::Unexpected::Unsigned(w as _),
+                &"a memory op width",
+            )),
+        }
+    }
+}
+
 
 impl<'de> Deserialize<'de> for RamInstr {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -201,10 +217,19 @@ impl<'de> Visitor<'de> for AdviceVisitor {
         let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
                 seq.expect += 3;
-                Advice::MemOp {
-                    addr: seq.next_element()?,
-                    value: seq.next_element()?,
-                    op: seq.next_element()?,
+                let addr = seq.next_element()?;
+                let value = seq.next_element()?;
+                let op = seq.next_element()?;
+                match seq.opt_next_element()? {
+                    Some(width) => Advice::MemOp { addr, value, op, width },
+                    // If the `width` field is absent, this is an old-style `MemOp`, using word
+                    // addressing, so convert it to the new byte-addressed style.
+                    None => Advice::MemOp {
+                        addr: addr * MemOpWidth::WORD.bytes() as u64,
+                        value,
+                        op,
+                        width: MemOpWidth::WORD,
+                    },
                 }
             },
             "Stutter" => {
@@ -250,6 +275,19 @@ impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
                     &(&format!("a sequence of length {}", self.expect) as &str),
                 ));
             },
+        }
+    }
+
+    /// Try to parse an optional element of type `T`.  On success, increments `expect`
+    /// automatically.
+    fn opt_next_element<T: Deserialize<'de>>(&mut self) -> Result<Option<T>, A::Error> {
+        match self.seq.next_element::<T>()? {
+            Some(x) => {
+                self.seen += 1;
+                self.expect += 1;
+                Ok(Some(x))
+            },
+            None => Ok(None),
         }
     }
 

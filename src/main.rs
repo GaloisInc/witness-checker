@@ -15,14 +15,15 @@ use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::gadget::arith::BuilderExt as _;
-use cheesecloth::lower::{self, run_pass};
+use cheesecloth::gadget::bit_pack;
+use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::fetch::Fetch;
-use cheesecloth::micro_ram::mem::Memory;
+use cheesecloth::micro_ram::mem::{Memory, extract_bytes_at_offset, extract_low_bytes};
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::types::{
-    RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE, REG_PC,
-    MEM_PORT_UNUSED_CYCLE,
+    RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, MemOpWidth, ByteOffset, Opcode, Advice,
+    REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 
 
@@ -219,12 +220,30 @@ fn calc_step<'a>(
         add_case(Opcode::Load, result, instr.dest);
     }
 
+    // Load1, Load2, Load4, Load8
+    for w in MemOpWidth::iter() {
+        let result = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+        add_case(w.load_opcode(), result, instr.dest);
+    }
+
     {
+        // Store operations have no effect on the registers, so their `calc_step` portion is a
+        // no-op.  Consistency between the stored value and the `MemPort` is handled in
+        // `check_step`.
         add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE));
+    }
+
+    // Store1, Store2, Store4, Store8
+    for w in MemOpWidth::iter() {
+        add_case(w.store_opcode(), b.lit(0), b.lit(REG_NONE));
     }
 
     {
         add_case(Opcode::Poison, b.lit(0), b.lit(REG_NONE));
+    }
+
+    {
+        add_case(Opcode::Poison8, b.lit(0), b.lit(REG_NONE));
     }
 
     {
@@ -294,22 +313,32 @@ fn check_step<'a>(
 
     let x = calc_im.x;
     let y = calc_im.y;
-    let result = calc_im.result;
 
     // If the instruction is a store, load, or poison, we need additional checks to make sure the
     // fields of `mem_port` match the instruction operands.
-    let is_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
-    let is_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
-    let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
+    let is_new_load = MemOpWidth::iter().map(|w| w.load_opcode())
+        .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
+    let is_old_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
+    let is_load = b.or(is_new_load, is_old_load);
+    let is_new_store = MemOpWidth::iter().map(|w| w.store_opcode())
+        .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
+    let is_old_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
+    let is_store = b.or(is_new_store, is_old_store);
+    let is_new_poison = b.eq(instr.opcode, b.lit(Opcode::Poison8 as u8));
+    let is_old_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
+    let is_poison = b.or(is_new_poison, is_old_poison);
     let is_store_like = b.or(is_store, is_poison);
     let is_mem = b.or(is_load, is_store_like);
+    // Is this an old-style memory op, using word addressing?
+    let is_old_style = b.or(b.or(is_old_load, is_old_store), is_old_poison);
 
-    let expect_value = b.mux(is_store_like, x, result);
+    let addr = b.mux(is_old_style, b.mul(y, b.lit(8)), y);
+
     cx.when(b, is_mem, |cx| {
         wire_assert!(
-            cx, b.eq(mem_port.addr, y),
+            cx, b.eq(mem_port.addr, addr),
             "cycle {}'s mem port has address {} (expected {})",
-            cycle, cx.eval(mem_port.addr), cx.eval(y),
+            cycle, cx.eval(mem_port.addr), cx.eval(addr),
         );
         let flag_ops = [
             (is_load, MemOpKind::Read),
@@ -325,10 +354,48 @@ fn check_step<'a>(
                 );
             });
         }
+    });
+
+    for w in MemOpWidth::iter() {
+        cx.when(b, b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), |cx| {
+            wire_assert!(
+                cx, b.eq(mem_port.width, b.lit(w)),
+                "cycle {}'s mem port has width {:?} (expected {:?})",
+                cycle, cx.eval(mem_port.width), w,
+            );
+
+            let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+            let x_low = extract_low_bytes(b, x, w);
+            wire_assert!(
+                cx, b.eq(stored_value, x_low),
+                "cycle {}'s mem port stores value {} at {:x} (expected value {})",
+                cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+            );
+        });
+    }
+
+    cx.when(b, is_old_store, |cx| {
+        let w = MemOpWidth::WORD;
         wire_assert!(
-            cx, b.eq(mem_port.value, expect_value),
-            "cycle {}'s mem port (op {}) has value {} (expected {})",
-            cycle, cx.eval(mem_port.op.repr), cx.eval(mem_port.value), cx.eval(expect_value),
+            cx, b.eq(mem_port.width, b.lit(w)),
+            "cycle {}'s mem port has width {:?} (expected {:?})",
+            cycle, cx.eval(mem_port.width), w,
+        );
+
+        let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+        let x_low = extract_low_bytes(b, x, w);
+        wire_assert!(
+            cx, b.eq(stored_value, x_low),
+            "cycle {}'s mem port stores value {} at {:x} (expected value {})",
+            cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+        );
+    });
+
+    cx.when(b, is_poison, |cx| {
+        wire_assert!(
+            cx, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
+            "cycle {}'s mem port has width {:?} (expected {:?})",
+            cycle, cx.eval(mem_port.width), MemOpWidth::W8,
         );
     });
 
@@ -378,6 +445,7 @@ fn check_last<'a>(
     }
 }
 
+
 struct PassRunner<'a> {
     // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have
     // overlapping `&` and `&mut` references.
@@ -387,6 +455,8 @@ struct PassRunner<'a> {
     /// arena.
     wires: MaybeUninit<Vec<Wire<'a>>>,
 }
+
+const DEBUG_PASSES: bool = false;
 
 impl<'a> PassRunner<'a> {
     pub fn new(a: &'a mut Bump, b: &'a mut Bump, wires: Vec<Wire>) -> PassRunner<'a> {
@@ -414,7 +484,11 @@ impl<'a> PassRunner<'a> {
                 let arena: &Bump = &**self.next.as_ptr();
                 let c = Circuit::new(arena);
                 let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
-                let wires = run_pass(&c, wires, f);
+                let wires = if DEBUG_PASSES {
+                    run_pass_debug(&c, wires, f)
+                } else {
+                    run_pass(&c, wires, f)
+                };
                 *self.wires.as_mut_ptr() = wires;
             }
             // All `wires` are now allocated from `self.next`, leaving `self.cur` unused.
@@ -608,7 +682,6 @@ fn main() -> io::Result<()> {
     passes.run(lower::bundle::unbundle_mux);
     passes.run(lower::bundle::simplify);
     passes.run(lower::const_fold::const_fold(&c));
-    passes.run(lower::int::mod_to_div);
     passes.run(lower::int::non_constant_shift);
     #[cfg(feature = "bellman")]
     if args.is_present("zkif-out") {
