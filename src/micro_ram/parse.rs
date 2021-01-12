@@ -1,41 +1,48 @@
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::fmt;
+use std::mem;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
-use crate::micro_ram::types::{
-    Execution, Version, Opcode, MemOpKind, RamInstr, Advice, DEFAULT_VERSION,
-};
+use crate::micro_ram::types::{Execution, Opcode, MemOpKind, RamInstr, Advice};
+use crate::micro_ram::feature::{self, Feature, Version};
 
 
 thread_local! {
-    static VERSION: Cell<Version> = Cell::new(DEFAULT_VERSION);
+    static FEATURES: Cell<HashSet<Feature>> = Cell::new(HashSet::new());
 }
 
-pub fn version() -> Version {
-    VERSION.with(|c| c.get())
+pub fn has_feature(f: Feature) -> bool {
+    FEATURES.with(|c| {
+        let features = c.replace(HashSet::new());
+        let r = features.contains(&f);
+        c.set(features);
+        r
+    })
 }
 
-struct VersionGuard {
-    old: Version,
+struct FeaturesGuard {
+    old: HashSet<Feature>,
 }
 
-impl VersionGuard {
-    pub fn set(v: Version) -> VersionGuard {
-        VERSION.with(|c| {
-            let old = c.replace(v);
-            VersionGuard { old }
+impl FeaturesGuard {
+    pub fn set(fs: HashSet<Feature>) -> FeaturesGuard {
+        FEATURES.with(|c| {
+            let old = c.replace(fs);
+            FeaturesGuard { old }
         })
     }
 }
 
-impl Drop for VersionGuard {
+impl Drop for FeaturesGuard {
     fn drop(&mut self) {
-        VERSION.with(|c| c.set(self.old))
+        let old = mem::replace(&mut self.old, HashSet::new());
+        FEATURES.with(|c| c.set(old))
     }
 }
 
-pub fn with_version<R>(v: Version, f: impl FnOnce() -> R) -> R {
-    let _g = VersionGuard::set(v);
+pub fn with_features<R>(fs: HashSet<Feature>, f: impl FnOnce() -> R) -> R {
+    let _g = FeaturesGuard::set(fs);
     f()
 }
 
@@ -84,15 +91,23 @@ impl<'de> Visitor<'de> for VersionedExecutionVisitor {
 
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<VersionedExecution, A::Error> {
         let mut seq = CountedSeqAccess::new(seq, 3);
-        let major = seq.next_element::<u8>()?;
-        let minor = seq.next_element::<u8>()?;
-        let ver = Version::new(major, minor);
-        let exec = with_version(ver, || {
+        let ver = seq.next_element::<Version>()?;
+        let features = seq.next_element::<HashSet<Feature>>()?;
+        let ver_features = match feature::lookup_version(ver) {
+            Some(x) => x,
+            None => return Err(serde::de::Error::custom(format_args!(
+                "input has unsupported version {:?}", ver
+            ))),
+        };
+        let all_features = &features | &ver_features;
+        let exec = with_features(all_features.clone(), || {
             seq.next_element::<Execution>()
         })?;
         seq.finish()?;
         Ok(VersionedExecution(Execution {
             version: ver,
+            features: all_features,
+            declared_features: features,
             .. exec
         }))
     }
@@ -106,7 +121,6 @@ pub struct UnversionedExecution(Execution);
 impl<'de> Deserialize<'de> for UnversionedExecution {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let mut exec = Execution::deserialize(d)?;
-        exec.version = version();
         Ok(UnversionedExecution(exec))
     }
 }

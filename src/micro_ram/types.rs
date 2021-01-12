@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use serde::Deserialize;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
 use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
+use crate::micro_ram::feature::{Feature, Version};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -700,6 +701,13 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 pub struct Execution {
     #[serde(default)]
     pub version: Version,
+    #[serde(default)]
+    pub features: HashSet<Feature>,
+    /// The set of features explicitly declared in the version header.  This is built by combining
+    /// `features` with the baseline features implied by `version`.
+    #[serde(default)]
+    pub declared_features: HashSet<Feature>,
+
     pub program: Vec<RamInstr>,
     #[serde(default)]
     pub init_mem: Vec<MemSegment>,
@@ -742,20 +750,6 @@ impl Execution {
         Ok(self)
     }
 }
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default, Deserialize)]
-pub struct Version {
-    pub major: u8,
-    pub minor: u8,
-}
-
-impl Version {
-    pub const fn new(major: u8, minor: u8) -> Version {
-        Version { major, minor }
-    }
-}
-
-pub const DEFAULT_VERSION: Version = Version::new(1, 0);
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MemSegment {
