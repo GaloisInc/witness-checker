@@ -120,7 +120,7 @@ impl<'a> Memory<'a> {
                             );
                         }
                         found_j = Some(j);
-                        mp = Some(MemPort { cycle, addr, value, op, tainted: IfMode::new(|fp| tainted) });
+                        mp = Some(MemPort { cycle, addr, value, op, tainted });
                     }
                 }
             }

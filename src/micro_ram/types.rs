@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
 use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
-use crate::mode::if_mode::{IfMode, AnyTainted};
+use crate::mode::if_mode::{IfMode, AnyTainted, is_mode};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -812,7 +812,7 @@ impl Default for Sparsity {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, op: MemOpKind, tainted: u64 },
+    MemOp { addr: u64, value: u64, op: MemOpKind, tainted: IfMode<AnyTainted,u64> },
     Stutter,
     Advise { advise: u64 },
 }
@@ -892,12 +892,16 @@ impl<'de> Visitor<'de> for AdviceVisitor {
         let mut seq = CountedSeqAccess::new(seq, 1);
         let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
-                seq.expect += 4;
+                seq.expect += 3;
+                let tainted = is_mode::<AnyTainted>();
+                if is_mode::<AnyTainted>() {
+                    seq.expect += 1;
+                }
                 Advice::MemOp {
                     addr: seq.next_element()?,
                     value: seq.next_element()?,
                     op: seq.next_element()?,
-                    tainted: seq.next_element()?, // Make this optional too?
+                    tainted: if tainted {seq.next_element()?} else {IfMode::none()},
                 }
             },
             "Stutter" => {
