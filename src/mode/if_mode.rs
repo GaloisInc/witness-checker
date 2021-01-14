@@ -257,11 +257,16 @@ impl<M: ModePred, T: PartialEq> PartialEq for IfMode<M, T> {
 
 impl<M: ModePred, T: Eq> Eq for IfMode<M, T> {}
 
-impl<M: ModePred, T: Default> Default for IfMode<M, T> {
+impl<M: ModePred, T> Default for IfMode<M, T> {
     fn default() -> IfMode<M, T> {
-        Self::new(|_pf| T::default())
+        Self::new(|_pf| panic!{"Invalid input. Missing corresponding field for IfMode."})
     }
 }
+// impl<M: ModePred, T: Default> Default for IfMode<M, T> {
+//     fn default() -> IfMode<M, T> {
+//         Self::new(|_pf| T::default())
+//     }
+// }
 
 impl<M: ModePred, T: fmt::Debug> fmt::Debug for IfMode<M, T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {

@@ -60,7 +60,7 @@ impl<'a> Memory<'a> {
 
             mp.tainted = {
                 let t: IfMode<_, u64> = IfMode::new(|pf| {
-                    seg.tainted.get(i as usize).cloned().unwrap_or(0)
+                    seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(0)
                 });
                 if seg.secret {
                     if self.verifier {

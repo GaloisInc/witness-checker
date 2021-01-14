@@ -172,6 +172,7 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
+    #[serde(default)]
     pub tainted_regs: IfMode<AnyTainted, Vec<u64>>,
 }
 
@@ -781,7 +782,8 @@ pub struct MemSegment {
     pub secret: bool,
     #[serde(default)]
     pub data: Vec<u64>,
-    pub tainted: Vec<u64>,
+    #[serde(default)]
+    pub tainted: IfMode<AnyTainted,Vec<u64>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
