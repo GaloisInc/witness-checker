@@ -30,11 +30,10 @@ pub fn calc_step<'a>(
             cases.push(TWire::<_>::new((op_match, parts)));
         };
 
-        // Extract the tainted of x, y.
+        // Extract the tainted label of x, y.
         let tx = b.index(&regs0, instr.op1, |b, i| b.lit(i as u8));
-        let ty = operand_value(b, &regs0, instr.op2, instr.imm);
-
-        // TODO: Add required asserts (in mem?). 
+        // If y is an immediate, set ty to UNTAINTED.
+        let ty = operand_value(b, &regs0, b.lit(UNTAINTED), instr.imm);
 
         {
             add_case(Opcode::Mov, ty);
@@ -115,7 +114,7 @@ pub fn check_state<'a>(
         for (i, (&v_calc, &v_new)) in calc_regs.iter().zip(trace_regs.iter()).enumerate() {
             wire_assert!(
                 cx, b.eq(v_new, v_calc),
-                "cycle {} sets tainted reg {} to {} (expected {})",
+                "cycle {} sets tainted label of reg {} to {} (expected {})",
                 cycle, i, cx.eval(v_new), cx.eval(v_calc),
             );
         }
@@ -153,7 +152,7 @@ pub fn check_step<'a>(
         // the sink.
         wire_bug_if!(
             cx, b.and(b.eq(instr.opcode, b.lit(Opcode::Sink as u8)), b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED)))),
-            "leak of tainted data from register {:x} with label {:x} does not match output channel label {:x} on cycle {}",
+            "leak of tainted data from register {:x} with label {} does not match output channel label {} on cycle {}",
             cx.eval(instr.op1), cx.eval(xt), cx.eval(y), cycle,
         );
     }

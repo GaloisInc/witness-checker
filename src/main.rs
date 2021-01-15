@@ -231,7 +231,11 @@ fn calc_step<'a>(
         add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
     }
 
-    // Opcode::Sink and Taint are no-ops so we let if fall through.
+    // Opcode::Sink is a no-op so we let if fall through.
+    // Opcode::Taint is a no-op so we set it to itself and we need to set its dest.
+    {
+        add_case(Opcode::Taint, x, instr.op1);
+    }
 
     let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));
 
