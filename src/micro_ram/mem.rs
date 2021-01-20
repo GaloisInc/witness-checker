@@ -7,7 +7,7 @@ use log::*;
 use crate::ir::typed::{TWire, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, PackedMemPort, Advice, MemSegment, MEM_PORT_PRELOAD_CYCLE,
+    MemPort, MemOpKind, PackedMemPort, Advice, Label, MemSegment, MEM_PORT_PRELOAD_CYCLE,
     MEM_PORT_UNUSED_CYCLE,
 };
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -59,7 +59,7 @@ impl<'a> Memory<'a> {
             }
 
             mp.tainted = {
-                let t: IfMode<_, u64> = IfMode::new(|pf| {
+                let t: IfMode<_, Label> = IfMode::new(|pf| {
                     seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(0)
                 });
                 if seg.secret {

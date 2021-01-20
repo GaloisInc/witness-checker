@@ -2,12 +2,14 @@
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{CalcIntermediate, MemPort, Opcode, RamInstr, REG_NONE}
+    types::{CalcIntermediate, MemPort, Opcode, RamInstr, REG_NONE, Label}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
 
-pub const UNTAINTED: u64 = u64::MAX;
+pub const UNTAINTED: Label = Label::MAX;
+
+// pub struct CalcIntermediate<'a> {
 
 // Builds the circuit that calculates our conservative dynamic taint tracking semantics. 
 pub fn calc_step<'a>(
@@ -15,10 +17,10 @@ pub fn calc_step<'a>(
     cycle: u32,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
-    regs0: &IfMode<AnyTainted, Vec<TWire<'a,u64>>>,
+    regs0: &IfMode<AnyTainted, Vec<TWire<'a,Label>>>,
     concrete_y: TWire<'a, u64>,
     concrete_dest: TWire<'a, u8>,
-) -> (IfMode<AnyTainted, Vec<TWire<'a,u64>>>, IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>) {
+) -> (IfMode<AnyTainted, Vec<TWire<'a,Label>>>, IfMode<AnyTainted, (TWire<'a,Label>, TWire<'a,Label>)>) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         let regs0 = regs0.as_ref().unwrap(&pf);
         let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", cycle));
@@ -51,7 +53,7 @@ pub fn calc_step<'a>(
         }
 
         {
-            add_case(Opcode::Taint, concrete_y);
+            add_case(Opcode::Taint, b.cast(concrete_y));
         }
 
         /*
@@ -103,8 +105,8 @@ pub fn check_state<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     cycle: u32,
-    calc_regs: &IfMode<AnyTainted, Vec<TWire<'a,u64>>>,
-    trace_regs: &IfMode<AnyTainted, Vec<TWire<'a,u64>>>,
+    calc_regs: &IfMode<AnyTainted, Vec<TWire<'a,Label>>>,
+    trace_regs: &IfMode<AnyTainted, Vec<TWire<'a,Label>>>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
         let _g = b.scoped_label(format_args!("tainted::check_state/cycle {}", cycle));
@@ -125,7 +127,7 @@ pub fn check_state<'a>(
 pub fn check_first<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    init_regs: &IfMode<AnyTainted, Vec<TWire<'a,u64>>>,
+    init_regs: &IfMode<AnyTainted, Vec<TWire<'a,Label>>>,
 ) {
     if let Some(init_regs) = init_regs.try_get() {
         for (i, &r) in init_regs.iter().enumerate() {
@@ -146,7 +148,7 @@ pub fn check_step<'a>(
     calc_im: &CalcIntermediate<'a>,
 ) {
     if let Some(pf) = check_mode::<AnyTainted>() {
-        let y = calc_im.y;
+        let y = b.cast(calc_im.y);
         let (xt, _) = calc_im.tainted.unwrap(&pf);
 
         // A leak is detected if the label of data being output to a sink does not match the label of
@@ -167,12 +169,12 @@ pub fn check_step_mem<'a, 'b>(
     cycle: u32,
     mem_port: &TWire<'a, MemPort>, 
     is_store_like: &TWire<'a, bool>, 
-    imm: IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>,
+    imm: IfMode<AnyTainted, (TWire<'a,Label>, TWire<'a,Label>)>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
         let (x_taint, result_taint) = imm.get(&pf);
         let expect_tainted = b.mux(*is_store_like, *x_taint, *result_taint);
-        let port_tainted : TWire<u64> = mem_port.tainted.unwrap(&pf);
+        let port_tainted = mem_port.tainted.unwrap(&pf);
 
         wire_assert!(
             cx, b.eq(port_tainted, expect_tainted),
@@ -202,7 +204,4 @@ pub fn check_memports<'a, 'b>(
         );
     }
 }
-// TODO: Need to check that reads/writes to tainted match op.
-
-// check_mem, check_last, and check_first_mem are not needed???
 

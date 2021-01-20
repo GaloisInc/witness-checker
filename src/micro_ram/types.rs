@@ -173,11 +173,11 @@ pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
     #[serde(default)]
-    pub tainted_regs: IfMode<AnyTainted, Vec<u64>>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<Label>>,
 }
 
 impl RamState {
-    pub fn new(pc: u32, regs: Vec<u32>, tainted_regs: IfMode<AnyTainted, Vec<u64>>) -> RamState {
+    pub fn new(pc: u32, regs: Vec<u32>, tainted_regs: IfMode<AnyTainted, Vec<Label>>) -> RamState {
         RamState {
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
@@ -190,7 +190,7 @@ impl RamState {
 pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
-    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, u64>>>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, Label>>>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -367,7 +367,6 @@ mk_named_enum! {
         /// Instruction used for taint analysis that signifies a value is written to a sink.
         /// The destination is unused, first argument is the value being output, and the second is the label of the output
         /// channel.
-        /// JP: Use dest as register being output?
         Sink = 29,
         /// Instruction used for taint analysis that taints a value is with a given label.
         /// The destination is unused, the first argument is the register being tainted, and the second is the label.
@@ -383,13 +382,17 @@ mk_named_enum! {
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
+/// Labels are used to taint registers and memory ports.
+/// Currently, labels are u16 integers.
+pub type Label = u16;
+
 #[derive(Clone, Copy, Default)]
 pub struct MemPort {
     pub cycle: u32,
     pub addr: u64,
     pub value: u64,
     pub op: MemOpKind,
-    pub tainted: IfMode<AnyTainted, u64>,
+    pub tainted: IfMode<AnyTainted, Label>,
 }
 
 mk_named_enum! {
@@ -428,8 +431,7 @@ pub struct MemPortRepr<'a> {
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
-    pub tainted: TWire<'a, IfMode<AnyTainted, u64>>,
-    // pub tainted: IfMode<AnyTainted, TWire<'a, u64>>,
+    pub tainted: TWire<'a, IfMode<AnyTainted, Label>>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -475,6 +477,7 @@ where
     C::Repr: Clone,
     u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
+    Label: Mux<'a, C, Label, Output = Label>,
     MemOpKind: Mux<'a, C, MemOpKind, Output = MemOpKind>,
 {
     type Output = MemPort;
@@ -783,7 +786,7 @@ pub struct MemSegment {
     #[serde(default)]
     pub data: Vec<u64>,
     #[serde(default)]
-    pub tainted: IfMode<AnyTainted,Vec<u64>>,
+    pub tainted: IfMode<AnyTainted,Vec<Label>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -814,7 +817,7 @@ impl Default for Sparsity {
 
 #[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, op: MemOpKind, tainted: IfMode<AnyTainted,u64> },
+    MemOp { addr: u64, value: u64, op: MemOpKind, tainted: IfMode<AnyTainted,Label> },
     Stutter,
     Advise { advise: u64 },
 }
@@ -970,6 +973,6 @@ pub struct CalcIntermediate<'a> {
     pub x: TWire<'a,u64>,
     pub y: TWire<'a,u64>,
     pub result: TWire<'a,u64>,
-    pub tainted: IfMode<AnyTainted, (TWire<'a,u64>, TWire<'a,u64>)>,
+    pub tainted: IfMode<AnyTainted, (TWire<'a,Label>, TWire<'a,Label>)>,
 }
 
