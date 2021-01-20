@@ -2,7 +2,7 @@
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{CalcIntermediate, MemPort, Opcode, RamInstr, REG_NONE, operand_value}
+    types::{CalcIntermediate, MemPort, Opcode, RamInstr, REG_NONE}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
@@ -33,7 +33,8 @@ pub fn calc_step<'a>(
         // Extract the tainted label of x, y.
         let tx = b.index(&regs0, instr.op1, |b, i| b.lit(i as u8));
         // If y is an immediate, set ty to UNTAINTED.
-        let ty = operand_value(b, &regs0, b.lit(UNTAINTED), instr.imm);
+        let reg_val = b.index(&regs0, instr.op2, |b, i| b.lit(i as u64));
+        let ty = b.mux(instr.imm, b.lit(UNTAINTED), reg_val);
 
         {
             add_case(Opcode::Mov, ty);

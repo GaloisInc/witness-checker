@@ -966,16 +966,6 @@ impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
     }
 }
 
-pub fn operand_value<'a>(
-    b: &Builder<'a>,
-    regs: &Vec<TWire<'a, u64>>,
-    op: TWire<'a, u64>,
-    imm: TWire<'a, bool>,
-) -> TWire<'a, u64> {
-    let reg_val = b.index(&regs, op, |b, i| b.lit(i as u64));
-    b.mux(imm, op, reg_val)
-}
-
 pub struct CalcIntermediate<'a> {
     pub x: TWire<'a,u64>,
     pub y: TWire<'a,u64>,

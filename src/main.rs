@@ -22,7 +22,6 @@ use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::types::{
     CalcIntermediate, Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, Opcode, Advice, REG_NONE,
     REG_PC, MEM_PORT_UNUSED_CYCLE,
-    operand_value,
 };
 use cheesecloth::mode;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, with_mode};
@@ -85,7 +84,8 @@ fn calc_step<'a>(
     };
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
-    let y = operand_value(b, &s1.regs, instr.op2, instr.imm);
+    let reg_val = b.index(&s1.regs, instr.op2, |b, i| b.lit(i as u64));
+    let y = b.mux(instr.imm, instr.op2, reg_val);
 
     {
         let result = b.and(x, y);
