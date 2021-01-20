@@ -2,7 +2,7 @@
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{CalcIntermediate, MemPort, Opcode, RamInstr, REG_NONE, Label}
+    types::{CalcIntermediate, Label, MemPort, Opcode, RamInstr, REG_NONE, TaintCalcIntermediate}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
@@ -20,7 +20,7 @@ pub fn calc_step<'a>(
     regs0: &IfMode<AnyTainted, Vec<TWire<'a,Label>>>,
     concrete_y: TWire<'a, u64>,
     concrete_dest: TWire<'a, u8>,
-) -> (IfMode<AnyTainted, Vec<TWire<'a,Label>>>, IfMode<AnyTainted, (TWire<'a,Label>, TWire<'a,Label>)>) {
+) -> (IfMode<AnyTainted, Vec<TWire<'a,Label>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         let regs0 = regs0.as_ref().unwrap(&pf);
         let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", cycle));
@@ -94,7 +94,11 @@ pub fn calc_step<'a>(
             regs.push(b.mux(is_dest, result, v_old));
         }
 
-        (IfMode::some(&pf, regs), IfMode::some(&pf, (tx, result)))
+        let timm = TaintCalcIntermediate {
+            label_x: tx,
+            label_result: result,
+        };
+        (IfMode::some(&pf, regs), IfMode::some(&pf, timm))
     } else {
         // JP: Better combinator for this? map_with_or?
         (IfMode::none(), IfMode::none())
@@ -149,7 +153,7 @@ pub fn check_step<'a>(
 ) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         let y = b.cast(calc_im.y);
-        let (xt, _) = calc_im.tainted.unwrap(&pf);
+        let xt = calc_im.tainted.as_ref().unwrap(&pf).label_x;
 
         // A leak is detected if the label of data being output to a sink does not match the label of
         // the sink.
@@ -169,10 +173,10 @@ pub fn check_step_mem<'a, 'b>(
     cycle: u32,
     mem_port: &TWire<'a, MemPort>, 
     is_store_like: &TWire<'a, bool>, 
-    imm: IfMode<AnyTainted, (TWire<'a,Label>, TWire<'a,Label>)>,
+    imm: &IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
-        let (x_taint, result_taint) = imm.get(&pf);
+        let TaintCalcIntermediate{label_x: x_taint, label_result: result_taint} = imm.get(&pf);
         let expect_tainted = b.mux(*is_store_like, *x_taint, *result_taint);
         let port_tainted = mem_port.tainted.unwrap(&pf);
 

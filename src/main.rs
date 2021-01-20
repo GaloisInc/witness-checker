@@ -329,7 +329,7 @@ fn check_step<'a>(
             "cycle {}'s mem port (op {}) has value {} (expected {})",
             cycle, cx.eval(mem_port.op.repr), cx.eval(mem_port.value), cx.eval(expect_value),
         );
-        tainted::check_step_mem(cx, b, cycle, mem_port, &is_store_like, calc_im.tainted);
+        tainted::check_step_mem(cx, b, cycle, mem_port, &is_store_like, &calc_im.tainted);
     });
 
     // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==

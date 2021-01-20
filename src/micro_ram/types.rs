@@ -969,10 +969,15 @@ impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
     }
 }
 
+pub struct TaintCalcIntermediate<'a> {
+    pub label_x: TWire<'a,Label>,      // Tainted label for x.
+    pub label_result: TWire<'a,Label>, // Tainted label for result.
+}
+
 pub struct CalcIntermediate<'a> {
     pub x: TWire<'a,u64>,
     pub y: TWire<'a,u64>,
     pub result: TWire<'a,u64>,
-    pub tainted: IfMode<AnyTainted, (TWire<'a,Label>, TWire<'a,Label>)>,
+    pub tainted: IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
 }
 
