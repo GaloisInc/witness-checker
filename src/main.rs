@@ -504,12 +504,15 @@ fn main() -> io::Result<()> {
         Some("json") => serde_json::from_slice(&content).unwrap(),
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
-    let exec = parse_exec.into_inner();
+    let exec = parse_exec.into_inner().validate().unwrap();
 
     let mut trace = Vec::new();
-    for (i, state) in exec.trace.iter().enumerate() {
-        let _g = b.scoped_label(format_args!("state {}", i));
-        trace.push(RamState::secret_with_value(&b, state.clone()));
+    assert!(exec.trace.len() == 1, "multi-chunk traces are NYI");
+    for (i, chunk) in exec.trace.iter().enumerate() {
+        for (j, state) in chunk.states.iter().enumerate() {
+            let _g = b.scoped_label(format_args!("state {}", j));
+            trace.push(RamState::secret_with_value(&b, state.clone()));
+        }
     }
 
     // Set up memory ports and check consistency.
@@ -558,7 +561,7 @@ fn main() -> io::Result<()> {
         &b,
         exec.params.trace_len - 1,
         &exec.program,
-        |i| exec.trace[i].pc,
+        |i| exec.trace[0].states[i].pc,
     );
     fetch.assert_consistent(&cx, &b);
 

@@ -25,6 +25,7 @@ macro_rules! define_features {
 }
 
 define_features! {
+    PublicPc = "public-pc",
 }
 
 
@@ -43,7 +44,7 @@ macro_rules! define_versions {
         $( ($($v:expr),*) = { $($variants:tt)* }, )*
     ) => {
         pub static VERSIONS: &[(Version, &[Feature])] = &[
-            $( (Version($($v),*), &[ $($variants)* ]), )*
+            $( (Version($($v),*), &[ $(Feature::$variants)* ]), )*
         ];
     };
 }

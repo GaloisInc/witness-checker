@@ -4,7 +4,9 @@ use std::fmt;
 use std::mem;
 use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
-use crate::micro_ram::types::{Execution, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice};
+use crate::micro_ram::types::{
+    Execution, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
+};
 use crate::micro_ram::feature::{self, Feature, Version};
 
 
@@ -141,6 +143,7 @@ impl<'de> Visitor<'de> for ExecutionVisitor {
             program: Vec::new(),
             init_mem: Vec::new(),
             params: Params::default(),
+            segments: Vec::new(),
             trace: Vec::new(),
             advice: HashMap::new(),
         };
@@ -157,7 +160,19 @@ impl<'de> Visitor<'de> for ExecutionVisitor {
                 "program" => { ex.program = map.next_value()?; },
                 "init_mem" => { ex.init_mem = map.next_value()?; },
                 "params" => { ex.params = map.next_value()?; },
-                "trace" => { ex.trace = map.next_value()?; },
+                "segments" if has_feature(Feature::PublicPc) => {
+                    ex.segments = map.next_value()?;
+                },
+                "trace" => {
+                    if has_feature(Feature::PublicPc) {
+                        ex.trace = map.next_value()?;
+                    } else {
+                        ex.trace = vec![TraceChunk {
+                            segment: 0,
+                            states: map.next_value()?,
+                        }];
+                    }
+                },
                 "advice" => { ex.advice = map.next_value()?; },
                 _ => return Err(serde::de::Error::custom(format_args!(
                     "unknown key {:?}", k,

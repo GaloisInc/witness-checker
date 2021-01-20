@@ -905,7 +905,8 @@ pub struct Execution {
     pub program: Vec<RamInstr>,
     pub init_mem: Vec<MemSegment>,
     pub params: Params,
-    pub trace: Vec<RamState>,
+    pub segments: Vec<Segment>,
+    pub trace: Vec<TraceChunk>,
     pub advice: HashMap<u64, Vec<Advice>>,
 }
 
@@ -919,12 +920,58 @@ impl Execution {
             ));
         }
 
-        for (i, s) in self.trace.iter().enumerate() {
-            if s.regs.len() != params.num_regs {
+        if !self.features.contains(&Feature::PublicPc) {
+            if self.segments.len() != 0 {
                 return Err(format!(
-                    "`trace[{}]` should have {} register values (`num_regs`), not {}",
-                    i, params.num_regs, s.regs.len(),
+                    "expected no segment definitions in non-public-pc trace, but got {}",
+                    self.segments.len(),
                 ));
+            }
+        }
+
+        for (i, seg) in self.segments.iter().enumerate() {
+            for &idx in &seg.successors {
+                if idx >= self.segments.len() {
+                    return Err(format!(
+                        "`segments[{}]` has out-of-range successor {} (len = {})",
+                        i, idx, self.segments.len(),
+                    ));
+                }
+            }
+        }
+
+        for (i, chunk) in self.trace.iter().enumerate() {
+            if !self.features.contains(&Feature::PublicPc) {
+                if chunk.segment != 0 {
+                    return Err(format!(
+                        "`trace[{}]` references segment {} in non-public-pc mode",
+                        i, chunk.segment,
+                    ));
+                }
+            } else {
+                if chunk.segment >= self.segments.len() {
+                    return Err(format!(
+                        "`trace[{}]` references undefined segment {} (len = {})",
+                        i, chunk.segment, self.segments.len(),
+                    ));
+                }
+
+                let expect_len = self.segments[chunk.segment].len;
+                if chunk.states.len() != expect_len {
+                    return Err(format!(
+                        "`trace[{}]` for segment {} should have {} states, but has {}",
+                        i, chunk.segment, expect_len, chunk.states.len(),
+                    ));
+                }
+            }
+
+            for (j, state) in chunk.states.iter().enumerate() {
+                if state.regs.len() != params.num_regs {
+                    return Err(format!(
+                        "`trace[{}][{}]` should have {} register values (`num_regs`), not {}",
+                        i, j, params.num_regs, state.regs.len(),
+                    ));
+                }
             }
         }
 
@@ -979,6 +1026,15 @@ impl Default for Sparsity {
     }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct Segment {
+    init_pc: Option<u64>,
+    len: usize,
+    enter_from_network: bool,
+    exit_to_network: bool,
+    successors: Vec<usize>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Advice {
     MemOp {
@@ -989,4 +1045,10 @@ pub enum Advice {
     },
     Stutter,
     Advise { advise: u64 },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TraceChunk {
+    pub segment: usize,
+    pub states: Vec<RamState>,
 }

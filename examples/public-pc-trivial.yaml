@@ -1,0 +1,31 @@
+## FLAGS: --validate-only --expect-zero
+
+- [0,1,0,0]
+- [public-pc]
+-
+  program:
+    - [mull, 2, 0, false, 0]    # mull r2, r0, r0
+    - [mull, 1, 0, true, 3]     # mull r1, r0, 3
+    - [add, 0, 1, false, 2]     # add r0, r1, r2
+    - [sub, 0, 0, true, 10]     # sub r0, r0, 10
+    - [mov, 0, 0, false, 0]
+
+  params:
+    num_regs: 3
+    trace_len: 5
+
+  segments:
+    - init_pc: null
+      len: 5
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [0, [2, 0, 0]]
+        - [1, [2, 0, 4]]
+        - [2, [2, 6, 4]]
+        - [3, [10, 6, 4]]
+        - [4, [0, 6, 4]]
