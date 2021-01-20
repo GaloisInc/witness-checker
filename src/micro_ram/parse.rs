@@ -1,10 +1,10 @@
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::mem;
-use serde::de::{self, Deserializer, SeqAccess, Visitor};
+use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
-use crate::micro_ram::types::{Execution, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice};
+use crate::micro_ram::types::{Execution, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice};
 use crate::micro_ram::feature::{self, Feature, Version};
 
 
@@ -110,6 +110,62 @@ impl<'de> Deserialize<'de> for UnversionedExecution {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let mut exec = Execution::deserialize(d)?;
         Ok(UnversionedExecution(exec))
+    }
+}
+
+
+impl<'de> Deserialize<'de> for Execution {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_struct(
+            "Execution",
+            &["program", "init_mem", "params", "trace", "advice"],
+            ExecutionVisitor,
+        )
+    }
+}
+
+struct ExecutionVisitor;
+impl<'de> Visitor<'de> for ExecutionVisitor {
+    type Value = Execution;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "an execution object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Execution, A::Error> {
+        let mut ex = Execution {
+            version: Version::default(),
+            features: HashSet::new(),
+            declared_features: HashSet::new(),
+
+            program: Vec::new(),
+            init_mem: Vec::new(),
+            params: Params::default(),
+            trace: Vec::new(),
+            advice: HashMap::new(),
+        };
+
+        let mut seen = HashSet::new();
+        while let Some(k) = map.next_key::<String>()? {
+            if !seen.insert(k.clone()) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate key {:?}", k,
+                )));
+            }
+
+            match &k as &str {
+                "program" => { ex.program = map.next_value()?; },
+                "init_mem" => { ex.init_mem = map.next_value()?; },
+                "params" => { ex.params = map.next_value()?; },
+                "trace" => { ex.trace = map.next_value()?; },
+                "advice" => { ex.advice = map.next_value()?; },
+                _ => return Err(serde::de::Error::custom(format_args!(
+                    "unknown key {:?}", k,
+                ))),
+            }
+        }
+
+        Ok(ex)
     }
 }
 

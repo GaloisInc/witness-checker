@@ -893,23 +893,19 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 
 
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Execution {
-    #[serde(default)]
     pub version: Version,
-    #[serde(default)]
+    /// The set of all enabled features.  This is built by combining `declared_features` with the
+    /// baseline features implied by `version`.
     pub features: HashSet<Feature>,
-    /// The set of features explicitly declared in the version header.  This is built by combining
-    /// `features` with the baseline features implied by `version`.
-    #[serde(default)]
+    /// The set of features explicitly declared in the version header.
     pub declared_features: HashSet<Feature>,
 
     pub program: Vec<RamInstr>,
-    #[serde(default)]
     pub init_mem: Vec<MemSegment>,
     pub params: Params,
     pub trace: Vec<RamState>,
-    #[serde(default)]
     pub advice: HashMap<u64, Vec<Advice>>,
 }
 
@@ -957,7 +953,7 @@ pub struct MemSegment {
     pub data: Vec<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Params {
     pub num_regs: usize,
     pub trace_len: usize,
