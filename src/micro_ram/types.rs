@@ -100,24 +100,22 @@ impl<'a> Lit<'a> for RamInstr {
 }
 
 impl<'a> Secret<'a> for RamInstr {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            RamInstrRepr {
-                opcode: bld.with_label("opcode", || bld.secret_init(Some(a.opcode))),
-                dest: bld.with_label("dest", || bld.secret_init(Some(a.dest))),
-                op1: bld.with_label("op1", || bld.secret_init(Some(a.op1))),
-                op2: bld.with_label("op2", || bld.secret_init(Some(a.op2))),
-                imm: bld.with_label("imm", || bld.secret_init(Some(a.imm))),
-            }
-        } else {
-            RamInstrRepr {
-                opcode: bld.with_label("opcode", || bld.secret_init(None)),
-                dest: bld.with_label("dest", || bld.secret_init(None)),
-                op1: bld.with_label("op1", || bld.secret_init(None)),
-                op2: bld.with_label("op2", || bld.secret_init(None)),
-                imm: bld.with_label("imm", || bld.secret_init(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        RamInstrRepr {
+            opcode: bld.with_label("opcode", || bld.secret_uninit()),
+            dest: bld.with_label("dest", || bld.secret_uninit()),
+            op1: bld.with_label("op1", || bld.secret_uninit()),
+            op2: bld.with_label("op2", || bld.secret_uninit()),
+            imm: bld.with_label("imm", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.opcode, &val.opcode, force);
+        Builder::set_secret_from_lit(&s.dest, &val.dest, force);
+        Builder::set_secret_from_lit(&s.op1, &val.op1, force);
+        Builder::set_secret_from_lit(&s.op2, &val.op2, force);
+        Builder::set_secret_from_lit(&s.imm, &val.imm, force);
     }
 }
 
@@ -215,9 +213,9 @@ impl RamState {
 
     pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.with_label("pc", || bld.secret_init(None)),
+            pc: bld.with_label("pc", || bld.secret_uninit()),
             regs: bld.with_label("regs", || (0 .. len).map(|i| {
-                bld.with_label(i, || bld.secret_init(None))
+                bld.with_label(i, || bld.secret_uninit())
             }).collect()),
         })
     }
@@ -290,8 +288,12 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> Secret<'a> for $Name {
-            fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-                bld.secret_init(a.map(|a| a as u8))
+            fn secret(bld: &Builder<'a>) -> Self::Repr {
+                bld.secret_uninit()
+            }
+
+            fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+                Builder::set_secret_from_lit(s, val, force);
             }
         }
 
@@ -527,24 +529,22 @@ impl<'a> Lit<'a> for MemPort {
 }
 
 impl<'a> Secret<'a> for MemPort {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            MemPortRepr {
-                cycle: bld.with_label("cycle", || bld.secret_init(Some(a.cycle))),
-                addr: bld.with_label("addr", || bld.secret_init(Some(a.addr))),
-                value: bld.with_label("value", || bld.secret_init(Some(a.value))),
-                op: bld.with_label("op", || bld.secret_init(Some(a.op))),
-                width: bld.with_label("width", || bld.secret_init(Some(a.width))),
-            }
-        } else {
-            MemPortRepr {
-                cycle: bld.with_label("cycle", || bld.secret_init(None)),
-                addr: bld.with_label("addr", || bld.secret_init(None)),
-                value: bld.with_label("value", || bld.secret_init(None)),
-                op: bld.with_label("op", || bld.secret_init(None)),
-                width: bld.with_label("width", || bld.secret_init(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        MemPortRepr {
+            cycle: bld.with_label("cycle", || bld.secret_uninit()),
+            addr: bld.with_label("addr", || bld.secret_uninit()),
+            value: bld.with_label("value", || bld.secret_uninit()),
+            op: bld.with_label("op", || bld.secret_uninit()),
+            width: bld.with_label("width", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
+        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
+        Builder::set_secret_from_lit(&s.value, &val.value, force);
+        Builder::set_secret_from_lit(&s.op, &val.op, force);
+        Builder::set_secret_from_lit(&s.width, &val.width, force);
     }
 }
 
@@ -770,20 +770,18 @@ impl<'a> Lit<'a> for FetchPort {
 }
 
 impl<'a> Secret<'a> for FetchPort {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            FetchPortRepr {
-                addr: bld.with_label("addr", || bld.secret_init(Some(a.addr))),
-                instr: bld.with_label("instr", || bld.secret_init(Some(a.instr))),
-                write: bld.with_label("write", || bld.secret_init(Some(a.write))),
-            }
-        } else {
-            FetchPortRepr {
-                addr: bld.with_label("addr", || bld.secret_init(None)),
-                instr: bld.with_label("instr", || bld.secret_init(None)),
-                write: bld.with_label("write", || bld.secret_init(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        FetchPortRepr {
+            addr: bld.with_label("addr", || bld.secret_uninit()),
+            instr: bld.with_label("instr", || bld.secret_uninit()),
+            write: bld.with_label("write", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
+        Builder::set_secret_from_lit(&s.instr, &val.instr, force);
+        Builder::set_secret_from_lit(&s.write, &val.write, force);
     }
 }
 

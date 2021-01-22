@@ -257,6 +257,12 @@ impl<'a> Circuit<'a> {
         w
     }
 
+    pub fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
+        let (w, sh) = self.new_secret(ty);
+        mem::forget(sh);
+        w
+    }
+
     pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
         let sz = match *ty {
             TyKind::Int(sz) | TyKind::Uint(sz) => sz,
@@ -724,6 +730,20 @@ impl<'a> GateKind<'a> {
             },
         }
     }
+
+    pub fn as_secret(&self) -> Secret<'a> {
+        match *self {
+            GateKind::Secret(s) => s,
+            _ => panic!("expected GateKind::Secret"),
+        }
+    }
+
+    pub fn as_lit(&self) -> (Ty<'a>, Bits<'a>) {
+        match *self {
+            GateKind::Lit(b, t) => (t, b),
+            _ => panic!("expected GateKind::Lit"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -863,6 +883,28 @@ impl<'a> SecretData<'a> {
     pub fn val(&self) -> Option<Bits<'a>> {
         self.val.as_ref().map(|sv| sv.get())
     }
+
+    pub fn set(&self, bits: Bits<'a>) {
+        let sv = self.val.as_ref()
+            .expect("can't provide secret values when running in verifier mode");
+        sv.set(bits);
+    }
+
+    pub fn set_default(&self, bits: Bits<'a>) {
+        if let Some(ref sv) = self.val {
+            sv.set_default(bits);
+        }
+    }
+
+    pub fn set_from_lit(&self, w: Wire<'a>, force: bool) {
+        let (ty, bits) = w.kind.as_lit();
+        assert!(ty == self.ty, "type mismatch in secret init: {:?} != {:?}", ty, self.ty);
+        if force {
+            self.set(bits);
+        } else {
+            self.set_default(bits);
+        }
+    }
 }
 
 /// A handle that can be used to set the value of a `Secret`.  Sets a default value on drop, if a
@@ -881,23 +923,21 @@ impl<'a> SecretHandle<'a> {
     fn with_default(self, c: &Circuit<'a>, default: Option<impl AsBits>) -> SecretHandle<'a> {
         // We allow providing a default in verifier mode, but it will be ignored in `drop`.
         let default = default.map(|val| c.bits(self.s.ty, val));
-        SecretHandle { s: self.s, default }
+        let new = SecretHandle { s: self.s, default };
+        mem::forget(self);
+        new
     }
 
     pub fn set(&self, c: &Circuit<'a>, val: impl AsBits) {
-        assert!(c.is_prover(), "can't provide secret values when running in verifier mode");
-        let sv = self.s.val.as_ref().unwrap();
         let bits = c.bits(self.s.ty, val);
-        sv.set(bits);
+        self.s.set(bits);
     }
 }
 
 impl<'a> Drop for SecretHandle<'a> {
     fn drop(&mut self) {
         if let Some(bits) = self.default {
-            if let Some(sv) = self.s.val.as_ref() {
-                sv.set_default(bits);
-            }
+            self.s.set_default(bits);
         }
     }
 }
