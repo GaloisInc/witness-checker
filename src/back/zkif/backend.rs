@@ -450,8 +450,8 @@ fn test_zkif() -> Result<()> {
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let sec1 = c.new_secret(c.ty(TyKind::I64), Some(12));
-    let sec2 = c.new_secret(c.ty(TyKind::I64), Some(13));
+    let sec1 = c.new_secret_init(c.ty(TyKind::I64), Some(12));
+    let sec2 = c.new_secret_init(c.ty(TyKind::I64), Some(13));
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);

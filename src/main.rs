@@ -555,12 +555,12 @@ fn main() -> io::Result<()> {
         // Fetch the instruction to execute.  If the `Stutter` advice is present, the instruction
         // opcode is actually replaced by `Opcode::Stutter`.
         let mut instr = cycle_fetch_ports.get_instr(i);
-        let stutter = b.secret(Some(stutters.contains(&(i as u32))));
+        let stutter = b.secret_init(Some(stutters.contains(&(i as u32))));
         instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
         let instr = instr;
 
         let port = cycle_mem_ports.get(&b, i);
-        let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
+        let advice = b.secret_init(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
 
         let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &port, advice, &prev_s);
 

@@ -220,11 +220,12 @@ impl<'a> Circuit<'a> {
         self.gate(GateKind::Secret(secret))
     }
 
-    /// Add a new secret value to the witness, and return a `Wire` that carries that value.
+    /// Add a new secret value to the witness, initialize it to `val`, and return a `Wire` that
+    /// carries that value.
     ///
     /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
     /// prover) is generating the circuit.
-    pub fn new_secret<T: AsBits>(&self, ty: Ty<'a>, val: Option<T>) -> Wire<'a> {
+    pub fn new_secret_init<T: AsBits>(&self, ty: Ty<'a>, val: Option<T>) -> Wire<'a> {
         let val = val.map(|val| self.bits(ty, val));
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
         self.secret(secret)
@@ -805,6 +806,7 @@ pub struct SecretData<'a> {
     pub ty: Ty<'a>,
     pub val: Option<Bits<'a>>,
 }
+
 
 declare_interned_pointer! {
     #[derive(Debug)]

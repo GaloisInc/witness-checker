@@ -54,7 +54,7 @@ impl<'a> Fetch<'a> {
                     .unwrap_or_else(|| panic!("program executed out of bounds at pc = {}", pc));
                 Some(FetchPort { addr: pc, instr, write: false })
             };
-            let mut fp = b.secret(fp);
+            let mut fp = b.secret_init(fp);
             fp.write = b.lit(false);
             cp.ports.push(fp);
         }

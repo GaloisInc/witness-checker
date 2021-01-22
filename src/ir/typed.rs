@@ -112,7 +112,7 @@ impl<'a> Builder<'a> {
         TWire::new(Lit::lit(self, x))
     }
 
-    pub fn secret<T: Secret<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
+    pub fn secret_init<T: Secret<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
         TWire::new(Secret::secret(self, x))
     }
 
@@ -294,7 +294,7 @@ impl<'a> Lit<'a> for bool {
 
 impl<'a> Secret<'a> for bool {
     fn secret(bld: &Builder<'a>, x: Option<bool>) -> Wire<'a> {
-        bld.c.new_secret(bld.c.ty(TyKind::BOOL), x.map(|x| x as u64))
+        bld.c.new_secret_init(bld.c.ty(TyKind::BOOL), x.map(|x| x as u64))
     }
 }
 
@@ -356,7 +356,7 @@ macro_rules! integer_impls {
 
         impl<'a> Secret<'a> for $T {
             fn secret(bld: &Builder<'a>, x: Option<$T>) -> Wire<'a> {
-                bld.c.new_secret(bld.c.ty(TyKind::$K), x.map(|x| x as u64))
+                bld.c.new_secret_init(bld.c.ty(TyKind::$K), x.map(|x| x as u64))
             }
         }
 
@@ -470,9 +470,9 @@ macro_rules! tuple_impl {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 #![allow(unused)]       // `bld` in the zero-element case
                 if let Some(($($A,)*)) = x {
-                    ($(bld.secret(Some($A)),)*)
+                    ($(bld.secret_init(Some($A)),)*)
                 } else {
-                    ($(bld.secret::<$A>(None),)*)
+                    ($(bld.secret_init::<$A>(None),)*)
                 }
             }
         }
@@ -617,12 +617,12 @@ macro_rules! array_impls {
                             for i in 0 .. $n {
                                 let a_val = (a.as_ptr() as *const A).add(i).read();
                                 // If this panics, the remaining elements of `a` and `b` will leak.
-                                let o_val = bld.secret(Some(a_val));
+                                let o_val = bld.secret_init(Some(a_val));
                                 (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
                             }
                         } else {
                             for i in 0 .. $n {
-                                let o_val = bld.secret::<A>(None);
+                                let o_val = bld.secret_init::<A>(None);
                                 (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
                             }
                         }

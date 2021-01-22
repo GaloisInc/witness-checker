@@ -171,7 +171,7 @@ fn maybe_swap<'a, T>(
     y: TWire<'a, T>,
 ) -> (TWire<'a, T>, TWire<'a, T>)
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
-    let swap = b.secret(swap);
+    let swap = b.secret_init(swap);
     let x2 = b.mux(swap, y.clone(), x.clone());
     let y2 = b.mux(swap, x, y);
     (x2, y2)

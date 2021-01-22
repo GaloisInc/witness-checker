@@ -45,13 +45,13 @@ impl<'a> Memory<'a> {
             });
 
             if self.verifier && seg.secret {
-                mp.value = b.secret(None);
+                mp.value = b.secret_init(None);
             } else {
                 // `data` is implicitly zero-padded out to `seg.len`, to support `.bss`-style
                 // zero-initialized segments.
                 let value = seg.data.get(i as usize).cloned().unwrap_or(0);
                 if seg.secret {
-                    mp.value = b.secret(Some(value));
+                    mp.value = b.secret_init(Some(value));
                 } else {
                     mp.value = b.lit(value);
                 }
@@ -80,8 +80,8 @@ impl<'a> Memory<'a> {
             // Simple case: everything is secret.
             for _ in 0 .. num_ports {
                 cp.ports.push(SparseMemPort {
-                    mp: b.secret(None),
-                    user: b.secret(None),
+                    mp: b.secret_init(None),
+                    user: b.secret_init(None),
                 });
             }
             cp.assert_valid(cx, b, len);
@@ -125,8 +125,8 @@ impl<'a> Memory<'a> {
             };
 
             cp.ports.push(SparseMemPort {
-                mp: b.secret(Some(mp)),
-                user: b.secret(Some(user)),
+                mp: b.secret_init(Some(mp)),
+                user: b.secret_init(Some(user)),
             });
         }
 
