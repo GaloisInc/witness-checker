@@ -39,10 +39,11 @@ pub struct Circuit<'a> {
     intern_bits: RefCell<HashSet<&'a [u32]>>,
 
     current_label: Cell<&'a str>,
+    is_prover: bool,
 }
 
 impl<'a> Circuit<'a> {
-    pub fn new(arena: &'a Bump) -> Circuit<'a> {
+    pub fn new(arena: &'a Bump, is_prover: bool) -> Circuit<'a> {
         Circuit {
             arena,
             intern_gate: RefCell::new(HashSet::new()),
@@ -53,7 +54,12 @@ impl<'a> Circuit<'a> {
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
+            is_prover,
         }
+    }
+
+    pub fn is_prover(&self) -> bool {
+        self.is_prover
     }
 
     fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {

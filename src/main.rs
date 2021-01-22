@@ -54,6 +54,9 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("1")
              .help("check state against the trace every D steps"))
+        .arg(Arg::with_name("verifier-mode")
+             .long("verifier-mode")
+             .help("run in verifier mode, constructing the circuit but not the secret witness"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -413,12 +416,18 @@ struct PassRunner<'a> {
     /// Invariant: the underlying `Gate` of every wire in `wires` is allocated from the `cur`
     /// arena.
     wires: MaybeUninit<Vec<Wire<'a>>>,
+    is_prover: bool,
 }
 
 const DEBUG_PASSES: bool = false;
 
 impl<'a> PassRunner<'a> {
-    pub fn new(a: &'a mut Bump, b: &'a mut Bump, wires: Vec<Wire>) -> PassRunner<'a> {
+    pub fn new(
+        a: &'a mut Bump,
+        b: &'a mut Bump,
+        wires: Vec<Wire>,
+        is_prover: bool,
+    ) -> PassRunner<'a> {
         a.reset();
         b.reset();
         let cur = MaybeUninit::new(a);
@@ -426,12 +435,12 @@ impl<'a> PassRunner<'a> {
         let wires = unsafe {
             // Transfer all wires into the `cur` arena.
             let arena: &Bump = &**cur.as_ptr();
-            let c = Circuit::new(arena);
+            let c = Circuit::new(arena, is_prover);
             let wires = run_pass(&c, wires, |c, _old, gk| c.gate(gk));
             MaybeUninit::new(wires)
         };
 
-        PassRunner { cur, next, wires }
+        PassRunner { cur, next, wires, is_prover }
     }
 
     // FIXME: using `'a` instead of a fresh lifetime (`for <'b>`) potentially allows the closure to
@@ -441,7 +450,7 @@ impl<'a> PassRunner<'a> {
         unsafe {
             {
                 let arena: &Bump = &**self.next.as_ptr();
-                let c = Circuit::new(arena);
+                let c = Circuit::new(arena, self.is_prover);
                 let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
                 let wires = if DEBUG_PASSES {
                     run_pass_debug(&c, wires, f)
@@ -459,7 +468,7 @@ impl<'a> PassRunner<'a> {
     pub fn finish(self) -> (Circuit<'a>, Vec<Wire<'a>>) {
         unsafe {
             let arena: &Bump = &**self.cur.as_ptr();
-            let c = Circuit::new(arena);
+            let c = Circuit::new(arena, self.is_prover);
             let wires = ptr::read(self.wires.as_ptr());
             (c, wires)
         }
@@ -475,9 +484,10 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    let is_prover = !args.is_present("verifier-mode");
 
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = Circuit::new(&arena, is_prover);
     let b = Builder::new(&c);
     let cx = Context::new(&c);
 
@@ -499,7 +509,7 @@ fn main() -> io::Result<()> {
     }
 
     // Set up memory ports and check consistency.
-    let mut mem = Memory::new(false);
+    let mut mem = Memory::new(is_prover);
     for seg in &exec.init_mem {
         mem.init_segment(&b, seg);
     }
@@ -532,7 +542,7 @@ fn main() -> io::Result<()> {
     }
 
     // Set up instruction-fetch ports and check consistency.
-    let mut fetch = Fetch::new(false);
+    let mut fetch = Fetch::new(is_prover);
     fetch.init_program(&b, &exec.program);
     let cycle_fetch_ports = fetch.add_cycles(
         &b,
@@ -620,7 +630,7 @@ fn main() -> io::Result<()> {
 
     let mut arena1 = Bump::new();
     let mut arena2 = Bump::new();
-    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags);
+    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags, is_prover);
 
     let gadget_supported = |g: GadgetKindRef| {
         use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};

@@ -469,7 +469,7 @@ mod test {
         assert!(perm.iter().enumerate().skip(n).all(|(i, &j)| i == j));
 
         let arena = Bump::new();
-        let c = Circuit::new(&arena);
+        let c = Circuit::new(&arena, true);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
@@ -512,7 +512,7 @@ mod test {
 
     fn check_benes_sort(inputs: &[u32]) {
         let arena = Bump::new();
-        let c = Circuit::new(&arena);
+        let c = Circuit::new(&arena, true);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 

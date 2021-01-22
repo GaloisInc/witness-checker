@@ -108,7 +108,7 @@ pub fn run_pass_debug<'new>(
     mut f: impl FnMut(&Circuit<'new>, Wire, GateKind<'new>) -> Wire<'new>,
 ) -> Vec<Wire<'new>> {
     let arena = bumpalo::Bump::new();
-    let old_c = Circuit::new(&arena);
+    let old_c = Circuit::new(&arena, c.is_prover());
     let wire = run_pass(&old_c, wire, |c, _, gk| c.gate(gk));
     let mut old_ev = CachingEvaluator::<eval::RevealSecrets>::new(&old_c);
     let mut new_ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);

@@ -14,14 +14,14 @@ use crate::micro_ram::types::{
 use crate::sort;
 
 pub struct Memory<'a> {
-    verifier: bool,
+    prover: bool,
     ports: Vec<TWire<'a, MemPort>>,
 }
 
 impl<'a> Memory<'a> {
-    pub fn new(verifier: bool) -> Memory<'a> {
+    pub fn new(prover: bool) -> Memory<'a> {
         Memory {
-            verifier,
+            prover,
             ports: Vec::new(),
         }
     }
@@ -37,14 +37,14 @@ impl<'a> Memory<'a> {
             let mut mp = b.lit(MemPort {
                 cycle: MEM_PORT_PRELOAD_CYCLE,
                 addr: waddr * MemOpWidth::WORD.bytes() as u64,
-                // Dummy value for now.  We fill in this field differently depending on `verifier`
+                // Dummy value for now.  We fill in this field differently depending on `prover`
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
                 width: MemOpWidth::WORD,
             });
 
-            if self.verifier && seg.secret {
+            if !self.prover && seg.secret {
                 mp.value = b.secret_init(None);
             } else {
                 // `data` is implicitly zero-padded out to `seg.len`, to support `.bss`-style
@@ -76,7 +76,7 @@ impl<'a> Memory<'a> {
             sparsity: u8::try_from(sparsity).unwrap(),
         };
 
-        if self.verifier {
+        if !self.prover {
             // Simple case: everything is secret.
             for _ in 0 .. num_ports {
                 cp.ports.push(SparseMemPort {

@@ -9,14 +9,14 @@ use crate::micro_ram::types::{FetchPort, PackedFetchPort, RamInstr};
 use crate::sort;
 
 pub struct Fetch<'a> {
-    verifier: bool,
+    prover: bool,
     ports: Vec<TWire<'a, FetchPort>>,
 }
 
 impl<'a> Fetch<'a> {
-    pub fn new(verifier: bool) -> Fetch<'a> {
+    pub fn new(prover: bool) -> Fetch<'a> {
         Fetch {
-            verifier,
+            prover,
             ports: Vec::new(),
         }
     }
@@ -46,13 +46,13 @@ impl<'a> Fetch<'a> {
         };
 
         for i in 0 .. len {
-            let fp = if self.verifier {
-                None
-            } else {
+            let fp = if self.prover {
                 let pc = get_pc(i);
                 let instr = prog.get(pc as usize).cloned()
                     .unwrap_or_else(|| panic!("program executed out of bounds at pc = {}", pc));
                 Some(FetchPort { addr: pc, instr, write: false })
+            } else {
+                None
             };
             let mut fp = b.secret_init(fp);
             fp.write = b.lit(false);
