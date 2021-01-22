@@ -137,7 +137,7 @@ impl<'a> Backend<'a> {
                         let int = Int::alloc::<Scalar, _>(
                             &mut self.cs,
                             sz.bits() as usize,
-                            secret.val.map(|val| val.to_biguint()),
+                            secret.val().map(|val| val.to_biguint()),
                         ).unwrap();
                         WireRepr::from(int)
                     }

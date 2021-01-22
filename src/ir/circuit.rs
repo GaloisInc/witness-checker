@@ -226,15 +226,35 @@ impl<'a> Circuit<'a> {
         self.gate(GateKind::Secret(secret))
     }
 
+    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
+    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
+    pub fn new_secret(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
+        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        let handle = SecretHandle::new(secret);
+        (self.secret(secret), handle)
+    }
+
+    pub fn new_secret_default<T: AsBits>(
+        &self,
+        ty: Ty<'a>,
+        default: Option<T>,
+    ) -> (Wire<'a>, SecretHandle<'a>) {
+        let (w, sh) = self.new_secret(ty);
+        (w, sh.with_default(self, default))
+    }
+
     /// Add a new secret value to the witness, initialize it to `val`, and return a `Wire` that
     /// carries that value.
     ///
     /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
     /// prover) is generating the circuit.
     pub fn new_secret_init<T: AsBits>(&self, ty: Ty<'a>, val: Option<T>) -> Wire<'a> {
-        let val = val.map(|val| self.bits(ty, val));
-        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
-        self.secret(secret)
+        let (w, sh) = self.new_secret(ty);
+        if let Some(val) = val {
+            sh.set(self, val);
+        }
+        w
     }
 
     pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
@@ -807,11 +827,81 @@ declare_interned_pointer! {
     pub struct Secret<'a> => SecretData<'a>;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+struct SecretValue<'a>(Cell<Option<Bits<'a>>>);
+
+impl<'a> SecretValue<'a> {
+    pub fn set(&self, val: Bits<'a>) {
+        assert!(self.0.get().is_none(), "secret value has already been set");
+        self.0.set(Some(val));
+    }
+
+    pub fn set_default(&self, val: Bits<'a>) {
+        if self.0.get().is_none() {
+            self.0.set(Some(val));
+        }
+    }
+
+    pub fn get(&self) -> Bits<'a> {
+        match self.0.get() {
+            Some(x) => x,
+            None => panic!("tried to access uninitialized secret value"),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
-    pub val: Option<Bits<'a>>,
+    val: Option<SecretValue<'a>>,
 }
+
+impl<'a> SecretData<'a> {
+    /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
+    /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
+    /// panic.
+    pub fn val(&self) -> Option<Bits<'a>> {
+        self.val.as_ref().map(|sv| sv.get())
+    }
+}
+
+/// A handle that can be used to set the value of a `Secret`.  Sets a default value on drop, if a
+/// default was provided when the handle was constructed.
+#[derive(Debug)]
+pub struct SecretHandle<'a> {
+    s: Secret<'a>,
+    default: Option<Bits<'a>>,
+}
+
+impl<'a> SecretHandle<'a> {
+    fn new(s: Secret<'a>) -> SecretHandle<'a> {
+        SecretHandle { s, default: None }
+    }
+
+    fn with_default(self, c: &Circuit<'a>, default: Option<impl AsBits>) -> SecretHandle<'a> {
+        // We allow providing a default in verifier mode, but it will be ignored in `drop`.
+        let default = default.map(|val| c.bits(self.s.ty, val));
+        SecretHandle { s: self.s, default }
+    }
+
+    pub fn set(&self, c: &Circuit<'a>, val: impl AsBits) {
+        assert!(c.is_prover(), "can't provide secret values when running in verifier mode");
+        let sv = self.s.val.as_ref().unwrap();
+        let bits = c.bits(self.s.ty, val);
+        sv.set(bits);
+    }
+}
+
+impl<'a> Drop for SecretHandle<'a> {
+    fn drop(&mut self) {
+        if let Some(bits) = self.default {
+            if let Some(sv) = self.s.val.as_ref() {
+                sv.set_default(bits);
+            }
+        }
+    }
+}
+
 
 
 declare_interned_pointer! {
