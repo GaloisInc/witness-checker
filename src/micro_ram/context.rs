@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::fmt;
+use std::mem;
 
 use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::Circuit;
@@ -7,30 +8,38 @@ use crate::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
 
 #[macro_export]
 macro_rules! wire_assert {
-    ($cx:expr, $cond:expr, $($args:tt)*) => {
+    ($cx:ident, $cond:expr, $($args:tt)*) => {
         {
             let cx = $cx;
             let cond = $cond;
-            if cx.assert_triggered(cond) == Some(true) {
+            $cx.assert($cond, move |$cx| {
                 eprintln!("invalid trace: {}", format_args!($($args)*));
-            }
-            $cx.assert($cond);
+            });
         }
     };
+
+    (& $cx:ident, $cond:expr, $($args:tt)*) => {{
+        let $cx = &$cx;
+        wire_assert!($cx, $cond, $($args)*);
+    }};
 }
 
 #[macro_export]
 macro_rules! wire_bug_if {
-    ($cx:expr, $cond:expr, $($args:tt)*) => {
+    ($cx:ident, $cond:expr, $($args:tt)*) => {
         {
             let cx = $cx;
             let cond = $cond;
-            if cx.bug_triggered(cond) == Some(true) {
+            $cx.bug_if($cond, move |$cx| {
                 eprintln!("found bug: {}", format_args!($($args)*));
-            }
-            $cx.bug_if($cond);
+            });
         }
     };
+
+    (& $cx:ident, $cond:expr, $($args:tt)*) => {{
+        let $cx = &$cx;
+        wire_bug_if!($cx, $cond, $($args)*);
+    }};
 }
 
 pub struct SecretValue<T>(pub Option<T>);
@@ -72,9 +81,20 @@ impl<T: fmt::UpperHex> fmt::UpperHex for SecretValue<T> {
 }
 
 
+struct Cond<'a> {
+    c: TWire<'a, bool>,
+    msg: Box<dyn FnOnce(&mut Context<'a>) + 'a>,
+}
+
+impl<'a> Cond<'a> {
+    pub fn new(c: TWire<'a, bool>, msg: impl FnOnce(&mut Context<'a>) + 'a) -> Cond<'a> {
+        Cond { c, msg: Box::new(msg) }
+    }
+}
+
 pub struct Context<'a> {
-    asserts: RefCell<Vec<TWire<'a, bool>>>,
-    bugs: RefCell<Vec<TWire<'a, bool>>>,
+    asserts: RefCell<Vec<Cond<'a>>>,
+    bugs: RefCell<Vec<Cond<'a>>>,
     eval: Option<RefCell<CachingEvaluator<'a, 'a, eval::RevealSecrets>>>,
 }
 
@@ -87,23 +107,40 @@ impl<'a> Context<'a> {
         }
     }
 
-    pub fn finish(self) -> (Vec<TWire<'a, bool>>, Vec<TWire<'a, bool>>) {
-        (
-            self.asserts.into_inner(),
-            self.bugs.into_inner(),
-        )
+    pub fn finish(mut self) -> (Vec<TWire<'a, bool>>, Vec<TWire<'a, bool>>) {
+        let assert_conds = mem::take(&mut *self.asserts.borrow_mut());
+        let asserts = assert_conds.into_iter()
+            .map(|cond| {
+                if self.assert_triggered(cond.c) == Some(true) {
+                    (cond.msg)(&mut self);
+                }
+                cond.c
+            })
+            .collect();
+
+        let bug_conds = mem::take(&mut *self.bugs.borrow_mut());
+        let bugs = bug_conds.into_iter()
+            .map(|cond| {
+                if self.bug_triggered(cond.c) == Some(true) {
+                    (cond.msg)(&mut self);
+                }
+                cond.c
+            })
+            .collect();
+
+        (asserts, bugs)
     }
 
     /// Mark the execution as invalid if `cond` is false.  A failed assertion represents
     /// misbehavior on the part of the prover.
-    pub fn assert(&self, cond: TWire<'a, bool>) {
-        self.asserts.borrow_mut().push(cond);
+    pub fn assert(&self, cond: TWire<'a, bool>, msg: impl FnOnce(&mut Context<'a>) + 'a) {
+        self.asserts.borrow_mut().push(Cond::new(cond, msg));
     }
 
     /// Signal an error condition of `cond` is true.  This should be used for situations like
     /// buffer overflows, which indicate a bug in the subject program.
-    pub fn bug_if(&self, cond: TWire<'a, bool>) {
-        self.bugs.borrow_mut().push(cond);
+    pub fn bug_if(&self, cond: TWire<'a, bool>, msg: impl FnOnce(&mut Context<'a>) + 'a) {
+        self.bugs.borrow_mut().push(Cond::new(cond, msg));
     }
 
     pub fn when<R>(
@@ -115,11 +152,11 @@ impl<'a> Context<'a> {
         f(&ContextWhen { cx: self, b, path_cond })
     }
 
-    pub fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
         self.eval_raw(cond).map(|ok| !ok)
     }
 
-    pub fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
+    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
         self.eval_raw(cond)
     }
 
@@ -150,12 +187,12 @@ impl<'a, 'b> ContextWhen<'a, 'b> {
         self.b.and(self.path_cond, cond)
     }
 
-    pub fn assert(&self, cond: TWire<'a, bool>) {
-        self.cx.assert(self.assert_cond(cond));
+    pub fn assert(&self, cond: TWire<'a, bool>, msg: impl FnOnce(&mut Context<'a>) + 'a) {
+        self.cx.assert(self.assert_cond(cond), msg);
     }
 
-    pub fn bug_if(&self, cond: TWire<'a, bool>) {
-        self.cx.bug_if(self.bug_cond(cond));
+    pub fn bug_if(&self, cond: TWire<'a, bool>, msg: impl FnOnce(&mut Context<'a>) + 'a) {
+        self.cx.bug_if(self.bug_cond(cond), msg);
     }
 
     pub fn when<R>(
@@ -165,14 +202,6 @@ impl<'a, 'b> ContextWhen<'a, 'b> {
         f: impl FnOnce(&ContextWhen<'a, '_>) -> R,
     ) -> R {
         self.cx.when(b, b.and(self.path_cond, path_cond), f)
-    }
-
-    pub fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        self.cx.assert_triggered(self.assert_cond(cond))
-    }
-
-    pub fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        self.cx.bug_triggered(self.bug_cond(cond))
     }
 
     pub fn eval<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> SecretValue<T> {

@@ -281,10 +281,12 @@ fn check_state<'a>(
         );
     }
 
+    let trace_pc = trace_s.pc;
+    let calc_pc = calc_s.pc;
     wire_assert!(
-        cx, b.eq(trace_s.pc, calc_s.pc),
+        cx, b.eq(trace_pc, calc_pc),
         "cycle {} sets pc to {} (expected {})",
-        cycle, cx.eval(trace_s.pc), cx.eval(calc_s.pc),
+        cycle, cx.eval(trace_pc), cx.eval(calc_pc),
     );
 }
 
@@ -293,7 +295,7 @@ fn check_step<'a>(
     b: &Builder<'a>,
     cycle: u32,
     instr: TWire<'a, RamInstr>,
-    mem_port: &TWire<'a, MemPort>,
+    mem_port: TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
     let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
@@ -377,10 +379,11 @@ fn check_first<'a>(
     s: &TWire<'a, RamState>,
 ) {
     let _g = b.scoped_label("check_first");
+    let pc = s.pc;
     wire_assert!(
-        cx, b.eq(s.pc, b.lit(0)),
+        cx, b.eq(pc, b.lit(0)),
         "initial pc is {} (expected {})",
-        cx.eval(s.pc), 0,
+        cx.eval(pc), 0,
     );
     for (i, &r) in s.regs.iter().enumerate().skip(1) {
         wire_assert!(
@@ -398,11 +401,12 @@ fn check_last<'a>(
     expect_zero: bool,
 ) {
     let _g = b.scoped_label("check_last");
+    let r0 = s.regs[0];
     if expect_zero {
         wire_assert!(
-            cx, b.eq(s.regs[0], b.lit(0)),
+            cx, b.eq(r0, b.lit(0)),
             "final r0 is {} (expected {})",
-            cx.eval(s.regs[0]), 0,
+            cx.eval(r0), 0,
         );
     }
 }
@@ -581,7 +585,7 @@ fn main() -> io::Result<()> {
         } else {
             prev_s = calc_s.clone();
         }
-        check_step(&cx, &b, i as u32, instr, &port, &calc_im);
+        check_step(&cx, &b, i as u32, instr, port, &calc_im);
     }
     // We rely on the loop running once for every `i` in `0 .. num_steps`.
     assert_eq!(max_i + 1, exec.params.trace_len as usize - 1);
@@ -590,11 +594,13 @@ fn main() -> io::Result<()> {
 
     // Check that the fetch ports are consistent with the steps taken.
     for (i, port) in cycle_fetch_ports.iter().enumerate() {
+        let addr = port.addr;
+        let pc = trace[i].pc;
         wire_assert!(
             &cx,
-            b.eq(port.addr, trace[i].pc),
+            b.eq(addr, pc),
             "fetch on cycle {} accesses address {:x} (expected {:x})",
-            i, cx.eval(port.addr), cx.eval(trace[i].pc),
+            i, cx.eval(addr), cx.eval(pc),
         );
     }
 

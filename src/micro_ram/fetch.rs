@@ -98,9 +98,9 @@ impl<'a> Fetch<'a> {
         }
 
         // Run the consistency check.
-        check_first_fetch(cx, b, &sorted_ports[0]);
+        check_first_fetch(cx, b, sorted_ports[0]);
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
-        for (i, (port1, port2)) in it {
+        for (i, (&port1, &port2)) in it {
             check_fetch(cx, b, i, port1, port2);
         }
     }
@@ -128,7 +128,7 @@ impl<'a> CyclePorts<'a> {
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    port: &TWire<'a, FetchPort>,
+    port: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label("check_first_fetch");
     wire_assert!(
@@ -142,8 +142,8 @@ fn check_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     index: usize,
-    port1: &TWire<'a, FetchPort>,
-    port2: &TWire<'a, FetchPort>,
+    port1: TWire<'a, FetchPort>,
+    port2: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label(format_args!("check_fetch/index {}", index));
     cx.when(b, b.not(port2.write), |cx| {

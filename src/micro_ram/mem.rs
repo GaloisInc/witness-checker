@@ -173,10 +173,10 @@ impl<'a> Memory<'a> {
 
         // Run the consistency check.
         // The first port has no previous port.  Supply a dummy port and set `prev_valid = false`.
-        check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), &sorted_ports[0]);
+        check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
 
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
-        for (i, (prev, port)) in it {
+        for (i, (prev, &port)) in it {
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
             check_mem(&cx, &b, i + 1, prev, prev_valid, port);
         }
@@ -243,10 +243,11 @@ impl<'a> CyclePorts<'a> {
             } else {
                 self.sparsity
             };
+            let user = smp.user;
             wire_assert!(
-                cx, b.lt(smp.user, b.lit(block_size)),
+                cx, b.lt(user, b.lit(block_size)),
                 "block {} user index {} is out of range (expected < {})",
-                i, cx.eval(smp.user), block_size,
+                i, cx.eval(user), block_size,
             );
         }
     }
@@ -279,7 +280,7 @@ fn check_mem<'a>(
     index: usize,
     prev: &TWire<'a, MemPort>,
     prev_valid: TWire<'a, bool>,
-    port: &TWire<'a, MemPort>,
+    port: TWire<'a, MemPort>,
 ) {
     let _g = b.scoped_label(format_args!("check_mem/index {}", index));
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
