@@ -517,16 +517,22 @@ fn main() -> io::Result<()> {
     for seg in &exec.init_mem {
         mem.init_segment(&b, seg);
     }
-    let cycle_mem_ports = mem.add_cycles(
+    let mut cycle_mem_ports = mem.add_cycles(
         &cx, &b,
         exec.params.trace_len - 1,
         exec.params.sparsity.mem_op,
-        |i| {
-            let advs = exec.advice.get(&(i as u64 + 1)).map_or(&[] as &[_], |x| x);
-            (advs, i as u32)
-        },
     );
-    mem.assert_consistent(&cx, &b);
+    for (&i, advs) in &exec.advice {
+        let cycle = (i - 1) as u32;
+        for adv in advs {
+            let port = match *adv {
+                Advice::MemOp { addr, value, op, width } =>
+                    MemPort { cycle, addr, value, op, width },
+                _ => { continue; },
+            };
+            cycle_mem_ports.set_port(&b, port);
+        }
+    }
 
     // Gather `Advise` and `Stutter` advice values
     let mut advices = HashMap::new();
@@ -603,6 +609,14 @@ fn main() -> io::Result<()> {
             i, cx.eval(addr), cx.eval(pc),
         );
     }
+
+    // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
+    // before we move on.
+    drop(cycle_mem_ports);
+
+    // Some consistency checks involve sorting, which requires that all the relevant secrets be
+    // initialized first.
+    mem.assert_consistent(&cx, &b);
 
     // Collect assertions and bugs.
     drop(b);

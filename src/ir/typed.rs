@@ -118,6 +118,16 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> Drop for TSecretHandle<'a, T> {
     }
 }
 
+impl<'a, T> Clone for TSecretHandle<'a, T>
+where T: Repr<'a> + Secret<'a>, T::Repr: Clone {
+    fn clone(&self) -> Self {
+        TSecretHandle {
+            secret: self.secret.clone(),
+            default: self.default.clone(),
+        }
+    }
+}
+
 
 pub trait Repr<'a> {
     type Repr;
