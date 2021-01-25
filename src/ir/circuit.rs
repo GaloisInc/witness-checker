@@ -228,39 +228,49 @@ impl<'a> Circuit<'a> {
 
     /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
     /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
+    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
+    /// automatically.
     pub fn new_secret(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
-        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
-        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
-        let handle = SecretHandle::new(secret);
-        (self.secret(secret), handle)
+        let default = self.intern_bits(&[]);
+        self.new_secret_default(ty, default)
     }
 
+    /// Like `new_secret`, but dropping the `SecretHandle` without setting a value will set the
+    /// value to `default` instead of zero.
     pub fn new_secret_default<T: AsBits>(
         &self,
         ty: Ty<'a>,
-        default: Option<T>,
+        default: T,
     ) -> (Wire<'a>, SecretHandle<'a>) {
-        let (w, sh) = self.new_secret(ty);
-        (w, sh.with_default(self, default))
+        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+        let default = self.bits(ty, default);
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        let handle = SecretHandle::new(secret, default);
+        (self.secret(secret), handle)
     }
 
-    /// Add a new secret value to the witness, initialize it to `val`, and return a `Wire` that
-    /// carries that value.
+    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
+    /// running in prover mode), and return a `Wire` that carries that value.
     ///
-    /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
-    /// prover) is generating the circuit.
-    pub fn new_secret_init<T: AsBits>(&self, ty: Ty<'a>, val: Option<T>) -> Wire<'a> {
-        let (w, sh) = self.new_secret(ty);
-        if let Some(val) = val {
-            sh.set(self, val);
-        }
-        w
+    /// `mk_val` will not be called when running in prover mode.
+    pub fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
+    where F: FnOnce() -> T {
+        let val = if self.is_prover {
+            let bits = self.bits(ty, mk_val());
+            Some(SecretValue::with_value(bits))
+        } else {
+            None
+        };
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        self.secret(secret)
     }
 
+    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
+    /// initialized later using `SecretData::set_from_lit`.
     pub fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        let (w, sh) = self.new_secret(ty);
-        mem::forget(sh);
-        w
+        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        self.secret(secret)
     }
 
     pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
@@ -851,6 +861,10 @@ declare_interned_pointer! {
 struct SecretValue<'a>(Cell<Option<Bits<'a>>>);
 
 impl<'a> SecretValue<'a> {
+    pub fn with_value(val: Bits<'a>) -> SecretValue<'a> {
+        SecretValue(Cell::new(Some(val)))
+    }
+
     pub fn set(&self, val: Bits<'a>) {
         assert!(self.0.get().is_none(), "secret value has already been set");
         self.0.set(Some(val));
@@ -912,20 +926,12 @@ impl<'a> SecretData<'a> {
 #[derive(Debug)]
 pub struct SecretHandle<'a> {
     s: Secret<'a>,
-    default: Option<Bits<'a>>,
+    default: Bits<'a>,
 }
 
 impl<'a> SecretHandle<'a> {
-    fn new(s: Secret<'a>) -> SecretHandle<'a> {
-        SecretHandle { s, default: None }
-    }
-
-    fn with_default(self, c: &Circuit<'a>, default: Option<impl AsBits>) -> SecretHandle<'a> {
-        // We allow providing a default in verifier mode, but it will be ignored in `drop`.
-        let default = default.map(|val| c.bits(self.s.ty, val));
-        let new = SecretHandle { s: self.s, default };
-        mem::forget(self);
-        new
+    fn new(s: Secret<'a>, default: Bits<'a>) -> SecretHandle<'a> {
+        SecretHandle { s, default }
     }
 
     pub fn set(&self, c: &Circuit<'a>, val: impl AsBits) {
@@ -936,9 +942,7 @@ impl<'a> SecretHandle<'a> {
 
 impl<'a> Drop for SecretHandle<'a> {
     fn drop(&mut self) {
-        if let Some(bits) = self.default {
-            self.s.set_default(bits);
-        }
+        self.s.set_default(self.default);
     }
 }
 

@@ -44,17 +44,14 @@ impl<'a> Memory<'a> {
                 width: MemOpWidth::WORD,
             });
 
-            if !self.prover && seg.secret {
-                mp.value = b.secret_init(None);
+            // Get the value of the word at index `i`.  `data` is implicitly zero-padded out to
+            // `seg.len`, to support `.bss`-style zero-initialized segments.  For secret segments
+            // in verifier mode, `seg.data` is always empty, so the `value` is zero (but unused).
+            let value = seg.data.get(i as usize).cloned().unwrap_or(0);
+            if seg.secret {
+                mp.value = b.secret_init(|| value);
             } else {
-                // `data` is implicitly zero-padded out to `seg.len`, to support `.bss`-style
-                // zero-initialized segments.
-                let value = seg.data.get(i as usize).cloned().unwrap_or(0);
-                if seg.secret {
-                    mp.value = b.secret_init(Some(value));
-                } else {
-                    mp.value = b.lit(value);
-                }
+                mp.value = b.lit(value);
             }
 
             self.ports.push(mp);
@@ -76,7 +73,7 @@ impl<'a> Memory<'a> {
         };
 
         for i in 0 .. num_ports {
-            let (mp, mp_secret) = b.secret_default(Some(MemPort {
+            let (mp, mp_secret) = b.secret_default(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
                 // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
                 // correspondence between `MemPort`s and steps.  We make unused ports distinct too,
@@ -85,8 +82,8 @@ impl<'a> Memory<'a> {
                 value: 0,
                 op: MemOpKind::Write,
                 width: MemOpWidth::WORD,
-            }));
-            let (user, user_secret) = b.secret_default(Some(0));
+            });
+            let (user, user_secret) = b.secret_default(0);
             cp.ports.push(SparseMemPort {
                 mp, mp_secret,
                 user, user_secret,

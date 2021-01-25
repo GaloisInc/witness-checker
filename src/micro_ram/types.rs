@@ -202,10 +202,10 @@ impl<'a> Lit<'a> for RamState {
 impl RamState {
     pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.with_label("pc", || bld.secret_init(Some(a.pc))),
+            pc: bld.with_label("pc", || bld.secret_init(|| a.pc)),
             regs: bld.with_label("regs", || {
                 a.regs.iter().enumerate().map(|(i, &x)| {
-                    bld.with_label(i, || bld.secret_init(Some(x)))
+                    bld.with_label(i, || bld.secret_init(|| x))
                 }).collect()
             }),
         })

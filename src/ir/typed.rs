@@ -88,20 +88,12 @@ pub struct TSecretHandle<'a, T: Repr<'a> + Secret<'a> + ?Sized> {
     /// Instead, we store the `TWire` of the `Secret` gate, and use `<T as Secret>::set_from_lit`
     /// to copy a `Lit` `TWire` into the `Secret` `TWire`.
     secret: TWire<'a, T>,
-    default: Option<TWire<'a, T>>,
+    default: TWire<'a, T>,
 }
 
 impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
-    pub fn new(secret: TWire<'a, T>) -> TSecretHandle<'a, T> {
-        TSecretHandle { secret, default: None }
-    }
-
-    pub fn with_default(self, bld: &Builder<'a>, default: Option<T>) -> TSecretHandle<'a, T> {
-        // Move out of `self.secret`, even though `self` implements `Drop`.
-        let slf = MaybeUninit::new(self);
-        let secret = unsafe { ptr::read(&(*slf.as_ptr()).secret) };
-        let default = default.map(|val| bld.lit(val));
-        TSecretHandle { secret: secret, default }
+    pub fn new(secret: TWire<'a, T>, default: TWire<'a, T>) -> TSecretHandle<'a, T> {
+        TSecretHandle { secret, default }
     }
 
     pub fn set(&self, bld: &Builder<'a>, val: T) {
@@ -112,9 +104,7 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
 
 impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> Drop for TSecretHandle<'a, T> {
     fn drop(&mut self) {
-        if let Some(ref val) = self.default {
-            T::set_from_lit(&self.secret.repr, &val.repr, false);
-        }
+        T::set_from_lit(&self.secret.repr, &self.default.repr, false);
     }
 }
 
@@ -162,27 +152,27 @@ impl<'a> Builder<'a> {
         TWire::new(Lit::lit(self, x))
     }
 
-    pub fn secret<T: Secret<'a>>(&self) -> (TWire<'a, T>, TSecretHandle<'a, T>)
+    pub fn secret<T: Secret<'a> + Default>(&self) -> (TWire<'a, T>, TSecretHandle<'a, T>)
     where T::Repr: Clone {
-        let w = self.secret_uninit::<T>();
-        let sh = TSecretHandle::new(w.clone());
-        (w, sh)
+        self.secret_default(T::default())
     }
 
     pub fn secret_default<T: Secret<'a>>(
         &self,
-        x: Option<T>,
+        default: T,
     ) -> (TWire<'a, T>, TSecretHandle<'a, T>)
     where T::Repr: Clone {
-        let (w, sh) = self.secret::<T>();
-        (w, sh.with_default(self, x))
+        let w = self.secret_uninit::<T>();
+        let sh = TSecretHandle::new(w.clone(), self.lit(default));
+        (w, sh)
     }
 
-    pub fn secret_init<T: Secret<'a>>(&self, x: Option<T>) -> TWire<'a, T> {
+    pub fn secret_init<T: Secret<'a>, F>(&self, mk_val: F) -> TWire<'a, T>
+    where F: FnOnce() -> T {
         let w = self.secret_uninit::<T>();
-        if let Some(x) = x {
-            let lit = self.lit(x);
-            Builder::set_secret_from_lit(&w, &lit, false);
+        if self.c.is_prover() {
+            let lit = self.lit(mk_val());
+            Builder::set_secret_from_lit(&w, &lit, true);
         }
         w
     }

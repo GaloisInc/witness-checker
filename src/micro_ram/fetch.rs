@@ -46,15 +46,12 @@ impl<'a> Fetch<'a> {
         };
 
         for i in 0 .. len {
-            let fp = if self.prover {
+            let mut fp = b.secret_init(|| {
                 let pc = get_pc(i);
                 let instr = prog.get(pc as usize).cloned()
                     .unwrap_or_else(|| panic!("program executed out of bounds at pc = {}", pc));
-                Some(FetchPort { addr: pc, instr, write: false })
-            } else {
-                None
-            };
-            let mut fp = b.secret_init(fp);
+                FetchPort { addr: pc, instr, write: false }
+            });
             fp.write = b.lit(false);
             cp.ports.push(fp);
         }
