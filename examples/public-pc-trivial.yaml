@@ -4,6 +4,7 @@
 - [public-pc]
 -
   program:
+    - [mov, 0, null, true, 2]   # mov r0, 2
     - [mull, 2, 0, false, 0]    # mull r2, r0, r0
     - [mull, 1, 0, true, 3]     # mull r1, r0, 3
     - [add, 0, 1, false, 2]     # add r0, r1, r2
@@ -12,11 +13,11 @@
 
   params:
     num_regs: 3
-    trace_len: 5
+    trace_len: 6
 
   segments:
     - init_pc: null
-      len: 5
+      len: 6
       successors: []
       enter_from_network: false
       exit_to_network: false
@@ -24,8 +25,9 @@
   trace:
     - segment: 0
       states:
-        - [0, [2, 0, 0]]
-        - [1, [2, 0, 4]]
-        - [2, [2, 6, 4]]
-        - [3, [10, 6, 4]]
-        - [4, [0, 6, 4]]
+        - [1, [2, 0, 0]]
+        - [2, [2, 0, 4]]
+        - [3, [2, 6, 4]]
+        - [4, [10, 6, 4]]
+        - [5, [0, 6, 4]]
+        - [6, [0, 6, 4]]

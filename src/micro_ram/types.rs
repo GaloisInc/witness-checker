@@ -911,6 +911,10 @@ pub struct Execution {
 }
 
 impl Execution {
+    pub fn has_feature(&self, feature: Feature) -> bool {
+        self.features.contains(&feature)
+    }
+
     pub fn validate(self) -> Result<Self, String> {
         let params = &self.params;
         if self.trace.len() > params.trace_len {
@@ -1028,11 +1032,11 @@ impl Default for Sparsity {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Segment {
-    init_pc: Option<u64>,
-    len: usize,
-    enter_from_network: bool,
-    exit_to_network: bool,
-    successors: Vec<usize>,
+    pub init_pc: Option<u64>,
+    pub len: usize,
+    pub enter_from_network: bool,
+    pub exit_to_network: bool,
+    pub successors: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
