@@ -555,15 +555,17 @@ fn main() -> io::Result<()> {
     }
 
     // Set up instruction-fetch ports and check consistency.
-    let mut fetch = Fetch::new(is_prover);
+    let mut fetch = Fetch::new();
     fetch.init_program(&b, &exec.program);
     let cycle_fetch_ports = fetch.add_cycles(
         &b,
         exec.params.trace_len - 1,
-        &exec.program,
-        |i| exec.trace[0].states[i].pc,
     );
-    fetch.assert_consistent(&cx, &b);
+    for i in 0 .. exec.trace[0].states.len() - 1 {
+        let pc = exec.trace[0].states[i].pc;
+        let instr = exec.program[pc as usize];
+        cycle_fetch_ports.set(&b, i, pc, instr);
+    }
 
     // Generate IR code to check the trace
 
@@ -616,10 +618,12 @@ fn main() -> io::Result<()> {
     // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
     // before we move on.
     drop(cycle_mem_ports);
+    drop(cycle_fetch_ports);
 
     // Some consistency checks involve sorting, which requires that all the relevant secrets be
     // initialized first.
     mem.assert_consistent(&cx, &b);
+    fetch.assert_consistent(&cx, &b);
 
     // Collect assertions and bugs.
     drop(b);

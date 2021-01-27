@@ -3,20 +3,18 @@
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
 use log::*;
-use crate::ir::typed::{TWire, Builder};
+use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
-use crate::micro_ram::types::{FetchPort, PackedFetchPort, RamInstr};
+use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
 use crate::sort;
 
 pub struct Fetch<'a> {
-    prover: bool,
     ports: Vec<TWire<'a, FetchPort>>,
 }
 
 impl<'a> Fetch<'a> {
-    pub fn new(prover: bool) -> Fetch<'a> {
+    pub fn new() -> Fetch<'a> {
         Fetch {
-            prover,
             ports: Vec::new(),
         }
     }
@@ -38,25 +36,20 @@ impl<'a> Fetch<'a> {
         &mut self,
         b: &Builder<'a>,
         len: usize,
-        prog: &[RamInstr],
-        mut get_pc: impl FnMut(usize) -> u64,
     ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
             ports: Vec::with_capacity(len),
         };
 
         for i in 0 .. len {
-            let mut fp = b.secret_init(|| {
-                let pc = get_pc(i);
-                let instr = prog.get(pc as usize).cloned()
-                    .unwrap_or_else(|| panic!("program executed out of bounds at pc = {}", pc));
-                FetchPort { addr: pc, instr, write: false }
-            });
-            fp.write = b.lit(false);
-            cp.ports.push(fp);
+            let (addr, addr_secret) = b.secret();
+            let (instr, instr_secret) = b.secret();
+            let write = b.lit(false);
+            let fp = TWire::new(FetchPortRepr { addr, instr, write });
+            cp.ports.push(CyclePort { fp, addr_secret, instr_secret });
         }
 
-        self.ports.extend_from_slice(&cp.ports);
+        self.ports.extend(cp.ports.iter().map(|p| p.fp));
         cp
     }
 
@@ -103,21 +96,32 @@ impl<'a> Fetch<'a> {
     }
 }
 
+struct CyclePort<'a> {
+    fp: TWire<'a, FetchPort>,
+    addr_secret: TSecretHandle<'a, u64>,
+    instr_secret: TSecretHandle<'a, RamInstr>,
+}
+
 pub struct CyclePorts<'a> {
-    ports: Vec<TWire<'a, FetchPort>>,
+    ports: Vec<CyclePort<'a>>,
 }
 
 impl<'a> CyclePorts<'a> {
     pub fn get(&self, i: usize) -> TWire<'a, FetchPort> {
-        self.ports[i]
+        self.ports[i].fp
     }
 
     pub fn get_instr(&self, i: usize) -> TWire<'a, RamInstr> {
-        self.ports[i].instr
+        self.ports[i].fp.instr
     }
 
     pub fn iter<'b>(&'b self) -> impl Iterator<Item = TWire<'a, FetchPort>> + 'b {
-        self.ports.iter().cloned()
+        self.ports.iter().map(|p| p.fp)
+    }
+
+    pub fn set(&self, b: &Builder<'a>, idx: usize, addr: u64, instr: RamInstr) {
+        self.ports[idx].addr_secret.set(b, addr);
+        self.ports[idx].instr_secret.set(b, instr);
     }
 }
 
