@@ -4,7 +4,9 @@ use serde::Deserialize;
 use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
-use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux, FromEval};
+use crate::ir::typed::{
+    self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
+};
 use crate::micro_ram::feature::{Feature, Version};
 
 
@@ -199,6 +201,20 @@ impl<'a> Lit<'a> for RamState {
     }
 }
 
+impl<'a> Secret<'a> for RamState {
+    fn secret(_bld: &Builder<'a>) -> Self::Repr {
+        panic!("can't construct RamState via Builder::secret - use RamState::secret instead");
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.pc, &val.pc, force);
+        assert_eq!(s.regs.len(), val.regs.len());
+        for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
+            Builder::set_secret_from_lit(s_reg, val_reg, force);
+        }
+    }
+}
+
 impl RamState {
     pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
@@ -219,7 +235,62 @@ impl RamState {
             }).collect()),
         })
     }
+
+    pub fn secret<'a>(
+        bld: &Builder<'a>,
+        len: usize,
+    ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
+        let wire = TWire::<RamState>::new(RamStateRepr {
+            pc: bld.with_label("pc", || bld.secret_uninit()),
+            regs: bld.with_label("regs", || (0 .. len).map(|i| {
+                bld.with_label(i, || bld.secret_uninit())
+            }).collect()),
+        });
+        let default = bld.lit(RamState {
+            pc: 0,
+            regs: vec![0; len],
+        });
+        (wire.clone(), TSecretHandle::new(wire, default))
+    }
 }
+
+impl<'a, C: Repr<'a>> Mux<'a, C, RamState> for RamState
+where
+    C::Repr: Clone,
+    u64: Mux<'a, C, u64, Output = u64>,
+    <u64 as Repr<'a>>::Repr: Copy,
+{
+    type Output = RamState;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        let c: TWire<C> = TWire::new(c);
+        assert_eq!(t.regs.len(), e.regs.len());
+        RamStateRepr {
+            pc: bld.mux(c.clone(), t.pc, e.pc),
+            regs: t.regs.iter().zip(e.regs.iter())
+                .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
+                .collect(),
+        }
+    }
+}
+
+impl<'a> typed::Eq<'a, RamState> for RamState {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        assert_eq!(a.regs.len(), b.regs.len());
+        let mut acc = bld.eq(a.pc, b.pc);
+        for (&a_reg, &b_reg) in a.regs.iter().zip(b.regs.iter()) {
+            acc = bld.and(acc, bld.eq(a_reg, b_reg));
+        }
+        acc.repr
+    }
+}
+
 
 
 macro_rules! mk_named_enum {
