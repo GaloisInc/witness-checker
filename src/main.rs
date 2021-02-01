@@ -22,6 +22,7 @@ use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::{Memory, extract_bytes_at_offset, extract_low_bytes};
 use cheesecloth::micro_ram::parse::ParseExecution;
+use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
 use cheesecloth::micro_ram::types::{
     RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, MemOpWidth, ByteOffset, Opcode, Advice,
@@ -237,7 +238,7 @@ fn main() -> io::Result<()> {
     // Generate IR code to check the trace.
     let check_steps = args.value_of("check-steps")
         .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
-    let mut segments = Vec::new();
+    let mut segments_map = HashMap::new();
     let mut segment_builder = SegmentBuilder {
         cx: &cx,
         b: &b,
@@ -257,28 +258,60 @@ fn main() -> io::Result<()> {
         check_first(&cx, &b, &init_state_wire);
     }
 
-    let mut prev_state = init_state_wire;
-    for seg_def in &exec.segments {
-        let seg = segment_builder.run(seg_def, prev_state.clone());
-        prev_state = seg.final_state().clone();
-        segments.push(seg);
+    let mut seg_graph_builder = SegGraphBuilder::new(
+        &b, &exec.segments, &exec.params, init_state_wire);
+
+    for item in seg_graph_builder.get_order() {
+        let idx = match item {
+            SegGraphItem::Segment(idx) => idx,
+            SegGraphItem::Network => {
+                seg_graph_builder.build_network(&b);
+                continue;
+            },
+        };
+
+        let seg_def = &exec.segments[idx];
+        let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
+        let seg = segment_builder.run(seg_def, prev_state);
+        seg_graph_builder.set_final(idx, seg.final_state().clone());
+        assert!(!segments_map.contains_key(&idx));
+        segments_map.insert(idx, seg);
     }
 
-    check_last(&cx, &b, &prev_state, args.is_present("expect-zero"));
+    let mut seg_graph = seg_graph_builder.finish(&cx, &b);
+
+    let mut segments = (0 .. exec.segments.len()).map(|i| {
+        segments_map.remove(&i)
+            .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
+    }).collect::<Vec<_>>();
+    drop(segments_map);
+
+    check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
 
     // Fill in advice and other secrets.
     let mut cycle = 0;
     let mut prev_state = &init_state;
+    let mut prev_segment = None;
     for chunk in &exec.trace {
         let seg = &mut segments[chunk.segment];
         seg.set_states(&b, &exec.program, cycle, prev_state, &chunk.states, &exec.advice);
         seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
 
+        seg_graph.set_initial_secret(&b, chunk.segment, prev_state);
+
+        if let Some(prev_segment) = prev_segment {
+            seg_graph.make_edge_live(&b, prev_segment, chunk.segment);
+        }
+        prev_segment = Some(chunk.segment);
+
         cycle += chunk.states.len() as u32;
         if chunk.states.len() > 0 {
             prev_state = chunk.states.last().unwrap();
+            seg_graph.set_final_secret(&b, chunk.segment, prev_state);
         }
     }
+
+    seg_graph.finish(&b);
 
     // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
     // before we move on.

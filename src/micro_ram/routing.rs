@@ -141,7 +141,12 @@ impl<'a, T: Repr<'a>> Routing<'a, T> {
             .collect::<Vec<_>>();
 
         // Compute the routing bits and set the secrets.
-        let routing = benes_route(&l2r);
+        let routing = if l2r.len() >= 2 {
+            benes_route(&l2r)
+        } else {
+            // Match the layout used by benes_build for 0- or 1-input networks.
+            vec![vec![false]]
+        };
         assert_eq!(routing.len(), self.secrets.len());
         for (rs, ss) in routing.into_iter().zip(self.secrets.into_iter()) {
             assert_eq!(rs.len(), ss.len());
