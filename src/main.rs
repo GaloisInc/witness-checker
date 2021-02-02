@@ -272,7 +272,7 @@ fn main() -> io::Result<()> {
 
         let seg_def = &exec.segments[idx];
         let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
-        let seg = segment_builder.run(seg_def, prev_state);
+        let seg = segment_builder.run(idx, seg_def, prev_state);
         seg_graph_builder.set_final(idx, seg.final_state().clone());
         assert!(!segments_map.contains_key(&idx));
         segments_map.insert(idx, seg);
@@ -294,6 +294,7 @@ fn main() -> io::Result<()> {
     let mut prev_segment = None;
     for chunk in &exec.trace {
         let seg = &mut segments[chunk.segment];
+        assert_eq!(seg.idx, chunk.segment);
         seg.set_states(&b, &exec.program, cycle, prev_state, &chunk.states, &exec.advice);
         seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
 

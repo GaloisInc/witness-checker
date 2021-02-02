@@ -13,6 +13,7 @@ use crate::micro_ram::types::{
 
 
 pub struct Segment<'a> {
+    pub idx: usize,
     len: usize,
     init_state: TWire<'a, RamState>,
     states: Vec<TWire<'a, RamState>>,
@@ -37,6 +38,7 @@ pub struct SegmentBuilder<'a, 'b> {
 impl<'a, 'b> SegmentBuilder<'a, 'b> {
     pub fn run(
         &mut self,
+        idx: usize,
         s: &types::Segment,
         init_state: TWire<'a, RamState>,
     ) -> Segment<'a> {
@@ -65,8 +67,8 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
                 let pc = prev_state.pc;
                 wire_assert!(
                     cx, b.eq(addr, pc),
-                    "fetch in slot {} accesses address {:x} (expected {:x})",
-                    i, cx.eval(addr), cx.eval(pc),
+                    "segment {}: fetch in slot {} accesses address {:x} (expected {:x})",
+                    idx, i, cx.eval(addr), cx.eval(pc),
                 );
             }
 
@@ -88,6 +90,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
         }
 
         Segment {
+            idx,
             len: s.len,
             init_state,
             states,
@@ -178,7 +181,7 @@ impl<'a> Segment<'a> {
         actual: &TWire<'a, RamState>,
         expected: &RamState,
     ) {
-        check_state(cx, b, cycle, actual, &b.lit(expected.clone()));
+        check_state(cx, b, self.idx, cycle, actual, &b.lit(expected.clone()));
     }
 }
 
@@ -386,6 +389,7 @@ fn calc_step<'a>(
 fn check_state<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    seg_idx: usize,
     cycle: u32,
     calc_s: &TWire<'a, RamState>,
     trace_s: &TWire<'a, RamState>,
@@ -395,8 +399,8 @@ fn check_state<'a>(
     for (i, (&v_calc, &v_new)) in calc_s.regs.iter().zip(trace_s.regs.iter()).enumerate() {
         wire_assert!(
             cx, b.eq(v_new, v_calc),
-            "cycle {} sets reg {} to {} (expected {})",
-            cycle, i, cx.eval(v_new), cx.eval(v_calc),
+            "segment {}: cycle {} sets reg {} to {} (expected {})",
+            seg_idx, cycle, i, cx.eval(v_new), cx.eval(v_calc),
         );
     }
 
@@ -404,8 +408,8 @@ fn check_state<'a>(
     let calc_pc = calc_s.pc;
     wire_assert!(
         cx, b.eq(trace_pc, calc_pc),
-        "cycle {} sets pc to {} (expected {})",
-        cycle, cx.eval(trace_pc), cx.eval(calc_pc),
+        "segment {}: cycle {} sets pc to {} (expected {})",
+        seg_idx, cycle, cx.eval(trace_pc), cx.eval(calc_pc),
     );
 }
 
