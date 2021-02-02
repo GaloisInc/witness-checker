@@ -381,7 +381,9 @@ fn calc_step<'a>(
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
-    let s2 = RamStateRepr { pc, regs };
+    let live = s1.live;
+
+    let s2 = RamStateRepr { pc, regs, live };
     let im = CalcIntermediate { x, y, result };
     (TWire::new(s2),im)
 }

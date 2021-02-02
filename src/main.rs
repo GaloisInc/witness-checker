@@ -251,7 +251,7 @@ fn main() -> io::Result<()> {
     let init_state = provided_init_state.clone().unwrap_or_else(|| {
         let mut regs = vec![0; exec.params.num_regs];
         regs[0] = exec.init_mem.iter().map(|ms| ms.start + ms.len).max().unwrap_or(0);
-        RamState { pc: 0, regs }
+        RamState { pc: 0, regs, live: true }
     });
     let init_state_wire = b.lit(init_state.clone());
     if provided_init_state.is_some() {

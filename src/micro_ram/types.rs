@@ -171,13 +171,19 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
+    // All states parsed from the trace are assumed to be live.
+    #[serde(default = "return_true")]
+    pub live: bool,
 }
 
+fn return_true() -> bool { true }
+
 impl RamState {
-    pub fn new(pc: u32, regs: Vec<u32>) -> RamState {
+    pub fn new(pc: u32, regs: Vec<u32>, live: bool) -> RamState {
         RamState {
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
+            live,
         }
     }
 
@@ -185,6 +191,7 @@ impl RamState {
         RamState {
             pc: 0,
             regs: vec![0; num_regs],
+            live: false,
         }
     }
 }
@@ -193,6 +200,7 @@ impl RamState {
 pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
+    pub live: TWire<'a, bool>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -204,6 +212,7 @@ impl<'a> Lit<'a> for RamState {
         RamStateRepr {
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
+            live: bld.lit(a.live),
         }
     }
 }
@@ -219,6 +228,7 @@ impl<'a> Secret<'a> for RamState {
         for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
             Builder::set_secret_from_lit(s_reg, val_reg, force);
         }
+        Builder::set_secret_from_lit(&s.live, &val.live, force);
     }
 }
 
@@ -231,6 +241,7 @@ impl RamState {
                     bld.with_label(i, || bld.secret_init(|| x))
                 }).collect()
             }),
+            live: bld.with_label("live", || bld.secret_init(|| a.live)),
         })
     }
 
@@ -240,6 +251,7 @@ impl RamState {
             regs: bld.with_label("regs", || (0 .. len).map(|i| {
                 bld.with_label(i, || bld.secret_uninit())
             }).collect()),
+            live: bld.with_label("live", || bld.secret_uninit()),
         })
     }
 
@@ -247,15 +259,11 @@ impl RamState {
         bld: &Builder<'a>,
         len: usize,
     ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
-        let wire = TWire::<RamState>::new(RamStateRepr {
-            pc: bld.with_label("pc", || bld.secret_uninit()),
-            regs: bld.with_label("regs", || (0 .. len).map(|i| {
-                bld.with_label(i, || bld.secret_uninit())
-            }).collect()),
-        });
+        let wire = Self::secret_with_len(bld, len);
         let default = bld.lit(RamState {
             pc: 0,
             regs: vec![0; len],
+            live: false,
         });
         (wire.clone(), TSecretHandle::new(wire, default))
     }
@@ -266,6 +274,8 @@ where
     C::Repr: Clone,
     u64: Mux<'a, C, u64, Output = u64>,
     <u64 as Repr<'a>>::Repr: Copy,
+    bool: Mux<'a, C, bool, Output = bool>,
+    <bool as Repr<'a>>::Repr: Copy,
 {
     type Output = RamState;
 
@@ -282,6 +292,7 @@ where
             regs: t.regs.iter().zip(e.regs.iter())
                 .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
                 .collect(),
+            live: bld.mux(c.clone(), t.live, e.live),
         }
     }
 }
@@ -290,7 +301,10 @@ impl<'a> typed::Eq<'a, RamState> for RamState {
     type Output = bool;
     fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         assert_eq!(a.regs.len(), b.regs.len());
-        let mut acc = bld.eq(a.pc, b.pc);
+        let mut acc = bld.and(
+            bld.eq(a.pc, b.pc),
+            bld.eq(a.live, b.live),
+        );
         for (&a_reg, &b_reg) in a.regs.iter().zip(b.regs.iter()) {
             acc = bld.and(acc, bld.eq(a_reg, b_reg));
         }
