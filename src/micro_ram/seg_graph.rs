@@ -203,8 +203,11 @@ impl<'a> SegGraphBuilder<'a> {
             let first_pred = it.next()
                 .unwrap_or_else(|| panic!("segment {} has no predecessors", idx));
             let mut first = self.get_final(first_pred.src).clone();
-            // FIXME: copy liveness_flag(first_pred.live) into first.live
-            // (current code can produce a live result even when no input edges are live)
+            // Force `first.live` to `false` if the first incoming edge is not live.  Note the edge
+            // can't be live unless the source segment is live (this is asserted in `finish`).
+            // `first` is the default output when no incoming edge is live, and we must produce a
+            // non-live state in that case.
+            first.live = self.liveness_flag(b, first_pred.live);
             let state = it.fold(first, |acc, pred| {
                 let live = self.liveness_flag(b, pred.live);
                 b.mux(live, self.get_final(pred.src).clone(), acc)
@@ -246,8 +249,10 @@ impl<'a> SegGraphBuilder<'a> {
 
         for inp in &self.network_inputs {
             let mut state = self.get_final(inp.pred.src).clone();
-            // FIXME: adjust state liveness (set to `to_net[inp.segment_index]`)
-            // (current code can produce a live result even when the input edge is not live)
+            // Force `state.live` to `false` if the edge leading to this network port is not live.
+            // Note the edge can't be live unless the source segment is live (this is asserted in
+            // `finish`).
+            state.live = *self.to_net[&inp.segment_index].wire();
             let id = routing.add_input(state);
             assert!(self.segments[inp.segment_index].to_net.is_none(),
                 "impossible: multiple to-net for segment {}?", inp.segment_index);
@@ -283,6 +288,69 @@ impl<'a> SegGraphBuilder<'a> {
                 });
             }
         }
+
+        // Assert that at most one outgoing edge is live from each live segment.  This prevents the
+        // prover from cheating by "spawning" a second execution that modifies memory concurrently
+        // with the main execution.
+        //
+        // Also assert that no outgoing edges are live from non-live segments.  This prevents the
+        // prover from spawning a second execution from nowhere with no connection to the initial
+        // state.
+        //
+        // We don't need a similar check for incoming edges because the initial state of the
+        // segment can only be equal to one predecessor's final state.  Any other live predecessors
+        // will have their states ignored, so they effectively die on entry to the segment.
+        let mut edge_list = self.edges.keys().cloned().collect::<Vec<_>>();
+        edge_list.sort();
+        let mut start = 0;
+        for i in 0 .. self.segments.len() {
+            // Consume a block of `(i, j)` pairs that all have the same `i` value.
+            let end = edge_list[start..].iter().position(|&(ii, _)| ii != i).map(|x| x + start)
+                .unwrap_or(edge_list.len());
+            debug_assert!(edge_list[start..end].iter().all(|&(ii, _)| ii == i));
+
+            let mut wires = Vec::with_capacity(end - start + 1);
+            for &(ii, j) in &edge_list[start..end] {
+                wires.push(*self.edges[&(i, j)].wire());
+            }
+            if let Some(to_net_live) = self.to_net.get(&i) {
+                wires.push(*to_net_live.wire());
+            }
+            assert!(wires.len() <= u8::MAX as usize);
+
+            let segment_live = self.segments[i].final_state.as_ref()
+                .unwrap_or_else(|| panic!("missing final state for segment {}", i))
+                .live;
+            // Check that the number of live outgoing edges is within the appropriate bounds,
+            // depending on `segment_live`.  The `count` is also produced for debugging purposes.
+            let (ok, count) = match wires.len() {
+                0 => (b.lit(true), b.lit(0)),
+                1 => {
+                    (b.or(segment_live, b.not(wires[0])), b.cast(wires[0]))
+                },
+                _ => {
+                    let count = wires.into_iter()
+                        .fold(b.lit(0), |acc, w| b.add(acc, b.cast(w)));
+                    (
+                        b.or(
+                            b.eq(count, b.lit(0)),
+                            b.and(segment_live, b.eq(count, b.lit(1))),
+                        ),
+                        count,
+                    )
+                },
+            };
+
+            wire_assert!(
+                cx, ok,
+                "segment {} ({}) has {} live successors (expected 0{})",
+                i, cx.eval(segment_live).map(|b| if b { "live" } else { "dead" }),
+                cx.eval(count), if cx.eval(segment_live).0 != Some(false) { " or 1" } else { "" },
+            );
+
+            start = end;
+        }
+        assert_eq!(start, edge_list.len());
 
 
         let mut sg = SegGraph {

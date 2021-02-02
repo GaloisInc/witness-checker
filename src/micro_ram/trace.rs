@@ -75,6 +75,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             let mut instr = fp.instr;
             let stutter = stutter_secrets[i].wire().clone();
             instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
+            instr.opcode = b.mux(prev_state.live, instr.opcode, b.lit(Opcode::Stutter as u8));
             let instr = instr;
 
             let mem_port = mem_ports.get(b, i);

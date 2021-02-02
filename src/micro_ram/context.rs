@@ -44,6 +44,12 @@ macro_rules! wire_bug_if {
 
 pub struct SecretValue<T>(pub Option<T>);
 
+impl<T> SecretValue<T> {
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> SecretValue<U> {
+        SecretValue(self.0.map(f))
+    }
+}
+
 impl<T: fmt::Display> fmt::Display for SecretValue<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {
