@@ -303,12 +303,12 @@ impl<'a> SegGraphBuilder<'a> {
         //
         // We process final secrets first, then leave the remaining `CycleBreakNode`s to be claimed
         // by `SegInfo`s in the loop below.
-        let mut final_secrets = HashMap::with_capacity(self.cycle_breaks.len());
+        let mut final_secrets = HashMap::new();
         let mut remaining_cycle_breaks = HashMap::with_capacity(self.cycle_breaks.len());
         for (i, cbn) in self.cycle_breaks.into_iter().enumerate() {
             if cbn.preds.len() == 1 {
                 if let StateSource::Segment(seg_idx) = cbn.preds[0].src {
-                    final_secrets.insert(seg_idx, cbn.secret);
+                    final_secrets.entry(seg_idx).or_insert_with(Vec::new).push(cbn.secret);
                     continue;
                 }
             }
@@ -342,7 +342,9 @@ impl<'a> SegGraphBuilder<'a> {
                 }
             }
 
-            seg.final_secret = final_secrets.remove(&idx);
+            if let Some(final_secrets) = final_secrets.remove(&idx) {
+                seg.final_secrets = final_secrets;
+            }
 
             sg.segs.push(seg);
         }
@@ -361,6 +363,10 @@ impl<'a> SegGraphBuilder<'a> {
             to_net_edges.len(), to_net_edges.keys().collect::<Vec<_>>());
         // `network` was consumed above.
 
+        assert!(final_secrets.is_empty(),
+            "found {} leftover final secrets: {:?}",
+            final_secrets.len(), final_secrets.keys().collect::<Vec<_>>());
+
         sg
     }
 }
@@ -375,7 +381,7 @@ pub enum SegGraphItem {
 #[derive(Default)]
 struct SegInfo<'a> {
     init_secret: Option<TSecretHandle<'a, RamState>>,
-    final_secret: Option<TSecretHandle<'a, RamState>>,
+    final_secrets: Vec<TSecretHandle<'a, RamState>>,
     from_net: Option<(OutputId, TSecretHandle<'a, bool>)>,
     to_net: Option<(InputId, TSecretHandle<'a, bool>)>,
 }
@@ -394,7 +400,7 @@ impl<'a> SegGraph<'a> {
     }
 
     pub fn set_final_secret(&self, b: &Builder<'a>, idx: usize, state: &RamState) {
-        if let Some(ref s) = self.segs[idx].final_secret {
+        for s in &self.segs[idx].final_secrets {
             s.set(b, state.clone());
         }
     }
