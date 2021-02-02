@@ -1,6 +1,5 @@
 ## FLAGS: --validate-only --expect-zero
-# Trivial example using the `public-pc` feature but only a single segment.
-# This exercises the `public-pc`-specific segment parsing and not much else.
+# A simple `public-pc` example with two segments, directly connected.
 
 - [0,1,0,0]
 - [public-pc]
@@ -19,7 +18,12 @@
 
   segments:
     - init_pc: null
-      len: 6
+      len: 3
+      successors: [1]
+      enter_from_network: false
+      exit_to_network: false
+    - init_pc: null
+      len: 3
       successors: []
       enter_from_network: false
       exit_to_network: false
@@ -30,6 +34,9 @@
         - [1, [2, 0, 0]]
         - [2, [2, 0, 4]]
         - [3, [2, 6, 4]]
-        - [4, [10, 6, 4]]
-        - [5, [0, 6, 4]]
-        - [6, [0, 6, 4]]
+    - segment: 1
+      states:
+        # Bad states: should have r1 = 6, not r1 = 7
+        - [4, [10, 7, 4]]
+        - [5, [0, 7, 4]]
+        - [6, [0, 7, 4]]

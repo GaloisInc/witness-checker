@@ -1,0 +1,4 @@
+invalid trace: segment 2: fetch in slot 0 accesses address 0 (expected 2)
+invalid trace: fetch from program address 0 produced wrong instruction
+invalid trace: fetch from program address 0 produced wrong instruction
+internal evaluator: 163 asserts passed, 3 failed; found 0 bugs; overall status: BAD
