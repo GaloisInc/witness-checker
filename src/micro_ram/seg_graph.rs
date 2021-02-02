@@ -336,9 +336,9 @@ impl<'a> SegGraphBuilder<'a> {
 
             if sn.preds.len() == 1 {
                 if let StateSource::CycleBreak(j) = sn.preds[0].src {
-                    let cbn = remaining_cycle_breaks.remove(&j).unwrap_or_else(|| panic!(
-                        "neither side of CycleBreak {} was connected to a single segment", j));
-                    seg.init_secret = Some(cbn.secret);
+                    if let Some(cbn) = remaining_cycle_breaks.remove(&j) {
+                        seg.init_secret = Some(cbn.secret);
+                    }
                 }
             }
 
