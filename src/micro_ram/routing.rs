@@ -52,9 +52,17 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
     /// Finish building the routing network circuit.
     pub fn finish(mut self, b: &Builder<'a>) -> Routing<'a, T>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a> + Default, T::Repr: Clone {
+        self.finish_with_default(b, T::default())
+    }
+
+    /// Finish building the routing network circuit.
+    pub fn finish_with_default(mut self, b: &Builder<'a>, default: T) -> Routing<'a, T>
+    where T: Mux<'a, bool, T, Output = T> + Lit<'a>, T::Repr: Clone {
+        let pad = b.lit(default);
+
         // Pad out the inputs and outputs to the same length.
         if self.inputs.len() < self.num_outputs {
-            let default = b.lit(T::default());
+            let default = pad.clone();
             self.inputs.resize_with(self.num_outputs, || default.clone());
         }
 

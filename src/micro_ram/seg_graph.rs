@@ -91,6 +91,7 @@ pub struct SegGraphBuilder<'a> {
     // The state of routing network construction.
     network: NetworkState<'a>,
 
+    default_state: RamState,
     cpu_init_state: TWire<'a, RamState>,
 }
 
@@ -112,6 +113,7 @@ impl<'a> SegGraphBuilder<'a> {
 
             network: NetworkState::Before(RoutingBuilder::new()),
 
+            default_state: RamState::default_with_regs(params.num_regs),
             cpu_init_state,
         };
 
@@ -252,7 +254,8 @@ impl<'a> SegGraphBuilder<'a> {
             self.segments[inp.segment_index].to_net = Some(id);
         }
 
-        self.network = NetworkState::After(routing.finish_exact(b));
+        let default = self.default_state.clone();
+        self.network = NetworkState::After(routing.finish_with_default(b, default));
     }
 
     fn liveness_flag(&self, b: &Builder<'a>, l: Liveness) -> TWire<'a, bool> {

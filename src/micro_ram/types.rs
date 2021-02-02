@@ -180,6 +180,13 @@ impl RamState {
             regs: regs.into_iter().map(|x| x as u64).collect(),
         }
     }
+
+    pub fn default_with_regs(num_regs: usize) -> RamState {
+        RamState {
+            pc: 0,
+            regs: vec![0; num_regs],
+        }
+    }
 }
 
 #[derive(Clone)]
