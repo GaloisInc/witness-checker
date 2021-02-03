@@ -232,8 +232,7 @@ fn main() -> io::Result<()> {
     }
 
     // Set up instruction-fetch ports and check consistency.
-    let mut fetch = Fetch::new();
-    fetch.init_program(&b, &exec.program);
+    let mut fetch = Fetch::new(&b, &exec.program);
 
     // Generate IR code to check the trace.
     let check_steps = args.value_of("check-steps")

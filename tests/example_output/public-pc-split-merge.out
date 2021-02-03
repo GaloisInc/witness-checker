@@ -1,3 +1,1 @@
-invalid trace: fetch from program address 0 produced wrong instruction
-invalid trace: fetch from program address 0 produced wrong instruction
-internal evaluator: 172 asserts passed, 2 failed; found 0 bugs; overall status: BAD
+internal evaluator: 174 asserts passed, 0 failed; found 0 bugs; overall status: GOOD

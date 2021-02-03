@@ -10,17 +10,13 @@ use crate::sort;
 
 pub struct Fetch<'a> {
     ports: Vec<TWire<'a, FetchPort>>,
+    /// Default value for secret `instr`s in uninitialized `FetchPort`s.
+    default_instr: RamInstr,
 }
 
 impl<'a> Fetch<'a> {
-    pub fn new() -> Fetch<'a> {
-        Fetch {
-            ports: Vec::new(),
-        }
-    }
-
-    pub fn init_program(&mut self, b: &Builder<'a>, prog: &[RamInstr]) {
-        self.ports.reserve(prog.len());
+    pub fn new(b: &Builder<'a>, prog: &[RamInstr]) -> Fetch<'a> {
+        let mut ports = Vec::with_capacity(prog.len());
 
         for (i, instr) in prog.iter().enumerate() {
             let fp = b.lit(FetchPort {
@@ -28,7 +24,15 @@ impl<'a> Fetch<'a> {
                 instr: instr.clone(),
                 write: true,
             });
-            self.ports.push(fp);
+            ports.push(fp);
+        }
+
+        Fetch {
+            ports,
+            // Set the default `RamInstr` to the correct `RamInstr` for the default address (0).
+            // This means uninitialized `FetchPort`s will be valid under the normal rules, and no
+            // special checks for unused `FetchPort`s are necessary.
+            default_instr: prog[0].clone(),
         }
     }
 
@@ -43,7 +47,7 @@ impl<'a> Fetch<'a> {
 
         for i in 0 .. len {
             let (addr, addr_secret) = b.secret();
-            let (instr, instr_secret) = b.secret();
+            let (instr, instr_secret) = b.secret_default(self.default_instr.clone());
             let write = b.lit(false);
             let fp = TWire::new(FetchPortRepr { addr, instr, write });
             cp.ports.push(CyclePort { fp, addr_secret, instr_secret });
