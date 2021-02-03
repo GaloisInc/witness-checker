@@ -92,7 +92,8 @@ pub struct SegGraphBuilder<'a> {
     network: NetworkState<'a>,
 
     default_state: RamState,
-    cpu_init_state: TWire<'a, RamState>,
+    cpu_init_state: RamState,
+    cpu_init_state_wire: TWire<'a, RamState>,
 }
 
 impl<'a> SegGraphBuilder<'a> {
@@ -100,7 +101,7 @@ impl<'a> SegGraphBuilder<'a> {
         b: &Builder<'a>,
         seg_defs: &[types::Segment],
         params: &Params,
-        cpu_init_state: TWire<'a, RamState>,
+        cpu_init_state: RamState,
     ) -> SegGraphBuilder<'a> {
         let mut sg = SegGraphBuilder {
             segments: iter::repeat_with(SegmentNode::default).take(seg_defs.len()).collect(),
@@ -114,7 +115,8 @@ impl<'a> SegGraphBuilder<'a> {
             network: NetworkState::Before(RoutingBuilder::new()),
 
             default_state: RamState::default_with_regs(params.num_regs),
-            cpu_init_state,
+            cpu_init_state: cpu_init_state.clone(),
+            cpu_init_state_wire: b.lit(cpu_init_state),
         };
 
         let network = match sg.network {
@@ -202,15 +204,10 @@ impl<'a> SegGraphBuilder<'a> {
             let mut it = self.segments[idx].preds.iter();
             let first_pred = it.next()
                 .unwrap_or_else(|| panic!("segment {} has no predecessors", idx));
-            let mut first = self.get_final(first_pred.src).clone();
-            // Force `first.live` to `false` if the first incoming edge is not live.  Note the edge
-            // can't be live unless the source segment is live (this is asserted in `finish`).
-            // `first` is the default output when no incoming edge is live, and we must produce a
-            // non-live state in that case.
-            first.live = self.liveness_flag(b, first_pred.live);
+            let mut first = self.get_predecessor(b, *first_pred);
             let state = it.fold(first, |acc, pred| {
-                let live = self.liveness_flag(b, pred.live);
-                b.mux(live, self.get_final(pred.src).clone(), acc)
+                let state = self.get_predecessor(b, *pred);
+                b.mux(state.live, state, acc)
             });
             self.segments[idx].init_state_cache = Some(state);
         }
@@ -227,7 +224,7 @@ impl<'a> SegGraphBuilder<'a> {
 
     fn get_final(&self, src: StateSource) -> &TWire<'a, RamState> {
         match src {
-            StateSource::CpuInit => &self.cpu_init_state,
+            StateSource::CpuInit => &self.cpu_init_state_wire,
             StateSource::Segment(idx) =>
                 self.segments[idx].final_state.as_ref()
                     .unwrap_or_else(|| panic!("{:?} final state is not initialized", src)),
@@ -239,6 +236,22 @@ impl<'a> SegGraphBuilder<'a> {
             StateSource::CycleBreak(idx) =>
                 self.cycle_breaks[idx].secret.wire(),
         }
+    }
+
+    fn liveness_flag(&self, b: &Builder<'a>, l: Liveness) -> TWire<'a, bool> {
+        match l {
+            Liveness::Always => b.lit(true),
+            Liveness::Edge(a, b) => self.edges[&(a, b)].wire().clone(),
+            Liveness::FromNetwork(i) => self.from_net[&i].wire().clone(),
+            Liveness::ToNetwork(i) => self.to_net[&i].wire().clone(),
+        }
+    }
+
+    fn get_predecessor(&self, b: &Builder<'a>, pred: Predecessor) -> TWire<'a, RamState> {
+        let mut wire = self.get_final(pred.src).clone();
+        let edge_live = self.liveness_flag(b, pred.live);
+        wire.live = b.and(wire.live, edge_live);
+        wire
     }
 
     pub fn build_network(&mut self, b: &Builder<'a>) {
@@ -263,30 +276,32 @@ impl<'a> SegGraphBuilder<'a> {
         self.network = NetworkState::After(routing.finish_with_default(b, default));
     }
 
-    fn liveness_flag(&self, b: &Builder<'a>, l: Liveness) -> TWire<'a, bool> {
-        match l {
-            Liveness::Always => b.lit(true),
-            Liveness::Edge(a, b) => self.edges[&(a, b)].wire().clone(),
-            Liveness::FromNetwork(i) => self.from_net[&i].wire().clone(),
-            Liveness::ToNetwork(i) => self.to_net[&i].wire().clone(),
-        }
-    }
-
     pub fn finish(mut self, cx: &Context<'a>, b: &Builder<'a>) -> SegGraph<'a> {
         // Add equality assertions to constrain the CycleBreakNode secrets.  We do this first
         // because the later steps involve dismantling `self` to extract its `TSecretHandle`s.
         for (i, cbn) in self.cycle_breaks.iter().enumerate() {
+            let mut count = b.lit(0_u8);
+            assert!(cbn.preds.len() <= u8::MAX as usize);
             for &pred in &cbn.preds {
-                let live = self.liveness_flag(b, pred.live);
-                let state = self.get_final(pred.src);
-                cx.when(b, live, |cx| {
+                let state = self.get_predecessor(b, pred);
+                count = b.add(count, b.cast(state.live));
+                cx.when(b, state.live, |cx| {
                     wire_assert!(
-                        cx, b.eq(cbn.secret.wire().clone(), state.clone()),
+                        cx, b.eq(cbn.secret.wire().clone(), state),
                         "CycleBreak {} incoming edge {:?} is live, but state doesn't match {:?}",
                         i, pred.live, pred.src,
                     );
                 });
             }
+
+            // If the CycleBreakNode's secret state is live, then at least one input must be live.
+            cx.when(b, cbn.secret.wire().live, |cx| {
+                wire_assert!(
+                    cx, b.ne(count, b.lit(0)),
+                    "CycleBreak {} has live output but no live inputs",
+                    i,
+                );
+            });
         }
 
         // Assert that at most one outgoing edge is live from each live segment.  This prevents the
@@ -353,35 +368,99 @@ impl<'a> SegGraphBuilder<'a> {
         assert_eq!(start, edge_list.len());
 
 
+        // Find which CycleBreakNode (if any) is present on each edge.
+        let mut edge_cbns = HashMap::new();
+        let mut from_net_cbns = HashMap::new();
+        let mut to_net_cbns = HashMap::new();
+
+        // Look for {CpuInit,Segment,Network} -> CycleBreak -> Segment
+        for (j, seg) in self.segments.iter().enumerate() {
+            for seg_pred in &seg.preds {
+                let cbn = match seg_pred.src {
+                    StateSource::CycleBreak(x) => x,
+                    _ => continue,
+                };
+                for cbn_pred in &self.cycle_breaks[cbn].preds {
+                    match cbn_pred.src {
+                        StateSource::CpuInit => {},
+                        StateSource::Segment(i) => {
+                            assert!(!edge_cbns.contains_key(&(i, j)),
+                                "multiple edges from {} to {}", i, j);
+                            edge_cbns.insert((i, j), cbn);
+                        },
+                        StateSource::Network(_) => {
+                            assert!(!from_net_cbns.contains_key(&j),
+                                "multiple edges from net to {}", j);
+                            from_net_cbns.insert(j, cbn);
+                        },
+                        StateSource::CycleBreak(cbn2) => {
+                            panic!("CycleBreak {} connects directly to CycleBreak {}",
+                                cbn, cbn2);
+                        },
+                    }
+                }
+            }
+        }
+
+        // Look for Segment -> CycleBreak -> Network
+        for net in self.network_inputs.iter() {
+            let cbn = match net.pred.src {
+                StateSource::CycleBreak(x) => x,
+                _ => continue,
+            };
+            for cbn_pred in &self.cycle_breaks[cbn].preds {
+                match cbn_pred.src {
+                    StateSource::CpuInit => {
+                        panic!("CpuInit connects to Network via CycleBreak {}", cbn);
+                    },
+                    StateSource::Segment(i) => {
+                        assert!(!to_net_cbns.contains_key(&i),
+                            "multiple edges from {} to net", i);
+                        to_net_cbns.insert(i, cbn);
+                    },
+                    StateSource::Network(_) => {
+                        panic!("Network connects to Network via CycleBreak {}", cbn);
+                    },
+                    StateSource::CycleBreak(cbn2) => {
+                        panic!("CycleBreak {} connects directly to CycleBreak {}",
+                            cbn, cbn2);
+                    },
+                }
+            }
+        }
+
+
+        // Special handling for CpuInit.
+
+        // Sanity check: there should be exactly one incoming edge from CpuInit.
+        let cpu_init_count = self.segments.iter().flat_map(|n| n.preds.iter())
+            .chain(self.cycle_breaks.iter().flat_map(|n| n.preds.iter()))
+            .filter(|p| p.src == StateSource::CpuInit).count();
+        assert_eq!(cpu_init_count, 1);
+
+        // The edge from CpuInit is always live.  If that edge passes through a CycleBreakNode, we
+        // set the secret for that node.
+        for cbn in self.cycle_breaks.iter() {
+            if cbn.preds.iter().any(|p| p.src == StateSource::CpuInit) {
+                cbn.secret.set(b, self.cpu_init_state.clone());
+            }
+        }
+
+
+        // Build the final SegGraph
+
         let mut sg = SegGraph {
             segs: Vec::with_capacity(self.segments.len()),
-            edges: self.edges,
+            edges: self.edges.into_iter().map(|(k, live)| {
+                let state_index = edge_cbns.remove(&k);
+                (k, EdgeSecrets { live, state_index })
+            }).collect(),
+            edge_states: self.cycle_breaks.into_iter().map(|cbn| cbn.secret).collect(),
             network: match self.network {
                 NetworkState::Before(_) => panic!("must call build_network() before finish()"),
                 NetworkState::After(net) => net,
             },
         };
-
-        // Each `CycleBreakNode`'s `TSecretHandle` must be attached as either the `init_secret` or
-        // `final_secret` of some segment.  Specifically, for a given `CycleBreakNode`, if its only
-        // predecessor is a segment, then it can be that segment's `final_secret`, and if its only
-        // successor is a segment, then it can be that segment's `init_secret`.  The requirement
-        // satisfied in both cases is that the `CycleBreakNode` is live exactly when the segment is
-        // live.
-        //
-        // We process final secrets first, then leave the remaining `CycleBreakNode`s to be claimed
-        // by `SegInfo`s in the loop below.
-        let mut final_secrets = HashMap::new();
-        let mut remaining_cycle_breaks = HashMap::with_capacity(self.cycle_breaks.len());
-        for (i, cbn) in self.cycle_breaks.into_iter().enumerate() {
-            if cbn.preds.len() == 1 {
-                if let StateSource::Segment(seg_idx) = cbn.preds[0].src {
-                    final_secrets.entry(seg_idx).or_insert_with(Vec::new).push(cbn.secret);
-                    continue;
-                }
-            }
-            remaining_cycle_breaks.insert(i, cbn);
-        }
 
         let mut from_net_edges = self.from_net;
         let mut to_net_edges = self.to_net;
@@ -392,35 +471,22 @@ impl<'a> SegGraphBuilder<'a> {
                 let live = from_net_edges.remove(&idx).unwrap_or_else(|| panic!(
                     "impossible: missing liveness flag for segment {} from_net", idx,
                 ));
-                (id, live)
+                let state_index = from_net_cbns.remove(&idx);
+                (id, EdgeSecrets { live, state_index })
             });
 
             seg.to_net = sn.to_net.map(|id| {
                 let live = to_net_edges.remove(&idx).unwrap_or_else(|| panic!(
                     "impossible: missing liveness flag for segment {} to_net", idx,
                 ));
-                (id, live)
+                let state_index = from_net_cbns.remove(&idx);
+                (id, EdgeSecrets { live, state_index })
             });
-
-            if sn.preds.len() == 1 {
-                if let StateSource::CycleBreak(j) = sn.preds[0].src {
-                    if let Some(cbn) = remaining_cycle_breaks.remove(&j) {
-                        seg.init_secret = Some(cbn.secret);
-                    }
-                }
-            }
-
-            if let Some(final_secrets) = final_secrets.remove(&idx) {
-                seg.final_secrets = final_secrets;
-            }
 
             sg.segs.push(seg);
         }
 
         // `segments` was consumed above.
-        assert!(remaining_cycle_breaks.len() == 0,
-            "found {} unconnected cycle breaks: {:?}",
-            remaining_cycle_breaks.len(), remaining_cycle_breaks.keys().collect::<Vec<_>>());
         // `network_inputs` is no longer needed after `build_network()`.
         // `edges` was consumed above.
         assert!(from_net_edges.len() == 0,
@@ -430,10 +496,6 @@ impl<'a> SegGraphBuilder<'a> {
             "found {} unused to_net edges: {:?}",
             to_net_edges.len(), to_net_edges.keys().collect::<Vec<_>>());
         // `network` was consumed above.
-
-        assert!(final_secrets.is_empty(),
-            "found {} leftover final secrets: {:?}",
-            final_secrets.len(), final_secrets.keys().collect::<Vec<_>>());
 
         sg
     }
@@ -446,48 +508,52 @@ pub enum SegGraphItem {
 }
 
 
+struct EdgeSecrets<'a> {
+    live: TSecretHandle<'a, bool>,
+    state_index: Option<usize>,
+}
+
 #[derive(Default)]
 struct SegInfo<'a> {
-    init_secret: Option<TSecretHandle<'a, RamState>>,
-    final_secrets: Vec<TSecretHandle<'a, RamState>>,
-    from_net: Option<(OutputId, TSecretHandle<'a, bool>)>,
-    to_net: Option<(InputId, TSecretHandle<'a, bool>)>,
+    from_net: Option<(OutputId, EdgeSecrets<'a>)>,
+    to_net: Option<(InputId, EdgeSecrets<'a>)>,
 }
 
 pub struct SegGraph<'a> {
     segs: Vec<SegInfo<'a>>,
-    edges: HashMap<(usize, usize), TSecretHandle<'a, bool>>,
+    edges: HashMap<(usize, usize), EdgeSecrets<'a>>,
+    edge_states: Vec<TSecretHandle<'a, RamState>>,
     network: Routing<'a, RamState>,
 }
 
 impl<'a> SegGraph<'a> {
-    pub fn set_initial_secret(&self, b: &Builder<'a>, idx: usize, state: &RamState) {
-        if let Some(ref s) = self.segs[idx].init_secret {
-            s.set(b, state.clone());
+    fn make_edge_live_inner(
+        edge_states: &mut [TSecretHandle<'a, RamState>],
+        edge: &EdgeSecrets<'a>,
+        b: &Builder<'a>,
+        state: &RamState,
+    ) {
+        edge.live.set(b, true);
+        if let Some(idx) = edge.state_index {
+            edge_states[idx].set(b, state.clone());
         }
     }
 
-    pub fn set_final_secret(&self, b: &Builder<'a>, idx: usize, state: &RamState) {
-        for s in &self.segs[idx].final_secrets {
-            s.set(b, state.clone());
-        }
-    }
-
-    pub fn make_edge_live(&mut self, b: &Builder<'a>, src: usize, dest: usize) {
-        if let Some(ref live) = self.edges.get(&(src, dest)) {
+    pub fn make_edge_live(&mut self, b: &Builder<'a>, src: usize, dest: usize, state: &RamState) {
+        if let Some(ref edge) = self.edges.get(&(src, dest)) {
             // Easy case: a direct edge between `src` and `dest`.
-            live.set(b, true);
+            Self::make_edge_live_inner(&mut self.edge_states, edge, b, state);
             return;
         }
 
         // There is no direct edge, so this connection must go through the routing network.
-        let &(inp, ref inp_secret) = self.segs[src].to_net.as_ref()
+        let &(inp, ref inp_edge) = self.segs[src].to_net.as_ref()
             .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
-        let &(out, ref out_secret) = self.segs[dest].from_net.as_ref()
+        let &(out, ref out_edge) = self.segs[dest].from_net.as_ref()
             .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
         self.network.connect(inp, out);
-        inp_secret.set(b, true);
-        out_secret.set(b, true);
+        Self::make_edge_live_inner(&mut self.edge_states, inp_edge, b, state);
+        Self::make_edge_live_inner(&mut self.edge_states, out_edge, b, state);
     }
 
     pub fn finish(self, b: &Builder<'a>) {

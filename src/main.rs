@@ -253,13 +253,13 @@ fn main() -> io::Result<()> {
         regs[0] = exec.init_mem.iter().map(|ms| ms.start + ms.len).max().unwrap_or(0);
         RamState { pc: 0, regs, live: true }
     });
-    let init_state_wire = b.lit(init_state.clone());
     if provided_init_state.is_some() {
+        let init_state_wire = b.lit(init_state.clone());
         check_first(&cx, &b, &init_state_wire);
     }
 
     let mut seg_graph_builder = SegGraphBuilder::new(
-        &b, &exec.segments, &exec.params, init_state_wire);
+        &b, &exec.segments, &exec.params, init_state.clone());
 
     for item in seg_graph_builder.get_order() {
         let idx = match item {
@@ -298,17 +298,14 @@ fn main() -> io::Result<()> {
         seg.set_states(&b, &exec.program, cycle, prev_state, &chunk.states, &exec.advice);
         seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
 
-        seg_graph.set_initial_secret(&b, chunk.segment, prev_state);
-
         if let Some(prev_segment) = prev_segment {
-            seg_graph.make_edge_live(&b, prev_segment, chunk.segment);
+            seg_graph.make_edge_live(&b, prev_segment, chunk.segment, &prev_state);
         }
         prev_segment = Some(chunk.segment);
 
         cycle += chunk.states.len() as u32;
         if chunk.states.len() > 0 {
             prev_state = chunk.states.last().unwrap();
-            seg_graph.set_final_secret(&b, chunk.segment, prev_state);
         }
     }
 
