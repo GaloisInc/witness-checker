@@ -1,0 +1,8 @@
+invalid trace: segment 1: fetch in slot 0 accesses address 6 (expected 0)
+invalid trace: segment 1: fetch in slot 1 accesses address 7 (expected 0)
+invalid trace: segment 1: cycle 6 sets reg 0 to 1 (expected 0)
+invalid trace: segment 1: cycle 6 sets reg 2 to 99 (expected 0)
+invalid trace: segment 1: cycle 6 sets pc to 7 (expected 0)
+invalid trace: segment 1: cycle 7 sets reg 2 to 99 (expected 0)
+invalid trace: segment 1: cycle 7 sets pc to 8 (expected 0)
+internal evaluator: 225 asserts passed, 7 failed; found 0 bugs; overall status: BAD

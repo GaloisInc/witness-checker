@@ -1147,4 +1147,23 @@ pub enum Advice {
 pub struct TraceChunk {
     pub segment: usize,
     pub states: Vec<RamState>,
+    /// Debug overrides.  Used to construct invalid traces for testing purposes.
+    #[serde(default)]
+    pub debug: Option<TraceChunkDebug>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TraceChunkDebug {
+    /// If set, force the cycle counter to this value before running the chunk.
+    #[serde(default)]
+    pub cycle: Option<u32>,
+    /// If set, force the previous state to this value before running the chunk.
+    #[serde(default)]
+    pub prev_state: Option<RamState>,
+    /// If set, force the previous-segment counter to `None` before running the chunk.
+    #[serde(default)]
+    pub clear_prev_segment: bool,
+    /// If set, force the previous-segment counter to this value before running the chunk.
+    #[serde(default)]
+    pub prev_segment: Option<usize>,
 }

@@ -170,6 +170,7 @@ impl<'de> Visitor<'de> for ExecutionVisitor {
                         ex.trace = vec![TraceChunk {
                             segment: 0,
                             states: map.next_value()?,
+                            debug: None,
                         }];
                     }
                 },

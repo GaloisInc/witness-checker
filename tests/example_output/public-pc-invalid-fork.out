@@ -1,0 +1,2 @@
+invalid trace: segment 0 (live) has 2 live successors (expected 0 or 1)
+internal evaluator: 256 asserts passed, 1 failed; found 0 bugs; overall status: BAD

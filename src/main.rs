@@ -218,6 +218,7 @@ fn main() -> io::Result<()> {
         let new_chunk = TraceChunk {
             segment: 0,
             states: chunk.states[1..].to_owned(),
+            debug: None,
         };
 
         exec.segments = vec![new_segment];
@@ -292,6 +293,21 @@ fn main() -> io::Result<()> {
     let mut prev_state = &init_state;
     let mut prev_segment = None;
     for chunk in &exec.trace {
+        if let Some(ref debug) = chunk.debug {
+            if let Some(c) = debug.cycle {
+                cycle = c;
+            }
+            if let Some(ref s) = debug.prev_state {
+                prev_state = s;
+            }
+            if debug.clear_prev_segment {
+                prev_segment = None;
+            }
+            if let Some(idx) = debug.prev_segment {
+                prev_segment = Some(idx);
+            }
+        }
+
         let seg = &mut segments[chunk.segment];
         assert_eq!(seg.idx, chunk.segment);
         seg.set_states(&b, &exec.program, cycle, prev_state, &chunk.states, &exec.advice);
