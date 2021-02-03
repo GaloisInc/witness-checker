@@ -12,7 +12,7 @@ macro_rules! wire_assert {
         {
             let cx = $cx;
             let cond = $cond;
-            $cx.assert($cond, move |$cx| {
+            $cx.assert(cond, move |$cx| {
                 eprintln!("invalid trace: {}", format_args!($($args)*));
             });
         }
@@ -30,7 +30,7 @@ macro_rules! wire_bug_if {
         {
             let cx = $cx;
             let cond = $cond;
-            $cx.bug_if($cond, move |$cx| {
+            $cx.bug_if(cond, move |$cx| {
                 eprintln!("found bug: {}", format_args!($($args)*));
             });
         }
