@@ -51,7 +51,8 @@
 
     - segment: 2
       debug:
-        prev_state: [3, [2, 6, 4]]
+        cycle: 3
+        prev_state: [3, [2, 6, 4], true, 3]
         prev_segment: 0
       states:
         - [4, [10, 6, 4]]

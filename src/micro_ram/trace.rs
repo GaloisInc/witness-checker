@@ -82,8 +82,8 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             let advice = advice_secrets[i].wire().clone();
 
             let (calc_state, calc_im) =
-                calc_step(&b, i as u32, instr, &mem_port, advice, &prev_state);
-            check_step(&cx, &b, i as u32, instr, mem_port, &calc_im);
+                calc_step(&b, i, instr, &mem_port, advice, &prev_state);
+            check_step(&cx, &b, i, prev_state.cycle, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
                 states.push(calc_state.clone());
             }
@@ -205,13 +205,13 @@ pub struct CalcIntermediate<'a> {
 
 fn calc_step<'a>(
     b: &Builder<'a>,
-    cycle: u32,
+    idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
     advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
-    let _g = b.scoped_label(format_args!("calc_step/cycle {}", cycle));
+    let _g = b.scoped_label(format_args!("calc_step/cycle {}", idx));
 
     // TODO: Where do we get instr from? PC wire of s1? Or still advice?
 
@@ -382,9 +382,10 @@ fn calc_step<'a>(
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
+    let cycle = b.add(s1.cycle, b.lit(1));
     let live = s1.live;
 
-    let s2 = RamStateRepr { pc, regs, live };
+    let s2 = RamStateRepr { cycle, pc, regs, live };
     let im = CalcIntermediate { x, y, result };
     (TWire::new(s2),im)
 }
@@ -397,7 +398,7 @@ fn check_state<'a>(
     calc_s: &TWire<'a, RamState>,
     trace_s: &TWire<'a, RamState>,
 ) {
-    let _g = b.scoped_label(format_args!("check_state/cycle {}", cycle));
+    let _g = b.scoped_label(format_args!("check_state/{}", cycle));
 
     for (i, (&v_calc, &v_new)) in calc_s.regs.iter().zip(trace_s.regs.iter()).enumerate() {
         wire_assert!(
@@ -414,17 +415,28 @@ fn check_state<'a>(
         "segment {}: cycle {} sets pc to {} (expected {})",
         seg_idx, cycle, cx.eval(trace_pc), cx.eval(calc_pc),
     );
+
+    // Cycle `N` increments the cycle counter by 1 and ends with `calc_s.cycle == N + 1`.
+    let trace_cycle = b.lit(cycle + 1);
+    let calc_cycle = calc_s.cycle;
+    wire_assert!(
+        cx, b.eq(trace_cycle, calc_cycle),
+        "segment {}: cycle {} sets cycle to {} (expected {})",
+        seg_idx, cycle, cx.eval(trace_cycle), cx.eval(calc_cycle),
+    );
+
 }
 
 fn check_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    cycle: u32,
+    idx: usize,
+    cycle: TWire<'a, u32>,
     instr: TWire<'a, RamInstr>,
     mem_port: TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
-    let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
+    let _g = b.scoped_label(format_args!("check_step/{}", idx));
 
     let x = calc_im.x;
     let y = calc_im.y;
@@ -444,8 +456,8 @@ fn check_step<'a>(
     cx.when(b, is_mem, |cx| {
         wire_assert!(
             cx, b.eq(mem_port.addr, addr),
-            "cycle {}'s mem port has address {} (expected {})",
-            cycle, cx.eval(mem_port.addr), cx.eval(addr),
+            "step {}'s mem port has address {} (expected {})",
+            idx, cx.eval(mem_port.addr), cx.eval(addr),
         );
         let flag_ops = [
             (is_load, MemOpKind::Read),
@@ -456,8 +468,8 @@ fn check_step<'a>(
             cx.when(b, flag, |cx| {
                 wire_assert!(
                     cx, b.eq(mem_port.op, b.lit(op)),
-                    "cycle {}'s mem port has op kind {} (expected {}, {:?})",
-                    cycle, cx.eval(mem_port.op.repr), op as u8, op,
+                    "step {}'s mem port has op kind {} (expected {}, {:?})",
+                    idx, cx.eval(mem_port.op.repr), op as u8, op,
                 );
             });
         }
@@ -467,16 +479,16 @@ fn check_step<'a>(
         cx.when(b, b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), |cx| {
             wire_assert!(
                 cx, b.eq(mem_port.width, b.lit(w)),
-                "cycle {}'s mem port has width {:?} (expected {:?})",
-                cycle, cx.eval(mem_port.width), w,
+                "step {}'s mem port has width {:?} (expected {:?})",
+                idx, cx.eval(mem_port.width), w,
             );
 
             let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
             let x_low = extract_low_bytes(b, x, w);
             wire_assert!(
                 cx, b.eq(stored_value, x_low),
-                "cycle {}'s mem port stores value {} at {:x} (expected value {})",
-                cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+                "step {}'s mem port stores value {} at {:x} (expected value {})",
+                idx, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
             );
         });
     }
@@ -484,17 +496,17 @@ fn check_step<'a>(
     cx.when(b, is_poison, |cx| {
         wire_assert!(
             cx, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
-            "cycle {}'s mem port has width {:?} (expected {:?})",
-            cycle, cx.eval(mem_port.width), MemOpWidth::W8,
+            "step {}'s mem port has width {:?} (expected {:?})",
+            idx, cx.eval(mem_port.width), MemOpWidth::W8,
         );
     });
 
     // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
     // MEM_PORT_UNUSED_CYCLE` and this is not a mem op.  Other `mem_port.cycle` values are invalid.
-    let expect_cycle = b.mux(is_mem, b.lit(cycle), b.lit(MEM_PORT_UNUSED_CYCLE));
+    let expect_cycle = b.mux(is_mem, cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_assert!(
         cx, b.eq(mem_port.cycle, expect_cycle),
-        "cycle {} mem port cycle number is {} (expected {}; mem op? {})",
-        cycle, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
+        "step {} mem port cycle number is {} (expected {}; mem op? {})",
+        idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
 }

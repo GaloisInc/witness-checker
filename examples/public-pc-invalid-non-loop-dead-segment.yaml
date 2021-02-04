@@ -52,7 +52,7 @@
 
     - segment: 1
       debug:
-        prev_state: [6, [0, 0, 99]]
+        prev_state: [6, [0, 0, 99], true, 6]
         prev_segment: 2
       states:
         - [7, [1, 0, 99]]

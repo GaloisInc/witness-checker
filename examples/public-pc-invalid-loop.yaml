@@ -53,7 +53,8 @@
 
     - segment: 1
       debug:
-        prev_state: [6, [0, 0, 99]]
+        cycle: 10
+        prev_state: [6, [0, 0, 99], true, 10]
         prev_segment: 2
       states:
         - [7, [1, 0, 99]]
@@ -62,7 +63,8 @@
 
     - segment: 2
       debug:
-        prev_state: [6, [0, 0, 99]]
+        cycle: 13
+        prev_state: [6, [0, 0, 99], true, 13]
         prev_segment: 1
       states:
         - [7, [1, 0, 99]]

@@ -1,1 +1,2 @@
-internal evaluator: 341 asserts passed, 0 failed; found 0 bugs; overall status: GOOD
+invalid trace: CycleBreak 1 incoming edge Edge(2, 1) is live, but state doesn't match Segment(2)
+internal evaluator: 352 asserts passed, 1 failed; found 0 bugs; overall status: BAD

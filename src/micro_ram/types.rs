@@ -174,13 +174,16 @@ pub struct RamState {
     // All states parsed from the trace are assumed to be live.
     #[serde(default = "return_true")]
     pub live: bool,
+    #[serde(default)]
+    pub cycle: u32,
 }
 
 fn return_true() -> bool { true }
 
 impl RamState {
-    pub fn new(pc: u32, regs: Vec<u32>, live: bool) -> RamState {
+    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool) -> RamState {
         RamState {
+            cycle,
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
             live,
@@ -189,6 +192,7 @@ impl RamState {
 
     pub fn default_with_regs(num_regs: usize) -> RamState {
         RamState {
+            cycle: 0,
             pc: 0,
             regs: vec![0; num_regs],
             live: false,
@@ -198,6 +202,7 @@ impl RamState {
 
 #[derive(Clone)]
 pub struct RamStateRepr<'a> {
+    pub cycle: TWire<'a, u32>,
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
     pub live: TWire<'a, bool>,
@@ -210,6 +215,7 @@ impl<'a> Repr<'a> for RamState {
 impl<'a> Lit<'a> for RamState {
     fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
         RamStateRepr {
+            cycle: bld.lit(a.cycle),
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
             live: bld.lit(a.live),
@@ -223,6 +229,7 @@ impl<'a> Secret<'a> for RamState {
     }
 
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
         Builder::set_secret_from_lit(&s.pc, &val.pc, force);
         assert_eq!(s.regs.len(), val.regs.len());
         for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
@@ -235,6 +242,7 @@ impl<'a> Secret<'a> for RamState {
 impl RamState {
     pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
+            cycle: bld.with_label("cycle", || bld.secret_init(|| a.cycle)),
             pc: bld.with_label("pc", || bld.secret_init(|| a.pc)),
             regs: bld.with_label("regs", || {
                 a.regs.iter().enumerate().map(|(i, &x)| {
@@ -247,6 +255,7 @@ impl RamState {
 
     pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
+            cycle: bld.with_label("cycle", || bld.secret_uninit()),
             pc: bld.with_label("pc", || bld.secret_uninit()),
             regs: bld.with_label("regs", || (0 .. len).map(|i| {
                 bld.with_label(i, || bld.secret_uninit())
@@ -261,6 +270,7 @@ impl RamState {
     ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
         let wire = Self::secret_with_len(bld, len);
         let default = bld.lit(RamState {
+            cycle: 0,
             pc: 0,
             regs: vec![0; len],
             live: false,
@@ -272,6 +282,8 @@ impl RamState {
 impl<'a, C: Repr<'a>> Mux<'a, C, RamState> for RamState
 where
     C::Repr: Clone,
+    u32: Mux<'a, C, u32, Output = u32>,
+    <u32 as Repr<'a>>::Repr: Copy,
     u64: Mux<'a, C, u64, Output = u64>,
     <u64 as Repr<'a>>::Repr: Copy,
     bool: Mux<'a, C, bool, Output = bool>,
@@ -288,6 +300,7 @@ where
         let c: TWire<C> = TWire::new(c);
         assert_eq!(t.regs.len(), e.regs.len());
         RamStateRepr {
+            cycle: bld.mux(c.clone(), t.cycle, e.cycle),
             pc: bld.mux(c.clone(), t.pc, e.pc),
             regs: t.regs.iter().zip(e.regs.iter())
                 .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
@@ -301,13 +314,13 @@ impl<'a> typed::Eq<'a, RamState> for RamState {
     type Output = bool;
     fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         assert_eq!(a.regs.len(), b.regs.len());
-        let mut acc = bld.and(
-            bld.eq(a.pc, b.pc),
-            bld.eq(a.live, b.live),
-        );
+        let mut acc = bld.lit(true);
+        acc = bld.and(acc, bld.eq(a.cycle, b.cycle));
+        acc = bld.and(acc, bld.eq(a.pc, b.pc));
         for (&a_reg, &b_reg) in a.regs.iter().zip(b.regs.iter()) {
             acc = bld.and(acc, bld.eq(a_reg, b_reg));
         }
+        acc = bld.and(acc, bld.eq(a.live, b.live));
         acc.repr
     }
 }

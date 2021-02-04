@@ -251,7 +251,7 @@ fn main() -> io::Result<()> {
     let init_state = provided_init_state.clone().unwrap_or_else(|| {
         let mut regs = vec![0; exec.params.num_regs];
         regs[0] = exec.init_mem.iter().map(|ms| ms.start + ms.len).max().unwrap_or(0);
-        RamState { pc: 0, regs, live: true }
+        RamState { cycle: 0, pc: 0, regs, live: true }
     });
     if provided_init_state.is_some() {
         let init_state_wire = b.lit(init_state.clone());
@@ -290,7 +290,7 @@ fn main() -> io::Result<()> {
 
     // Fill in advice and other secrets.
     let mut cycle = 0;
-    let mut prev_state = &init_state;
+    let mut prev_state = init_state.clone();
     let mut prev_segment = None;
     for chunk in &exec.trace {
         if let Some(ref debug) = chunk.debug {
@@ -298,7 +298,7 @@ fn main() -> io::Result<()> {
                 cycle = c;
             }
             if let Some(ref s) = debug.prev_state {
-                prev_state = s;
+                prev_state = s.clone();
             }
             if debug.clear_prev_segment {
                 prev_segment = None;
@@ -310,7 +310,7 @@ fn main() -> io::Result<()> {
 
         let seg = &mut segments[chunk.segment];
         assert_eq!(seg.idx, chunk.segment);
-        seg.set_states(&b, &exec.program, cycle, prev_state, &chunk.states, &exec.advice);
+        seg.set_states(&b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
         seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
 
         if let Some(prev_segment) = prev_segment {
@@ -320,7 +320,8 @@ fn main() -> io::Result<()> {
 
         cycle += chunk.states.len() as u32;
         if chunk.states.len() > 0 {
-            prev_state = chunk.states.last().unwrap();
+            prev_state = chunk.states.last().unwrap().clone();
+            prev_state.cycle = cycle;
         }
     }
 

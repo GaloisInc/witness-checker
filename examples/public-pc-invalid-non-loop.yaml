@@ -46,7 +46,8 @@
 
     - segment: 1
       debug:
-        prev_state: [6, [0, 0, 99]]
+        cycle: 0
+        prev_state: [6, [0, 0, 99], true, 0]
         clear_prev_segment: true
       states:
         - [7, [1, 0, 99]]
