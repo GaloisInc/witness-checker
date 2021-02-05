@@ -83,7 +83,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
 
             let (calc_state, calc_im) =
                 calc_step(&b, i, instr, &mem_port, advice, &prev_state);
-            check_step(&cx, &b, i, prev_state.cycle, instr, mem_port, &calc_im);
+            check_step(&cx, &b, i, prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
                 states.push(calc_state.clone());
             }
@@ -432,6 +432,7 @@ fn check_step<'a>(
     b: &Builder<'a>,
     idx: usize,
     cycle: TWire<'a, u32>,
+    live: TWire<'a, bool>,
     instr: TWire<'a, RamInstr>,
     mem_port: TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
@@ -453,7 +454,12 @@ fn check_step<'a>(
 
     let addr = y;
 
-    cx.when(b, is_mem, |cx| {
+    // TODO: we could avoid most of the `live` checks if public-pc segments set appropriate
+    // defaults when constructing their MemPorts (so the checks automatically pass on non-live
+    // segments).  for secret segments we can continue to rely on non-live segments running nothing
+    // but `Opcode::Stutter`.
+
+    cx.when(b, b.and(is_mem, live), |cx| {
         wire_assert!(
             cx, b.eq(mem_port.addr, addr),
             "step {}'s mem port has address {} (expected {})",
@@ -476,7 +482,7 @@ fn check_step<'a>(
     });
 
     for w in MemOpWidth::iter() {
-        cx.when(b, b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), |cx| {
+        cx.when(b, b.and(b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), live), |cx| {
             wire_assert!(
                 cx, b.eq(mem_port.width, b.lit(w)),
                 "step {}'s mem port has width {:?} (expected {:?})",
@@ -493,7 +499,7 @@ fn check_step<'a>(
         });
     }
 
-    cx.when(b, is_poison, |cx| {
+    cx.when(b, b.and(is_poison, live), |cx| {
         wire_assert!(
             cx, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
             "step {}'s mem port has width {:?} (expected {:?})",
@@ -503,7 +509,7 @@ fn check_step<'a>(
 
     // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
     // MEM_PORT_UNUSED_CYCLE` and this is not a mem op.  Other `mem_port.cycle` values are invalid.
-    let expect_cycle = b.mux(is_mem, cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
+    let expect_cycle = b.mux(b.and(is_mem, live), cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_assert!(
         cx, b.eq(mem_port.cycle, expect_cycle),
         "step {} mem port cycle number is {} (expected {}; mem op? {})",
