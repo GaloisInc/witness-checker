@@ -161,7 +161,8 @@ impl<'a> Segment<'a> {
             for adv in adv_list {
                 match *adv {
                     Advice::MemOp { addr, value, op, width } => {
-                        self.mem_ports.set_port(b, MemPort { cycle, addr, value, op, width });
+                        self.mem_ports.set_port(b, init_cycle,
+                            MemPort { cycle, addr, value, op, width });
                     },
                     Advice::Stutter => {
                         self.stutter_secrets[i].set(b, true);

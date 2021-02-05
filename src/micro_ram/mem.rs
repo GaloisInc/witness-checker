@@ -188,9 +188,10 @@ impl<'a> CyclePorts<'a> {
     }
 
     /// Initialize the `MemPort` for `port.cycle` with the values in `port`.
-    pub fn set_port(&mut self, b: &Builder<'a>, port: MemPort) {
-        let idx = usize::try_from(port.cycle / self.sparsity as u32).unwrap();
-        let user = u8::try_from(port.cycle % self.sparsity as u32).unwrap();
+    pub fn set_port(&mut self, b: &Builder<'a>, init_cycle: u32, port: MemPort) {
+        let rel_cycle = port.cycle - init_cycle;
+        let idx = usize::try_from(rel_cycle / self.sparsity as u32).unwrap();
+        let user = u8::try_from(rel_cycle % self.sparsity as u32).unwrap();
         let smp = &mut self.ports[idx];
         assert!(!smp.is_set, "multiple mem ops require sparse mem port {}", idx);
         smp.mp_secret.set(b, port);
