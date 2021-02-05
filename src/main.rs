@@ -245,6 +245,7 @@ fn main() -> io::Result<()> {
         mem: &mut mem,
         fetch: &mut fetch,
         params: &exec.params,
+        prog: &exec.program,
         check_steps,
     };
 

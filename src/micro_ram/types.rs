@@ -487,7 +487,7 @@ mk_named_enum! {
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,

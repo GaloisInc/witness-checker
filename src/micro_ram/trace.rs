@@ -19,7 +19,7 @@ pub struct Segment<'a> {
     states: Vec<TWire<'a, RamState>>,
     final_state: TWire<'a, RamState>,
 
-    fetch_ports: fetch::CyclePorts<'a>,
+    fetch_ports: Option<fetch::CyclePorts<'a>>,
     mem_ports: mem::CyclePorts<'a>,
     advice_secrets: Vec<TSecretHandle<'a, u64>>,
     stutter_secrets: Vec<TSecretHandle<'a, bool>>,
@@ -32,6 +32,7 @@ pub struct SegmentBuilder<'a, 'b> {
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
+    pub prog: &'b [RamInstr],
     pub check_steps: usize,
 }
 
@@ -50,7 +51,9 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             s.len,
             self.params.sparsity.mem_op,
         );
-        let fetch_ports = self.fetch.add_cycles(b, s.len);
+        let fetch_ports = if s.init_pc.is_some() { None } else {
+            Some(self.fetch.add_cycles(b, s.len))
+        };
         let advice_secrets: Vec<TSecretHandle<u64>> =
             iter::repeat_with(|| b.secret().1).take(s.len).collect();
         let stutter_secrets: Vec<TSecretHandle<bool>> =
@@ -58,24 +61,45 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
 
         let mut states = Vec::new();
 
+        if let Some(init_pc) = s.init_pc {
+            let init_state_pc = init_state.pc;
+            cx.when(b, init_state.live, |cx| {
+                wire_assert!(
+                    cx, b.eq(init_state_pc, b.lit(init_pc)),
+                    "segment {}: initial pc is {:x} (expected {:x})",
+                    idx, cx.eval(init_state_pc), init_pc,
+                );
+            });
+            // TODO: assert that there are no jmps within the segment except at the end (regular
+            // assert!, since this can be checked with only public info)
+        }
+
         let mut prev_state = init_state.clone();
         for i in 0 .. s.len {
-            let fp = fetch_ports.get(i);
-            {
-                // Check that the fetch port is consistent with the step taken.
-                let addr = fp.addr;
-                let pc = prev_state.pc;
-                wire_assert!(
-                    cx, b.eq(addr, pc),
-                    "segment {}: fetch in slot {} accesses address {:x} (expected {:x})",
-                    idx, i, cx.eval(addr), cx.eval(pc),
-                );
-            }
+            // Get the instruction to execute.
+            let mut instr;
+            if let Some(init_pc) = s.init_pc {
+                let pc = init_pc + i as u64;
+                instr = b.lit(self.prog[pc as usize]);
+            } else {
+                let fp = fetch_ports.as_ref().unwrap().get(i);
+                {
+                    // Check that the fetch port is consistent with the step taken.
+                    let addr = fp.addr;
+                    let pc = prev_state.pc;
+                    wire_assert!(
+                        cx, b.eq(addr, pc),
+                        "segment {}: fetch in slot {} accesses address {:x} (expected {:x})",
+                        idx, i, cx.eval(addr), cx.eval(pc),
+                    );
+                }
+                instr = fp.instr;
 
-            let mut instr = fp.instr;
-            let stutter = stutter_secrets[i].wire().clone();
-            instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
-            instr.opcode = b.mux(prev_state.live, instr.opcode, b.lit(Opcode::Stutter as u8));
+                // Stutter advice only makes sense in secret segments.
+                let stutter = stutter_secrets[i].wire().clone();
+                instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
+                instr.opcode = b.mux(prev_state.live, instr.opcode, b.lit(Opcode::Stutter as u8));
+            };
             let instr = instr;
 
             let mem_port = mem_ports.get(b, i);
@@ -124,11 +148,13 @@ impl<'a> Segment<'a> {
         for (i, state) in states_iter.enumerate() {
             let cycle = init_cycle + i as u32;
 
-            let pc = state.pc;
-            let instr = prog.get(pc as usize).cloned().unwrap_or_else(|| panic!(
-                "program executed out of bounds (pc = 0x{:x}) on cycle {}", pc, cycle,
-            ));
-            self.fetch_ports.set(b, i, pc, instr);
+            if let Some(ref mut fetch_ports) = self.fetch_ports {
+                let pc = state.pc;
+                let instr = prog.get(pc as usize).cloned().unwrap_or_else(|| panic!(
+                    "program executed out of bounds (pc = 0x{:x}) on cycle {}", pc, cycle,
+                ));
+                fetch_ports.set(b, i, pc, instr);
+            }
 
             let k = cycle as u64 + 1;
             let adv_list = advice.get(&k).map_or(&[] as &[_], |v| v as &[_]);
