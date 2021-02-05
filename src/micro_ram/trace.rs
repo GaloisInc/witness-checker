@@ -83,7 +83,8 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
 
             let (calc_state, calc_im) =
                 calc_step(&b, i, instr, &mem_port, advice, &prev_state);
-            check_step(&cx, &b, i, prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
+            check_step(&cx, &b, idx, i,
+                prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
                 states.push(calc_state.clone());
             }
@@ -430,6 +431,7 @@ fn check_state<'a>(
 fn check_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    seg_idx: usize,
     idx: usize,
     cycle: TWire<'a, u32>,
     live: TWire<'a, bool>,
@@ -437,7 +439,7 @@ fn check_step<'a>(
     mem_port: TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
-    let _g = b.scoped_label(format_args!("check_step/{}", idx));
+    let _g = b.scoped_label(format_args!("check_step/{},{}", seg_idx, idx));
 
     let x = calc_im.x;
     let y = calc_im.y;
@@ -462,8 +464,8 @@ fn check_step<'a>(
     cx.when(b, b.and(is_mem, live), |cx| {
         wire_assert!(
             cx, b.eq(mem_port.addr, addr),
-            "step {}'s mem port has address {} (expected {})",
-            idx, cx.eval(mem_port.addr), cx.eval(addr),
+            "segment {}: step {}'s mem port has address {} (expected {})",
+            seg_idx, idx, cx.eval(mem_port.addr), cx.eval(addr),
         );
         let flag_ops = [
             (is_load, MemOpKind::Read),
@@ -474,8 +476,8 @@ fn check_step<'a>(
             cx.when(b, flag, |cx| {
                 wire_assert!(
                     cx, b.eq(mem_port.op, b.lit(op)),
-                    "step {}'s mem port has op kind {} (expected {}, {:?})",
-                    idx, cx.eval(mem_port.op.repr), op as u8, op,
+                    "segment {}: step {}'s mem port has op kind {} (expected {}, {:?})",
+                    seg_idx, idx, cx.eval(mem_port.op.repr), op as u8, op,
                 );
             });
         }
@@ -485,16 +487,16 @@ fn check_step<'a>(
         cx.when(b, b.and(b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), live), |cx| {
             wire_assert!(
                 cx, b.eq(mem_port.width, b.lit(w)),
-                "step {}'s mem port has width {:?} (expected {:?})",
-                idx, cx.eval(mem_port.width), w,
+                "segment {}: step {}'s mem port has width {:?} (expected {:?})",
+                seg_idx, idx, cx.eval(mem_port.width), w,
             );
 
             let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
             let x_low = extract_low_bytes(b, x, w);
             wire_assert!(
                 cx, b.eq(stored_value, x_low),
-                "step {}'s mem port stores value {} at {:x} (expected value {})",
-                idx, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+                "segment {}: step {}'s mem port stores value {} at {:x} (expected value {})",
+                seg_idx, idx, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
             );
         });
     }
@@ -502,8 +504,8 @@ fn check_step<'a>(
     cx.when(b, b.and(is_poison, live), |cx| {
         wire_assert!(
             cx, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
-            "step {}'s mem port has width {:?} (expected {:?})",
-            idx, cx.eval(mem_port.width), MemOpWidth::W8,
+            "segment {}: step {}'s mem port has width {:?} (expected {:?})",
+            seg_idx, idx, cx.eval(mem_port.width), MemOpWidth::W8,
         );
     });
 
@@ -512,7 +514,7 @@ fn check_step<'a>(
     let expect_cycle = b.mux(b.and(is_mem, live), cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
     wire_assert!(
         cx, b.eq(mem_port.cycle, expect_cycle),
-        "step {} mem port cycle number is {} (expected {}; mem op? {})",
-        idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
+        "segment {}: step {} mem port cycle number is {} (expected {}; mem op? {})",
+        seg_idx, idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
 }
