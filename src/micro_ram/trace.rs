@@ -46,13 +46,23 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
         let cx = self.cx;
         let b = self.b;
 
-        let mem_ports = self.mem.add_cycles(
-            cx, b,
-            s.len,
-            self.params.sparsity.mem_op,
-        );
-        let fetch_ports = if s.init_pc.is_some() { None } else {
-            Some(self.fetch.add_cycles(b, s.len))
+        let mem_ports: mem::CyclePorts;
+        let fetch_ports: Option<fetch::CyclePorts>;
+        if let Some(init_pc) = s.init_pc {
+            let prog = self.prog;
+            mem_ports = self.mem.add_cycles_irregular(
+                cx, b,
+                s.len,
+                (0 .. s.len).filter(|i| prog[init_pc as usize + i].opcode().is_mem()),
+            );
+            fetch_ports = None;
+        } else {
+            mem_ports = self.mem.add_cycles(
+                cx, b,
+                s.len,
+                self.params.sparsity.mem_op,
+            );
+            fetch_ports = Some(self.fetch.add_cycles(b, s.len));
         };
         let advice_secrets: Vec<TSecretHandle<u64>> =
             iter::repeat_with(|| b.secret().1).take(s.len).collect();

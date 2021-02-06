@@ -3,6 +3,7 @@
 //! This includes setting up initial memory, adding `MemPort`s for each cycle, sorting, and
 //! checking the sorted list.
 use std::convert::TryFrom;
+use std::iter;
 use log::*;
 use crate::gadget::bit_pack;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
@@ -65,13 +66,25 @@ impl<'a> Memory<'a> {
         len: usize,
         sparsity: usize,
     ) -> CyclePorts<'a> {
-        let num_ports = (len + sparsity - 1) / sparsity;
+        self.add_cycles_irregular(cx, b, len, (0 .. len).step_by(sparsity))
+    }
 
+    pub fn add_cycles_irregular<'b>(
+        &mut self,
+        cx: &Context<'a>,
+        b: &Builder<'a>,
+        len: usize,
+        idxs: impl IntoIterator<Item = usize>,
+    ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
-            port_starts: Vec::with_capacity(num_ports + 1),
-            ports: Vec::with_capacity(num_ports),
+            port_starts: idxs.into_iter().chain(iter::once(len))
+                .map(|i| u32::try_from(i).unwrap()).collect(),
+            ports: Vec::new(),
         };
+        assert!((1 .. cp.port_starts.len()).all(|i| cp.port_starts[i - 1] < cp.port_starts[i]));
 
+        let num_ports = cp.port_starts.len() - 1;
+        cp.ports.reserve(num_ports);
         for i in 0 .. num_ports {
             let (mp, mp_secret) = b.secret_default(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
@@ -89,9 +102,7 @@ impl<'a> Memory<'a> {
                 user, user_secret,
                 is_set: false,
             });
-            cp.port_starts.push((i * sparsity) as u32);
         }
-        cp.port_starts.push(len as u32);
 
         cp.assert_valid(cx, b);
         self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
@@ -136,7 +147,9 @@ impl<'a> Memory<'a> {
 
         // Run the consistency check.
         // The first port has no previous port.  Supply a dummy port and set `prev_valid = false`.
-        check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
+        if sorted_ports.len() > 0 {
+            check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
+        }
 
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
         for (i, (prev, &port)) in it {

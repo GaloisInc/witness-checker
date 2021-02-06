@@ -40,6 +40,10 @@ impl RamInstr {
         }
     }
 
+    pub fn opcode(&self) -> Opcode {
+        Opcode::from_raw(self.opcode).unwrap()
+    }
+
     pub fn mov(rd: u32, r1: u32) -> RamInstr {
         RamInstr::new(Opcode::Mov, rd, r1, 0, false)
     }
@@ -480,6 +484,18 @@ mk_named_enum! {
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
         Stutter = 255,
+    }
+}
+
+impl Opcode {
+    pub fn is_mem(&self) -> bool {
+        use Opcode::*;
+        match *self {
+            Store1 | Store2 | Store4 | Store8 |
+            Load1 | Load2 | Load4 | Load8 |
+            Poison8 => true,
+            _ => false,
+        }
     }
 }
 
