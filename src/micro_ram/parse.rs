@@ -174,7 +174,14 @@ impl<'de> Visitor<'de> for ExecutionVisitor {
                         }];
                     }
                 },
-                "advice" => { ex.advice = map.next_value()?; },
+                "advice" => {
+                    ex.advice = map.next_value()?;
+                    if has_feature(Feature::PreAdvice) {
+                        // Convert from pre-state indices to post-state indices.
+                        ex.advice = mem::take(&mut ex.advice).into_iter()
+                            .map(|(k, v)| (k + 1, v)).collect();
+                    }
+                },
                 _ => return Err(serde::de::Error::custom(format_args!(
                     "unknown key {:?}", k,
                 ))),
