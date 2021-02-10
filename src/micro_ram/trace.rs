@@ -48,7 +48,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
 
         let mem_ports: mem::CyclePorts;
         let fetch_ports: Option<fetch::CyclePorts>;
-        if let Some(init_pc) = s.init_pc {
+        if let Some(init_pc) = s.init_pc() {
             let prog = self.prog;
             mem_ports = self.mem.add_cycles_irregular(
                 cx, b,
@@ -71,7 +71,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
 
         let mut states = Vec::new();
 
-        if let Some(init_pc) = s.init_pc {
+        if let Some(init_pc) = s.init_pc() {
             let init_state_pc = init_state.pc;
             cx.when(b, init_state.live, |cx| {
                 wire_assert!(
@@ -88,7 +88,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
         for i in 0 .. s.len {
             // Get the instruction to execute.
             let mut instr;
-            if let Some(init_pc) = s.init_pc {
+            if let Some(init_pc) = s.init_pc() {
                 let pc = init_pc + i as u64;
                 instr = b.lit(self.prog[pc as usize]);
             } else {

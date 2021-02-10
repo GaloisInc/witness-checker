@@ -6,6 +6,7 @@ use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
     Execution, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
+    SegmentConstraint,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 
@@ -258,6 +259,38 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
             op1: seq.next_element::<Option<u8>>()?.unwrap_or(0),
             imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
             op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+
+impl<'de> Deserialize<'de> for SegmentConstraint {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_seq(SegmentConstraintVisitor)
+    }
+}
+
+struct SegmentConstraintVisitor;
+impl<'de> Visitor<'de> for SegmentConstraintVisitor {
+    type Value = SegmentConstraint;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a segment constraint object")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<SegmentConstraint, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 1);
+        let x = match &seq.next_element::<String>()? as &str {
+            "pc" => {
+                seq.expect += 1;
+                let pc = seq.next_element()?;
+                SegmentConstraint::Pc(pc)
+            },
+            kind => return Err(de::Error::custom(
+                format_args!("unknown segment constraint kind {}", kind),
+            )),
         };
         seq.finish()?;
         Ok(x)

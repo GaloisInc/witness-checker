@@ -32,22 +32,22 @@
       data: []
 
   segments:
-    - init_pc: 0
+    - constraints: [[pc, 0]]
       len: 2
       successors: [1, 2]
       enter_from_network: false
       exit_to_network: false
-    - init_pc: 2
+    - constraints: [[pc, 2]]
       len: 2
       successors: [3]
       enter_from_network: false
       exit_to_network: false
-    - init_pc: 4
+    - constraints: [[pc, 4]]
       len: 1
       successors: [3]
       enter_from_network: false
       exit_to_network: false
-    - init_pc: 5
+    - constraints: [[pc, 5]]
       len: 2
       successors: []
       enter_from_network: false

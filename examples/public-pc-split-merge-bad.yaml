@@ -31,22 +31,22 @@
       data: []
 
   segments:
-    - init_pc: null
+    - constraints: []
       len: 2
       successors: [1, 2]
       enter_from_network: false
       exit_to_network: false
-    - init_pc: null
+    - constraints: []
       len: 2
       successors: [3]
       enter_from_network: false
       exit_to_network: false
-    - init_pc: null
+    - constraints: []
       len: 1
       successors: [3]
       enter_from_network: false
       exit_to_network: false
-    - init_pc: null
+    - constraints: []
       len: 1
       successors: []
       enter_from_network: false

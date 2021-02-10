@@ -1153,11 +1153,28 @@ impl Default for Sparsity {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Segment {
-    pub init_pc: Option<u64>,
+    pub constraints: Vec<SegmentConstraint>,
     pub len: usize,
+    pub successors: Vec<usize>,
     pub enter_from_network: bool,
     pub exit_to_network: bool,
-    pub successors: Vec<usize>,
+}
+
+impl Segment {
+    pub fn init_pc(&self) -> Option<u64> {
+        for c in &self.constraints {
+            match *c {
+                SegmentConstraint::Pc(pc) => return Some(pc),
+                _ => {},
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SegmentConstraint {
+    Pc(u64),
 }
 
 #[derive(Clone, Debug)]

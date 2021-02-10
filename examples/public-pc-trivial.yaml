@@ -18,7 +18,7 @@
     trace_len: 6
 
   segments:
-    - init_pc: null
+    - constraints: []
       len: 6
       successors: []
       enter_from_network: false

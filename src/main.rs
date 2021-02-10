@@ -207,11 +207,11 @@ fn main() -> io::Result<()> {
         let chunk = &exec.trace[0];
 
         let new_segment = Segment {
-            init_pc: None,
+            constraints: vec![],
             len: chunk.states.len() - 1,
+            successors: vec![],
             enter_from_network: false,
             exit_to_network: false,
-            successors: vec![],
         };
 
         provided_init_state = Some(chunk.states[0].clone());

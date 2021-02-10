@@ -17,12 +17,12 @@
     trace_len: 6
 
   segments:
-    - init_pc: null
+    - constraints: []
       len: 3
       successors: [1]
       enter_from_network: false
       exit_to_network: false
-    - init_pc: null
+    - constraints: []
       len: 3
       successors: []
       enter_from_network: false
