@@ -6,7 +6,7 @@ use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
     Execution, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
-    SegmentConstraint,
+    Segment, SegmentConstraint,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 
@@ -265,6 +265,66 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
     }
 }
 
+
+impl<'de> Deserialize<'de> for Segment {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(SegmentVisitor)
+    }
+}
+
+struct SegmentVisitor;
+impl<'de> Visitor<'de> for SegmentVisitor {
+    type Value = Segment;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a segment object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Segment, A::Error> {
+        let mut x = Segment {
+            constraints: Vec::new(),
+            len: 0,
+            successors: Vec::new(),
+            enter_from_network: false,
+            exit_to_network: false,
+        };
+
+        let mut seen = HashSet::new();
+        while let Some(k) = map.next_key::<String>()? {
+            if !seen.insert(k.clone()) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate key {:?}", k,
+                )));
+            }
+
+            match &k as &str {
+                "constraints" => { x.constraints = map.next_value()?; },
+                "len" => { x.len = map.next_value()?; },
+                "successors" => { x.successors = map.next_value()?; },
+                "enter_from_network" => { x.enter_from_network = map.next_value()?; },
+                "exit_to_network" => { x.exit_to_network = map.next_value()?; },
+                _ => return Err(serde::de::Error::custom(format_args!(
+                    "unknown key {:?}", k,
+                ))),
+            }
+        }
+
+        Ok(x)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Segment, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 5);
+        let x = Segment {
+            constraints: seq.next_element()?,
+            len: seq.next_element()?,
+            successors: seq.next_element()?,
+            enter_from_network: seq.next_element()?,
+            exit_to_network: seq.next_element()?,
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
 
 impl<'de> Deserialize<'de> for SegmentConstraint {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {

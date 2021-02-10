@@ -1151,7 +1151,7 @@ impl Default for Sparsity {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Segment {
     pub constraints: Vec<SegmentConstraint>,
     pub len: usize,
