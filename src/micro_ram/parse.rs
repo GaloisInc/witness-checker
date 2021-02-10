@@ -403,6 +403,61 @@ impl<'de> Visitor<'de> for AdviceVisitor {
 }
 
 
+impl<'de> Deserialize<'de> for TraceChunk {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(TraceChunkVisitor)
+    }
+}
+
+struct TraceChunkVisitor;
+impl<'de> Visitor<'de> for TraceChunkVisitor {
+    type Value = TraceChunk;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a segment object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<TraceChunk, A::Error> {
+        let mut x = TraceChunk {
+            segment: 0,
+            states: Vec::new(),
+            debug: None,
+        };
+
+        let mut seen = HashSet::new();
+        while let Some(k) = map.next_key::<String>()? {
+            if !seen.insert(k.clone()) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate key {:?}", k,
+                )));
+            }
+
+            match &k as &str {
+                "segment" => { x.segment = map.next_value()?; },
+                "states" => { x.states = map.next_value()?; },
+                "debug" => { x.debug = Some(map.next_value()?); },
+                _ => return Err(serde::de::Error::custom(format_args!(
+                    "unknown key {:?}", k,
+                ))),
+            }
+        }
+
+        Ok(x)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<TraceChunk, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 2);
+        let x = TraceChunk {
+            segment: seq.next_element()?,
+            states: seq.next_element()?,
+            debug: None,
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+
 struct CountedSeqAccess<A> {
     seq: A,
     expect: usize,

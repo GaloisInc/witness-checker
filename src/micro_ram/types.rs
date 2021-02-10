@@ -1189,12 +1189,11 @@ pub enum Advice {
     Advise { advise: u64 },
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TraceChunk {
     pub segment: usize,
     pub states: Vec<RamState>,
     /// Debug overrides.  Used to construct invalid traces for testing purposes.
-    #[serde(default)]
     pub debug: Option<TraceChunkDebug>,
 }
 
