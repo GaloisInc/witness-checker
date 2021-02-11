@@ -50,24 +50,12 @@ pub fn with_features<R>(fs: HashSet<Feature>, f: impl FnOnce() -> R) -> R {
 /// A wrapper around `Execution` to support custom parsing logic.
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub struct ParseExecution(AnyExecution);
+pub struct ParseExecution(VersionedExecution);
 
 impl ParseExecution {
     pub fn into_inner(self) -> Execution {
-        match self.0 {
-            AnyExecution::Versioned(e) => e.0,
-            AnyExecution::Unversioned(e) => e.0,
-        }
+        self.0.0
     }
-}
-
-
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum AnyExecution {
-    Versioned(VersionedExecution),
-    Unversioned(UnversionedExecution),
 }
 
 
