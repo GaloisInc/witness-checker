@@ -3,4 +3,4 @@ invalid trace: read from 28 on cycle 12 produced 30 (expected 40)
 invalid trace: read from 28 on cycle 17 produced 40 (expected 30)
 invalid trace: cycle 7 sets reg 0 to 20 (expected 21)
 invalid trace: cycle 12's mem port has address 40 (expected 32)
-internal evaluator: 860 asserts passed, 5 failed; found 0 bugs; overall status: BAD
+internal evaluator: 804 asserts passed, 5 failed; found 0 bugs; overall status: BAD

@@ -355,24 +355,20 @@ mk_named_enum! {
         Cjmp = 21,
         Cnjmp = 22,
 
-        Store = 23,
-        Load = 24,
-        Poison = 25,
+        Store1 = 23,
+        Store2 = 24,
+        Store4 = 25,
+        Store8 = 26,
+        Load1 = 27,
+        Load2 = 28,
+        Load4 = 29,
+        Load8 = 30,
+        Poison8 = 31,
 
-        Store1 = 26,
-        Store2 = 27,
-        Store4 = 28,
-        Store8 = 29,
-        Load1 = 30,
-        Load2 = 31,
-        Load4 = 32,
-        Load8 = 33,
-        Poison8 = 34,
+        Read = 32,
+        Answer = 33,
 
-        Read = 35,
-        Answer = 36,
-
-        Advise = 37,
+        Advise = 34,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.

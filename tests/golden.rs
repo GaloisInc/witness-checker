@@ -47,6 +47,7 @@ fn golden_tests() -> io::Result<()> {
             path.with_extension("out").file_name().unwrap(),
         )?;
 
+        eprintln!("running {:?}", path);
         // TODO: use witness-checker builder as a library instead of invoking the binary
         let output = Command::new("target/release/cheesecloth")
             .arg(&path)
