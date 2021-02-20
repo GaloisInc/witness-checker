@@ -103,6 +103,7 @@ impl<'a> SegGraphBuilder<'a> {
         params: &Params,
         cpu_init_state: RamState,
     ) -> SegGraphBuilder<'a> {
+        let _g = b.scoped_label("seg_graph");
         let mut sg = SegGraphBuilder {
             segments: iter::repeat_with(SegmentNode::default).take(seg_defs.len()).collect(),
             cycle_breaks: Vec::new(),
@@ -125,6 +126,7 @@ impl<'a> SegGraphBuilder<'a> {
         };
 
         for (i, seg_def) in seg_defs.iter().enumerate() {
+            let _g = b.scoped_label(format_args!("segment/{}", i));
             if i == 0 {
                 sg.segments[i].preds.push(Predecessor {
                     src: StateSource::CpuInit,
@@ -133,6 +135,7 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             for &j in &seg_def.successors {
+                let _g = b.scoped_label(format_args!("successor {}", j));
                 assert!(!sg.edges.contains_key(&(i, j)), "duplicate edge {} -> {}", i, j);
                 sg.edges.insert((i, j), b.secret().1);
 
@@ -143,6 +146,7 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             if seg_def.enter_from_network {
+                let _g = b.scoped_label("from net");
                 assert!(!sg.from_net.contains_key(&i), "duplicate edge net -> {}", i);
                 sg.from_net.insert(i, b.secret().1);
                 let output_id = network.add_output();
@@ -154,6 +158,7 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             if seg_def.exit_to_network {
+                let _g = b.scoped_label("to net");
                 assert!(!sg.to_net.contains_key(&i), "duplicate edge {} -> net", i);
                 sg.to_net.insert(i, b.secret().1);
                 sg.network_inputs.push(NetworkInputNode {
@@ -176,6 +181,7 @@ impl<'a> SegGraphBuilder<'a> {
         // For now, just insert a cycle-breaker before each segment.  This is very inefficient, but
         // is definitely correct.
         for (i, seg) in self.segments.iter_mut().enumerate() {
+            let _g = b.scoped_label(format_args!("cycle break {}", i));
             let preds = mem::take(&mut seg.preds);
             let j = self.cycle_breaks.len();
             self.cycle_breaks.push(CycleBreakNode {
@@ -200,6 +206,7 @@ impl<'a> SegGraphBuilder<'a> {
 
     /// Obtain the initial state to use for a given segment.
     pub fn get_initial(&mut self, b: &Builder<'a>, idx: usize) -> &TWire<'a, RamState> {
+        let _g = b.scoped_label(format_args!("seg_graph/get_initial/{}", idx));
         if self.segments[idx].init_state_cache.is_none() {
             let mut it = self.segments[idx].preds.iter();
             let first_pred = it.next()
@@ -255,6 +262,7 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     pub fn build_network(&mut self, b: &Builder<'a>) {
+        let _g = b.scoped_label("seg_graph/build_network");
         let mut routing = match self.network {
             NetworkState::Before(ref mut rb) => mem::take(rb),
             NetworkState::After(_) => panic!("already built the routing network"),
@@ -277,6 +285,7 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     pub fn finish(mut self, cx: &Context<'a>, b: &Builder<'a>) -> SegGraph<'a> {
+        let _g = b.scoped_label("seg_graph/finish");
         // Add equality assertions to constrain the CycleBreakNode secrets.  We do this first
         // because the later steps involve dismantling `self` to extract its `TSecretHandle`s.
         for (i, cbn) in self.cycle_breaks.iter().enumerate() {
