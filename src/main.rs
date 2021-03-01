@@ -215,31 +215,15 @@ fn calc_step<'a>(
         add_case(Opcode::Cnjmp, y, dest);
     }
 
-    {
-        let result = mem_port.value;
-        add_case(Opcode::Load, result, instr.dest);
-    }
-
     // Load1, Load2, Load4, Load8
     for w in MemOpWidth::iter() {
         let result = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
         add_case(w.load_opcode(), result, instr.dest);
     }
 
-    {
-        // Store operations have no effect on the registers, so their `calc_step` portion is a
-        // no-op.  Consistency between the stored value and the `MemPort` is handled in
-        // `check_step`.
-        add_case(Opcode::Store, b.lit(0), b.lit(REG_NONE));
-    }
-
     // Store1, Store2, Store4, Store8
     for w in MemOpWidth::iter() {
         add_case(w.store_opcode(), b.lit(0), b.lit(REG_NONE));
-    }
-
-    {
-        add_case(Opcode::Poison, b.lit(0), b.lit(REG_NONE));
     }
 
     {
@@ -316,23 +300,15 @@ fn check_step<'a>(
 
     // If the instruction is a store, load, or poison, we need additional checks to make sure the
     // fields of `mem_port` match the instruction operands.
-    let is_new_load = MemOpWidth::iter().map(|w| w.load_opcode())
+    let is_load = MemOpWidth::iter().map(|w| w.load_opcode())
         .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
-    let is_old_load = b.eq(instr.opcode, b.lit(Opcode::Load as u8));
-    let is_load = b.or(is_new_load, is_old_load);
-    let is_new_store = MemOpWidth::iter().map(|w| w.store_opcode())
+    let is_store = MemOpWidth::iter().map(|w| w.store_opcode())
         .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
-    let is_old_store = b.eq(instr.opcode, b.lit(Opcode::Store as u8));
-    let is_store = b.or(is_new_store, is_old_store);
-    let is_new_poison = b.eq(instr.opcode, b.lit(Opcode::Poison8 as u8));
-    let is_old_poison = b.eq(instr.opcode, b.lit(Opcode::Poison as u8));
-    let is_poison = b.or(is_new_poison, is_old_poison);
+    let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison8 as u8));
     let is_store_like = b.or(is_store, is_poison);
     let is_mem = b.or(is_load, is_store_like);
-    // Is this an old-style memory op, using word addressing?
-    let is_old_style = b.or(b.or(is_old_load, is_old_store), is_old_poison);
 
-    let addr = b.mux(is_old_style, b.mul(y, b.lit(8)), y);
+    let addr = y;
 
     cx.when(b, is_mem, |cx| {
         wire_assert!(
@@ -373,23 +349,6 @@ fn check_step<'a>(
             );
         });
     }
-
-    cx.when(b, is_old_store, |cx| {
-        let w = MemOpWidth::WORD;
-        wire_assert!(
-            cx, b.eq(mem_port.width, b.lit(w)),
-            "cycle {}'s mem port has width {:?} (expected {:?})",
-            cycle, cx.eval(mem_port.width), w,
-        );
-
-        let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
-        let x_low = extract_low_bytes(b, x, w);
-        wire_assert!(
-            cx, b.eq(stored_value, x_low),
-            "cycle {}'s mem port stores value {} at {:x} (expected value {})",
-            cycle, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
-        );
-    });
 
     cx.when(b, is_poison, |cx| {
         wire_assert!(

@@ -50,24 +50,12 @@ pub fn with_features<R>(fs: HashSet<Feature>, f: impl FnOnce() -> R) -> R {
 /// A wrapper around `Execution` to support custom parsing logic.
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub struct ParseExecution(AnyExecution);
+pub struct ParseExecution(VersionedExecution);
 
 impl ParseExecution {
     pub fn into_inner(self) -> Execution {
-        match self.0 {
-            AnyExecution::Versioned(e) => e.0,
-            AnyExecution::Unversioned(e) => e.0,
-        }
+        self.0.0
     }
-}
-
-
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum AnyExecution {
-    Versioned(VersionedExecution),
-    Unversioned(UnversionedExecution),
 }
 
 
@@ -216,20 +204,12 @@ impl<'de> Visitor<'de> for AdviceVisitor {
         let mut seq = CountedSeqAccess::new(seq, 1);
         let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
-                seq.expect += 3;
-                let addr = seq.next_element()?;
-                let value = seq.next_element()?;
-                let op = seq.next_element()?;
-                match seq.opt_next_element()? {
-                    Some(width) => Advice::MemOp { addr, value, op, width },
-                    // If the `width` field is absent, this is an old-style `MemOp`, using word
-                    // addressing, so convert it to the new byte-addressed style.
-                    None => Advice::MemOp {
-                        addr: addr * MemOpWidth::WORD.bytes() as u64,
-                        value,
-                        op,
-                        width: MemOpWidth::WORD,
-                    },
+                seq.expect += 4;
+                Advice::MemOp {
+                    addr: seq.next_element()?,
+                    value: seq.next_element()?,
+                    op: seq.next_element()?,
+                    width: seq.next_element()?,
                 }
             },
             "Stutter" => {
@@ -275,19 +255,6 @@ impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
                     &(&format!("a sequence of length {}", self.expect) as &str),
                 ));
             },
-        }
-    }
-
-    /// Try to parse an optional element of type `T`.  On success, increments `expect`
-    /// automatically.
-    fn opt_next_element<T: Deserialize<'de>>(&mut self) -> Result<Option<T>, A::Error> {
-        match self.seq.next_element::<T>()? {
-            Some(x) => {
-                self.seen += 1;
-                self.expect += 1;
-                Ok(Some(x))
-            },
-            None => Ok(None),
         }
     }
 
