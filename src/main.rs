@@ -54,6 +54,9 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("1")
              .help("check state against the trace every D steps"))
+        .arg(Arg::with_name("verifier-mode")
+             .long("verifier-mode")
+             .help("run in verifier mode, constructing the circuit but not the secret witness"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -278,10 +281,12 @@ fn check_state<'a>(
         );
     }
 
+    let trace_pc = trace_s.pc;
+    let calc_pc = calc_s.pc;
     wire_assert!(
-        cx, b.eq(trace_s.pc, calc_s.pc),
+        cx, b.eq(trace_pc, calc_pc),
         "cycle {} sets pc to {} (expected {})",
-        cycle, cx.eval(trace_s.pc), cx.eval(calc_s.pc),
+        cycle, cx.eval(trace_pc), cx.eval(calc_pc),
     );
 }
 
@@ -290,7 +295,7 @@ fn check_step<'a>(
     b: &Builder<'a>,
     cycle: u32,
     instr: TWire<'a, RamInstr>,
-    mem_port: &TWire<'a, MemPort>,
+    mem_port: TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
     let _g = b.scoped_label(format_args!("check_step/cycle {}", cycle));
@@ -374,10 +379,11 @@ fn check_first<'a>(
     s: &TWire<'a, RamState>,
 ) {
     let _g = b.scoped_label("check_first");
+    let pc = s.pc;
     wire_assert!(
-        cx, b.eq(s.pc, b.lit(0)),
+        cx, b.eq(pc, b.lit(0)),
         "initial pc is {} (expected {})",
-        cx.eval(s.pc), 0,
+        cx.eval(pc), 0,
     );
     for (i, &r) in s.regs.iter().enumerate().skip(1) {
         wire_assert!(
@@ -395,11 +401,12 @@ fn check_last<'a>(
     expect_zero: bool,
 ) {
     let _g = b.scoped_label("check_last");
+    let r0 = s.regs[0];
     if expect_zero {
         wire_assert!(
-            cx, b.eq(s.regs[0], b.lit(0)),
+            cx, b.eq(r0, b.lit(0)),
             "final r0 is {} (expected {})",
-            cx.eval(s.regs[0]), 0,
+            cx.eval(r0), 0,
         );
     }
 }
@@ -413,12 +420,18 @@ struct PassRunner<'a> {
     /// Invariant: the underlying `Gate` of every wire in `wires` is allocated from the `cur`
     /// arena.
     wires: MaybeUninit<Vec<Wire<'a>>>,
+    is_prover: bool,
 }
 
 const DEBUG_PASSES: bool = false;
 
 impl<'a> PassRunner<'a> {
-    pub fn new(a: &'a mut Bump, b: &'a mut Bump, wires: Vec<Wire>) -> PassRunner<'a> {
+    pub fn new(
+        a: &'a mut Bump,
+        b: &'a mut Bump,
+        wires: Vec<Wire>,
+        is_prover: bool,
+    ) -> PassRunner<'a> {
         a.reset();
         b.reset();
         let cur = MaybeUninit::new(a);
@@ -426,12 +439,12 @@ impl<'a> PassRunner<'a> {
         let wires = unsafe {
             // Transfer all wires into the `cur` arena.
             let arena: &Bump = &**cur.as_ptr();
-            let c = Circuit::new(arena);
+            let c = Circuit::new(arena, is_prover);
             let wires = run_pass(&c, wires, |c, _old, gk| c.gate(gk));
             MaybeUninit::new(wires)
         };
 
-        PassRunner { cur, next, wires }
+        PassRunner { cur, next, wires, is_prover }
     }
 
     // FIXME: using `'a` instead of a fresh lifetime (`for <'b>`) potentially allows the closure to
@@ -441,7 +454,7 @@ impl<'a> PassRunner<'a> {
         unsafe {
             {
                 let arena: &Bump = &**self.next.as_ptr();
-                let c = Circuit::new(arena);
+                let c = Circuit::new(arena, self.is_prover);
                 let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
                 let wires = if DEBUG_PASSES {
                     run_pass_debug(&c, wires, f)
@@ -459,7 +472,7 @@ impl<'a> PassRunner<'a> {
     pub fn finish(self) -> (Circuit<'a>, Vec<Wire<'a>>) {
         unsafe {
             let arena: &Bump = &**self.cur.as_ptr();
-            let c = Circuit::new(arena);
+            let c = Circuit::new(arena, self.is_prover);
             let wires = ptr::read(self.wires.as_ptr());
             (c, wires)
         }
@@ -475,9 +488,10 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    let is_prover = !args.is_present("verifier-mode");
 
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = Circuit::new(&arena, is_prover);
     let b = Builder::new(&c);
     let cx = Context::new(&c);
 
@@ -499,20 +513,26 @@ fn main() -> io::Result<()> {
     }
 
     // Set up memory ports and check consistency.
-    let mut mem = Memory::new(false);
+    let mut mem = Memory::new(is_prover);
     for seg in &exec.init_mem {
         mem.init_segment(&b, seg);
     }
-    let cycle_mem_ports = mem.add_cycles(
+    let mut cycle_mem_ports = mem.add_cycles(
         &cx, &b,
         exec.params.trace_len - 1,
         exec.params.sparsity.mem_op,
-        |i| {
-            let advs = exec.advice.get(&(i as u64 + 1)).map_or(&[] as &[_], |x| x);
-            (advs, i as u32)
-        },
     );
-    mem.assert_consistent(&cx, &b);
+    for (&i, advs) in &exec.advice {
+        let cycle = (i - 1) as u32;
+        for adv in advs {
+            let port = match *adv {
+                Advice::MemOp { addr, value, op, width } =>
+                    MemPort { cycle, addr, value, op, width },
+                _ => { continue; },
+            };
+            cycle_mem_ports.set_port(&b, port);
+        }
+    }
 
     // Gather `Advise` and `Stutter` advice values
     let mut advices = HashMap::new();
@@ -532,7 +552,7 @@ fn main() -> io::Result<()> {
     }
 
     // Set up instruction-fetch ports and check consistency.
-    let mut fetch = Fetch::new(false);
+    let mut fetch = Fetch::new(is_prover);
     fetch.init_program(&b, &exec.program);
     let cycle_fetch_ports = fetch.add_cycles(
         &b,
@@ -555,12 +575,12 @@ fn main() -> io::Result<()> {
         // Fetch the instruction to execute.  If the `Stutter` advice is present, the instruction
         // opcode is actually replaced by `Opcode::Stutter`.
         let mut instr = cycle_fetch_ports.get_instr(i);
-        let stutter = b.secret(Some(stutters.contains(&(i as u32))));
+        let stutter = b.secret_init(|| stutters.contains(&(i as u32)));
         instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
         let instr = instr;
 
         let port = cycle_mem_ports.get(&b, i);
-        let advice = b.secret(Some(*advices.get(&(i as u32)).unwrap_or(&0)));
+        let advice = b.secret_init(|| *advices.get(&(i as u32)).unwrap_or(&0));
 
         let (calc_s, calc_im) = calc_step(&b, i as u32, instr, &port, advice, &prev_s);
 
@@ -571,7 +591,7 @@ fn main() -> io::Result<()> {
         } else {
             prev_s = calc_s.clone();
         }
-        check_step(&cx, &b, i as u32, instr, &port, &calc_im);
+        check_step(&cx, &b, i as u32, instr, port, &calc_im);
     }
     // We rely on the loop running once for every `i` in `0 .. num_steps`.
     assert_eq!(max_i + 1, exec.params.trace_len as usize - 1);
@@ -580,13 +600,23 @@ fn main() -> io::Result<()> {
 
     // Check that the fetch ports are consistent with the steps taken.
     for (i, port) in cycle_fetch_ports.iter().enumerate() {
+        let addr = port.addr;
+        let pc = trace[i].pc;
         wire_assert!(
             &cx,
-            b.eq(port.addr, trace[i].pc),
+            b.eq(addr, pc),
             "fetch on cycle {} accesses address {:x} (expected {:x})",
-            i, cx.eval(port.addr), cx.eval(trace[i].pc),
+            i, cx.eval(addr), cx.eval(pc),
         );
     }
+
+    // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
+    // before we move on.
+    drop(cycle_mem_ports);
+
+    // Some consistency checks involve sorting, which requires that all the relevant secrets be
+    // initialized first.
+    mem.assert_consistent(&cx, &b);
 
     // Collect assertions and bugs.
     drop(b);
@@ -620,7 +650,7 @@ fn main() -> io::Result<()> {
 
     let mut arena1 = Bump::new();
     let mut arena2 = Bump::new();
-    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags);
+    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags, is_prover);
 
     let gadget_supported = |g: GadgetKindRef| {
         use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};

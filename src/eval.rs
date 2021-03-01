@@ -105,7 +105,7 @@ impl<'a> SecretEvaluator<'a> for Public {
 pub struct RevealSecrets;
 impl<'a> SecretEvaluator<'a> for RevealSecrets {
     fn eval_secret(&mut self, s: Secret<'a>) -> Option<Value> {
-        Some(Value::from_lit(s.ty, s.val?))
+        Some(Value::from_lit(s.ty, s.val()?))
     }
 }
 

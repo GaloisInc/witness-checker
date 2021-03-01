@@ -9,14 +9,14 @@ use crate::micro_ram::types::{FetchPort, PackedFetchPort, RamInstr};
 use crate::sort;
 
 pub struct Fetch<'a> {
-    verifier: bool,
+    prover: bool,
     ports: Vec<TWire<'a, FetchPort>>,
 }
 
 impl<'a> Fetch<'a> {
-    pub fn new(verifier: bool) -> Fetch<'a> {
+    pub fn new(prover: bool) -> Fetch<'a> {
         Fetch {
-            verifier,
+            prover,
             ports: Vec::new(),
         }
     }
@@ -46,15 +46,12 @@ impl<'a> Fetch<'a> {
         };
 
         for i in 0 .. len {
-            let fp = if self.verifier {
-                None
-            } else {
+            let mut fp = b.secret_init(|| {
                 let pc = get_pc(i);
                 let instr = prog.get(pc as usize).cloned()
                     .unwrap_or_else(|| panic!("program executed out of bounds at pc = {}", pc));
-                Some(FetchPort { addr: pc, instr, write: false })
-            };
-            let mut fp = b.secret(fp);
+                FetchPort { addr: pc, instr, write: false }
+            });
             fp.write = b.lit(false);
             cp.ports.push(fp);
         }
@@ -98,9 +95,9 @@ impl<'a> Fetch<'a> {
         }
 
         // Run the consistency check.
-        check_first_fetch(cx, b, &sorted_ports[0]);
+        check_first_fetch(cx, b, sorted_ports[0]);
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
-        for (i, (port1, port2)) in it {
+        for (i, (&port1, &port2)) in it {
             check_fetch(cx, b, i, port1, port2);
         }
     }
@@ -128,7 +125,7 @@ impl<'a> CyclePorts<'a> {
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    port: &TWire<'a, FetchPort>,
+    port: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label("check_first_fetch");
     wire_assert!(
@@ -142,8 +139,8 @@ fn check_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     index: usize,
-    port1: &TWire<'a, FetchPort>,
-    port2: &TWire<'a, FetchPort>,
+    port1: TWire<'a, FetchPort>,
+    port2: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label(format_args!("check_fetch/index {}", index));
     cx.when(b, b.not(port2.write), |cx| {

@@ -171,7 +171,7 @@ fn maybe_swap<'a, T>(
     y: TWire<'a, T>,
 ) -> (TWire<'a, T>, TWire<'a, T>)
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
-    let swap = b.secret(swap);
+    let swap = b.secret_init(|| swap.unwrap());
     let x2 = b.mux(swap, y.clone(), x.clone());
     let y2 = b.mux(swap, x, y);
     (x2, y2)
@@ -469,7 +469,7 @@ mod test {
         assert!(perm.iter().enumerate().skip(n).all(|(i, &j)| i == j));
 
         let arena = Bump::new();
-        let c = Circuit::new(&arena);
+        let c = Circuit::new(&arena, true);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
@@ -512,7 +512,7 @@ mod test {
 
     fn check_benes_sort(inputs: &[u32]) {
         let arena = Bump::new();
-        let c = Circuit::new(&arena);
+        let c = Circuit::new(&arena, true);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
