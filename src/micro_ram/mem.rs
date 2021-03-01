@@ -3,6 +3,7 @@
 //! This includes setting up initial memory, adding `MemPort`s for each cycle, sorting, and
 //! checking the sorted list.
 use std::convert::TryFrom;
+use std::iter;
 use log::*;
 use crate::gadget::bit_pack;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
@@ -65,13 +66,25 @@ impl<'a> Memory<'a> {
         len: usize,
         sparsity: usize,
     ) -> CyclePorts<'a> {
-        let num_ports = (len + sparsity - 1) / sparsity;
+        self.add_cycles_irregular(cx, b, len, (0 .. len).step_by(sparsity))
+    }
 
+    pub fn add_cycles_irregular<'b>(
+        &mut self,
+        cx: &Context<'a>,
+        b: &Builder<'a>,
+        len: usize,
+        idxs: impl IntoIterator<Item = usize>,
+    ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
-            ports: Vec::with_capacity(num_ports),
-            sparsity: u8::try_from(sparsity).unwrap(),
+            port_starts: idxs.into_iter().chain(iter::once(len))
+                .map(|i| u32::try_from(i).unwrap()).collect(),
+            ports: Vec::new(),
         };
+        assert!((1 .. cp.port_starts.len()).all(|i| cp.port_starts[i - 1] < cp.port_starts[i]));
 
+        let num_ports = cp.port_starts.len() - 1;
+        cp.ports.reserve(num_ports);
         for i in 0 .. num_ports {
             let (mp, mp_secret) = b.secret_default(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
@@ -91,7 +104,7 @@ impl<'a> Memory<'a> {
             });
         }
 
-        cp.assert_valid(cx, b, len);
+        cp.assert_valid(cx, b);
         self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
         cp
     }
@@ -134,7 +147,9 @@ impl<'a> Memory<'a> {
 
         // Run the consistency check.
         // The first port has no previous port.  Supply a dummy port and set `prev_valid = false`.
-        check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
+        if sorted_ports.len() > 0 {
+            check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
+        }
 
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
         for (i, (prev, &port)) in it {
@@ -157,28 +172,54 @@ pub struct SparseMemPort<'a> {
 }
 
 pub struct CyclePorts<'a> {
+    /// The initial cycle covered by each port in `ports`.  `ports[i]` handles cycles in the range
+    /// `port_starts[i] .. port_starts[i+1]`.  We keep an extra trailing element in `port_starts`
+    /// to indicate the length (number of cycles covered) of the last port.
+    port_starts: Vec<u32>,
     ports: Vec<SparseMemPort<'a>>,
-    sparsity: u8,
 }
 
 impl<'a> CyclePorts<'a> {
-    pub fn sparsity(&self) -> usize {
-        self.sparsity as usize
+    fn index_to_port(&self, i: u32) -> Option<(usize, u8)> {
+        // Find the greatest element with `start <= i`.
+        let idx = match self.port_starts.binary_search(&i) {
+            // `Ok` means we found an entry whose start is exactly equal to `i`.
+            Ok(x) => x,
+            // `Err` gives the position where `i` could be inserted to keep the list sorted.  So
+            // the element at the previous index is the one we want.
+            Err(0) => return None,
+            Err(x) => x - 1,
+        };
+        let user = u8::try_from(i - self.port_starts[idx]).ok()?;
+        Some((idx, user))
+    }
+
+    fn port_len(&self, idx: usize) -> u8 {
+        let len = self.port_starts[idx + 1] - self.port_starts[idx];
+        u8::try_from(len)
+            .unwrap_or_else(|_| panic!("port index {} out of range for CyclePorts", idx))
     }
 
     /// Get the `MemPort` used by step `i`.  Returns `MemPort::default()` if step `i` does not have
     /// a `MemPort` assigned to it.
     pub fn get(&self, b: &Builder<'a>, i: usize) -> TWire<'a, MemPort> {
-        if self.sparsity == 1 {
+        let (idx, user) = match self.index_to_port(u32::try_from(i).unwrap()) {
+            Some(x) => x,
+            // `None` means no port covers step `i`.
+            None => return b.lit(MemPort {
+                cycle: MEM_PORT_UNUSED_CYCLE,
+                .. MemPort::default()
+            }),
+        };
+
+        if self.port_len(idx) == 1 {
             // Avoid an extra mux when sparsity is disabled.
-            return self.ports[i].mp;
+            return self.ports[idx].mp;
         }
 
-        let base = i / self.sparsity as usize;
-        let offset = i % self.sparsity as usize;
-        let smp = &self.ports[base];
+        let smp = &self.ports[idx];
         b.mux(
-            b.eq(smp.user, b.lit(offset as u8)),
+            b.eq(smp.user, b.lit(user as u8)),
             smp.mp,
             b.lit(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
@@ -187,10 +228,12 @@ impl<'a> CyclePorts<'a> {
         )
     }
 
-    /// Initialize the `MemPort` for `port.cycle` with the values in `port`.
-    pub fn set_port(&mut self, b: &Builder<'a>, port: MemPort) {
-        let idx = usize::try_from(port.cycle / self.sparsity as u32).unwrap();
-        let user = u8::try_from(port.cycle % self.sparsity as u32).unwrap();
+    /// Initialize the `MemPort` for `i` with the values in `port`.  `i` is the index of a cycle,
+    /// not a port, so it can range up to `self.ports.len() * self.sparsity` (the number of cycles
+    /// covered by this `CyclePorts`), not just `self.ports.len()` (the number of actual ports).
+    pub fn set_port(&mut self, b: &Builder<'a>, i: usize, port: MemPort) {
+        let (idx, user) = self.index_to_port(u32::try_from(i).unwrap())
+            .unwrap_or_else(|| panic!("no memory port is available for index {}", i));
         let smp = &mut self.ports[idx];
         assert!(!smp.is_set, "multiple mem ops require sparse mem port {}", idx);
         smp.mp_secret.set(b, port);
@@ -203,24 +246,17 @@ impl<'a> CyclePorts<'a> {
     }
 
     /// Perform validity checks, as described in `docs/memory_sparsity.md`.
-    fn assert_valid(&self, cx: &Context<'a>, b: &Builder<'a>, len: usize) {
-        // The last block may have fewer than `sparsity` steps in it.  In that case, we need to
-        // lower the limit on `user` for the final block.
-        let last_block_size = if len % self.sparsity as usize == 0 {
-            self.sparsity
-        } else {
-            (len % self.sparsity as usize) as u8
-        };
-
+    fn assert_valid(&self, cx: &Context<'a>, b: &Builder<'a>) {
         for (i, smp) in self.ports.iter().enumerate() {
-            let block_size = if i == self.ports.len() - 1 {
-                last_block_size
-            } else {
-                self.sparsity
-            };
+            let block_size = self.port_len(i);
             let user = smp.user;
+            let ok = if block_size == 1 {
+                b.eq(user, b.lit(0))
+            } else {
+                b.lt(user, b.lit(block_size))
+            };
             wire_assert!(
-                cx, b.lt(user, b.lit(block_size)),
+                cx, ok,
                 "block {} user index {} is out of range (expected < {})",
                 i, cx.eval(user), block_size,
             );

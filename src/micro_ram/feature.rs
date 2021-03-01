@@ -3,11 +3,11 @@ use serde::{Deserialize, Deserializer};
 
 macro_rules! define_features {
     (
-        $( $Variant:ident = $str:expr, )*
+        $( $(#[$attr:meta])* $Variant:ident = $str:expr, )*
     ) => {
         #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
         pub enum Feature {
-            $($Variant,)*
+            $( $(#[$attr])* $Variant,)*
         }
 
         impl<'de> Deserialize<'de> for Feature {
@@ -25,6 +25,11 @@ macro_rules! define_features {
 }
 
 define_features! {
+    PublicPc = "public-pc",
+    /// The keys of the `advice` dict are the index of the pre-state of the step that uses the
+    /// advice, rather than the index of the post-state.  For example, the advice for the first
+    /// step is placed at index 0 with this feature, rather than index 1.
+    PreAdvice = "pre-advice",
 }
 
 
@@ -43,13 +48,14 @@ macro_rules! define_versions {
         $( ($($v:expr),*) = { $($variants:tt)* }, )*
     ) => {
         pub static VERSIONS: &[(Version, &[Feature])] = &[
-            $( (Version($($v),*), &[ $($variants)* ]), )*
+            $( (Version($($v),*), &[ $(Feature::$variants,)* ]), )*
         ];
     };
 }
 
 define_versions! {
     (0,1,0,0) = {},
+    (0,1,1,0) = { PublicPc PreAdvice },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {

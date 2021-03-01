@@ -100,6 +100,10 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
         let lit = bld.lit(val);
         T::set_from_lit(&self.secret.repr, &lit.repr, true);
     }
+
+    pub fn wire(&self) -> &TWire<'a, T> {
+        &self.secret
+    }
 }
 
 impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> Drop for TSecretHandle<'a, T> {

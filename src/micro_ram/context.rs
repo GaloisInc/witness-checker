@@ -12,7 +12,7 @@ macro_rules! wire_assert {
         {
             let cx = $cx;
             let cond = $cond;
-            $cx.assert($cond, move |$cx| {
+            $cx.assert(cond, move |$cx| {
                 eprintln!("invalid trace: {}", format_args!($($args)*));
             });
         }
@@ -30,7 +30,7 @@ macro_rules! wire_bug_if {
         {
             let cx = $cx;
             let cond = $cond;
-            $cx.bug_if($cond, move |$cx| {
+            $cx.bug_if(cond, move |$cx| {
                 eprintln!("found bug: {}", format_args!($($args)*));
             });
         }
@@ -43,6 +43,12 @@ macro_rules! wire_bug_if {
 }
 
 pub struct SecretValue<T>(pub Option<T>);
+
+impl<T> SecretValue<T> {
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> SecretValue<U> {
+        SecretValue(self.0.map(f))
+    }
+}
 
 impl<T: fmt::Display> fmt::Display for SecretValue<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
