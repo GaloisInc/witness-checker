@@ -208,7 +208,7 @@ fn main() -> io::Result<()> {
 
         let new_segment = Segment {
             constraints: vec![],
-            len: chunk.states.len() - 1,
+            len: exec.params.trace_len.unwrap() - 1,
             successors: vec![],
             enter_from_network: false,
             exit_to_network: false,

@@ -15,7 +15,6 @@
 
   params:
     num_regs: 3
-    trace_len: 6
 
   segments:
     - constraints: []

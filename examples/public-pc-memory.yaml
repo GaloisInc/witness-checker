@@ -1,7 +1,6 @@
 ## FLAGS: --validate-only --expect-zero
 # An example with a conditional branch and separate segments for each side.
 # This tests segment graphs that split and merge.
-# TODO: needs per-state liveness flag to avoid spurious errors from the unused segment
 
 - [0,1,0,0]
 - [public-pc]
@@ -20,7 +19,6 @@
 
   params:
     num_regs: 2
-    trace_len: 7
 
   # Use a dummy initial memory segment to set the initial r0 to a specific
   # value (the end address of the segment)
