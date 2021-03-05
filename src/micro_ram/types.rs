@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt;
-use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
+use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind};
-use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux};
-use crate::mode::if_mode::{IfMode, AnyTainted, is_mode};
+use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
+use crate::ir::typed::{
+    self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
+};
+use crate::micro_ram::feature::{Feature, Version};
+use crate::mode::if_mode::{IfMode, AnyTainted, UNTAINTED, is_mode};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -37,6 +39,10 @@ impl RamInstr {
             op2: op2 as u64,
             imm,
         }
+    }
+
+    pub fn opcode(&self) -> Opcode {
+        Opcode::from_raw(self.opcode).unwrap()
     }
 
     pub fn mov(rd: u32, r1: u32) -> RamInstr {
@@ -101,24 +107,22 @@ impl<'a> Lit<'a> for RamInstr {
 }
 
 impl<'a> Secret<'a> for RamInstr {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            RamInstrRepr {
-                opcode: bld.with_label("opcode", || bld.secret(Some(a.opcode))),
-                dest: bld.with_label("dest", || bld.secret(Some(a.dest))),
-                op1: bld.with_label("op1", || bld.secret(Some(a.op1))),
-                op2: bld.with_label("op2", || bld.secret(Some(a.op2))),
-                imm: bld.with_label("imm", || bld.secret(Some(a.imm))),
-            }
-        } else {
-            RamInstrRepr {
-                opcode: bld.with_label("opcode", || bld.secret(None)),
-                dest: bld.with_label("dest", || bld.secret(None)),
-                op1: bld.with_label("op1", || bld.secret(None)),
-                op2: bld.with_label("op2", || bld.secret(None)),
-                imm: bld.with_label("imm", || bld.secret(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        RamInstrRepr {
+            opcode: bld.with_label("opcode", || bld.secret_uninit()),
+            dest: bld.with_label("dest", || bld.secret_uninit()),
+            op1: bld.with_label("op1", || bld.secret_uninit()),
+            op2: bld.with_label("op2", || bld.secret_uninit()),
+            imm: bld.with_label("imm", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.opcode, &val.opcode, force);
+        Builder::set_secret_from_lit(&s.dest, &val.dest, force);
+        Builder::set_secret_from_lit(&s.op1, &val.op1, force);
+        Builder::set_secret_from_lit(&s.op2, &val.op2, force);
+        Builder::set_secret_from_lit(&s.imm, &val.imm, force);
     }
 }
 
@@ -172,24 +176,45 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
+    // All states parsed from the trace are assumed to be live.
+    #[serde(default = "return_true")]
+    pub live: bool,
+    #[serde(default)]
+    pub cycle: u32,
     #[serde(default)]
     pub tainted_regs: IfMode<AnyTainted, Vec<Label>>,
 }
 
+fn return_true() -> bool { true }
+
 impl RamState {
-    pub fn new(pc: u32, regs: Vec<u32>, tainted_regs: IfMode<AnyTainted, Vec<Label>>) -> RamState {
+    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool, tainted_regs: IfMode<AnyTainted, Vec<Label>>) -> RamState {
         RamState {
+            cycle,
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
+            live,
             tainted_regs,
+        }
+    }
+
+    pub fn default_with_regs(num_regs: usize) -> RamState {
+        RamState {
+            cycle: 0,
+            pc: 0,
+            regs: vec![0; num_regs],
+            live: false,
+            tainted_regs: IfMode::new(|_| vec![UNTAINTED; num_regs]),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct RamStateRepr<'a> {
+    pub cycle: TWire<'a, u32>,
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
+    pub live: TWire<'a, bool>,
     pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, Label>>>,
 }
 
@@ -200,22 +225,45 @@ impl<'a> Repr<'a> for RamState {
 impl<'a> Lit<'a> for RamState {
     fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
         RamStateRepr {
+            cycle: bld.lit(a.cycle),
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
+            live: bld.lit(a.live),
             tainted_regs: a.tainted_regs.map(|regs| bld.lit(regs).repr),
         }
+    }
+}
+
+impl<'a> Secret<'a> for RamState {
+    fn secret(_bld: &Builder<'a>) -> Self::Repr {
+        panic!("can't construct RamState via Builder::secret - use RamState::secret instead");
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
+        Builder::set_secret_from_lit(&s.pc, &val.pc, force);
+        assert_eq!(s.regs.len(), val.regs.len());
+        for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
+            Builder::set_secret_from_lit(s_reg, val_reg, force);
+        }
+        for (s_reg, val_reg) in s.tainted_regs.iter().zip(val.tainted_regs.iter()) {
+            Builder::set_secret_from_lit(s_reg, val_reg, force);
+        }
+        Builder::set_secret_from_lit(&s.live, &val.live, force);
     }
 }
 
 impl RamState {
     pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.with_label("pc", || bld.secret(Some(a.pc))),
+            cycle: bld.with_label("cycle", || bld.secret_init(|| a.cycle)),
+            pc: bld.with_label("pc", || bld.secret_init(|| a.pc)),
             regs: bld.with_label("regs", || {
                 a.regs.iter().enumerate().map(|(i, &x)| {
-                    bld.with_label(i, || bld.secret(Some(x)))
+                    bld.with_label(i, || bld.secret_init(|| x))
                 }).collect()
             }),
+            live: bld.with_label("live", || bld.secret_init(|| a.live)),
             tainted_regs: bld.with_label("tainted_regs", || {
                 a.tainted_regs.map(|v| v.iter().enumerate().map(|(i, &t)| {
                     bld.with_label(i, || bld.secret(Some(t)))
@@ -226,16 +274,79 @@ impl RamState {
 
     pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.with_label("pc", || bld.secret(None)),
+            cycle: bld.with_label("cycle", || bld.secret_uninit()),
+            pc: bld.with_label("pc", || bld.secret_uninit()),
             regs: bld.with_label("regs", || (0 .. len).map(|i| {
-                bld.with_label(i, || bld.secret(None))
+                bld.with_label(i, || bld.secret_uninit())
             }).collect()),
+            live: bld.with_label("live", || bld.secret_uninit()),
             tainted_regs: IfMode::new(|_| bld.with_label("tainted_regs", || (0 .. len).map(|i| {
                 bld.with_label(i, || bld.secret(None))
             }).collect())),
         })
     }
+
+    pub fn secret<'a>(
+        bld: &Builder<'a>,
+        len: usize,
+    ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
+        let wire = Self::secret_with_len(bld, len);
+        let default = bld.lit(RamState {
+            cycle: 0,
+            pc: 0,
+            regs: vec![0; len],
+            live: false,
+        });
+        (wire.clone(), TSecretHandle::new(wire, default))
+    }
 }
+
+impl<'a, C: Repr<'a>> Mux<'a, C, RamState> for RamState
+where
+    C::Repr: Clone,
+    u32: Mux<'a, C, u32, Output = u32>,
+    <u32 as Repr<'a>>::Repr: Copy,
+    u64: Mux<'a, C, u64, Output = u64>,
+    <u64 as Repr<'a>>::Repr: Copy,
+    bool: Mux<'a, C, bool, Output = bool>,
+    <bool as Repr<'a>>::Repr: Copy,
+{
+    type Output = RamState;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        let c: TWire<C> = TWire::new(c);
+        assert_eq!(t.regs.len(), e.regs.len());
+        RamStateRepr {
+            cycle: bld.mux(c.clone(), t.cycle, e.cycle),
+            pc: bld.mux(c.clone(), t.pc, e.pc),
+            regs: t.regs.iter().zip(e.regs.iter())
+                .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
+                .collect(),
+            live: bld.mux(c.clone(), t.live, e.live),
+        }
+    }
+}
+
+impl<'a> typed::Eq<'a, RamState> for RamState {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        assert_eq!(a.regs.len(), b.regs.len());
+        let mut acc = bld.lit(true);
+        acc = bld.and(acc, bld.eq(a.cycle, b.cycle));
+        acc = bld.and(acc, bld.eq(a.pc, b.pc));
+        for (&a_reg, &b_reg) in a.regs.iter().zip(b.regs.iter()) {
+            acc = bld.and(acc, bld.eq(a_reg, b_reg));
+        }
+        acc = bld.and(acc, bld.eq(a.live, b.live));
+        acc.repr
+    }
+}
+
 
 
 macro_rules! mk_named_enum {
@@ -304,8 +415,12 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> Secret<'a> for $Name {
-            fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-                bld.secret(a.map(|a| a as u8))
+            fn secret(bld: &Builder<'a>) -> Self::Repr {
+                bld.secret_uninit()
+            }
+
+            fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+                Builder::set_secret_from_lit(s, val, force);
             }
         }
 
@@ -320,6 +435,20 @@ macro_rules! mk_named_enum {
             type Output = bool;
             fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
                 bld.ne(a, b).repr
+            }
+        }
+
+        impl<'a> FromEval<'a> for $Name {
+            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+                let raw = u8::from_eval(ev, a.repr)?;
+                let result = Self::from_raw(raw);
+                if result.is_none() {
+                    eprintln!(
+                        "warning: evaluation of {} produced out-of-range value {}",
+                        stringify!($Name), raw,
+                    );
+                }
+                result
             }
         }
     };
@@ -355,14 +484,20 @@ mk_named_enum! {
         Cjmp = 21,
         Cnjmp = 22,
 
-        Store = 23,
-        Load = 24,
-        Poison = 25,
+        Store1 = 23,
+        Store2 = 24,
+        Store4 = 25,
+        Store8 = 26,
+        Load1 = 27,
+        Load2 = 28,
+        Load4 = 29,
+        Load8 = 30,
+        Poison8 = 31,
 
-        Read = 26,
-        Answer = 27,
+        Read = 32,
+        Answer = 33,
 
-        Advise = 28,
+        Advise = 34,
 
         /// Instruction used for taint analysis that signifies a value is written to a sink.
         /// The destination is unused, first argument is the value being output, and the second is the label of the output
@@ -378,6 +513,18 @@ mk_named_enum! {
     }
 }
 
+impl Opcode {
+    pub fn is_mem(&self) -> bool {
+        use Opcode::*;
+        match *self {
+            Store1 | Store2 | Store4 | Store8 |
+            Load1 | Load2 | Load4 | Load8 |
+            Poison8 => true,
+            _ => false,
+        }
+    }
+}
+
 
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
@@ -386,14 +533,26 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 /// Currently, labels are u16 integers.
 pub type Label = u16;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct MemPort {
+    /// The cycle on which this operation occurs.
     pub cycle: u32,
+    /// The address accessed in this operation.  Must be well aligned; that is, `addr` must be a
+    /// multiple of the `width.bytes()`.
     pub addr: u64,
+    /// The value of the aligned word that contains `addr` after the execution of this operation.
+    /// For example, if `addr` is `0x13`, then `value` is the value of the word starting at `0x10`.
     pub value: u64,
     pub op: MemOpKind,
+    /// The width of this memory access.  For `Write` and `Poison` operations, only the
+    /// `width.bytes()` bytes starting at `addr` may be modified; if `width < MemOpWidth::WORD`,
+    /// then all other bytes of `value` must be copied from the previous value of the modified
+    /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
+    /// `value` must exactly match the previous value of the accessed word.
+    pub width: MemOpWidth,
     pub tainted: IfMode<AnyTainted, Label>,
 }
+
 
 mk_named_enum! {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -425,12 +584,84 @@ where
     }
 }
 
+
+mk_named_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum MemOpWidth {
+        W1 = 0,
+        W2 = 1,
+        W4 = 2,
+        W8 = 3,
+    }
+}
+
+impl MemOpWidth {
+    pub const WORD: MemOpWidth = MemOpWidth::W8;
+
+    pub const fn bytes(self) -> usize {
+        1_usize << (self as u8)
+    }
+
+    pub const fn bits(self) -> usize {
+        self.bytes() * 8
+    }
+
+    pub const fn log_bytes(self) -> usize {
+        self as u8 as usize
+    }
+
+    pub const fn load_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Load1,
+            MemOpWidth::W2 => Opcode::Load2,
+            MemOpWidth::W4 => Opcode::Load4,
+            MemOpWidth::W8 => Opcode::Load8,
+        }
+    }
+
+    pub const fn store_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Store1,
+            MemOpWidth::W2 => Opcode::Store2,
+            MemOpWidth::W4 => Opcode::Store4,
+            MemOpWidth::W8 => Opcode::Store8,
+        }
+    }
+}
+
+pub const WORD_BYTES: usize = MemOpWidth::WORD.bytes();
+pub const WORD_BITS: usize = MemOpWidth::WORD.bits();
+pub const WORD_LOG_BYTES: usize = MemOpWidth::WORD.log_bytes();
+
+impl Default for MemOpWidth {
+    fn default() -> MemOpWidth { MemOpWidth::WORD }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, MemOpWidth> for MemOpWidth
+where
+    C::Repr: Clone,
+    u8: Mux<'a, C, u8, Output = u8>,
+{
+    type Output = MemOpWidth;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: TWire<'a, u8>,
+        e: TWire<'a, u8>,
+    ) -> TWire<'a, u8> {
+        bld.mux(TWire::new(c), t, e)
+    }
+}
+
+
 #[derive(Clone, Copy)]
 pub struct MemPortRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
+    pub width: TWire<'a, MemOpWidth>,
     pub tainted: TWire<'a, IfMode<AnyTainted, Label>>,
 }
 
@@ -445,30 +676,30 @@ impl<'a> Lit<'a> for MemPort {
             addr: bld.lit(a.addr),
             value: bld.lit(a.value),
             op: bld.lit(a.op),
+            width: bld.lit(a.width),
             tainted: bld.lit(a.tainted),
         }
     }
 }
 
 impl<'a> Secret<'a> for MemPort {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            MemPortRepr {
-                cycle: bld.with_label("cycle", || bld.secret(Some(a.cycle))),
-                addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
-                value: bld.with_label("value", || bld.secret(Some(a.value))),
-                op: bld.with_label("op", || bld.secret(Some(a.op))),
-                tainted: bld.with_label("tainted", || bld.secret(Some(a.tainted))),
-            }
-        } else {
-            MemPortRepr {
-                cycle: bld.with_label("cycle", || bld.secret(None)),
-                addr: bld.with_label("addr", || bld.secret(None)),
-                value: bld.with_label("value", || bld.secret(None)),
-                op: bld.with_label("op", || bld.secret(None)),
-                tainted: bld.with_label("tainted", || bld.secret(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        MemPortRepr {
+            cycle: bld.with_label("cycle", || bld.secret_uninit()),
+            addr: bld.with_label("addr", || bld.secret_uninit()),
+            value: bld.with_label("value", || bld.secret_uninit()),
+            op: bld.with_label("op", || bld.secret_uninit()),
+            width: bld.with_label("width", || bld.secret_uninit()),
+            tainted: bld.with_label("tainted", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
+        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
+        Builder::set_secret_from_lit(&s.value, &val.value, force);
+        Builder::set_secret_from_lit(&s.op, &val.op, force);
+        Builder::set_secret_from_lit(&s.width, &val.width, force);
     }
 }
 
@@ -479,6 +710,7 @@ where
     u64: Mux<'a, C, u64, Output = u64>,
     Label: Mux<'a, C, Label, Output = Label>,
     MemOpKind: Mux<'a, C, MemOpKind, Output = MemOpKind>,
+    MemOpWidth: Mux<'a, C, MemOpWidth, Output = MemOpWidth>,
 {
     type Output = MemPort;
 
@@ -494,10 +726,94 @@ where
             addr: bld.mux(c.clone(), t.addr, e.addr),
             value: bld.mux(c.clone(), t.value, e.value),
             op: bld.mux(c.clone(), t.op, e.op),
+            width: bld.mux(c.clone(), t.width, e.width),
             tainted: bld.mux(c.clone(), t.tainted, e.tainted),
         }
     }
 }
+
+
+pub struct ByteOffset(u8);
+
+impl ByteOffset {
+    pub fn new(x: u8) -> ByteOffset {
+        assert!((x as usize) < MemOpWidth::WORD.bytes());
+        ByteOffset(x)
+    }
+
+    pub fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl<'a> Repr<'a> for ByteOffset {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for ByteOffset {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
+
+impl<'a> Lit<'a> for ByteOffset {
+    fn lit(bld: &Builder<'a>, x: Self) -> Wire<'a> {
+        let c = bld.circuit();
+        c.lit(Self::wire_type(c), x.raw() as u64)
+    }
+}
+
+impl<'a> Mux<'a, bool, ByteOffset> for ByteOffset {
+    type Output = ByteOffset;
+    fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+        bld.circuit().mux(c, t, e)
+    }
+}
+
+
+impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a, b)
+    }
+}
+
+pub struct WordAddr;
+
+impl<'a> Repr<'a> for WordAddr {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for WordAddr {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(
+            MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
+
+impl<'a> typed::Eq<'a, WordAddr> for WordAddr {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        bld.circuit().eq(a, b)
+    }
+}
+
 
 pub struct PackedMemPort;
 
@@ -515,21 +831,25 @@ impl PackedMemPort {
         // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_CYCLE (-1) comes before all real
         // cycles.
         let cycle_adj = bld.add(mp.cycle, bld.lit(1));
+        // Split the address into word (upper 61 bits) and offset (lower 3 bits) parts.
+        let (offset, waddr) = *bit_pack::split_bits::<(ByteOffset, WordAddr)>(bld, mp.addr.repr);
         // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
         // put `addr` last in the list.
-        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, mp.addr)));
-        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _)>::new((
-            mp.value, mp.op, mp.tainted)));
+        let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, waddr)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _, _, _)>::new((
+            mp.value, mp.op, mp.width, mp.tainted, offset)));
         TWire::new(PackedMemPortRepr { key, data })
     }
 }
 
 impl<'a> PackedMemPortRepr<'a> {
     pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
-        let (cycle_adj, addr) = *bit_pack::split_bits::<(u32, _)>(bld, self.key);
+        let (cycle_adj, waddr) = *bit_pack::split_bits::<(u32, WordAddr)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
-        let (value, op, tainted) = *bit_pack::split_bits::<(_, _, _)>(bld, self.data);
-        TWire::new(MemPortRepr { cycle, addr, value, op, tainted })
+        let (value, op, width, tainted, offset) =
+            *bit_pack::split_bits::<(_, _, _, _, ByteOffset)>(bld, self.data);
+        let addr = TWire::new(bit_pack::concat_bits(bld, TWire::<(_, _)>::new((offset, waddr))));
+        TWire::new(MemPortRepr { cycle, addr, value, op, width, tainted })
     }
 }
 
@@ -607,20 +927,18 @@ impl<'a> Lit<'a> for FetchPort {
 }
 
 impl<'a> Secret<'a> for FetchPort {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            FetchPortRepr {
-                addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
-                instr: bld.with_label("instr", || bld.secret(Some(a.instr))),
-                write: bld.with_label("write", || bld.secret(Some(a.write))),
-            }
-        } else {
-            FetchPortRepr {
-                addr: bld.with_label("addr", || bld.secret(None)),
-                instr: bld.with_label("instr", || bld.secret(None)),
-                write: bld.with_label("write", || bld.secret(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        FetchPortRepr {
+            addr: bld.with_label("addr", || bld.secret_uninit()),
+            instr: bld.with_label("instr", || bld.secret_uninit()),
+            write: bld.with_label("write", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
+        Builder::set_secret_from_lit(&s.instr, &val.instr, force);
+        Builder::set_secret_from_lit(&s.write, &val.write, force);
     }
 }
 
@@ -732,18 +1050,28 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 
 
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Execution {
+    pub version: Version,
+    /// The set of all enabled features.  This is built by combining `declared_features` with the
+    /// baseline features implied by `version`.
+    pub features: HashSet<Feature>,
+    /// The set of features explicitly declared in the version header.
+    pub declared_features: HashSet<Feature>,
+
     pub program: Vec<RamInstr>,
-    #[serde(default)]
     pub init_mem: Vec<MemSegment>,
     pub params: Params,
-    pub trace: Vec<RamState>,
-    #[serde(default)]
+    pub segments: Vec<Segment>,
+    pub trace: Vec<TraceChunk>,
     pub advice: HashMap<u64, Vec<Advice>>,
 }
 
 impl Execution {
+    pub fn has_feature(&self, feature: Feature) -> bool {
+        self.features.contains(&feature)
+    }
+
     pub fn validate(self) -> Result<Self, String> {
         let params = &self.params;
         if self.trace.len() > params.trace_len {
@@ -753,12 +1081,58 @@ impl Execution {
             ));
         }
 
-        for (i, s) in self.trace.iter().enumerate() {
-            if s.regs.len() != params.num_regs {
+        if !self.features.contains(&Feature::PublicPc) {
+            if self.segments.len() != 0 {
                 return Err(format!(
-                    "`trace[{}]` should have {} register values (`num_regs`), not {}",
-                    i, params.num_regs, s.regs.len(),
+                    "expected no segment definitions in non-public-pc trace, but got {}",
+                    self.segments.len(),
                 ));
+            }
+        }
+
+        for (i, seg) in self.segments.iter().enumerate() {
+            for &idx in &seg.successors {
+                if idx >= self.segments.len() {
+                    return Err(format!(
+                        "`segments[{}]` has out-of-range successor {} (len = {})",
+                        i, idx, self.segments.len(),
+                    ));
+                }
+            }
+        }
+
+        for (i, chunk) in self.trace.iter().enumerate() {
+            if !self.features.contains(&Feature::PublicPc) {
+                if chunk.segment != 0 {
+                    return Err(format!(
+                        "`trace[{}]` references segment {} in non-public-pc mode",
+                        i, chunk.segment,
+                    ));
+                }
+            } else {
+                if chunk.segment >= self.segments.len() {
+                    return Err(format!(
+                        "`trace[{}]` references undefined segment {} (len = {})",
+                        i, chunk.segment, self.segments.len(),
+                    ));
+                }
+
+                let expect_len = self.segments[chunk.segment].len;
+                if chunk.states.len() != expect_len {
+                    return Err(format!(
+                        "`trace[{}]` for segment {} should have {} states, but has {}",
+                        i, chunk.segment, expect_len, chunk.states.len(),
+                    ));
+                }
+            }
+
+            for (j, state) in chunk.states.iter().enumerate() {
+                if state.regs.len() != params.num_regs {
+                    return Err(format!(
+                        "`trace[{}][{}]` should have {} register values (`num_regs`), not {}",
+                        i, j, params.num_regs, state.regs.len(),
+                    ));
+                }
             }
         }
 
@@ -789,7 +1163,7 @@ pub struct MemSegment {
     pub tainted: IfMode<AnyTainted,Vec<Label>>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Params {
     pub num_regs: usize,
     pub trace_len: usize,
@@ -816,157 +1190,66 @@ impl Default for Sparsity {
 }
 
 #[derive(Clone, Debug)]
+pub struct Segment {
+    pub constraints: Vec<SegmentConstraint>,
+    pub len: usize,
+    pub successors: Vec<usize>,
+    pub enter_from_network: bool,
+    pub exit_to_network: bool,
+}
+
+impl Segment {
+    pub fn init_pc(&self) -> Option<u64> {
+        for c in &self.constraints {
+            match *c {
+                SegmentConstraint::Pc(pc) => return Some(pc),
+                _ => {},
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SegmentConstraint {
+    Pc(u64),
+}
+
+#[derive(Clone, Debug)]
 pub enum Advice {
-    MemOp { addr: u64, value: u64, op: MemOpKind, tainted: IfMode<AnyTainted,Label> },
+    MemOp {
+        addr: u64,
+        value: u64,
+        op: MemOpKind,
+        width: MemOpWidth,
+        tainted: IfMode<AnyTainted,Label>,
+    },
     Stutter,
     Advise { advise: u64 },
 }
 
-
-impl<'de> Deserialize<'de> for Opcode {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        match Opcode::from_str(&s) {
-            Some(x) => Ok(x),
-            None => Err(de::Error::invalid_value(
-                de::Unexpected::Str(&s),
-                &"a MicroRAM opcode mnemonic",
-            )),
-        }
-    }
+#[derive(Clone, Debug)]
+pub struct TraceChunk {
+    pub segment: usize,
+    pub states: Vec<RamState>,
+    /// Debug overrides.  Used to construct invalid traces for testing purposes.
+    pub debug: Option<TraceChunkDebug>,
 }
 
-impl<'de> Deserialize<'de> for MemOpKind {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        match MemOpKind::from_str(&s) {
-            Some(x) => Ok(x),
-            None => Err(de::Error::invalid_value(
-                de::Unexpected::Str(&s),
-                &"a memory op kind",
-            )),
-        }
-    }
-}
-
-
-impl<'de> Deserialize<'de> for RamInstr {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_tuple(5, RamInstrVisitor)
-    }
-}
-
-struct RamInstrVisitor;
-impl<'de> Visitor<'de> for RamInstrVisitor {
-    type Value = RamInstr;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a sequence of 5 values")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<RamInstr, A::Error> {
-        let mut seq = CountedSeqAccess::new(seq, 5);
-        let x = RamInstr {
-            opcode: seq.next_element::<Opcode>()? as u8,
-            dest: seq.next_element::<Option<u8>>()?.unwrap_or(0),
-            op1: seq.next_element::<Option<u8>>()?.unwrap_or(0),
-            imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
-            op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
-        };
-        seq.finish()?;
-        Ok(x)
-    }
-}
-
-
-impl<'de> Deserialize<'de> for Advice {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_seq(AdviceVisitor)
-    }
-}
-
-struct AdviceVisitor;
-impl<'de> Visitor<'de> for AdviceVisitor {
-    type Value = Advice;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "an advice object")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Advice, A::Error> {
-        let mut seq = CountedSeqAccess::new(seq, 1);
-        let x = match &seq.next_element::<String>()? as &str {
-            "MemOp" => {
-                seq.expect += 3;
-                let tainted = is_mode::<AnyTainted>();
-                if is_mode::<AnyTainted>() {
-                    seq.expect += 1;
-                }
-                Advice::MemOp {
-                    addr: seq.next_element()?,
-                    value: seq.next_element()?,
-                    op: seq.next_element()?,
-                    tainted: if tainted {seq.next_element()?} else {IfMode::none()},
-                }
-            },
-            "Stutter" => {
-                Advice::Stutter
-            },
-            "Advise" => {
-                seq.expect += 1;
-                Advice::Advise {
-                    advise: seq.next_element()?,
-                }
-            },
-            kind => return Err(de::Error::custom(
-                format_args!("unknown advice kind {}", kind),
-            )),
-        };
-        seq.finish()?;
-        Ok(x)
-    }
-}
-
-
-struct CountedSeqAccess<A> {
-    seq: A,
-    expect: usize,
-    seen: usize,
-}
-
-impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
-    fn new(seq: A, expect: usize) -> CountedSeqAccess<A> {
-        CountedSeqAccess { seq, expect, seen: 0 }
-    }
-
-    fn next_element<T: Deserialize<'de>>(&mut self) -> Result<T, A::Error> {
-        assert!(self.seen < self.expect);
-        match self.seq.next_element::<T>()? {
-            Some(x) => {
-                self.seen += 1;
-                Ok(x)
-            },
-            None => {
-                return Err(de::Error::invalid_length(
-                    self.seen, 
-                    &(&format!("a sequence of length {}", self.expect) as &str),
-                ));
-            },
-        }
-    }
-
-    fn finish(mut self) -> Result<(), A::Error> {
-        match self.seq.next_element::<()>() {
-            Ok(None) => Ok(()),
-            // A parse error indicates there was some data left to parse - there shouldn't be.
-            Ok(Some(_)) | Err(_) => {
-                return Err(de::Error::invalid_length(
-                    self.seen + 1,
-                    &(&format!("a sequence of length {}", self.expect) as &str),
-                ));
-            },
-        }
-    }
+#[derive(Clone, Debug, Deserialize)]
+pub struct TraceChunkDebug {
+    /// If set, force the cycle counter to this value before running the chunk.
+    #[serde(default)]
+    pub cycle: Option<u32>,
+    /// If set, force the previous state to this value before running the chunk.
+    #[serde(default)]
+    pub prev_state: Option<RamState>,
+    /// If set, force the previous-segment counter to `None` before running the chunk.
+    #[serde(default)]
+    pub clear_prev_segment: bool,
+    /// If set, force the previous-segment counter to this value before running the chunk.
+    #[serde(default)]
+    pub prev_segment: Option<usize>,
 }
 
 pub struct TaintCalcIntermediate<'a> {

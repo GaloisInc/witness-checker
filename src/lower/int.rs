@@ -133,8 +133,8 @@ pub fn extend_to_64<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a
             }
             GateKind::Secret(s) => {
                 let new_ty = extend_integer_ty(c, s.ty);
-                let new_val = s.val.map(|x| maybe_sign_extend(x.as_u64().unwrap(), s.ty));
-                return c.new_secret(new_ty, new_val);
+                let new_val = s.val().map(|x| maybe_sign_extend(x.as_u64().unwrap(), s.ty));
+                return c.new_secret_init(new_ty, || new_val.unwrap());
             }
             GateKind::Cast(w, ty) => {
                 return normalize_64(c, w, ty);
@@ -186,7 +186,7 @@ pub fn int_to_uint<'a>(c: &Circuit<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a>
                 return c.lit(new_ty, x);
             }
             GateKind::Secret(s) => {
-                return c.new_secret(new_ty, s.val);
+                return c.new_secret_init(new_ty, || s.val().unwrap());
             }
             GateKind::Unary(_op, _a) => {}
             GateKind::Binary(op, a, b) => match op {
@@ -296,6 +296,7 @@ fn make_split_lit<'a>(c: &Circuit<'a>, x: BigUint, ty: Ty<'a>) -> Wire<'a> {
 /// not support `Mod`.
 pub fn mod_to_div<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     if let GateKind::Binary(BinOp::Mod, x, y) = gk {
+        // FIXME: changes behavior on division by zero (returns `x` for `x % 0`, not `0`)
         return c.sub(
             x,
             c.mul(c.div(x, y), y),

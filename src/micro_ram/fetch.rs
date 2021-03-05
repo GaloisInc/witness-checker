@@ -3,26 +3,20 @@
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
 use log::*;
-use crate::ir::typed::{TWire, Builder};
+use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
-use crate::micro_ram::types::{FetchPort, PackedFetchPort, RamInstr};
+use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
 use crate::sort;
 
 pub struct Fetch<'a> {
-    verifier: bool,
     ports: Vec<TWire<'a, FetchPort>>,
+    /// Default value for secret `instr`s in uninitialized `FetchPort`s.
+    default_instr: RamInstr,
 }
 
 impl<'a> Fetch<'a> {
-    pub fn new(verifier: bool) -> Fetch<'a> {
-        Fetch {
-            verifier,
-            ports: Vec::new(),
-        }
-    }
-
-    pub fn init_program(&mut self, b: &Builder<'a>, prog: &[RamInstr]) {
-        self.ports.reserve(prog.len());
+    pub fn new(b: &Builder<'a>, prog: &[RamInstr]) -> Fetch<'a> {
+        let mut ports = Vec::with_capacity(prog.len());
 
         for (i, instr) in prog.iter().enumerate() {
             let fp = b.lit(FetchPort {
@@ -30,7 +24,15 @@ impl<'a> Fetch<'a> {
                 instr: instr.clone(),
                 write: true,
             });
-            self.ports.push(fp);
+            ports.push(fp);
+        }
+
+        Fetch {
+            ports,
+            // Set the default `RamInstr` to the correct `RamInstr` for the default address (0).
+            // This means uninitialized `FetchPort`s will be valid under the normal rules, and no
+            // special checks for unused `FetchPort`s are necessary.
+            default_instr: prog[0].clone(),
         }
     }
 
@@ -38,28 +40,20 @@ impl<'a> Fetch<'a> {
         &mut self,
         b: &Builder<'a>,
         len: usize,
-        prog: &[RamInstr],
-        mut get_pc: impl FnMut(usize) -> u64,
     ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
             ports: Vec::with_capacity(len),
         };
 
         for i in 0 .. len {
-            let fp = if self.verifier {
-                None
-            } else {
-                let pc = get_pc(i);
-                let instr = prog.get(pc as usize).cloned()
-                    .unwrap_or_else(|| panic!("program executed out of bounds at pc = {}", pc));
-                Some(FetchPort { addr: pc, instr, write: false })
-            };
-            let mut fp = b.secret(fp);
-            fp.write = b.lit(false);
-            cp.ports.push(fp);
+            let (addr, addr_secret) = b.secret();
+            let (instr, instr_secret) = b.secret_default(self.default_instr.clone());
+            let write = b.lit(false);
+            let fp = TWire::new(FetchPortRepr { addr, instr, write });
+            cp.ports.push(CyclePort { fp, addr_secret, instr_secret });
         }
 
-        self.ports.extend_from_slice(&cp.ports);
+        self.ports.extend(cp.ports.iter().map(|p| p.fp));
         cp
     }
 
@@ -98,29 +92,40 @@ impl<'a> Fetch<'a> {
         }
 
         // Run the consistency check.
-        check_first_fetch(cx, b, &sorted_ports[0]);
+        check_first_fetch(cx, b, sorted_ports[0]);
         let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
-        for (i, (port1, port2)) in it {
+        for (i, (&port1, &port2)) in it {
             check_fetch(cx, b, i, port1, port2);
         }
     }
 }
 
+struct CyclePort<'a> {
+    fp: TWire<'a, FetchPort>,
+    addr_secret: TSecretHandle<'a, u64>,
+    instr_secret: TSecretHandle<'a, RamInstr>,
+}
+
 pub struct CyclePorts<'a> {
-    ports: Vec<TWire<'a, FetchPort>>,
+    ports: Vec<CyclePort<'a>>,
 }
 
 impl<'a> CyclePorts<'a> {
     pub fn get(&self, i: usize) -> TWire<'a, FetchPort> {
-        self.ports[i]
+        self.ports[i].fp
     }
 
     pub fn get_instr(&self, i: usize) -> TWire<'a, RamInstr> {
-        self.ports[i].instr
+        self.ports[i].fp.instr
     }
 
     pub fn iter<'b>(&'b self) -> impl Iterator<Item = TWire<'a, FetchPort>> + 'b {
-        self.ports.iter().cloned()
+        self.ports.iter().map(|p| p.fp)
+    }
+
+    pub fn set(&self, b: &Builder<'a>, idx: usize, addr: u64, instr: RamInstr) {
+        self.ports[idx].addr_secret.set(b, addr);
+        self.ports[idx].instr_secret.set(b, instr);
     }
 }
 
@@ -128,7 +133,7 @@ impl<'a> CyclePorts<'a> {
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    port: &TWire<'a, FetchPort>,
+    port: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label("check_first_fetch");
     wire_assert!(
@@ -142,8 +147,8 @@ fn check_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     index: usize,
-    port1: &TWire<'a, FetchPort>,
-    port2: &TWire<'a, FetchPort>,
+    port1: TWire<'a, FetchPort>,
+    port2: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label(format_args!("check_fetch/index {}", index));
     cx.when(b, b.not(port2.write), |cx| {

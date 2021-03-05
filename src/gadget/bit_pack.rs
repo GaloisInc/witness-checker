@@ -178,3 +178,13 @@ pub fn extract_bits<'a>(c: &Circuit<'a>, w: Wire<'a>, start: u16, end: u16) -> W
     let gk = c.intern_gadget_kind(ExtractBits { start, end });
     c.gadget(gk, &[w])
 }
+
+/// Extract enough low bits from `w` to construct a value of type `T`.
+pub fn extract_low<'a, T: Flatten<'a>>(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, T> {
+    let c = bld.circuit();
+    let ty = T::wire_type(c);
+    let width = bundle_tys(&[ty]).map(|ty| ty.integer_size().bits()).sum::<u16>();
+    let gk = c.intern_gadget_kind(ExtractBits { start: 0, end: width });
+    let out_wire = c.gadget(gk, &[w]);
+    T::from_wire(bld, out_wire)
+}

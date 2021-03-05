@@ -1,0 +1,2 @@
+invalid trace: final r0 is 8 (expected 0)
+internal evaluator: 123 asserts passed, 1 failed; found 0 bugs; overall status: BAD
