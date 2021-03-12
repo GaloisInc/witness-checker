@@ -56,6 +56,9 @@ macro_rules! define_versions {
 define_versions! {
     (0,1,0,0) = {},
     (0,1,1,0) = { PublicPc PreAdvice },
+    // 0.1.2.0 removes `params.trace_len`, which we already ignore in all public-pc traces, and
+    // also removes `flag` from states, which we ignore always.
+    (0,1,2,0) = { PublicPc PreAdvice },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {
