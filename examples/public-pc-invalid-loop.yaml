@@ -1,0 +1,72 @@
+## FLAGS: --validate-only --expect-zero
+# Check that we correctly prevent constructing a loop of states independent of
+# the initial state.
+
+- [0,1,0,0]
+- [public-pc]
+-
+  program:
+    - [mov, 0, null, true, 2]   # mov r0, 2
+    - [mull, 2, 0, false, 0]    # mull r2, r0, r0
+    - [mull, 1, 0, true, 3]     # mull r1, r0, 3
+    - [add, 0, 1, false, 2]     # add r0, r1, r2
+    - [sub, 0, 0, true, 10]     # sub r0, r0, 10
+    - [mov, 0, 0, false, 0]
+
+    # The code used for the loop.
+    - [add, 0, 0, true, 1]
+    - [sub, 0, 0, true, 1]
+    - [jmp, null, null, true, 6]
+
+  params:
+    num_regs: 3
+
+  segments:
+    - constraints: []
+      len: 6
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+    - constraints: []
+      len: 3
+      successors: [2]
+      enter_from_network: false
+      exit_to_network: false
+
+    - constraints: []
+      len: 3
+      successors: [1]
+      enter_from_network: false
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [2, 0, 0]]
+        - [2, [2, 0, 4]]
+        - [3, [2, 6, 4]]
+        - [4, [10, 6, 4]]
+        - [5, [0, 6, 4]]
+        - [6, [0, 6, 4]]
+
+    - segment: 1
+      debug:
+        cycle: 10
+        prev_state: [6, [0, 0, 99], true, 10]
+        prev_segment: 2
+      states:
+        - [7, [1, 0, 99]]
+        - [8, [0, 0, 99]]
+        - [6, [0, 0, 99]]
+
+    - segment: 2
+      debug:
+        cycle: 13
+        prev_state: [6, [0, 0, 99], true, 13]
+        prev_segment: 1
+      states:
+        - [7, [1, 0, 99]]
+        - [8, [0, 0, 99]]
+        - [6, [0, 0, 99]]
+

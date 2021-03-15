@@ -1,0 +1,64 @@
+## FLAGS: --validate-only --expect-zero
+# An example with a conditional branch and separate segments for each side.
+# This tests segment graphs that split and merge.
+
+- [0,1,0,0]
+- [public-pc]
+-
+  program:
+    - [cmpae, 1, 0, true, 10]   # cmpae r1, r0, 10
+    - [cjmp, null, 1, true, 4]  # cjmp r1, 4
+    # r0 < 10 case
+    - [add, 0, 0, true, 20]     # add r0, r0, 20
+    - [jmp, null, null, true, 5]  # jmp 5
+    # r0 >= 10 case
+    - [add, 0, 0, true, 10]     # add r0, r0, 10
+    # join
+    - [sub, 0, 0, true, 27]     # sub r0, r0, 27
+
+  params:
+    num_regs: 2
+
+  # Use a dummy initial memory segment to set the initial r0 to a specific
+  # value (the end address of the segment)
+  init_mem:
+    - start: 7
+      len: 0
+      read_only: true
+      secret: false
+      data: []
+
+  segments:
+    - constraints: [[pc, 0]]
+      len: 2
+      successors: [1, 2]
+      enter_from_network: false
+      exit_to_network: false
+    - constraints: [[pc, 2]]
+      len: 2
+      successors: [3]
+      enter_from_network: false
+      exit_to_network: false
+    - constraints: [[pc, 4]]
+      len: 1
+      successors: [3]
+      enter_from_network: false
+      exit_to_network: false
+    - constraints: [[pc, 5]]
+      len: 1
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [7, 0]]
+        - [2, [7, 0]]
+    - segment: 1
+      states:
+        - [3, [27, 0]]
+        - [5, [27, 0]]
+    - segment: 3
+      states:
+        - [6, [0, 0]]

@@ -1,10 +1,13 @@
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::mem;
-use serde::de::{self, Deserializer, SeqAccess, Visitor};
+use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
-use crate::micro_ram::types::{Execution, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice};
+use crate::micro_ram::types::{
+    Execution, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
+    Segment, SegmentConstraint,
+};
 use crate::micro_ram::feature::{self, Feature, Version};
 
 
@@ -50,24 +53,12 @@ pub fn with_features<R>(fs: HashSet<Feature>, f: impl FnOnce() -> R) -> R {
 /// A wrapper around `Execution` to support custom parsing logic.
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub struct ParseExecution(AnyExecution);
+pub struct ParseExecution(VersionedExecution);
 
 impl ParseExecution {
     pub fn into_inner(self) -> Execution {
-        match self.0 {
-            AnyExecution::Versioned(e) => e.0,
-            AnyExecution::Unversioned(e) => e.0,
-        }
+        self.0.0
     }
-}
-
-
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum AnyExecution {
-    Versioned(VersionedExecution),
-    Unversioned(UnversionedExecution),
 }
 
 
@@ -122,6 +113,83 @@ impl<'de> Deserialize<'de> for UnversionedExecution {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let mut exec = Execution::deserialize(d)?;
         Ok(UnversionedExecution(exec))
+    }
+}
+
+
+impl<'de> Deserialize<'de> for Execution {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_struct(
+            "Execution",
+            &["program", "init_mem", "params", "trace", "advice"],
+            ExecutionVisitor,
+        )
+    }
+}
+
+struct ExecutionVisitor;
+impl<'de> Visitor<'de> for ExecutionVisitor {
+    type Value = Execution;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "an execution object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Execution, A::Error> {
+        let mut ex = Execution {
+            version: Version::default(),
+            features: HashSet::new(),
+            declared_features: HashSet::new(),
+
+            program: Vec::new(),
+            init_mem: Vec::new(),
+            params: Params::default(),
+            segments: Vec::new(),
+            trace: Vec::new(),
+            advice: HashMap::new(),
+        };
+
+        let mut seen = HashSet::new();
+        while let Some(k) = map.next_key::<String>()? {
+            if !seen.insert(k.clone()) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate key {:?}", k,
+                )));
+            }
+
+            match &k as &str {
+                "program" => { ex.program = map.next_value()?; },
+                "init_mem" => { ex.init_mem = map.next_value()?; },
+                "params" => { ex.params = map.next_value()?; },
+                "segments" if has_feature(Feature::PublicPc) => {
+                    ex.segments = map.next_value()?;
+                },
+                "trace" => {
+                    if has_feature(Feature::PublicPc) {
+                        ex.trace = map.next_value()?;
+                    } else {
+                        ex.trace = vec![TraceChunk {
+                            segment: 0,
+                            states: map.next_value()?,
+                            debug: None,
+                        }];
+                    }
+                },
+                "advice" => {
+                    ex.advice = map.next_value()?;
+                    if has_feature(Feature::PreAdvice) {
+                        // Convert from pre-state indices to post-state indices.
+                        ex.advice = mem::take(&mut ex.advice).into_iter()
+                            .map(|(k, v)| (k + 1, v)).collect();
+                    }
+                },
+                _ => return Err(serde::de::Error::custom(format_args!(
+                    "unknown key {:?}", k,
+                ))),
+            }
+        }
+
+        Ok(ex)
     }
 }
 
@@ -198,6 +266,98 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
 }
 
 
+impl<'de> Deserialize<'de> for Segment {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(SegmentVisitor)
+    }
+}
+
+struct SegmentVisitor;
+impl<'de> Visitor<'de> for SegmentVisitor {
+    type Value = Segment;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a segment object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Segment, A::Error> {
+        let mut x = Segment {
+            constraints: Vec::new(),
+            len: 0,
+            successors: Vec::new(),
+            enter_from_network: false,
+            exit_to_network: false,
+        };
+
+        let mut seen = HashSet::new();
+        while let Some(k) = map.next_key::<String>()? {
+            if !seen.insert(k.clone()) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate key {:?}", k,
+                )));
+            }
+
+            match &k as &str {
+                "constraints" => { x.constraints = map.next_value()?; },
+                "len" => { x.len = map.next_value()?; },
+                "successors" => { x.successors = map.next_value()?; },
+                "enter_from_network" => { x.enter_from_network = map.next_value()?; },
+                "exit_to_network" => { x.exit_to_network = map.next_value()?; },
+                _ => return Err(serde::de::Error::custom(format_args!(
+                    "unknown key {:?}", k,
+                ))),
+            }
+        }
+
+        Ok(x)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Segment, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 5);
+        let x = Segment {
+            constraints: seq.next_element()?,
+            len: seq.next_element()?,
+            successors: seq.next_element()?,
+            enter_from_network: seq.next_element()?,
+            exit_to_network: seq.next_element()?,
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+impl<'de> Deserialize<'de> for SegmentConstraint {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_seq(SegmentConstraintVisitor)
+    }
+}
+
+struct SegmentConstraintVisitor;
+impl<'de> Visitor<'de> for SegmentConstraintVisitor {
+    type Value = SegmentConstraint;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a segment constraint object")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<SegmentConstraint, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 1);
+        let x = match &seq.next_element::<String>()? as &str {
+            "pc" => {
+                seq.expect += 1;
+                let pc = seq.next_element()?;
+                SegmentConstraint::Pc(pc)
+            },
+            kind => return Err(de::Error::custom(
+                format_args!("unknown segment constraint kind {}", kind),
+            )),
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+
 impl<'de> Deserialize<'de> for Advice {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         d.deserialize_seq(AdviceVisitor)
@@ -216,20 +376,12 @@ impl<'de> Visitor<'de> for AdviceVisitor {
         let mut seq = CountedSeqAccess::new(seq, 1);
         let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
-                seq.expect += 3;
-                let addr = seq.next_element()?;
-                let value = seq.next_element()?;
-                let op = seq.next_element()?;
-                match seq.opt_next_element()? {
-                    Some(width) => Advice::MemOp { addr, value, op, width },
-                    // If the `width` field is absent, this is an old-style `MemOp`, using word
-                    // addressing, so convert it to the new byte-addressed style.
-                    None => Advice::MemOp {
-                        addr: addr * MemOpWidth::WORD.bytes() as u64,
-                        value,
-                        op,
-                        width: MemOpWidth::WORD,
-                    },
+                seq.expect += 4;
+                Advice::MemOp {
+                    addr: seq.next_element()?,
+                    value: seq.next_element()?,
+                    op: seq.next_element()?,
+                    width: seq.next_element()?,
                 }
             },
             "Stutter" => {
@@ -244,6 +396,61 @@ impl<'de> Visitor<'de> for AdviceVisitor {
             kind => return Err(de::Error::custom(
                 format_args!("unknown advice kind {}", kind),
             )),
+        };
+        seq.finish()?;
+        Ok(x)
+    }
+}
+
+
+impl<'de> Deserialize<'de> for TraceChunk {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(TraceChunkVisitor)
+    }
+}
+
+struct TraceChunkVisitor;
+impl<'de> Visitor<'de> for TraceChunkVisitor {
+    type Value = TraceChunk;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a segment object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<TraceChunk, A::Error> {
+        let mut x = TraceChunk {
+            segment: 0,
+            states: Vec::new(),
+            debug: None,
+        };
+
+        let mut seen = HashSet::new();
+        while let Some(k) = map.next_key::<String>()? {
+            if !seen.insert(k.clone()) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate key {:?}", k,
+                )));
+            }
+
+            match &k as &str {
+                "segment" => { x.segment = map.next_value()?; },
+                "states" => { x.states = map.next_value()?; },
+                "debug" => { x.debug = Some(map.next_value()?); },
+                _ => return Err(serde::de::Error::custom(format_args!(
+                    "unknown key {:?}", k,
+                ))),
+            }
+        }
+
+        Ok(x)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<TraceChunk, A::Error> {
+        let mut seq = CountedSeqAccess::new(seq, 2);
+        let x = TraceChunk {
+            segment: seq.next_element()?,
+            states: seq.next_element()?,
+            debug: None,
         };
         seq.finish()?;
         Ok(x)
@@ -275,19 +482,6 @@ impl<'de, A: SeqAccess<'de>> CountedSeqAccess<A> {
                     &(&format!("a sequence of length {}", self.expect) as &str),
                 ));
             },
-        }
-    }
-
-    /// Try to parse an optional element of type `T`.  On success, increments `expect`
-    /// automatically.
-    fn opt_next_element<T: Deserialize<'de>>(&mut self) -> Result<Option<T>, A::Error> {
-        match self.seq.next_element::<T>()? {
-            Some(x) => {
-                self.seen += 1;
-                self.expect += 1;
-                Ok(Some(x))
-            },
-            None => Ok(None),
         }
     }
 

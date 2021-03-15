@@ -39,10 +39,11 @@ pub struct Circuit<'a> {
     intern_bits: RefCell<HashSet<&'a [u32]>>,
 
     current_label: Cell<&'a str>,
+    is_prover: bool,
 }
 
 impl<'a> Circuit<'a> {
-    pub fn new(arena: &'a Bump) -> Circuit<'a> {
+    pub fn new(arena: &'a Bump, is_prover: bool) -> Circuit<'a> {
         Circuit {
             arena,
             intern_gate: RefCell::new(HashSet::new()),
@@ -53,7 +54,12 @@ impl<'a> Circuit<'a> {
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
+            is_prover,
         }
+    }
+
+    pub fn is_prover(&self) -> bool {
+        self.is_prover
     }
 
     fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {
@@ -220,12 +226,49 @@ impl<'a> Circuit<'a> {
         self.gate(GateKind::Secret(secret))
     }
 
-    /// Add a new secret value to the witness, and return a `Wire` that carries that value.
+    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
+    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
+    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
+    /// automatically.
+    pub fn new_secret(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
+        let default = self.intern_bits(&[]);
+        self.new_secret_default(ty, default)
+    }
+
+    /// Like `new_secret`, but dropping the `SecretHandle` without setting a value will set the
+    /// value to `default` instead of zero.
+    pub fn new_secret_default<T: AsBits>(
+        &self,
+        ty: Ty<'a>,
+        default: T,
+    ) -> (Wire<'a>, SecretHandle<'a>) {
+        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+        let default = self.bits(ty, default);
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        let handle = SecretHandle::new(secret, default);
+        (self.secret(secret), handle)
+    }
+
+    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
+    /// running in prover mode), and return a `Wire` that carries that value.
     ///
-    /// `val` can be `None` if the witness values are unknown, as when the verifier (not the
-    /// prover) is generating the circuit.
-    pub fn new_secret<T: AsBits>(&self, ty: Ty<'a>, val: Option<T>) -> Wire<'a> {
-        let val = val.map(|val| self.bits(ty, val));
+    /// `mk_val` will not be called when running in prover mode.
+    pub fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
+    where F: FnOnce() -> T {
+        let val = if self.is_prover {
+            let bits = self.bits(ty, mk_val());
+            Some(SecretValue::with_value(bits))
+        } else {
+            None
+        };
+        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        self.secret(secret)
+    }
+
+    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
+    /// initialized later using `SecretData::set_from_lit`.
+    pub fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
+        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
         self.secret(secret)
     }
@@ -697,6 +740,20 @@ impl<'a> GateKind<'a> {
             },
         }
     }
+
+    pub fn as_secret(&self) -> Secret<'a> {
+        match *self {
+            GateKind::Secret(s) => s,
+            _ => panic!("expected GateKind::Secret"),
+        }
+    }
+
+    pub fn as_lit(&self) -> (Ty<'a>, Bits<'a>) {
+        match *self {
+            GateKind::Lit(b, t) => (t, b),
+            _ => panic!("expected GateKind::Lit"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -800,11 +857,96 @@ declare_interned_pointer! {
     pub struct Secret<'a> => SecretData<'a>;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+struct SecretValue<'a>(Cell<Option<Bits<'a>>>);
+
+impl<'a> SecretValue<'a> {
+    pub fn with_value(val: Bits<'a>) -> SecretValue<'a> {
+        SecretValue(Cell::new(Some(val)))
+    }
+
+    pub fn set(&self, val: Bits<'a>) {
+        assert!(self.0.get().is_none(), "secret value has already been set");
+        self.0.set(Some(val));
+    }
+
+    pub fn set_default(&self, val: Bits<'a>) {
+        if self.0.get().is_none() {
+            self.0.set(Some(val));
+        }
+    }
+
+    pub fn get(&self) -> Bits<'a> {
+        match self.0.get() {
+            Some(x) => x,
+            None => panic!("tried to access uninitialized secret value"),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
-    pub val: Option<Bits<'a>>,
+    val: Option<SecretValue<'a>>,
 }
+
+impl<'a> SecretData<'a> {
+    /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
+    /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
+    /// panic.
+    pub fn val(&self) -> Option<Bits<'a>> {
+        self.val.as_ref().map(|sv| sv.get())
+    }
+
+    pub fn set(&self, bits: Bits<'a>) {
+        let sv = self.val.as_ref()
+            .expect("can't provide secret values when running in verifier mode");
+        sv.set(bits);
+    }
+
+    pub fn set_default(&self, bits: Bits<'a>) {
+        if let Some(ref sv) = self.val {
+            sv.set_default(bits);
+        }
+    }
+
+    pub fn set_from_lit(&self, w: Wire<'a>, force: bool) {
+        let (ty, bits) = w.kind.as_lit();
+        assert!(ty == self.ty, "type mismatch in secret init: {:?} != {:?}", ty, self.ty);
+        if force {
+            self.set(bits);
+        } else {
+            self.set_default(bits);
+        }
+    }
+}
+
+/// A handle that can be used to set the value of a `Secret`.  Sets a default value on drop, if a
+/// default was provided when the handle was constructed.
+#[derive(Debug)]
+pub struct SecretHandle<'a> {
+    s: Secret<'a>,
+    default: Bits<'a>,
+}
+
+impl<'a> SecretHandle<'a> {
+    fn new(s: Secret<'a>, default: Bits<'a>) -> SecretHandle<'a> {
+        SecretHandle { s, default }
+    }
+
+    pub fn set(&self, c: &Circuit<'a>, val: impl AsBits) {
+        let bits = c.bits(self.s.ty, val);
+        self.s.set(bits);
+    }
+}
+
+impl<'a> Drop for SecretHandle<'a> {
+    fn drop(&mut self) {
+        self.s.set_default(self.default);
+    }
+}
+
+
 
 declare_interned_pointer! {
     #[derive(Debug)]

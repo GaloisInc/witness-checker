@@ -47,9 +47,11 @@ fn golden_tests() -> io::Result<()> {
             path.with_extension("out").file_name().unwrap(),
         )?;
 
+        eprintln!("running {:?}", path);
         // TODO: use witness-checker builder as a library instead of invoking the binary
         let output = Command::new("target/release/cheesecloth")
             .arg(&path)
+            .arg("--check-steps").arg("1")
             .args(if has_custom_flags { &custom_flags } else { &default_flags })
             .stdout(dest.try_clone()?)
             .stderr(dest)

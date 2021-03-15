@@ -4,7 +4,9 @@ use serde::Deserialize;
 use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
-use crate::ir::typed::{self, Builder, TWire, Repr, Flatten, Lit, Secret, Mux, FromEval};
+use crate::ir::typed::{
+    self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
+};
 use crate::micro_ram::feature::{Feature, Version};
 
 
@@ -36,6 +38,10 @@ impl RamInstr {
             op2: op2 as u64,
             imm,
         }
+    }
+
+    pub fn opcode(&self) -> Opcode {
+        Opcode::from_raw(self.opcode).unwrap()
     }
 
     pub fn mov(rd: u32, r1: u32) -> RamInstr {
@@ -100,24 +106,22 @@ impl<'a> Lit<'a> for RamInstr {
 }
 
 impl<'a> Secret<'a> for RamInstr {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            RamInstrRepr {
-                opcode: bld.with_label("opcode", || bld.secret(Some(a.opcode))),
-                dest: bld.with_label("dest", || bld.secret(Some(a.dest))),
-                op1: bld.with_label("op1", || bld.secret(Some(a.op1))),
-                op2: bld.with_label("op2", || bld.secret(Some(a.op2))),
-                imm: bld.with_label("imm", || bld.secret(Some(a.imm))),
-            }
-        } else {
-            RamInstrRepr {
-                opcode: bld.with_label("opcode", || bld.secret(None)),
-                dest: bld.with_label("dest", || bld.secret(None)),
-                op1: bld.with_label("op1", || bld.secret(None)),
-                op2: bld.with_label("op2", || bld.secret(None)),
-                imm: bld.with_label("imm", || bld.secret(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        RamInstrRepr {
+            opcode: bld.with_label("opcode", || bld.secret_uninit()),
+            dest: bld.with_label("dest", || bld.secret_uninit()),
+            op1: bld.with_label("op1", || bld.secret_uninit()),
+            op2: bld.with_label("op2", || bld.secret_uninit()),
+            imm: bld.with_label("imm", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.opcode, &val.opcode, force);
+        Builder::set_secret_from_lit(&s.dest, &val.dest, force);
+        Builder::set_secret_from_lit(&s.op1, &val.op1, force);
+        Builder::set_secret_from_lit(&s.op2, &val.op2, force);
+        Builder::set_secret_from_lit(&s.imm, &val.imm, force);
     }
 }
 
@@ -171,21 +175,41 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
+    // All states parsed from the trace are assumed to be live.
+    #[serde(default = "return_true")]
+    pub live: bool,
+    #[serde(default)]
+    pub cycle: u32,
 }
 
+fn return_true() -> bool { true }
+
 impl RamState {
-    pub fn new(pc: u32, regs: Vec<u32>) -> RamState {
+    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool) -> RamState {
         RamState {
+            cycle,
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
+            live,
+        }
+    }
+
+    pub fn default_with_regs(num_regs: usize) -> RamState {
+        RamState {
+            cycle: 0,
+            pc: 0,
+            regs: vec![0; num_regs],
+            live: false,
         }
     }
 }
 
 #[derive(Clone)]
 pub struct RamStateRepr<'a> {
+    pub cycle: TWire<'a, u32>,
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
+    pub live: TWire<'a, bool>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -195,33 +219,116 @@ impl<'a> Repr<'a> for RamState {
 impl<'a> Lit<'a> for RamState {
     fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
         RamStateRepr {
+            cycle: bld.lit(a.cycle),
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
+            live: bld.lit(a.live),
         }
+    }
+}
+
+impl<'a> Secret<'a> for RamState {
+    fn secret(_bld: &Builder<'a>) -> Self::Repr {
+        panic!("can't construct RamState via Builder::secret - use RamState::secret instead");
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
+        Builder::set_secret_from_lit(&s.pc, &val.pc, force);
+        assert_eq!(s.regs.len(), val.regs.len());
+        for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
+            Builder::set_secret_from_lit(s_reg, val_reg, force);
+        }
+        Builder::set_secret_from_lit(&s.live, &val.live, force);
     }
 }
 
 impl RamState {
     pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.with_label("pc", || bld.secret(Some(a.pc))),
+            cycle: bld.with_label("cycle", || bld.secret_init(|| a.cycle)),
+            pc: bld.with_label("pc", || bld.secret_init(|| a.pc)),
             regs: bld.with_label("regs", || {
                 a.regs.iter().enumerate().map(|(i, &x)| {
-                    bld.with_label(i, || bld.secret(Some(x)))
+                    bld.with_label(i, || bld.secret_init(|| x))
                 }).collect()
             }),
+            live: bld.with_label("live", || bld.secret_init(|| a.live)),
         })
     }
 
     pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            pc: bld.with_label("pc", || bld.secret(None)),
+            cycle: bld.with_label("cycle", || bld.secret_uninit()),
+            pc: bld.with_label("pc", || bld.secret_uninit()),
             regs: bld.with_label("regs", || (0 .. len).map(|i| {
-                bld.with_label(i, || bld.secret(None))
+                bld.with_label(i, || bld.secret_uninit())
             }).collect()),
+            live: bld.with_label("live", || bld.secret_uninit()),
         })
     }
+
+    pub fn secret<'a>(
+        bld: &Builder<'a>,
+        len: usize,
+    ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
+        let wire = Self::secret_with_len(bld, len);
+        let default = bld.lit(RamState {
+            cycle: 0,
+            pc: 0,
+            regs: vec![0; len],
+            live: false,
+        });
+        (wire.clone(), TSecretHandle::new(wire, default))
+    }
 }
+
+impl<'a, C: Repr<'a>> Mux<'a, C, RamState> for RamState
+where
+    C::Repr: Clone,
+    u32: Mux<'a, C, u32, Output = u32>,
+    <u32 as Repr<'a>>::Repr: Copy,
+    u64: Mux<'a, C, u64, Output = u64>,
+    <u64 as Repr<'a>>::Repr: Copy,
+    bool: Mux<'a, C, bool, Output = bool>,
+    <bool as Repr<'a>>::Repr: Copy,
+{
+    type Output = RamState;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        let c: TWire<C> = TWire::new(c);
+        assert_eq!(t.regs.len(), e.regs.len());
+        RamStateRepr {
+            cycle: bld.mux(c.clone(), t.cycle, e.cycle),
+            pc: bld.mux(c.clone(), t.pc, e.pc),
+            regs: t.regs.iter().zip(e.regs.iter())
+                .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
+                .collect(),
+            live: bld.mux(c.clone(), t.live, e.live),
+        }
+    }
+}
+
+impl<'a> typed::Eq<'a, RamState> for RamState {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        assert_eq!(a.regs.len(), b.regs.len());
+        let mut acc = bld.lit(true);
+        acc = bld.and(acc, bld.eq(a.cycle, b.cycle));
+        acc = bld.and(acc, bld.eq(a.pc, b.pc));
+        for (&a_reg, &b_reg) in a.regs.iter().zip(b.regs.iter()) {
+            acc = bld.and(acc, bld.eq(a_reg, b_reg));
+        }
+        acc = bld.and(acc, bld.eq(a.live, b.live));
+        acc.repr
+    }
+}
+
 
 
 macro_rules! mk_named_enum {
@@ -290,8 +397,12 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> Secret<'a> for $Name {
-            fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-                bld.secret(a.map(|a| a as u8))
+            fn secret(bld: &Builder<'a>) -> Self::Repr {
+                bld.secret_uninit()
+            }
+
+            fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+                Builder::set_secret_from_lit(s, val, force);
             }
         }
 
@@ -355,24 +466,20 @@ mk_named_enum! {
         Cjmp = 21,
         Cnjmp = 22,
 
-        Store = 23,
-        Load = 24,
-        Poison = 25,
+        Store1 = 23,
+        Store2 = 24,
+        Store4 = 25,
+        Store8 = 26,
+        Load1 = 27,
+        Load2 = 28,
+        Load4 = 29,
+        Load8 = 30,
+        Poison8 = 31,
 
-        Store1 = 26,
-        Store2 = 27,
-        Store4 = 28,
-        Store8 = 29,
-        Load1 = 30,
-        Load2 = 31,
-        Load4 = 32,
-        Load8 = 33,
-        Poison8 = 34,
+        Read = 32,
+        Answer = 33,
 
-        Read = 35,
-        Answer = 36,
-
-        Advise = 37,
+        Advise = 34,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
@@ -380,11 +487,23 @@ mk_named_enum! {
     }
 }
 
+impl Opcode {
+    pub fn is_mem(&self) -> bool {
+        use Opcode::*;
+        match *self {
+            Store1 | Store2 | Store4 | Store8 |
+            Load1 | Load2 | Load4 | Load8 |
+            Poison8 => true,
+            _ => false,
+        }
+    }
+}
+
 
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -531,24 +650,22 @@ impl<'a> Lit<'a> for MemPort {
 }
 
 impl<'a> Secret<'a> for MemPort {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            MemPortRepr {
-                cycle: bld.with_label("cycle", || bld.secret(Some(a.cycle))),
-                addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
-                value: bld.with_label("value", || bld.secret(Some(a.value))),
-                op: bld.with_label("op", || bld.secret(Some(a.op))),
-                width: bld.with_label("width", || bld.secret(Some(a.width))),
-            }
-        } else {
-            MemPortRepr {
-                cycle: bld.with_label("cycle", || bld.secret(None)),
-                addr: bld.with_label("addr", || bld.secret(None)),
-                value: bld.with_label("value", || bld.secret(None)),
-                op: bld.with_label("op", || bld.secret(None)),
-                width: bld.with_label("width", || bld.secret(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        MemPortRepr {
+            cycle: bld.with_label("cycle", || bld.secret_uninit()),
+            addr: bld.with_label("addr", || bld.secret_uninit()),
+            value: bld.with_label("value", || bld.secret_uninit()),
+            op: bld.with_label("op", || bld.secret_uninit()),
+            width: bld.with_label("width", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
+        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
+        Builder::set_secret_from_lit(&s.value, &val.value, force);
+        Builder::set_secret_from_lit(&s.op, &val.op, force);
+        Builder::set_secret_from_lit(&s.width, &val.width, force);
     }
 }
 
@@ -774,20 +891,18 @@ impl<'a> Lit<'a> for FetchPort {
 }
 
 impl<'a> Secret<'a> for FetchPort {
-    fn secret(bld: &Builder<'a>, a: Option<Self>) -> Self::Repr {
-        if let Some(a) = a {
-            FetchPortRepr {
-                addr: bld.with_label("addr", || bld.secret(Some(a.addr))),
-                instr: bld.with_label("instr", || bld.secret(Some(a.instr))),
-                write: bld.with_label("write", || bld.secret(Some(a.write))),
-            }
-        } else {
-            FetchPortRepr {
-                addr: bld.with_label("addr", || bld.secret(None)),
-                instr: bld.with_label("instr", || bld.secret(None)),
-                write: bld.with_label("write", || bld.secret(None)),
-            }
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        FetchPortRepr {
+            addr: bld.with_label("addr", || bld.secret_uninit()),
+            instr: bld.with_label("instr", || bld.secret_uninit()),
+            write: bld.with_label("write", || bld.secret_uninit()),
         }
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
+        Builder::set_secret_from_lit(&s.instr, &val.instr, force);
+        Builder::set_secret_from_lit(&s.write, &val.write, force);
     }
 }
 
@@ -899,52 +1014,112 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 
 
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Execution {
-    #[serde(default)]
     pub version: Version,
-    #[serde(default)]
+    /// The set of all enabled features.  This is built by combining `declared_features` with the
+    /// baseline features implied by `version`.
     pub features: HashSet<Feature>,
-    /// The set of features explicitly declared in the version header.  This is built by combining
-    /// `features` with the baseline features implied by `version`.
-    #[serde(default)]
+    /// The set of features explicitly declared in the version header.
     pub declared_features: HashSet<Feature>,
 
     pub program: Vec<RamInstr>,
-    #[serde(default)]
     pub init_mem: Vec<MemSegment>,
     pub params: Params,
-    pub trace: Vec<RamState>,
-    #[serde(default)]
+    pub segments: Vec<Segment>,
+    pub trace: Vec<TraceChunk>,
     pub advice: HashMap<u64, Vec<Advice>>,
 }
 
 impl Execution {
+    pub fn has_feature(&self, feature: Feature) -> bool {
+        self.features.contains(&feature)
+    }
+
     pub fn validate(self) -> Result<Self, String> {
         let params = &self.params;
-        if self.trace.len() > params.trace_len {
-            return Err(format!(
-                "`trace` contains more than `trace_len` states: {} > {}",
-                self.trace.len(), params.trace_len,
-            ));
-        }
-
-        for (i, s) in self.trace.iter().enumerate() {
-            if s.regs.len() != params.num_regs {
+        if !self.features.contains(&Feature::PublicPc) {
+            if self.segments.len() != 0 {
                 return Err(format!(
-                    "`trace[{}]` should have {} register values (`num_regs`), not {}",
-                    i, params.num_regs, s.regs.len(),
+                    "expected no segment definitions in non-public-pc trace, but got {}",
+                    self.segments.len(),
+                ));
+            }
+
+            if self.trace.len() != 1 {
+                return Err(format!(
+                    "expected exactly one trace chunk in non-public-pc trace, but got {}",
+                    self.trace.len(),
+                ));
+            }
+
+            if self.params.trace_len.is_none() {
+                return Err(format!("non-public-pc trace must have `params.trace_len` set"));
+            }
+
+            let expect_trace_len = self.params.trace_len.unwrap();
+            if self.trace[0].states.len() != expect_trace_len {
+                return Err(format!(
+                    "wrong number of states in trace: expected {}, but got {}",
+                    expect_trace_len, self.trace[0].states.len(),
                 ));
             }
         }
 
+        for (i, seg) in self.segments.iter().enumerate() {
+            for &idx in &seg.successors {
+                if idx >= self.segments.len() {
+                    return Err(format!(
+                        "`segments[{}]` has out-of-range successor {} (len = {})",
+                        i, idx, self.segments.len(),
+                    ));
+                }
+            }
+        }
+
+        for (i, chunk) in self.trace.iter().enumerate() {
+            if !self.features.contains(&Feature::PublicPc) {
+                if chunk.segment != 0 {
+                    return Err(format!(
+                        "`trace[{}]` references segment {} in non-public-pc mode",
+                        i, chunk.segment,
+                    ));
+                }
+            } else {
+                if chunk.segment >= self.segments.len() {
+                    return Err(format!(
+                        "`trace[{}]` references undefined segment {} (len = {})",
+                        i, chunk.segment, self.segments.len(),
+                    ));
+                }
+
+                let expect_len = self.segments[chunk.segment].len;
+                if chunk.states.len() != expect_len {
+                    return Err(format!(
+                        "`trace[{}]` for segment {} should have {} states, but has {}",
+                        i, chunk.segment, expect_len, chunk.states.len(),
+                    ));
+                }
+            }
+
+            for (j, state) in chunk.states.iter().enumerate() {
+                if state.regs.len() != params.num_regs {
+                    return Err(format!(
+                        "`trace[{}][{}]` should have {} register values (`num_regs`), not {}",
+                        i, j, params.num_regs, state.regs.len(),
+                    ));
+                }
+            }
+        }
+
+        let trace_len = self.trace.iter().map(|c| c.states.len()).sum();
         for &i in self.advice.keys() {
             let i = usize::try_from(i)
                 .map_err(|e| format!("advice key {} out of range: {}", i, e))?;
-            if i >= self.params.trace_len {
+            if i >= trace_len {
                 return Err(format!(
-                    "`advice` key out of range: the index is {} but `trace_len` is {}",
-                    i, self.params.trace_len,
+                    "`advice` key out of range: the index is {} but `trace` has only {} states",
+                    i, trace_len,
                 ));
             }
         }
@@ -963,10 +1138,11 @@ pub struct MemSegment {
     pub data: Vec<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Params {
     pub num_regs: usize,
-    pub trace_len: usize,
+    #[serde(default)]
+    pub trace_len: Option<usize>,
     #[serde(alias = "sparcity", default)]
     pub sparsity: Sparsity,
 }
@@ -990,6 +1166,32 @@ impl Default for Sparsity {
 }
 
 #[derive(Clone, Debug)]
+pub struct Segment {
+    pub constraints: Vec<SegmentConstraint>,
+    pub len: usize,
+    pub successors: Vec<usize>,
+    pub enter_from_network: bool,
+    pub exit_to_network: bool,
+}
+
+impl Segment {
+    pub fn init_pc(&self) -> Option<u64> {
+        for c in &self.constraints {
+            match *c {
+                SegmentConstraint::Pc(pc) => return Some(pc),
+                _ => {},
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SegmentConstraint {
+    Pc(u64),
+}
+
+#[derive(Clone, Debug)]
 pub enum Advice {
     MemOp {
         addr: u64,
@@ -999,4 +1201,28 @@ pub enum Advice {
     },
     Stutter,
     Advise { advise: u64 },
+}
+
+#[derive(Clone, Debug)]
+pub struct TraceChunk {
+    pub segment: usize,
+    pub states: Vec<RamState>,
+    /// Debug overrides.  Used to construct invalid traces for testing purposes.
+    pub debug: Option<TraceChunkDebug>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TraceChunkDebug {
+    /// If set, force the cycle counter to this value before running the chunk.
+    #[serde(default)]
+    pub cycle: Option<u32>,
+    /// If set, force the previous state to this value before running the chunk.
+    #[serde(default)]
+    pub prev_state: Option<RamState>,
+    /// If set, force the previous-segment counter to `None` before running the chunk.
+    #[serde(default)]
+    pub clear_prev_segment: bool,
+    /// If set, force the previous-segment counter to this value before running the chunk.
+    #[serde(default)]
+    pub prev_segment: Option<usize>,
 }

@@ -1,29 +1,26 @@
 # Cheesecloth witness checker prototype
 
-This tool generates a witness/trace checker, which checks that a (secret) trace
-represents a valid execution of a (public) program.  The output program is
-SCALE bytecode and can be run using the SCALE engine.
+This tool constructs a witness/trace checking circuit, which checks that a
+(secret) trace represents a valid execution of a (public) program.  The output
+can be saved in zkInterface format and evaluated using other tools.
 
-To generate the witness checker:
+To generate the witness checking circuit:
 
-    cargo run -- examples/poly-prog.txt examples/poly-trace-good.txt
+    cargo run --release -- examples/memory-3.yaml
 
-The first argument is the program (a list of instructions) and the second is
-the trace (a list of machine states).  Currently the bytecode output path is
-hardcoded as `out.bc`.
+The input is a program and trace in the CBOR format produced by MicroRAM.
+(YAML and JSON representations are also accepted, allowing for human-readable
+input.)  The tool will build and evaluate the circuit and print some output
+about the status of its various validity assertions and bug checks.
 
-To run the checker using the SCALE engine:
+By default, the trace is expected to exhibit a memory safety error.  If you
+only want to check that the trace is valid, use the `--validate-only` flag:
 
-    scripts/run_scale.py path/to/SCALE-MAMBA/Player.x out.bc
+    cargo run --release -- examples/memory-1.yaml --validate-only
 
-The script will run `out.bc` with three players, printing player 0's output to
-the screen.  Near the end of the output, player 0 will print a line of digits
-(1 or 0) indicating outcome of each check applied to the trace.  If the trace
-is valid, then all digits should be 1.
+To save the circuit in ZKIF format:
 
-To set up the SCALE engine, first clone [the SCALE-MAMBA
-repository](https://github.com/KULeuven-COSIC/SCALE-MAMBA/).  Then follow the
-installation instructions in the [SCALE
-manual](https://homes.esat.kuleuven.be/~nsmart/SCALE/Documentation-SCALE.pdf),
-specifically sections 3.1 (building the SCALE engine) and 3.4 (setting up
-certificates for local use).
+    cargo run --release --features bellman -- examples/memory-3.yaml --zkif-out zkif
+
+This will produce zkInterface files in the `zkif/` directory, which you can
+later evaluate using `mac-n-cheese` or a similar tool.

@@ -53,7 +53,8 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
                     GateKind::Lit(new_val, new_ty)
                 },
                 // TODO: avoid unnecessary duplication of Secrets
-                GateKind::Secret(s) => self.c.new_secret(self.ty(s.ty), s.val).kind,
+                GateKind::Secret(s) =>
+                    self.c.new_secret_init(self.ty(s.ty), || s.val().unwrap()).kind,
                 GateKind::Unary(op, a) => GateKind::Unary(op, get(a)),
                 GateKind::Binary(op, a, b) => GateKind::Binary(op, get(a), get(b)),
                 GateKind::Shift(op, a, b) => GateKind::Shift(op, get(a), get(b)),
@@ -108,7 +109,7 @@ pub fn run_pass_debug<'new>(
     mut f: impl FnMut(&Circuit<'new>, Wire, GateKind<'new>) -> Wire<'new>,
 ) -> Vec<Wire<'new>> {
     let arena = bumpalo::Bump::new();
-    let old_c = Circuit::new(&arena);
+    let old_c = Circuit::new(&arena, c.is_prover());
     let wire = run_pass(&old_c, wire, |c, _, gk| c.gate(gk));
     let mut old_ev = CachingEvaluator::<eval::RevealSecrets>::new(&old_c);
     let mut new_ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
