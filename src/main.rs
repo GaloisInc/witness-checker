@@ -516,6 +516,12 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    #[cfg(not(feature = "sieve_ir"))]
+    if args.is_present("sieve_ir-out") {
+        eprintln!("error: sieve_ir output is not supported - build with `--features sieve_ir`");
+        std::process::exit(1);
+    }
+
 
     let arena = Bump::new();
     let c = Circuit::new(&arena);
@@ -747,6 +753,46 @@ fn main() -> io::Result<()> {
             tool: "stats".to_string(),
             paths: vec![workspace.to_path_buf()],
         }).unwrap();
+    }
+
+
+
+    #[cfg(feature = "sieve_ir")]
+    if let Some(dest) = args.value_of_os("sieve-ir-out") {
+        use cheesecloth::back::sieve_ir::backend::{Backend, Scalar};
+
+        use std::fs::remove_file;
+        use zkinterface::{cli::{cli, Options}, clean_workspace};
+
+        let accepted = flags[0];
+
+
+
+        // Clean workspace.
+        let workspace = Path::new(dest);
+        clean_workspace(workspace).unwrap();
+
+        // Generate the circuit and witness.
+        let mut backend = Backend::new(workspace, true);
+
+        backend.enforce_true(accepted);
+
+        // Write files.
+        backend.finish().unwrap();
+
+        // eprintln!("validating zkif...");
+        //
+        // // Validate the circuit and witness.
+        // cli(&Options {
+        //     tool: "simulate".to_string(),
+        //     paths: vec![workspace.to_path_buf()],
+        // }).unwrap();
+        //
+        // // Print statistics.
+        // cli(&Options {
+        //     tool: "stats".to_string(),
+        //     paths: vec![workspace.to_path_buf()],
+        // }).unwrap();
     }
 
     // Unused in some configurations.

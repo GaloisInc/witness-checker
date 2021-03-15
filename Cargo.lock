@@ -60,9 +60,9 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
 name = "bellman"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc584b78257b78b8359e751b140921df627ae90087818da4d316b1e83523c0c5"
+checksum = "7089887635778eabf0038a166f586eee5413fb85c8fa6c9a754914f0f644f49f"
 dependencies = [
  "bitvec",
  "blake2s_simd",
@@ -159,6 +159,7 @@ dependencies = [
  "serde_yaml",
  "subtle",
  "tempfile",
+ "zki",
  "zkinterface",
  "zkinterface_bellman",
 ]
@@ -480,6 +481,7 @@ dependencies = [
  "autocfg",
  "num-integer",
  "num-traits",
+ "rand",
 ]
 
 [[package]]
@@ -901,15 +903,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "zkinterface"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d56f428ae0ceeb13786da2c59d1c6c5c14648aa191e01bb807ff9e99c2e5b9d0"
+name = "zki"
+version = "0.1.0"
+source = "git+ssh://git@github.mit.edu/sieve-all/zkinterface-sieve.git#84ffaed30bfad34581d0b58c75e5db38d797fab7"
 dependencies = [
  "colored",
  "flatbuffers",
  "num-bigint",
  "num-traits",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "structopt",
+ "zkinterface",
+]
+
+[[package]]
+name = "zkinterface"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61f7fc1e7f5ed6b1080e552db52fcc5d145eb20ae802783ff17ff106f971eede"
+dependencies = [
+ "colored",
+ "flatbuffers",
+ "num-bigint",
+ "num-traits",
+ "rand",
  "regex",
  "serde",
  "serde_json",
