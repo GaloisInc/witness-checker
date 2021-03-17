@@ -180,10 +180,12 @@ pub fn check_step_mem<'a, 'b>(
         let expect_tainted = b.mux(*is_store_like, *x_taint, *result_taint);
         let port_tainted = mem_port.tainted.unwrap(&pf);
 
+        let op = mem_port.op.repr;
+        let tainted = mem_port.tainted;
         wire_assert!(
             cx, b.eq(port_tainted, expect_tainted),
             "cycle {}'s mem port (op {}) has tainted {} (expected {})",
-            cycle, cx.eval(mem_port.op.repr), cx.eval(mem_port.tainted), cx.eval(expect_tainted),
+            cycle, cx.eval(op), cx.eval(tainted), cx.eval(expect_tainted),
         );
     }
 }
@@ -200,10 +202,12 @@ pub fn check_memports<'a, 'b>(
         let tainted1 = port1.tainted.unwrap(&pf);
         let tainted2 = port2.tainted.unwrap(&pf);
 
+        let addr2 = port2.addr;
+        let cycle2 = port2.cycle;
         wire_assert!(
             cx, b.eq(tainted1, tainted2),
             "tainted read from {:x} on cycle {} produced {} (expected {})",
-            cx.eval(port2.addr), cx.eval(port2.cycle),
+            cx.eval(addr2), cx.eval(cycle2),
             cx.eval(tainted2), cx.eval(tainted1),
         );
     }

@@ -846,8 +846,16 @@ impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
 }
 
 impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
-    fn secret(bld: &Builder<'a>, x: Option<IfMode<M, A>>) -> IfMode<M, TWire<'a, A>> {
-        IfMode::new(|pf| bld.secret(x.map(|x| x.unwrap(&pf))))
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        IfMode::new(|_pf| bld.with_label("IfMode", || bld.secret_uninit()))
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        if let Some(pf) = check_mode() {
+            let s = s.unwrap(&pf);
+            let val = val.unwrap(&pf);
+            Builder::set_secret_from_lit(&s, &val, force);
+        }
     }
 }
 

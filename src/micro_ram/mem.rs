@@ -64,11 +64,7 @@ impl<'a> Memory<'a> {
                     seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(0)
                 });
                 if seg.secret {
-                    if self.verifier {
-                        b.secret(None)
-                    } else {
-                        b.secret(Some(t))
-                    }
+                    b.secret_init(|| t)
                 } else {
                     b.lit(t)
                 }

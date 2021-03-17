@@ -6,7 +6,7 @@ use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
 use crate::micro_ram::mem::{self, Memory, extract_bytes_at_offset, extract_low_bytes};
 use crate::micro_ram::types::{
-    self, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
+    self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
     REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE
 };
 
@@ -170,8 +170,8 @@ impl<'a> Segment<'a> {
             let adv_list = advice.get(&k).map_or(&[] as &[_], |v| v as &[_]);
             for adv in adv_list {
                 match *adv {
-                    Advice::MemOp { addr, value, op, width } => {
-                        self.mem_ports.set_port(b, i, MemPort { cycle, addr, value, op, width });
+                    Advice::MemOp { addr, value, op, width, tainted } => {
+                        self.mem_ports.set_port(b, i, MemPort { cycle, addr, value, op, width, tainted });
                     },
                     Advice::Stutter => {
                         self.stutter_secrets[i].set(b, true);
@@ -232,12 +232,6 @@ fn operand_value<'a>(
 ) -> TWire<'a, u64> {
     let reg_val = b.index(&s.regs, op, |b, i| b.lit(i as u64));
     b.mux(imm, op, reg_val)
-}
-
-pub struct CalcIntermediate<'a> {
-    pub x: TWire<'a,u64>,
-    pub y: TWire<'a,u64>,
-    pub result: TWire<'a,u64>,
 }
 
 fn calc_step<'a>(

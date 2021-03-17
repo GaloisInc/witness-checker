@@ -8,7 +8,8 @@ use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
 use crate::micro_ram::feature::{Feature, Version};
-use crate::mode::if_mode::{IfMode, AnyTainted, UNTAINTED, is_mode};
+use crate::mode::if_mode::{IfMode, AnyTainted, is_mode};
+use crate::mode::tainted::{UNTAINTED};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -246,8 +247,10 @@ impl<'a> Secret<'a> for RamState {
         for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
             Builder::set_secret_from_lit(s_reg, val_reg, force);
         }
-        for (s_reg, val_reg) in s.tainted_regs.iter().zip(val.tainted_regs.iter()) {
-            Builder::set_secret_from_lit(s_reg, val_reg, force);
+        if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
+            for (s_reg, val_reg) in s.tainted_regs.unwrap(&pf).iter().zip(val.tainted_regs.unwrap(&pf).iter()) {
+                Builder::set_secret_from_lit(s_reg, val_reg, force);
+            }
         }
         Builder::set_secret_from_lit(&s.live, &val.live, force);
     }
@@ -266,7 +269,7 @@ impl RamState {
             live: bld.with_label("live", || bld.secret_init(|| a.live)),
             tainted_regs: bld.with_label("tainted_regs", || {
                 a.tainted_regs.map(|v| v.iter().enumerate().map(|(i, &t)| {
-                    bld.with_label(i, || bld.secret(Some(t)))
+                    bld.with_label(i, || bld.secret_init(|| t))
                 }).collect())
             }),
         })
@@ -281,7 +284,7 @@ impl RamState {
             }).collect()),
             live: bld.with_label("live", || bld.secret_uninit()),
             tainted_regs: IfMode::new(|_| bld.with_label("tainted_regs", || (0 .. len).map(|i| {
-                bld.with_label(i, || bld.secret(None))
+                bld.with_label(i, || bld.secret_uninit())
             }).collect())),
         })
     }
@@ -296,6 +299,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; len],
             live: false,
+            tainted_regs: IfMode::new(|_| vec![UNTAINTED; len]),
         });
         (wire.clone(), TSecretHandle::new(wire, default))
     }
@@ -308,6 +312,8 @@ where
     <u32 as Repr<'a>>::Repr: Copy,
     u64: Mux<'a, C, u64, Output = u64>,
     <u64 as Repr<'a>>::Repr: Copy,
+    Label: Mux<'a, C, Label, Output = Label>,
+    <Label as Repr<'a>>::Repr: Copy,
     bool: Mux<'a, C, bool, Output = bool>,
     <bool as Repr<'a>>::Repr: Copy,
 {
@@ -328,6 +334,11 @@ where
                 .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
                 .collect(),
             live: bld.mux(c.clone(), t.live, e.live),
+            tainted_regs: IfMode::new(|pf| {
+                t.tainted_regs.unwrap(&pf).iter().zip(e.tainted_regs.unwrap(&pf).iter())
+                    .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
+                    .collect()
+            }),
         }
     }
 }
@@ -502,10 +513,10 @@ mk_named_enum! {
         /// Instruction used for taint analysis that signifies a value is written to a sink.
         /// The destination is unused, first argument is the value being output, and the second is the label of the output
         /// channel.
-        Sink = 29,
+        Sink = 35,
         /// Instruction used for taint analysis that taints a value is with a given label.
         /// The destination is unused, the first argument is the register being tainted, and the second is the label.
-        Taint = 30,
+        Taint = 36,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
@@ -700,6 +711,7 @@ impl<'a> Secret<'a> for MemPort {
         Builder::set_secret_from_lit(&s.value, &val.value, force);
         Builder::set_secret_from_lit(&s.op, &val.op, force);
         Builder::set_secret_from_lit(&s.width, &val.width, force);
+        Builder::set_secret_from_lit(&s.tainted, &val.tainted, force);
     }
 }
 
