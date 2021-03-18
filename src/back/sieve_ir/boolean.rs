@@ -48,13 +48,10 @@ impl AllocatedBit {
     where
         Builder: IBuilder
     {
-        let mut result_value = None;
-
-        if *a.value.get()? ^ *b.value.get()? {
-            result_value = Some(true);
-        } else {
-            result_value = Some(false);
-        }
+        let result_value = match (a.value, b.value) {
+            (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
+            _ => None // verifier mode
+        };
 
         let result_wire = builder.create_gate(Xor(a.get_wire(), b.get_wire()));
 
@@ -70,13 +67,10 @@ impl AllocatedBit {
     where
         Builder: IBuilder
     {
-        let mut result_value = None;
-
-        if *a.value.get()? & *b.value.get()? {
-            result_value = Some(true);
-        } else {
-            result_value = Some(false);
-        }
+        let result_value = match (a.value, b.value) {
+            (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
+            _ => None // verifier mode
+        };
 
         let wire = builder.create_gate(And(a.get_wire(), b.get_wire()));
 
@@ -91,13 +85,10 @@ impl AllocatedBit {
     where
         Builder: IBuilder
     {
-        let mut result_value = None;
-
-        if *a.value.get()? & !*b.value.get()? {
-            result_value = Some(true);
-        } else {
-            result_value = Some(false);
-        }
+        let result_value = match (a.value, b.value) {
+            (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
+            _ => None // verifier mode
+        };
 
         let not_bwire = builder.create_gate(Not(b.get_wire()));
         let wire = builder.create_gate(And(a.get_wire(), not_bwire));
@@ -113,14 +104,10 @@ impl AllocatedBit {
     where
         Builder: IBuilder
     {
-        let mut result_value = None;
-
-        if !*a.value.get()? & !*b.value.get()? {
-            result_value = Some(true);
-        } else {
-            result_value = Some(false);
-        }
-
+        let result_value = match (a.value, b.value) {
+            (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
+            _ => None // verifier mode
+        };
 
         let not_awire = builder.create_gate(Not(a.get_wire()));
         let not_bwire = builder.create_gate(Not(b.get_wire()));
