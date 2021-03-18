@@ -55,7 +55,7 @@ impl From<Boolean> for WireRepr {
 }
 
 impl WireRepr {
-    pub fn as_num(&mut self) -> &Num {
+    pub fn as_num(&mut self, builder: &mut Builder) -> &Num {
         match &self.num {
             Some(num) => num.clone(),
 
@@ -63,7 +63,7 @@ impl WireRepr {
                 // Convert from another repr.
                 let num = {
                     if let Some(int) = &self.int {
-                        Num::from_int::<Builder>(int)
+                        Num::from_int(builder, int)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }

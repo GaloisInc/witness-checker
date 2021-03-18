@@ -58,24 +58,23 @@ impl<Scalar: PrimeField> Num<Scalar> {
         }
     }
 
-    pub fn from_int<CS: ConstraintSystem<Scalar>>(
+    pub fn from_int(
+        builder: &mut Builder,
         int: &Int,
     ) -> Num<Scalar> {
         let value = int.value.as_ref().map(|x| scalar_from_biguint(x).unwrap());
-        let lc = Self::lc_from_bits::<CS>(&int.bits);
+        let zki_wire = Self::lc_from_bits(&int.bits);
         let width = int.width() as u16;
 
         Num {
             value,
-            lc,
+            zki_wire,
             real_bits: width,
             valid_bits: width,
         }
     }
 
-    pub fn lc_from_bits<CS: ConstraintSystem<Scalar>>(
-        bits: &[Boolean]) -> LinearCombination<Scalar>
-    {
+    pub fn lc_from_bits(bits: &[Boolean]) -> WireId {
         let mut lc = LinearCombination::zero();
         let one = CS::one();
         let mut coeff = Scalar::one();
