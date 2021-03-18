@@ -5,3 +5,4 @@ mod bit_width;
 mod int_ops;
 mod int;
 mod field;
+mod boolean;
