@@ -1,6 +1,6 @@
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use super::{
-    backend::{Num, CS},
+    backend::{Num, Builder},
     int::Int,
 };
 
@@ -29,7 +29,7 @@ impl Representer {
 #[derive(Copy, Clone, PartialEq)]
 pub struct ReprId(pub usize);
 
-// WireRepr holds one or several equivalent representations of a wire.
+// WireRepr holds one or several equivalent representations of an abstract wire as zki_sieve wires.
 #[derive(Default)]
 pub struct WireRepr {
     pub num: Option<Num>,
@@ -55,7 +55,7 @@ impl From<Boolean> for WireRepr {
 }
 
 impl WireRepr {
-    pub fn as_num(&mut self) -> Num {
+    pub fn as_num(&mut self) -> &Num {
         match &self.num {
             Some(num) => num.clone(),
 
@@ -63,7 +63,7 @@ impl WireRepr {
                 // Convert from another repr.
                 let num = {
                     if let Some(int) = &self.int {
-                        Num::from_int::<CS>(int)
+                        Num::from_int::<Builder>(int)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
@@ -75,10 +75,10 @@ impl WireRepr {
     }
 
     /// Get `self` as a "truncated" num (as by `Num::truncate`), with `real_bits == valid_bits`.
-    pub fn as_num_trunc(&mut self, cs: &mut CS) -> Num {
+    pub fn as_num_trunc(&mut self, builder: &mut Builder) -> Num {
         let mut num = self.as_num();
         if num.valid_bits != num.real_bits {
-            num = num.truncate(cs);
+            num = num.truncate(builder);
             self.num = Some(num.clone());
         }
         num

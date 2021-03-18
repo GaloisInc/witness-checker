@@ -464,17 +464,10 @@ fn main() -> io::Result<()> {
     }
 
 
-
     #[cfg(feature = "sieve_ir")]
     if let Some(dest) = args.value_of_os("sieve-ir-out") {
         use cheesecloth::back::sieve_ir::backend::{Backend, Scalar};
-
-        use std::fs::remove_file;
-        use zkinterface::{cli::{cli, Options}, clean_workspace};
-
-        let accepted = flags[0];
-
-
+        use zki_sieve::{cli::{cli, Options}, clean_workspace};
 
         // Clean workspace.
         let workspace = Path::new(dest);
@@ -483,12 +476,13 @@ fn main() -> io::Result<()> {
         // Generate the circuit and witness.
         let mut backend = Backend::new(workspace, true);
 
+        let accepted = flags[0];
         backend.enforce_true(accepted);
 
         // Write files.
         backend.finish().unwrap();
 
-        // eprintln!("validating zkif...");
+        // eprintln!("validating SIEVE IR...");
         //
         // // Validate the circuit and witness.
         // cli(&Options {

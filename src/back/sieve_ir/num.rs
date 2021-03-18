@@ -14,9 +14,14 @@ use zkinterface_bellman::{
     ff::{Field, PrimeField},
     zkif_cs::ZkifCS,
 };
+use zki_sieve::{
+    WireId, producers::builder::{IBuilder, BuildGate},
+};
 use super::{
     bit_width::BitWidth,
     int::Int,
+    backend::Builder,
+    field::encode_scalar,
 };
 
 
@@ -24,7 +29,7 @@ use super::{
 #[derive(Clone)]
 pub struct Num<Scalar: PrimeField> {
     pub value: Option<Scalar>,
-    pub lc: LinearCombination<Scalar>,
+    pub zki_wire: WireId,
 
     /// Conservative upper bound on the number of bits required to represent this number.
     /// Specifically, the `Scalar` value is always less than `2^real_bits`.  `real_bits` may exceed
@@ -38,33 +43,19 @@ pub struct Num<Scalar: PrimeField> {
 
 impl<Scalar: PrimeField> Num<Scalar> {
     pub fn from_biguint(
+        builder: &mut Builder,
         width: u16,
         value: &BigUint,
     ) -> Num<Scalar> {
         let element: Scalar = scalar_from_biguint(value).unwrap();
+        let zki_wire = builder.create_gate(
+            BuildBuildGate::Constant(encode_scalar(&element)));
         Num {
-            value: Some(element.clone()),
-            lc: LinearCombination::zero() + (element, ZkifCS::<Scalar>::one()),
+            value: Some(element),
+            zki_wire,
             real_bits: width,
             valid_bits: width,
         }
-    }
-
-    pub fn _alloc<CS: ConstraintSystem<Scalar>>(
-        mut cs: CS,
-        width: u16,
-        value: Option<BigUint>,
-    ) -> Result<Self, SynthesisError>
-    {
-        let value = value.map(|val| scalar_from_biguint(&val).unwrap());
-        let var = cs.alloc(|| "num", ||
-            value.ok_or(SynthesisError::AssignmentMissing))?;
-        Ok(Num {
-            value,
-            lc: LinearCombination::zero() + var,
-            real_bits: width,
-            valid_bits: width,
-        })
     }
 
     pub fn from_int<CS: ConstraintSystem<Scalar>>(
@@ -135,11 +126,11 @@ impl<Scalar: PrimeField> Num<Scalar> {
     // TODO: Turn add/sub/mul/neg into wrappers that check for the necessary width and truncate the
     // inputs to `cmp::min(self.real_bits, other.real_bits)` if needed.
 
-    pub fn add(
+    pub fn add_assign(
         mut self,
         other: &Self,
         // `cs` argument will be needed when we add automatic truncation
-        _cs: &mut impl ConstraintSystem<Scalar>,
+        builder: &mut Builder,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (
@@ -149,7 +140,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
             _ => {}
         }
 
-        self.lc = self.lc + &other.lc;
+        self.zki_wire = builder.create_gate(
+            BuildGate::Add(self.zki_wire, other.zki_wire));
+
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
@@ -165,7 +158,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn sub(
         mut self,
         other: &Self,
-        _cs: &mut impl ConstraintSystem<Scalar>,
+        builder: &mut Builder,
     ) -> Result<Self, String> {
         // `a - b` might underflow in the field, producing garbage.  We compute `a + (2^N - b)`
         // instead, with `N` large enough that `2^N - b` can't underflow.  This makes `a.sub(b)`
@@ -187,7 +180,14 @@ impl<Scalar: PrimeField> Num<Scalar> {
             _ => {}
         }
 
-        self.lc = self.lc + (max_value, ZkifCS::<Scalar>::one()) - &other.lc;
+        // TODO: compute self + max_value + other * -1
+        // cache constant -1
+        // cache constant max_value
+        // Mul other, -1
+        // Add self, max_value
+        // Add other
+        self.zki_wire = builder.create_gate(
+            BuildGate::Add(self.zki_wire, other.zki_wire));
 
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
@@ -204,7 +204,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn mul(
         mut self,
         other: &Self,
-        cs: &mut impl ConstraintSystem<Scalar>,
+        builder: &mut Builder,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (
@@ -214,29 +214,15 @@ impl<Scalar: PrimeField> Num<Scalar> {
             _ => {}
         }
 
-        let product = cs.alloc(
-            || "product",
-            || self.value.ok_or(SynthesisError::AssignmentMissing),
-        ).unwrap();
-        let product_lc = LinearCombination::<Scalar>::zero() + product;
-
-        cs.enforce(
-            || "multiplication",
-            |lc| lc + &self.lc,
-            |lc| lc + &other.lc,
-            |lc| lc + &product_lc,
-        );
-
-        self.lc = product_lc;
+        self.zki_wire = builder.create_gate(
+            BuildGate::Mul(self.zki_wire, other.zki_wire));
 
         fn mul_bits(b1: u16, b2: u16) -> u16 {
             // If `bits == 0`, then the value must be zero, so the product is also zero.
             if b1 == 0 || b2 == 0 { 0 }
             // If `bits == 1`, then the value must be 0 or 1.  The product can either be zero or
             // the value of the other input.
-            else if b1 == 1 { b2 }
-            else if b2 == 1 { b1 }
-            else { b1 + b2 }
+            else if b1 == 1 { b2 } else if b2 == 1 { b1 } else { b1 + b2 }
         }
         let new_real_bits = mul_bits(self.real_bits, other.real_bits);
         // NB: This is the one case where `real_bits` is allowed to exactly equal the number of

@@ -159,7 +159,7 @@ dependencies = [
  "serde_yaml",
  "subtle",
  "tempfile",
- "zki",
+ "zki_sieve",
  "zkinterface",
  "zkinterface_bellman",
 ]
@@ -903,9 +903,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "zki"
-version = "0.1.0"
-source = "git+ssh://git@github.mit.edu/sieve-all/zkinterface-sieve.git#84ffaed30bfad34581d0b58c75e5db38d797fab7"
+name = "zki_sieve"
+version = "0.1.1"
 dependencies = [
  "colored",
  "flatbuffers",
