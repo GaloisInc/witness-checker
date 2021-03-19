@@ -1,0 +1,18 @@
+image: rust:1.50
+
+default:
+  tags: [docker]
+
+stages:
+  - build
+  - test
+
+build:
+  stage: build
+  script:
+    - cargo build
+
+test:
+  stage: test
+  script:
+    - cargo test
