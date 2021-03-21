@@ -13,13 +13,14 @@ use zkinterface_bellman::{
         SynthesisError,
         ConstraintSystem,
         LinearCombination,
-        gadgets::boolean::{Boolean, AllocatedBit},
     },
 };
 use super::{
     num::Num,
     bit_width::BitWidth,
+    boolean::{Boolean, AllocatedBit},
 };
+use crate::back::sieve_ir::builder_ext::BuilderExt;
 
 /// Represents an interpretation of SIZE `Boolean` objects as a
 /// unsigned integer, or two-complement signed integer.
@@ -100,13 +101,13 @@ impl Int {
         })
     }
 
-    pub fn from_num<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
-        mut cs: CS,
+    pub fn from_num<Scalar: PrimeField>(
+        b: &mut BuilderExt,
         width: usize,
         num: &Num<Scalar>,
     ) -> Int {
-        // `alloc_bits` produces `num.real_bits` bits, but we only care about the valid ones.
-        let mut bits = num.alloc_bits(&mut cs);
+        // `to_bits` produces `num.real_bits` bits, but we only care about the valid ones.
+        let mut bits = num.to_bits(&mut cs);
         bits.truncate(cmp::min(width, num.valid_bits as usize));
 
         if (num.valid_bits as usize) < width {
@@ -222,7 +223,7 @@ impl Int {
                     }
                 }
                 Some(new_v)
-            },
+            }
             None => None,
         };
 

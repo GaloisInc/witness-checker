@@ -8,7 +8,7 @@ use zkinterface_bellman::{
     zkif_cs::ZkifCS,
 };
 use super::{
-    num::{Num, boolean_lc, scalar_from_unsigned},
+    num::{Num, scalar_from_unsigned},
     int::Int,
     bit_width::BitWidth,
 };
@@ -133,4 +133,11 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     // TODO: this should be done without enforce but by construction of diff_int.
 
     (quot_num, quot_int, rest_num, rest_int)
+}
+
+
+pub fn boolean_lc<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
+    bool: &Boolean,
+) -> LinearCombination<Scalar> {
+    bool.lc(CS::one(), Scalar::one())
 }

@@ -48,7 +48,7 @@ use super::{
     bit_width::BitWidth,
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
-    num, num::{boolean_lc, scalar_from_unsigned},
+    num, num::{scalar_from_unsigned},
     field::QuarkScalar,
 };
 

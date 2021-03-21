@@ -10,6 +10,7 @@ use zki_sieve::producers::builder::{IBuilder, BuildGate};
 use zkinterface_bellman::bellman::gadgets::Assignment;
 use num_traits::AsPrimitive;
 use std::io::Write;
+use crate::back::sieve_ir::builder_ext::BuilderExt;
 
 /// Represents a variable in the constraint system which is guaranteed
 /// to be either zero or one.
@@ -37,7 +38,6 @@ fn minus_one<Scalar: PrimeField>() -> Vec<u8> {
 }
 
 fn one<Scalar: PrimeField>() -> Vec<u8> {
-
     let mut one = Vec::<u8>::new();
     write_scalar(&Scalar::one(), &mut one);
     one
@@ -52,13 +52,14 @@ impl AllocatedBit {
         self.wire
     }
 
-    pub fn alloc<Builder>(mut builder: &mut Builder, value: Option<bool>) -> Result<(Self)>
-    where
-        Builder: IBuilder
+    pub fn alloc<Builder>(builder: &mut Builder, value: Option<bool>) -> Result<(Self)>
+        where
+            Builder: IBuilder
     {
         let allocated = builder.create_gate(
-            BuildGate::Constant(vec![value.unwrap_or(false).as_()])
-        );
+            BuildGate::Witness);
+
+        // TODO: store witness value.
 
         Ok(AllocatedBit {
             wire: allocated,
@@ -70,9 +71,9 @@ impl AllocatedBit {
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
     pub fn xor<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-    where
-        Scalar: PrimeField,
-        Builder: IBuilder
+        where
+            Scalar: PrimeField,
+            Builder: IBuilder
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
@@ -102,9 +103,9 @@ impl AllocatedBit {
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
     pub fn and<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-    where
-        Scalar: PrimeField,
-        Builder: IBuilder
+        where
+            Scalar: PrimeField,
+            Builder: IBuilder
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
@@ -129,9 +130,9 @@ impl AllocatedBit {
 
     /// Calculates `a AND (NOT b)`.
     pub fn and_not<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-    where
-        Scalar: PrimeField,
-        Builder: IBuilder
+        where
+            Scalar: PrimeField,
+            Builder: IBuilder
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
@@ -159,9 +160,9 @@ impl AllocatedBit {
 
     /// Calculates `(NOT a) AND (NOT b)`.
     pub fn nor<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-    where
-        Scalar: PrimeField,
-        Builder: IBuilder
+        where
+            Scalar: PrimeField,
+            Builder: IBuilder
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
@@ -193,9 +194,9 @@ impl AllocatedBit {
 }
 
 pub fn u64_into_boolean_vec_le<Scalar, Builder>(mut builder: &mut Builder, value: Option<u64>) -> Result<(Vec<Boolean>)>
-where
-    Scalar: PrimeField,
-    Builder: IBuilder
+    where
+        Scalar: PrimeField,
+        Builder: IBuilder
 {
     let values = match value {
         Some(ref value) => {
@@ -293,6 +294,15 @@ pub enum Boolean {
 }
 
 impl Boolean {
+    pub fn wire(&self, b: &BuilderExt) -> WireId {
+        match self {
+            Boolean::Is(bit) => bit.wire,
+            Boolean::Not(bit) => unimplemented!("Negated view of a bit"),
+            Boolean::Constant(false) => b.zero,
+            Boolean::Constant(true) => b.one,
+        }
+    }
+
     pub fn is_constant(&self) -> bool {
         match *self {
             Boolean::Constant(_) => true,
@@ -318,10 +328,10 @@ impl Boolean {
                     Boolean::Is(ref v) => {
                         let w = builder.create_gate(Not(v.get_wire()));
                         builder.create_gate(AssertZero(w));
-                    },
+                    }
                     Boolean::Not(ref v) => {
                         builder.create_gate(AssertZero(v.get_wire()));
-                    },
+                    }
                     _ => { /* This case will never happen => DO NOTHING */ }
                 }
                 Ok(())
@@ -330,11 +340,11 @@ impl Boolean {
                 match &c {
                     Boolean::Is(ref v) => {
                         builder.create_gate(AssertZero(v.get_wire()));
-                    },
+                    }
                     Boolean::Not(ref v) => {
                         let w = builder.create_gate(Not(v.get_wire()));
                         builder.create_gate(AssertZero(w));
-                    },
+                    }
                     _ => { /* This case will never happen => DO NOTHING */ }
                 }
                 Ok(())
@@ -427,7 +437,6 @@ impl Boolean {
             }
         }
     }
-
 }
 
 impl From<AllocatedBit> for Boolean {
