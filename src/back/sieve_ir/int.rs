@@ -3,24 +3,23 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
+
+use zki_sieve::Result;
+
 use std::cmp;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-use zkinterface_bellman::{
-    ff::{Field, PrimeField},
-    bellman::{
-        SynthesisError,
-        ConstraintSystem,
-        LinearCombination,
-    },
-};
+use ff::PrimeField;
+
 use super::{
     num::Num,
     bit_width::BitWidth,
     boolean::{Boolean, AllocatedBit},
+    builder_ext::BuilderExt,
 };
-use crate::back::sieve_ir::builder_ext::BuilderExt;
+
+
 
 /// Represents an interpretation of SIZE `Boolean` objects as a
 /// unsigned integer, or two-complement signed integer.
@@ -59,13 +58,11 @@ impl Int {
     }
 
     /// Allocate an `Int` in the constraint system
-    pub fn alloc<Scalar, CS>(
-        mut cs: CS,
+    pub fn alloc(
+        mut builder: &mut BuilderExt,
         width: usize,
         value: Option<BigUint>,
-    ) -> Result<Self, SynthesisError>
-        where Scalar: PrimeField,
-              CS: ConstraintSystem<Scalar>
+    ) -> Result<(Self)>
     {
         let values = match value {
             Some(ref val) => {
@@ -86,14 +83,13 @@ impl Int {
         };
 
         let bits = values.into_iter()
-            .enumerate()
-            .map(|(i, v)| {
+            .map(|v| {
                 Ok(Boolean::from(AllocatedBit::alloc(
-                    cs.namespace(|| format!("allocated bit {}", i)),
+                    builder,
                     v,
                 )?))
             })
-            .collect::<Result<Vec<_>, SynthesisError>>()?;
+            .collect::<Result<(Vec<_>)>>()?;
 
         Ok(Int {
             bits: bits,
@@ -234,13 +230,11 @@ impl Int {
     }
 
     /// XOR this `Int` with another `Int`
-    pub fn xor<Scalar, CS>(
+    pub fn xor(
         &self,
-        mut cs: CS,
+        mut builder: &mut BuilderExt,
         other: &Self,
-    ) -> Result<Self, SynthesisError>
-        where Scalar: PrimeField,
-              CS: ConstraintSystem<Scalar>
+    ) -> Result<(Self)>
     {
         let new_value = match (self.value.as_ref(), other.value.as_ref()) {
             (Some(a), Some(b)) => {
@@ -251,15 +245,14 @@ impl Int {
 
         let bits = self.bits.iter()
             .zip(other.bits.iter())
-            .enumerate()
-            .map(|(i, (a, b))| {
+            .map(|(a, b)| {
                 Boolean::xor(
-                    cs.namespace(|| format!("xor of bit {}", i)),
+                    builder,
                     a,
                     b,
                 )
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<(_)>>()?;
 
         Ok(Int {
             bits: bits,
