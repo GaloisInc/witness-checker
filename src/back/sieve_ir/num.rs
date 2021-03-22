@@ -20,7 +20,6 @@ use super::{
     bit_width::BitWidth,
     int::Int,
     boolean::{AllocatedBit, Boolean},
-    backend::Builder,
     field::encode_scalar,
     builder_ext::BuilderExt,
 };
@@ -44,7 +43,7 @@ pub struct Num<Scalar: PrimeField> {
 
 impl<Scalar: PrimeField> Num<Scalar> {
     pub fn from_biguint(
-        builder: &mut Builder,
+        builder: &mut BuilderExt,
         width: u16,
         value: &BigUint,
     ) -> Num<Scalar> {
@@ -115,8 +114,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // Enforce that the bit representation is equivalent to this Num.
         let recomposed_wire = Self::compose_bits(b, &bits);
         let difference = b.sub(self.zki_wire, recomposed_wire);
-        b.create_gate(
-            BuildGate::AssertZero(difference));
+        b.assert_zero(difference);
 
         bits
     }
@@ -127,7 +125,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn add_assign(
         mut self,
         other: &Self,
-        builder: &mut Builder,
+        builder: &mut BuilderExt,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (
@@ -154,7 +152,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn sub(
         mut self,
         other: &Self,
-        b: &mut Builder,
+        b: &mut BuilderExt,
     ) -> Result<Self, String> {
         // `a - b` might underflow in the field, producing garbage.  We compute `a + (2^N - b)`
         // instead, with `N` large enough that `2^N - b` can't underflow.  This makes `a.sub(b)`
@@ -166,7 +164,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // other.real_bits`, then we'll trample on some high bits of `self`, but that's okay
         // because `valid_bits` is the `min` of the two inputs, and will be smaller than
         // `other.real_bits`.
-        let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << other.real_bits))?;
+        let max_value: Scalar = scalar_from_biguint(&(BigUint::from(1_u8) << other.real_bits))?;
 
         match (&mut self.value, &other.value) {
             (
@@ -199,7 +197,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn mul(
         mut self,
         other: &Self,
-        b: &mut Builder,
+        b: &mut BuilderExt,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (
@@ -241,7 +239,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
     pub fn neg(
         mut self,
-        b: &mut Builder,
+        b: &mut BuilderExt,
     ) -> Result<Self, String> {
         // Computing `0 - a` in the field could underflow, producing garbage.  We instead compute
         // `2^N - a`, which never underflows, but does increase `real_bits` by one.
@@ -275,7 +273,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         mut self,
         else_: &Self,
         cond: &Self,
-        b: &mut Builder,
+        b: &mut BuilderExt,
     ) -> Result<Self, String> {
         if cond.real_bits == 0 || cond.valid_bits == 0 {
             // This probably won't ever happen, but if it does, we know the logical value of
@@ -316,7 +314,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
     /// Truncate `self` modulo `2^valid_bits`, producing a new `Num` with `real_bits ==
     /// valid_bits`.
-    pub fn truncate<CS: ConstraintSystem<Scalar>>(
+    // TODO: simple take the right wire in the bit recomposition (like `compose_bits`).
+    pub fn truncate(
         mut self,
         b: &mut BuilderExt,
     ) -> Self {

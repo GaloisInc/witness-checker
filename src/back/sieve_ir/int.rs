@@ -107,7 +107,7 @@ impl Int {
         num: &Num<Scalar>,
     ) -> Int {
         // `to_bits` produces `num.real_bits` bits, but we only care about the valid ones.
-        let mut bits = num.to_bits(&mut cs);
+        let mut bits = num.to_bits(b);
         bits.truncate(cmp::min(width, num.valid_bits as usize));
 
         if (num.valid_bits as usize) < width {

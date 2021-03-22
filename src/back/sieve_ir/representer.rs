@@ -1,7 +1,8 @@
-use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use super::{
-    backend::{Num, Builder},
+    backend::Num,
+    builder_ext::BuilderExt,
     int::Int,
+    boolean::Boolean,
 };
 
 
@@ -55,15 +56,15 @@ impl From<Boolean> for WireRepr {
 }
 
 impl WireRepr {
-    pub fn as_num(&mut self, builder: &mut Builder) -> &Num {
-        match &self.num {
-            Some(num) => num.clone(),
+    pub fn as_num(&mut self, b: &mut BuilderExt) -> Num {
+        match self.num {
+            Some(ref num) => (*num).clone(),
 
             None => {
                 // Convert from another repr.
                 let num = {
                     if let Some(int) = &self.int {
-                        Num::from_int(builder, int)
+                        Num::from_int(b, int)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
@@ -75,16 +76,16 @@ impl WireRepr {
     }
 
     /// Get `self` as a "truncated" num (as by `Num::truncate`), with `real_bits == valid_bits`.
-    pub fn as_num_trunc(&mut self, builder: &mut Builder) -> Num {
-        let mut num = self.as_num();
+    pub fn as_num_trunc(&mut self, b: &mut BuilderExt) -> Num {
+        let mut num = self.as_num(b);
         if num.valid_bits != num.real_bits {
-            num = num.truncate(builder);
+            num = num.truncate(b);
             self.num = Some(num.clone());
         }
         num
     }
 
-    pub fn as_int(&mut self, cs: &mut CS, width: usize) -> Int {
+    pub fn as_int(&mut self, b: &mut BuilderExt, width: usize) -> Int {
         match &self.int {
             Some(u) => {
                 // Currently we don't support treating the same `WireRepr` as multiple widths of
@@ -98,7 +99,7 @@ impl WireRepr {
                 // Convert from another repr.
                 let int = {
                     if let Some(num) = &self.num {
-                        Int::from_num(cs, width, num)
+                        Int::from_num(b, width, num)
                     } else {
                         panic!("Access to a wire that has no representation")
                     }
@@ -109,8 +110,8 @@ impl WireRepr {
         }
     }
 
-    pub fn as_boolean(&mut self, cs: &mut CS) -> Boolean {
-        let i = self.as_int(cs, 1);
+    pub fn as_boolean(&mut self, b: &mut BuilderExt) -> Boolean {
+        let i = self.as_int(b, 1);
         assert!(i.bits.len() == 1);
         i.bits[0].clone()
     }

@@ -2,7 +2,6 @@ use std::cmp;
 use num_traits::Zero;
 use zkinterface_bellman::{
     bellman::{ConstraintSystem, SynthesisError, LinearCombination},
-    bellman::gadgets::boolean::Boolean,
     pairing::Engine,
     ff::PrimeField,
     zkif_cs::ZkifCS,
@@ -10,8 +9,10 @@ use zkinterface_bellman::{
 use super::{
     num::{Num, scalar_from_unsigned},
     int::Int,
+    boolean::Boolean,
     bit_width::BitWidth,
 };
+use crate::back::sieve_ir::builder_ext::BuilderExt;
 
 pub fn bitwise_xor<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: CS,
@@ -66,18 +67,12 @@ pub fn bool_or<'a, Scalar, CS>(
     Boolean::and(cs, &a.not(), &b.not()).unwrap().not()
 }
 
-pub fn enforce_true<Scalar, CS>(
-    mut cs: CS,
+pub fn enforce_true(
+    b: &mut BuilderExt,
     bool: &Boolean,
-) where Scalar: PrimeField,
-        CS: ConstraintSystem<Scalar>
-{
-    cs.enforce(
-        || "enforce true",
-        |_| boolean_lc::<Scalar, CS>(bool),
-        |lc| lc + CS::one(),
-        |lc| lc + CS::one(),
-    );
+) {
+    let not = bool.not().wire(b);
+    b.assert_zero(not);
 }
 
 pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
@@ -104,8 +99,8 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     let quot_int = Int::alloc(&mut cs, max_width, quot_val).unwrap();
     let rest_int = Int::alloc(&mut cs, denom_int.width(), rest_val).unwrap();
 
-    let quot_num = Num::from_int::<CS>(&quot_int);
-    let rest_num = Num::from_int::<CS>(&rest_int);
+    let quot_num = Num::from_int(&quot_int);
+    let rest_num = Num::from_int(&rest_int);
 
     // Verify that: numerator == quotient * denominator + rest.
     cs.enforce(
