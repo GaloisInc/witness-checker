@@ -4,13 +4,17 @@ use ff::PrimeField;
 use zki_sieve::{
     WireId,
     Result,
-    producers::build_gates::BuildGate::*,
+    producers::builder::BuildGate::*,
+    producers::builder::IBuilder,
 };
-use zki_sieve::producers::builder::{IBuilder, BuildGate};
-use zkinterface_bellman::bellman::gadgets::Assignment;
 use num_traits::AsPrimitive;
 use std::io::Write;
+use super::{
+    field::encode_scalar
+};
 use crate::back::sieve_ir::builder_ext::BuilderExt;
+
+
 
 /// Represents a variable in the constraint system which is guaranteed
 /// to be either zero or one.
@@ -18,29 +22,6 @@ use crate::back::sieve_ir::builder_ext::BuilderExt;
 pub struct AllocatedBit {
     wire: WireId,
     value: Option<bool>,
-}
-
-fn write_scalar<Scalar: PrimeField>(
-    fr: &Scalar,
-    writer: &mut impl Write,
-) {
-    let repr = fr.to_repr();
-    writer.write_all(repr.as_ref()).unwrap();
-}
-
-fn minus_one<Scalar: PrimeField>() -> Vec<u8> {
-    let negative_one = Scalar::one();
-    negative_one.neg();
-
-    let mut minus_one = Vec::<u8>::new();
-    write_scalar(&negative_one, &mut minus_one);
-    minus_one
-}
-
-fn one<Scalar: PrimeField>() -> Vec<u8> {
-    let mut one = Vec::<u8>::new();
-    write_scalar(&Scalar::one(), &mut one);
-    one
 }
 
 impl AllocatedBit {
@@ -52,12 +33,10 @@ impl AllocatedBit {
         self.wire
     }
 
-    pub fn alloc<Builder>(builder: &mut Builder, value: Option<bool>) -> Result<(Self)>
-        where
-            Builder: IBuilder
+    pub fn alloc(builder: &mut BuilderExt, value: Option<bool>) -> Result<(Self)>
     {
         let allocated = builder.create_gate(
-            BuildGate::Witness);
+            Witness);
 
         // TODO: store witness value.
 
@@ -70,10 +49,7 @@ impl AllocatedBit {
 
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn xor<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-        where
-            Scalar: PrimeField,
-            Builder: IBuilder
+    pub fn xor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
@@ -89,10 +65,8 @@ impl AllocatedBit {
         //  1 | 0 |  1  |     1
         //  1 | 1 |  0  |     0
 
-        let minus_one_wire = builder.create_gate(Constant(minus_one::<Scalar>()));
-        let minus_b_wire = builder.create_gate(Mul(minus_one_wire, b.get_wire()));
-        let tmp_wire = builder.create_gate(Add(a.get_wire(), minus_b_wire));
-        let result_wire = builder.create_gate(Mul(tmp_wire, tmp_wire));
+        let tmp_wire = builder.sub(a.get_wire(), b.get_wire());
+        let result_wire = builder.mul(tmp_wire, tmp_wire);
 
         Ok(AllocatedBit {
             wire: result_wire,
@@ -102,10 +76,7 @@ impl AllocatedBit {
 
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn and<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-        where
-            Scalar: PrimeField,
-            Builder: IBuilder
+    pub fn and(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
@@ -120,7 +91,7 @@ impl AllocatedBit {
         //  0 | 1 |  0  |  0
         //  1 | 0 |  0  |  0
         //  1 | 1 |  1  |  1
-        let wire = builder.create_gate(Mul(a.get_wire(), b.get_wire()));
+        let wire = builder.mul(a.get_wire(), b.get_wire());
 
         Ok(AllocatedBit {
             wire,
@@ -129,10 +100,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `a AND (NOT b)`.
-    pub fn and_not<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-        where
-            Scalar: PrimeField,
-            Builder: IBuilder
+    pub fn and_not(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
@@ -141,16 +109,14 @@ impl AllocatedBit {
 
         // Implementing AND-NOT using arithmetic operations only:
         // Truth Table:
-        //  a | b | a&!b | a - a*b
+        //  a | b | a&!b | a*(1-b)
         // ---|---|------|--------|
         //  0 | 0 |  0   |  0
         //  0 | 1 |  0   |  0
         //  1 | 0 |  1   |  1
         //  1 | 1 |  0   |  0
-        let minus_one_wire = builder.create_gate(Constant(minus_one::<Scalar>()));
-        let ab_wire = builder.create_gate(Mul(a.get_wire(), b.get_wire()));
-        let minus_ab_wire = builder.create_gate(Mul(minus_one_wire, ab_wire));
-        let wire = builder.create_gate(Add(a.get_wire(), minus_ab_wire));
+        let right_wire = builder.sub(builder.one, b.get_wire());
+        let wire = builder.mul(a.get_wire(), right_wire);
 
         Ok(AllocatedBit {
             wire,
@@ -159,10 +125,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `(NOT a) AND (NOT b)`.
-    pub fn nor<Scalar, Builder>(mut builder: &mut Builder, a: &Self, b: &Self) -> Result<(Self)>
-        where
-            Scalar: PrimeField,
-            Builder: IBuilder
+    pub fn nor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
@@ -177,14 +140,9 @@ impl AllocatedBit {
         //  0 | 1 |    0    |     0
         //  1 | 0 |    0    |     0
         //  1 | 1 |    0    |     0
-        let minus_one_wire = builder.create_gate(Constant(minus_one::<Scalar>()));
-        let minus_a_wire = builder.create_gate(Mul(minus_one_wire, a.get_wire()));
-        let minus_b_wire = builder.create_gate(Mul(minus_one_wire, b.get_wire()));
-
-        let one_wire = builder.create_gate(Constant(one::<Scalar>()));
-        let left_wire = builder.create_gate(Add(one_wire, minus_a_wire));
-        let right_wire = builder.create_gate(Add(one_wire, minus_b_wire));
-        let wire = builder.create_gate(Mul(left_wire, right_wire));
+        let left_wire = builder.sub(builder.one, a.get_wire());
+        let right_wire = builder.sub(builder.one, b.get_wire());
+        let wire = builder.mul(left_wire, right_wire);
 
         Ok(AllocatedBit {
             wire,
@@ -193,10 +151,7 @@ impl AllocatedBit {
     }
 }
 
-pub fn u64_into_boolean_vec_le<Scalar, Builder>(mut builder: &mut Builder, value: Option<u64>) -> Result<(Vec<Boolean>)>
-    where
-        Scalar: PrimeField,
-        Builder: IBuilder
+pub fn u64_into_boolean_vec_le(mut builder: &mut BuilderExt, value: Option<u64>) -> Result<(Vec<Boolean>)>
 {
     let values = match value {
         Some(ref value) => {
@@ -226,22 +181,20 @@ pub fn u64_into_boolean_vec_le<Scalar, Builder>(mut builder: &mut Builder, value
 
 pub fn field_into_boolean_vec_le<
     Scalar: PrimeField,
-    Builder: IBuilder,
 >(
-    mut builder: &mut Builder,
+    mut builder: &mut BuilderExt,
     value: Option<Scalar>,
 ) -> Result<(Vec<Boolean>)>
 {
-    let v = field_into_allocated_bits_le::<Scalar, Builder>(builder, value)?;
+    let v = field_into_allocated_bits_le::<Scalar>(builder, value)?;
 
     Ok(v.into_iter().map(Boolean::from).collect())
 }
 
 pub fn field_into_allocated_bits_le<
     Scalar: PrimeField,
-    Builder: IBuilder,
 >(
-    mut builder: &mut Builder,
+    mut builder: &mut BuilderExt,
     value: Option<Scalar>,
 ) -> Result<(Vec<AllocatedBit>)> {
     // Deconstruct in big-endian bit order
@@ -310,10 +263,7 @@ impl Boolean {
         }
     }
 
-    pub fn enforce_equal<'l, Scalar, Builder>(mut builder: &mut Builder, a: &'l Self, b: &'l Self) -> Result<()>
-        where
-            Scalar: PrimeField,
-            Builder: IBuilder,
+    pub fn enforce_equal<'l>(mut builder: &mut BuilderExt, a: &'l Self, b: &'l Self) -> Result<()>
     {
         match (a, b) {
             (&Boolean::Constant(a), &Boolean::Constant(b)) => {
@@ -350,14 +300,14 @@ impl Boolean {
                 Ok(())
             }
             (&Boolean::Is(ref v), &Boolean::Is(ref w)) | (&Boolean::Not(ref v), &Boolean::Not(ref w)) => {
-                let xorwire = AllocatedBit::xor::<Scalar, Builder>(builder, &v, &w)?.get_wire();
+                let xorwire = AllocatedBit::xor(builder, &v, &w)?.get_wire();
                 builder.create_gate(AssertZero(xorwire));
 
                 Ok(())
             }
 
             (&Boolean::Is(ref v), &Boolean::Not(ref w)) | (&Boolean::Not(ref v), &Boolean::Is(ref w)) => {
-                let norwire = AllocatedBit::nor::<Scalar, Builder>(builder, &v, &w)?.get_wire();
+                let norwire = AllocatedBit::nor(builder, &v, &w)?.get_wire();
                 builder.create_gate(AssertZero(norwire));
 
                 Ok(())
@@ -388,10 +338,7 @@ impl Boolean {
     }
 
     /// Perform XOR over two boolean operands
-    pub fn xor<'a, Scalar, Builder>(mut builder: &mut Builder, a: &'a Self, b: &'a Self) -> Result<(Self)>
-        where
-            Scalar: PrimeField,
-            Builder: IBuilder,
+    pub fn xor<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<(Self)>
     {
         match (a, b) {
             (&Boolean::Constant(false), x) | (x, &Boolean::Constant(false)) => Ok(x.clone()),
@@ -399,21 +346,18 @@ impl Boolean {
             // a XOR (NOT b) = NOT(a XOR b)
             (is @ &Boolean::Is(_), not @ &Boolean::Not(_))
             | (not @ &Boolean::Not(_), is @ &Boolean::Is(_)) => {
-                Ok(Boolean::xor::<Scalar, Builder>(builder, is, &not.not())?.not())
+                Ok(Boolean::xor(builder, is, &not.not())?.not())
             }
             // a XOR b = (NOT a) XOR (NOT b)
             (&Boolean::Is(ref a), &Boolean::Is(ref b))
             | (&Boolean::Not(ref a), &Boolean::Not(ref b)) => {
-                Ok(Boolean::Is(AllocatedBit::xor::<Scalar, Builder>(builder, a, b)?))
+                Ok(Boolean::Is(AllocatedBit::xor(builder, a, b)?))
             }
         }
     }
 
     /// Perform AND over two boolean operands
-    pub fn and<'a, Scalar, Builder>(mut builder: &mut Builder, a: &'a Self, b: &'a Self) -> Result<(Self)>
-        where
-            Scalar: PrimeField,
-            Builder: IBuilder,
+    pub fn and<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<(Self)>
     {
         match (a, b) {
             // false AND x is always false
@@ -425,15 +369,15 @@ impl Boolean {
             // a AND (NOT b)
             (&Boolean::Is(ref is), &Boolean::Not(ref not))
             | (&Boolean::Not(ref not), &Boolean::Is(ref is)) => {
-                Ok(Boolean::Is(AllocatedBit::and_not::<Scalar, Builder>(builder, is, not)?))
+                Ok(Boolean::Is(AllocatedBit::and_not(builder, is, not)?))
             }
             // (NOT a) AND (NOT b) = a NOR b
             (&Boolean::Not(ref a), &Boolean::Not(ref b)) => {
-                Ok(Boolean::Is(AllocatedBit::nor::<Scalar, Builder>(builder, a, b)?))
+                Ok(Boolean::Is(AllocatedBit::nor(builder, a, b)?))
             }
             // a AND b
             (&Boolean::Is(ref a), &Boolean::Is(ref b)) => {
-                Ok(Boolean::Is(AllocatedBit::and::<Scalar, Builder>(builder, a, b)?))
+                Ok(Boolean::Is(AllocatedBit::and(builder, a, b)?))
             }
         }
     }
@@ -448,7 +392,7 @@ impl From<AllocatedBit> for Boolean {
 
 #[cfg(test)]
 mod test {
-/*
+
     use super::{field_into_allocated_bits_le, u64_into_boolean_vec_le, AllocatedBit, Boolean};
     use crate::gadgets::test::*;
 
@@ -456,28 +400,26 @@ mod test {
     use zki_sieve::producers::examples::*;
     use ff::{Field, PrimeField};
     use crate::back::sieve_ir::field::QuarkScalar;
-
-    type Scalar = QuarkScalar;
+    use crate::back::sieve_ir::builder_ext::BuilderExt;
 
     #[test]
     fn test_allocated_bit() {
-        let mut builder = Builder::new(0);
-        let header = example_header_in_field();
+        let mut builder = BuilderExt::new(Builder::new(0));
 
+        let v = AllocatedBit::alloc(&mut builder, Some(true)).unwrap();
+        assert_eq!(v.get_wire(), 0);
+        assert_eq!(v.get_value(), Some(true));
 
-
-        AllocatedBit::alloc(&mut cs, Some(true)).unwrap();
-        assert!(cs.get("boolean") == Scalar::one());
-        assert!(cs.is_satisfied());
-        cs.set("boolean", Scalar::zero());
-        assert!(cs.is_satisfied());
-        cs.set("boolean", Scalar::from_str("2").unwrap());
-        assert!(!cs.is_satisfied());
-        assert!(cs.which_is_unsatisfied() == Some("boolean constraint"));
+        let w = AllocatedBit::alloc(&mut builder, Some(false)).unwrap();
+        assert_eq!(v.get_wire(), 1);
+        assert_eq!(v.get_value(), Some(false));
     }
-
+/*
     #[test]
     fn test_xor() {
+
+        let header = example_header();
+
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
                 let mut cs = TestConstraintSystem::<Scalar>::new();
