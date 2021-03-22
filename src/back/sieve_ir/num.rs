@@ -6,13 +6,8 @@
 use std::cmp;
 use std::ops::{Add, Sub, Mul, AddAssign};
 use num_bigint::BigUint;
+use ff::PrimeField;
 
-use zkinterface_bellman::{
-    bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},
-    pairing::Engine,
-    ff::{Field, PrimeField},
-    zkif_cs::ZkifCS,
-};
 use zki_sieve::{
     WireId, producers::builder::{IBuilder, BuildGate},
 };
@@ -177,7 +172,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // Compute max_value + other * -1 + self
         // TODO: cache max_wire.
         let max_wire = b.create_gate(
-            BuildGate::Constant(encode_scalar(max_value)));
+            BuildGate::Constant(encode_scalar(&max_value)));
         let other_shifted = b.sub(max_wire, other.zki_wire);
         self.zki_wire = b.add(self.zki_wire, other_shifted);
 
@@ -243,7 +238,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     ) -> Result<Self, String> {
         // Computing `0 - a` in the field could underflow, producing garbage.  We instead compute
         // `2^N - a`, which never underflows, but does increase `real_bits` by one.
-        let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << self.real_bits))?;
+        let max_value: Scalar = scalar_from_biguint::<Scalar>(&(BigUint::from(1_u8) << self.real_bits))?;
 
         self.value = match self.value {
             Some(val) => Some(max_value - val),
@@ -253,7 +248,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // Compute max_value + self * -1
         // TODO: cache max_wire.
         let max_wire = b.create_gate(
-            BuildGate::Constant(encode_scalar(max_value)));
+            BuildGate::Constant(encode_scalar(&max_value)));
         self.zki_wire = b.sub(max_wire, self.zki_wire);
 
         let new_real_bits = self.real_bits + 1;

@@ -1,31 +1,30 @@
 use std::cmp;
 use num_traits::Zero;
-use zkinterface_bellman::{
-    bellman::{ConstraintSystem, SynthesisError, LinearCombination},
-    pairing::Engine,
-    ff::PrimeField,
-    zkif_cs::ZkifCS,
-};
+use zki_sieve::Result;
+use ff::PrimeField;
+
 use super::{
     num::{Num, scalar_from_unsigned},
     int::Int,
     boolean::Boolean,
     bit_width::BitWidth,
+    builder_ext::BuilderExt,
 };
-use crate::back::sieve_ir::builder_ext::BuilderExt;
+use zki_sieve::producers::builder::IBuilder;
 
-pub fn bitwise_xor<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
-    cs: CS,
+
+pub fn bitwise_xor(
+    mut builder: &mut BuilderExt,
     left: &Int,
     right: &Int,
 ) -> Int
 {
-    left.xor(cs, right).unwrap()
+    left.xor(builder, right).unwrap()
 }
 
 // TODO: Implement directly on the type but fields are private.
-pub fn bitwise_and<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+pub fn bitwise_and(
+    mut builder: &mut BuilderExt,
     left: &Int,
     right: &Int,
 ) -> Int
@@ -34,14 +33,14 @@ pub fn bitwise_and<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
         left.bits.iter()
             .zip(right.bits.iter())
             .map(|(l, r)|
-                Boolean::and(&mut cs, l, r).unwrap()
+                Boolean::and(builder, l, r).unwrap()
             ).collect();
 
     Int::from_bits(&out_bits)
 }
 
-pub fn bitwise_or<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
-    mut cs: &mut CS,
+pub fn bitwise_or(
+    mut builder: &mut BuilderExt,
     left: &Int,
     right: &Int,
 ) -> Int
@@ -50,21 +49,19 @@ pub fn bitwise_or<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
         left.bits.iter()
             .zip(right.bits.iter())
             .map(|(l, r)|
-                bool_or(&mut cs, l, r)
+                bool_or(builder, l, r)
             ).collect();
 
     Int::from_bits(&out_bits)
 }
 
-pub fn bool_or<'a, Scalar, CS>(
-    cs: CS,
+pub fn bool_or<'a>(
+    mut builder: &mut BuilderExt,
     a: &'a Boolean,
     b: &'a Boolean,
 ) -> Boolean
-    where Scalar: PrimeField,
-          CS: ConstraintSystem<Scalar>
 {
-    Boolean::and(cs, &a.not(), &b.not()).unwrap().not()
+    Boolean::and(builder, &a.not(), &b.not()).unwrap().not()
 }
 
 pub fn enforce_true(
@@ -75,8 +72,8 @@ pub fn enforce_true(
     b.assert_zero(not);
 }
 
-pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+pub fn div<Scalar: PrimeField>(
+    mut builder: &mut BuilderExt,
     numer_num: &Num<Scalar>,
     numer_int: &Int,
     denom_num: &Num<Scalar>,
@@ -96,43 +93,38 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     };
 
     let max_width = cmp::max(numer_int.width(), denom_int.width());
-    let quot_int = Int::alloc(&mut cs, max_width, quot_val).unwrap();
-    let rest_int = Int::alloc(&mut cs, denom_int.width(), rest_val).unwrap();
+    let quot_int = Int::alloc(builder, max_width, quot_val).unwrap();
+    let rest_int = Int::alloc(builder, denom_int.width(), rest_val).unwrap();
 
-    let quot_num = Num::from_int(&quot_int);
-    let rest_num = Num::from_int(&rest_int);
+    let quot_num = Num::from_int(builder, &quot_int);
+    let rest_num = Num::from_int(builder, &rest_int);
 
-    // Verify that: numerator == quotient * denominator + rest.
-    cs.enforce(
-        || "division",
-        |lc| lc + &quot_num.lc,
-        |lc| lc + &denom_num.lc,
-        |lc| lc + &numer_num.lc - &rest_num.lc,
-    );
+    // Ensure that: numerator == quotient * denominator + rest.
+    // we first compute 'quotient * denominator', then 'numerator - rest', finally compute the
+    // difference of the two and ensure that it's null.
+    let quo_times_denom = builder.mul(quot_num.zki_wire, denom_num.zki_wire);
+    let num_minus_rest = builder.sub(numer_num.zki_wire, rest_num.zki_wire);
+    let diff_all = builder.sub(quo_times_denom, num_minus_rest);
+    builder.assert_zero(diff_all);
 
     // Verify that rest < denom || denom == 0.
     let width = denom_int.width();
     let diff_num = rest_num.zero_extend(width as u16 + 1).unwrap()
-        .sub(&denom_num.zero_extend(width as u16 + 1).unwrap(), &mut cs).unwrap();
-    let diff_int = Int::from_num(&mut cs, width + 1, &diff_num);
+        .sub(&denom_num.zero_extend(width as u16 + 1).unwrap(), builder).unwrap();
+    let diff_int = Int::from_num(builder, width + 1, &diff_num);
     let diff_ok = diff_int.is_negative();
-    let denom_zero = denom_num.equals_zero(&mut cs);
-    let ok = bool_or(&mut cs, &diff_ok, &denom_zero);
-    let one = CS::one();
-    cs.enforce(
-        || "rest < denom",
-        |lc| lc + one,
-        |lc| lc + one,
-        |_| boolean_lc::<Scalar, CS>(&ok),
-    );
-    // TODO: this should be done without enforce but by construction of diff_int.
+    let denom_zero = denom_num.equals_zero(builder);
+    let ok = bool_or(builder, &diff_ok, &denom_zero);
+
+    enforce_true(builder, &ok);
 
     (quot_num, quot_int, rest_num, rest_int)
 }
 
-
+/*
 pub fn boolean_lc<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     bool: &Boolean,
 ) -> LinearCombination<Scalar> {
     bool.lc(CS::one(), Scalar::one())
 }
+*/
