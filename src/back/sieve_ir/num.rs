@@ -4,7 +4,6 @@
 // Copyright (c) 2017-2019 Electric Coin Company
 
 use std::cmp;
-use std::ops::{Add, Sub, Mul, AddAssign};
 use num_bigint::BigUint;
 use ff::PrimeField;
 
@@ -12,7 +11,6 @@ use zki_sieve::{
     WireId, producers::builder::{IBuilder, BuildGate},
 };
 use super::{
-    bit_width::BitWidth,
     int::Int,
     boolean::{AllocatedBit, Boolean},
     field::encode_scalar,

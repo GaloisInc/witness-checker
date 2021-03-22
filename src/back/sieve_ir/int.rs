@@ -14,7 +14,6 @@ use ff::PrimeField;
 
 use super::{
     num::Num,
-    bit_width::BitWidth,
     boolean::{Boolean, AllocatedBit},
     builder_ext::BuilderExt,
 };
@@ -62,7 +61,7 @@ impl Int {
         mut builder: &mut BuilderExt,
         width: usize,
         value: Option<BigUint>,
-    ) -> Result<(Self)>
+    ) -> Result<Self>
     {
         let values = match value {
             Some(ref val) => {
@@ -89,7 +88,7 @@ impl Int {
                     v,
                 )?))
             })
-            .collect::<Result<(Vec<_>)>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Int {
             bits: bits,
@@ -234,7 +233,7 @@ impl Int {
         &self,
         mut builder: &mut BuilderExt,
         other: &Self,
-    ) -> Result<(Self)>
+    ) -> Result<Self>
     {
         let new_value = match (self.value.as_ref(), other.value.as_ref()) {
             (Some(a), Some(b)) => {
@@ -252,7 +251,7 @@ impl Int {
                     b,
                 )
             })
-            .collect::<Result<(_)>>()?;
+            .collect::<Result<_>>()?;
 
         Ok(Int {
             bits: bits,

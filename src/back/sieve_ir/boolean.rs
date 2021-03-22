@@ -7,11 +7,7 @@ use zki_sieve::{
     producers::builder::BuildGate::*,
     producers::builder::IBuilder,
 };
-use num_traits::AsPrimitive;
-use std::io::Write;
-use super::{
-    field::encode_scalar
-};
+
 use crate::back::sieve_ir::builder_ext::BuilderExt;
 
 
@@ -33,7 +29,7 @@ impl AllocatedBit {
         self.wire
     }
 
-    pub fn alloc(builder: &mut BuilderExt, value: Option<bool>) -> Result<(Self)>
+    pub fn alloc(builder: &mut BuilderExt, value: Option<bool>) -> Result<Self>
     {
         let allocated = builder.create_gate(
             Witness);
@@ -49,7 +45,7 @@ impl AllocatedBit {
 
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn xor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
+    pub fn xor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
@@ -76,7 +72,7 @@ impl AllocatedBit {
 
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn and(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
+    pub fn and(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
@@ -100,7 +96,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `a AND (NOT b)`.
-    pub fn and_not(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
+    pub fn and_not(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
@@ -125,7 +121,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `(NOT a) AND (NOT b)`.
-    pub fn nor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<(Self)>
+    pub fn nor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
     {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
@@ -151,7 +147,7 @@ impl AllocatedBit {
     }
 }
 
-pub fn u64_into_boolean_vec_le(mut builder: &mut BuilderExt, value: Option<u64>) -> Result<(Vec<Boolean>)>
+pub fn u64_into_boolean_vec_le(mut builder: &mut BuilderExt, value: Option<u64>) -> Result<Vec<Boolean>>
 {
     let values = match value {
         Some(ref value) => {
@@ -174,7 +170,7 @@ pub fn u64_into_boolean_vec_le(mut builder: &mut BuilderExt, value: Option<u64>)
                 b,
             )?))
         })
-        .collect::<Result<(Vec<_>)>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(bits)
 }
@@ -184,7 +180,7 @@ pub fn field_into_boolean_vec_le<
 >(
     mut builder: &mut BuilderExt,
     value: Option<Scalar>,
-) -> Result<(Vec<Boolean>)>
+) -> Result<Vec<Boolean>>
 {
     let v = field_into_allocated_bits_le::<Scalar>(builder, value)?;
 
@@ -196,7 +192,7 @@ pub fn field_into_allocated_bits_le<
 >(
     mut builder: &mut BuilderExt,
     value: Option<Scalar>,
-) -> Result<(Vec<AllocatedBit>)> {
+) -> Result<Vec<AllocatedBit>> {
     // Deconstruct in big-endian bit order
     let values = match value {
         Some(ref value) => {
@@ -229,7 +225,7 @@ pub fn field_into_allocated_bits_le<
         .rev()
         .enumerate()
         .map(|(i, b)| AllocatedBit::alloc(builder, b))
-        .collect::<Result<(Vec<_>)>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(bits)
 }
@@ -338,7 +334,7 @@ impl Boolean {
     }
 
     /// Perform XOR over two boolean operands
-    pub fn xor<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<(Self)>
+    pub fn xor<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self>
     {
         match (a, b) {
             (&Boolean::Constant(false), x) | (x, &Boolean::Constant(false)) => Ok(x.clone()),
@@ -357,7 +353,7 @@ impl Boolean {
     }
 
     /// Perform AND over two boolean operands
-    pub fn and<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<(Self)>
+    pub fn and<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self>
     {
         match (a, b) {
             // false AND x is always false

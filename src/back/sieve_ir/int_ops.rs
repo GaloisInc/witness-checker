@@ -1,17 +1,13 @@
 use std::cmp;
 use num_traits::Zero;
-use zki_sieve::Result;
 use ff::PrimeField;
 
 use super::{
-    num::{Num, scalar_from_unsigned},
+    num::Num,
     int::Int,
     boolean::Boolean,
-    bit_width::BitWidth,
     builder_ext::BuilderExt,
 };
-use zki_sieve::producers::builder::IBuilder;
-
 
 pub fn bitwise_xor(
     mut builder: &mut BuilderExt,

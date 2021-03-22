@@ -26,32 +26,25 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
 use std::path::Path;
-use std::ops::Sub;
 use num_bigint::BigUint;
-use num_traits::{Zero, One};
+use num_traits::Zero;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
-    self, Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit,
+    self, Wire, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp,
 };
 
-use zkinterface::Result;
-use zkinterface_bellman::{
-    bellman::{ConstraintSystem, SynthesisError},
-    ff::{Field, PrimeField},
-    zkif_cs::ZkifCS,
-};
 use super::{
     int_ops,
     int::Int,
-    boolean::{AllocatedBit, Boolean},
-    bit_width::BitWidth,
+    boolean::Boolean,
     representer::{Representer, ReprId, WireRepr},
     int_ops::{bool_or, enforce_true},
-    num, num::{scalar_from_unsigned},
+    num,
     field::QuarkScalar,
 };
 use zki_sieve::producers::builder::Builder;
+use zki_sieve::Result;
 use super::builder_ext::BuilderExt;
 
 // TODO: template with trait PrimeField instead of a specific Scalar.
@@ -83,7 +76,7 @@ impl<'a> Backend<'a> {
 
     pub fn finish(self) -> Result<()> {
         // TODO: finish API of Builder.
-        //self.builder.finish("cheesecloth")
+        // self.builder.finish("cheesecloth")
     }
 
     pub fn enforce_true(&mut self, wire: Wire<'a>) {
