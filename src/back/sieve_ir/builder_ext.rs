@@ -27,9 +27,8 @@ impl BuilderExt {
         let zero = b.create_gate(Constant(vec![0]));
         let one = b.create_gate(Constant(vec![1]));
 
-        let minus_one = Scalar::one();
-        minus_one.neg();
-        let neg_one = b.create_gate(Constant(encode_scalar(minus_one)));
+        let minus_one = Scalar::one().neg();
+        let neg_one = b.create_gate(Constant(encode_scalar(&minus_one)));
 
         BuilderExt {
             b,
@@ -45,7 +44,7 @@ impl BuilderExt {
     pub fn power_of_two(&mut self, n: usize) -> WireId {
         while self.powers_of_two.len() <= n {
             let exponent = self.powers_of_two.len() as u32;
-            let value = BigUint::from(2).pow(exponent);
+            let value = BigUint::from(2 as u32).pow(exponent);
             let wire = self.b.create_gate(
                 Constant(value.to_bytes_le()));
             self.powers_of_two.push(wire);
