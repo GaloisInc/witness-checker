@@ -64,10 +64,15 @@ impl BuilderExt {
     }
 
     pub fn sub(&mut self, left: WireId, right: WireId) -> WireId {
-        let neg_right = self.b.create_gate(
-            Mul(right, self.neg_one));
+        let neg_right = self.neg(right);
         self.b.create_gate(
             Add(left, neg_right))
+    }
+
+    pub fn neg(&mut self, wire: WireId) -> WireId {
+        self.b.create_gate(
+            Mul(wire, self.neg_one))
+
     }
 
     pub fn mul(&mut self, left: WireId, right: WireId) -> WireId {
