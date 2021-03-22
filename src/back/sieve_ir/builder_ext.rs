@@ -2,6 +2,8 @@ use zki_sieve::producers::builder::{Builder, IBuilder, BuildGate};
 use zki_sieve::WireId;
 use BuildGate::*;
 use num_bigint::BigUint;
+use ff::PrimeField;
+use crate::back::sieve_ir::field::encode_scalar;
 
 
 /// Extensions to the basic builder.
@@ -21,12 +23,13 @@ impl IBuilder for BuilderExt {
 }
 
 impl BuilderExt {
-    pub fn new(mut b: Builder) -> BuilderExt {
+    pub fn new<Scalar: PrimeField>(mut b: Builder) -> BuilderExt {
         let zero = b.create_gate(Constant(vec![0]));
         let one = b.create_gate(Constant(vec![1]));
 
-        // TODO: negative one based on field.
-        let neg_one = b.create_gate(Constant(vec![1]));
+        let minus_one = Scalar::one();
+        minus_one.neg();
+        let neg_one = b.create_gate(Constant(encode_scalar(minus_one)));
 
         BuilderExt {
             b,
