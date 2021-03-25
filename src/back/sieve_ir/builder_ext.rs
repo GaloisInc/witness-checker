@@ -1,5 +1,5 @@
 use zki_sieve::producers::builder::{Builder, IBuilder, BuildGate};
-use zki_sieve::WireId;
+use zki_sieve::{WireId, Gate};
 use BuildGate::*;
 use num_bigint::BigUint;
 use ff::PrimeField;
@@ -77,5 +77,9 @@ impl BuilderExt {
     pub fn mul(&mut self, left: WireId, right: WireId) -> WireId {
         self.b.create_gate(
             Mul(left, right))
+    }
+
+    pub fn gates(&self) -> Vec<Gate> {
+        self.b.gates.clone()
     }
 }

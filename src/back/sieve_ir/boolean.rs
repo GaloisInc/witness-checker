@@ -1,6 +1,6 @@
 // Inspired from bellman::gadgets::boolean
 
-use ff::PrimeField;
+use ff::{Field, PrimeField};
 use zki_sieve::{
     WireId,
     Result,
@@ -9,7 +9,7 @@ use zki_sieve::{
 };
 
 use crate::back::sieve_ir::builder_ext::BuilderExt;
-
+use num_traits::AsPrimitive;
 
 
 /// Represents a variable in the constraint system which is guaranteed
@@ -35,6 +35,11 @@ impl AllocatedBit {
             Witness);
 
         // TODO: store witness value.
+
+        let square = builder.mul(allocated, allocated);
+        let diff = builder.sub(square, allocated);
+        builder.assert_zero(diff);
+
 
         Ok(AllocatedBit {
             wire: allocated,
@@ -303,8 +308,13 @@ impl Boolean {
             }
 
             (&Boolean::Is(ref v), &Boolean::Not(ref w)) | (&Boolean::Not(ref v), &Boolean::Is(ref w)) => {
-                let norwire = AllocatedBit::nor(builder, &v, &w)?.get_wire();
-                builder.create_gate(AssertZero(norwire));
+                let true_bit = AllocatedBit {
+                    wire: builder.one,
+                    value: Some(true),
+                };
+                let not_w = AllocatedBit::xor(builder, &w, &true_bit)?;
+                let xor_wire = AllocatedBit::xor(builder, &v, &not_w)?.get_wire();
+                builder.create_gate(AssertZero(xor_wire));
 
                 Ok(())
             }
@@ -390,188 +400,163 @@ impl From<AllocatedBit> for Boolean {
 mod test {
 
     use super::{field_into_allocated_bits_le, u64_into_boolean_vec_le, AllocatedBit, Boolean};
-    use crate::gadgets::test::*;
 
     use zki_sieve::producers::builder::Builder;
     use zki_sieve::producers::examples::*;
+    use zki_sieve::consumers::evaluator::Evaluator;
+    use zki_sieve::{Relation, Message};
+
     use ff::{Field, PrimeField};
-    use crate::back::sieve_ir::field::QuarkScalar;
+    use crate::back::sieve_ir::field::{QuarkScalar, encode_scalar};
     use crate::back::sieve_ir::builder_ext::BuilderExt;
+    use num_bigint::BigUint;
+    use crate::back::sieve_ir::num::{scalar_from_unsigned, scalar_from_biguint};
+    use num_traits::{Num, One, Zero};
+    use std::ops::Neg;
+
+
+    macro_rules! initialize_everything {
+        ($one_:ident, $zero_:ident, $neg_one:ident, $modulus:ident, $header:ident) => {
+            let $one_ = BigUint::one();
+            let $zero_ = BigUint::zero();
+            let $neg_one: QuarkScalar = QuarkScalar::one().neg();
+            let $modulus = BigUint::from_bytes_le(encode_scalar(&$neg_one).as_slice()) + BigUint::one();
+            let $header = example_header_in_field($modulus.to_bytes_le());
+        };
+    }
+
 
     #[test]
-    fn test_allocated_bit() {
-        let mut builder = BuilderExt::new(Builder::new(0));
+    fn test_bit_allocated_bit() {
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+        let mut evaluator = Evaluator::default();
+
+        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
         let v = AllocatedBit::alloc(&mut builder, Some(true)).unwrap();
-        assert_eq!(v.get_wire(), 0);
         assert_eq!(v.get_value(), Some(true));
 
         let w = AllocatedBit::alloc(&mut builder, Some(false)).unwrap();
-        assert_eq!(v.get_wire(), 1);
-        assert_eq!(v.get_value(), Some(false));
-    }
-/*
-    #[test]
-    fn test_xor() {
+        assert_eq!(w.get_value(), Some(false));
 
-        let header = example_header();
+        evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+
+        assert_eq!(evaluator.get(v.get_wire()).unwrap(), &one_);
+        assert_eq!(evaluator.get(w.get_wire()).unwrap(), &zero_);
+    }
+
+    #[test]
+    fn test_bit_xor() {
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
 
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Scalar>::new();
-                let a = AllocatedBit::alloc(cs.namespace(|| "a"), Some(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.namespace(|| "b"), Some(*b_val)).unwrap();
-                let c = AllocatedBit::xor(&mut cs, &a, &b).unwrap();
+                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
+                let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
+                let c = AllocatedBit::xor(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), *a_val ^ *b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Field::one() } else { Field::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Field::one() } else { Field::zero() });
-                assert!(
-                    cs.get("xor result")
-                        == if *a_val ^ *b_val {
-                        Field::one()
-                    } else {
-                        Field::zero()
-                    }
-                );
+                let mut evaluator = Evaluator::default();
+                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
+                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
 
-                // Invert the result and check if the constraint system is still satisfied
-                cs.set(
-                    "xor result",
-                    if *a_val ^ *b_val {
-                        Field::zero()
-                    } else {
-                        Field::one()
-                    },
-                );
-                assert!(!cs.is_satisfied());
+                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+
+                assert_eq!(evaluator.get_violations().len(), 0 as usize);
             }
         }
     }
 
     #[test]
-    fn test_and() {
+    fn test_bit_and() {
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Scalar>::new();
-                let a = AllocatedBit::alloc(cs.namespace(|| "a"), Some(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.namespace(|| "b"), Some(*b_val)).unwrap();
-                let c = AllocatedBit::and(&mut cs, &a, &b).unwrap();
+                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
+                let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
+                let c = AllocatedBit::and(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), *a_val & *b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Field::one() } else { Field::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Field::one() } else { Field::zero() });
-                assert!(
-                    cs.get("and result")
-                        == if *a_val & *b_val {
-                        Field::one()
-                    } else {
-                        Field::zero()
-                    }
-                );
+                let mut evaluator = Evaluator::default();
+                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
+                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
 
-                // Invert the result and check if the constraint system is still satisfied
-                cs.set(
-                    "and result",
-                    if *a_val & *b_val {
-                        Field::zero()
-                    } else {
-                        Field::one()
-                    },
-                );
-                assert!(!cs.is_satisfied());
+                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+
+                assert_eq!(evaluator.get_violations().len(), 0 as usize);
             }
         }
     }
 
     #[test]
-    fn test_and_not() {
+    fn test_bit_and_not() {
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Scalar>::new();
-                let a = AllocatedBit::alloc(cs.namespace(|| "a"), Some(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.namespace(|| "b"), Some(*b_val)).unwrap();
-                let c = AllocatedBit::and_not(&mut cs, &a, &b).unwrap();
+                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
+                let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
+                let c = AllocatedBit::and_not(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), *a_val & !*b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Field::one() } else { Field::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Field::one() } else { Field::zero() });
-                assert!(
-                    cs.get("and not result")
-                        == if *a_val & !*b_val {
-                        Field::one()
-                    } else {
-                        Field::zero()
-                    }
-                );
+                let mut evaluator = Evaluator::default();
+                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
+                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
 
-                // Invert the result and check if the constraint system is still satisfied
-                cs.set(
-                    "and not result",
-                    if *a_val & !*b_val {
-                        Field::zero()
-                    } else {
-                        Field::one()
-                    },
-                );
-                assert!(!cs.is_satisfied());
+                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+
+                assert_eq!(evaluator.get_violations().len(), 0 as usize);
             }
         }
     }
 
     #[test]
-    fn test_nor() {
+    fn test_bit_nor() {
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Scalar>::new();
-                let a = AllocatedBit::alloc(cs.namespace(|| "a"), Some(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.namespace(|| "b"), Some(*b_val)).unwrap();
-                let c = AllocatedBit::nor(&mut cs, &a, &b).unwrap();
+                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
+                let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
+                let c = AllocatedBit::nor(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), !*a_val & !*b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Field::one() } else { Field::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Field::one() } else { Field::zero() });
-                assert!(
-                    cs.get("nor result")
-                        == if !*a_val & !*b_val {
-                        Field::one()
-                    } else {
-                        Field::zero()
-                    }
-                );
+                let mut evaluator = Evaluator::default();
+                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
+                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
 
-                // Invert the result and check if the constraint system is still satisfied
-                cs.set(
-                    "nor result",
-                    if !*a_val & !*b_val {
-                        Field::zero()
-                    } else {
-                        Field::one()
-                    },
-                );
-                assert!(!cs.is_satisfied());
+                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+
+                assert_eq!(evaluator.get_violations().len(), 0);
             }
         }
     }
 
     #[test]
-    fn test_enforce_equal() {
+    fn test_boolean_enforce_equal() {
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+
         for a_bool in [false, true].iter().cloned() {
             for b_bool in [false, true].iter().cloned() {
                 for a_neg in [false, true].iter().cloned() {
                     for b_neg in [false, true].iter().cloned() {
                         {
-                            let mut cs = TestConstraintSystem::<Scalar>::new();
+                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
                             let mut a = Boolean::from(
-                                AllocatedBit::alloc(cs.namespace(|| "a"), Some(a_bool)).unwrap(),
+                                AllocatedBit::alloc(&mut builder, Some(a_bool)).unwrap(),
                             );
                             let mut b = Boolean::from(
-                                AllocatedBit::alloc(cs.namespace(|| "b"), Some(b_bool)).unwrap(),
+                                AllocatedBit::alloc(&mut builder, Some(b_bool)).unwrap(),
                             );
 
                             if a_neg {
@@ -581,16 +566,18 @@ mod test {
                                 b = b.not();
                             }
 
-                            Boolean::enforce_equal(&mut cs, &a, &b).unwrap();
+                            Boolean::enforce_equal(&mut builder, &a, &b).unwrap();
 
-                            assert_eq!(cs.is_satisfied(), (a_bool ^ a_neg) == (b_bool ^ b_neg));
+                            let mut evaluator = Evaluator::default();
+                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                            assert_eq!(evaluator.get_violations().len() == 0, (a_bool ^ a_neg) == (b_bool ^ b_neg));
                         }
                         {
-                            let mut cs = TestConstraintSystem::<Scalar>::new();
+                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
                             let mut a = Boolean::Constant(a_bool);
                             let mut b = Boolean::from(
-                                AllocatedBit::alloc(cs.namespace(|| "b"), Some(b_bool)).unwrap(),
+                                AllocatedBit::alloc(&mut builder, Some(b_bool)).unwrap(),
                             );
 
                             if a_neg {
@@ -600,15 +587,17 @@ mod test {
                                 b = b.not();
                             }
 
-                            Boolean::enforce_equal(&mut cs, &a, &b).unwrap();
+                            Boolean::enforce_equal(&mut builder, &a, &b).unwrap();
 
-                            assert_eq!(cs.is_satisfied(), (a_bool ^ a_neg) == (b_bool ^ b_neg));
+                            let mut evaluator = Evaluator::default();
+                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                            assert_eq!(evaluator.get_violations().len() == 0, (a_bool ^ a_neg) == (b_bool ^ b_neg));
                         }
                         {
-                            let mut cs = TestConstraintSystem::<Scalar>::new();
+                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
                             let mut a = Boolean::from(
-                                AllocatedBit::alloc(cs.namespace(|| "a"), Some(a_bool)).unwrap(),
+                                AllocatedBit::alloc(&mut builder, Some(a_bool)).unwrap(),
                             );
                             let mut b = Boolean::Constant(b_bool);
 
@@ -619,12 +608,14 @@ mod test {
                                 b = b.not();
                             }
 
-                            Boolean::enforce_equal(&mut cs, &a, &b).unwrap();
+                            Boolean::enforce_equal(&mut builder, &a, &b).unwrap();
 
-                            assert_eq!(cs.is_satisfied(), (a_bool ^ a_neg) == (b_bool ^ b_neg));
+                            let mut evaluator = Evaluator::default();
+                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                            assert_eq!(evaluator.get_violations().len() == 0, (a_bool ^ a_neg) == (b_bool ^ b_neg))
                         }
                         {
-                            let mut cs = TestConstraintSystem::<Scalar>::new();
+                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
                             let mut a = Boolean::Constant(a_bool);
                             let mut b = Boolean::Constant(b_bool);
@@ -636,11 +627,13 @@ mod test {
                                 b = b.not();
                             }
 
-                            let result = Boolean::enforce_equal(&mut cs, &a, &b);
+                            let result = Boolean::enforce_equal(&mut builder, &a, &b);
+                            let mut evaluator = Evaluator::default();
+                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
 
                             if (a_bool ^ a_neg) == (b_bool ^ b_neg) {
                                 assert!(result.is_ok());
-                                assert!(cs.is_satisfied());
+                                assert_eq!(evaluator.get_violations().len(), 0);
                             } else {
                                 assert!(result.is_err());
                             }
@@ -653,9 +646,9 @@ mod test {
 
     #[test]
     fn test_boolean_negation() {
-        let mut cs = TestConstraintSystem::<Scalar>::new();
+        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
-        let mut b = Boolean::from(AllocatedBit::alloc(&mut cs, Some(true)).unwrap());
+        let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap());
 
         match b {
             Boolean::Is(_) => {}
@@ -743,31 +736,32 @@ mod test {
             OperandType::NegatedAllocatedFalse,
         ];
 
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+
         for first_operand in variants.iter().cloned() {
             for second_operand in variants.iter().cloned() {
-                let mut cs = TestConstraintSystem::<Scalar>::new();
+                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
                 let a;
                 let b;
 
                 {
                     let mut dyn_construct = |operand, name| {
-                        let cs = cs.namespace(|| name);
 
                         match operand {
                             OperandType::True => Boolean::constant(true),
                             OperandType::False => Boolean::constant(false),
                             OperandType::AllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap())
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
                             }
                             OperandType::AllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap())
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
                             }
                             OperandType::NegatedAllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap()).not()
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap()).not()
                             }
                             OperandType::NegatedAllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap()).not()
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap()).not()
                             }
                         }
                     };
@@ -776,11 +770,13 @@ mod test {
                     b = dyn_construct(second_operand, "b");
                 }
 
-                let c = Boolean::xor(&mut cs, &a, &b).unwrap();
+                let c = Boolean::xor(&mut builder, &a, &b).unwrap();
 
-                assert!(cs.is_satisfied());
+                let mut evaluator = Evaluator::default();
+                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
 
-                match (first_operand, second_operand, c) {
+
+                match (first_operand, second_operand, c.clone()) {
                     (OperandType::True, OperandType::True, Boolean::Constant(false)) => {}
                     (OperandType::True, OperandType::False, Boolean::Constant(true)) => {}
                     (OperandType::True, OperandType::AllocatedTrue, Boolean::Not(_)) => {}
@@ -802,7 +798,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -810,7 +806,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -818,7 +814,6 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -826,7 +821,6 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
                         assert_eq!(v.value, Some(true));
                     }
 
@@ -837,7 +831,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -845,7 +839,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -853,7 +847,6 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -861,7 +854,6 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
                         assert_eq!(v.value, Some(false));
                     }
 
@@ -872,7 +864,6 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -880,7 +871,6 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -888,7 +878,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -896,7 +886,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
 
@@ -907,7 +897,6 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -915,7 +904,6 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -923,7 +911,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -931,12 +919,13 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("xor result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
 
                     _ => panic!("this should never be encountered"),
                 }
+                assert_eq!(evaluator.get_violations().len(), 0);
             }
         }
     }
@@ -952,31 +941,32 @@ mod test {
             OperandType::NegatedAllocatedFalse,
         ];
 
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+
         for first_operand in variants.iter().cloned() {
             for second_operand in variants.iter().cloned() {
-                let mut cs = TestConstraintSystem::<Scalar>::new();
+                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
                 let a;
                 let b;
 
                 {
                     let mut dyn_construct = |operand, name| {
-                        let cs = cs.namespace(|| name);
 
                         match operand {
                             OperandType::True => Boolean::constant(true),
                             OperandType::False => Boolean::constant(false),
                             OperandType::AllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap())
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
                             }
                             OperandType::AllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap())
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
                             }
                             OperandType::NegatedAllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap()).not()
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap()).not()
                             }
                             OperandType::NegatedAllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap()).not()
+                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap()).not()
                             }
                         }
                     };
@@ -985,11 +975,11 @@ mod test {
                     b = dyn_construct(second_operand, "b");
                 }
 
-                let c = Boolean::and(&mut cs, &a, &b).unwrap();
+                let c = Boolean::and(&mut builder, &a, &b).unwrap();
+                let mut evaluator = Evaluator::default();
+                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
 
-                assert!(cs.is_satisfied());
-
-                match (first_operand, second_operand, c) {
+                match (first_operand, second_operand, c.clone()) {
                     (OperandType::True, OperandType::True, Boolean::Constant(true)) => {}
                     (OperandType::True, OperandType::False, Boolean::Constant(false)) => {}
                     (OperandType::True, OperandType::AllocatedTrue, Boolean::Is(_)) => {}
@@ -1020,7 +1010,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -1028,7 +1018,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1036,7 +1026,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1044,7 +1034,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
 
@@ -1056,7 +1046,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1064,7 +1054,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1072,7 +1062,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1080,7 +1070,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
 
@@ -1095,7 +1085,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1103,7 +1093,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1111,7 +1101,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("nor result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1119,7 +1109,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("nor result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
 
@@ -1134,7 +1124,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -1142,7 +1132,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1150,7 +1140,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("nor result") == Field::zero());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1158,7 +1148,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("nor result") == Field::one());
+                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
 
@@ -1169,17 +1159,21 @@ mod test {
                         );
                     }
                 }
+                assert_eq!(evaluator.get_violations().len(), 0);
             }
         }
     }
 
     #[test]
     fn test_u64_into_boolean_vec_le() {
-        let mut cs = TestConstraintSystem::<Scalar>::new();
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
-        let bits = u64_into_boolean_vec_le(&mut cs, Some(17234652694787248421)).unwrap();
+        let bits = u64_into_boolean_vec_le(&mut builder, Some(17234652694787248421)).unwrap();
 
-        assert!(cs.is_satisfied());
+        let mut evaluator = Evaluator::default();
+        evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+        assert_eq!(evaluator.get_violations().len(), 0);
 
         assert_eq!(bits.len(), 64);
 
@@ -1196,280 +1190,32 @@ mod test {
 
     #[test]
     fn test_field_into_allocated_bits_le() {
-        let mut cs = TestConstraintSystem::<Scalar>::new();
+        initialize_everything!(one_, zero_, neg_one, modulus, header);
+        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
 
-        let r = Scalar::from_str(
-            "9147677615426976802526883532204139322118074541891858454835346926874644257775",
+        let r = QuarkScalar::from_str(
+            "139407991430939255523467833655006660152",
         )
             .unwrap();
 
-        let bits = field_into_allocated_bits_le(&mut cs, Some(r)).unwrap();
+        let bits = field_into_allocated_bits_le(&mut builder, Some(r)).unwrap();
 
-        assert!(cs.is_satisfied());
+        let mut evaluator = Evaluator::default();
+        evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+        assert_eq!(evaluator.get_violations().len(), 0);
 
-        assert_eq!(bits.len(), 255);
+        assert_eq!(bits.len(), 128);
 
-        assert_eq!(bits[254 - 0].value.unwrap(), false);
-        assert_eq!(bits[254 - 1].value.unwrap(), false);
-        assert_eq!(bits[254 - 2].value.unwrap(), true);
-        assert_eq!(bits[254 - 3].value.unwrap(), false);
-        assert_eq!(bits[254 - 4].value.unwrap(), true);
-        assert_eq!(bits[254 - 5].value.unwrap(), false);
-        assert_eq!(bits[254 - 20].value.unwrap(), true);
-        assert_eq!(bits[254 - 23].value.unwrap(), true);
+        assert_eq!(bits[127 -  4].value.unwrap(), true);
+        assert_eq!(bits[127 -  7].value.unwrap(), false);
+        assert_eq!(bits[127 - 16].value.unwrap(), false);
+        assert_eq!(bits[127 - 20].value.unwrap(), false);
+        assert_eq!(bits[127 - 29].value.unwrap(), true);
+        assert_eq!(bits[127 - 37].value.unwrap(), false);
+        assert_eq!(bits[127 - 47].value.unwrap(), true);
+        assert_eq!(bits[127 - 60].value.unwrap(), false);
+        assert_eq!(bits[127 - 74].value.unwrap(), false);
     }
 
-    #[test]
-    fn test_boolean_sha256_ch() {
-        let variants = [
-            OperandType::True,
-            OperandType::False,
-            OperandType::AllocatedTrue,
-            OperandType::AllocatedFalse,
-            OperandType::NegatedAllocatedTrue,
-            OperandType::NegatedAllocatedFalse,
-        ];
-
-        for first_operand in variants.iter().cloned() {
-            for second_operand in variants.iter().cloned() {
-                for third_operand in variants.iter().cloned() {
-                    let mut cs = TestConstraintSystem::new();
-
-                    let a;
-                    let b;
-                    let c;
-
-                    // ch = (a and b) xor ((not a) and c)
-                    let expected = (first_operand.val() & second_operand.val())
-                        ^ ((!first_operand.val()) & third_operand.val());
-
-                    {
-                        let mut dyn_construct = |operand, name| {
-                            let cs = cs.namespace(|| name);
-
-                            match operand {
-                                OperandType::True => Boolean::constant(true),
-                                OperandType::False => Boolean::constant(false),
-                                OperandType::AllocatedTrue => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap())
-                                }
-                                OperandType::AllocatedFalse => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap())
-                                }
-                                OperandType::NegatedAllocatedTrue => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap())
-                                        .not()
-                                }
-                                OperandType::NegatedAllocatedFalse => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap())
-                                        .not()
-                                }
-                            }
-                        };
-
-                        a = dyn_construct(first_operand, "a");
-                        b = dyn_construct(second_operand, "b");
-                        c = dyn_construct(third_operand, "c");
-                    }
-
-                    let maj = Boolean::sha256_ch(&mut cs, &a, &b, &c).unwrap();
-
-                    assert!(cs.is_satisfied());
-
-                    assert_eq!(maj.get_value().unwrap(), expected);
-
-                    if first_operand.is_constant()
-                        || second_operand.is_constant()
-                        || third_operand.is_constant()
-                    {
-                        if first_operand.is_constant()
-                            && second_operand.is_constant()
-                            && third_operand.is_constant()
-                        {
-                            assert_eq!(cs.num_constraints(), 0);
-                        }
-                    } else {
-                        assert_eq!(cs.get("ch"), {
-                            if expected {
-                                Scalar::one()
-                            } else {
-                                Scalar::zero()
-                            }
-                        });
-                        cs.set("ch", {
-                            if expected {
-                                Scalar::zero()
-                            } else {
-                                Scalar::one()
-                            }
-                        });
-                        assert_eq!(cs.which_is_unsatisfied().unwrap(), "ch computation");
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_boolean_sha256_maj() {
-        let variants = [
-            OperandType::True,
-            OperandType::False,
-            OperandType::AllocatedTrue,
-            OperandType::AllocatedFalse,
-            OperandType::NegatedAllocatedTrue,
-            OperandType::NegatedAllocatedFalse,
-        ];
-
-        for first_operand in variants.iter().cloned() {
-            for second_operand in variants.iter().cloned() {
-                for third_operand in variants.iter().cloned() {
-                    let mut cs = TestConstraintSystem::new();
-
-                    let a;
-                    let b;
-                    let c;
-
-                    // maj = (a and b) xor (a and c) xor (b and c)
-                    let expected = (first_operand.val() & second_operand.val())
-                        ^ (first_operand.val() & third_operand.val())
-                        ^ (second_operand.val() & third_operand.val());
-
-                    {
-                        let mut dyn_construct = |operand, name| {
-                            let cs = cs.namespace(|| name);
-
-                            match operand {
-                                OperandType::True => Boolean::constant(true),
-                                OperandType::False => Boolean::constant(false),
-                                OperandType::AllocatedTrue => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap())
-                                }
-                                OperandType::AllocatedFalse => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap())
-                                }
-                                OperandType::NegatedAllocatedTrue => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(true)).unwrap())
-                                        .not()
-                                }
-                                OperandType::NegatedAllocatedFalse => {
-                                    Boolean::from(AllocatedBit::alloc(cs, Some(false)).unwrap())
-                                        .not()
-                                }
-                            }
-                        };
-
-                        a = dyn_construct(first_operand, "a");
-                        b = dyn_construct(second_operand, "b");
-                        c = dyn_construct(third_operand, "c");
-                    }
-
-                    let maj = Boolean::sha256_maj(&mut cs, &a, &b, &c).unwrap();
-
-                    assert!(cs.is_satisfied());
-
-                    assert_eq!(maj.get_value().unwrap(), expected);
-
-                    if first_operand.is_constant()
-                        || second_operand.is_constant()
-                        || third_operand.is_constant()
-                    {
-                        if first_operand.is_constant()
-                            && second_operand.is_constant()
-                            && third_operand.is_constant()
-                        {
-                            assert_eq!(cs.num_constraints(), 0);
-                        }
-                    } else {
-                        assert_eq!(cs.get("maj"), {
-                            if expected {
-                                Scalar::one()
-                            } else {
-                                Scalar::zero()
-                            }
-                        });
-                        cs.set("maj", {
-                            if expected {
-                                Scalar::zero()
-                            } else {
-                                Scalar::one()
-                            }
-                        });
-                        assert_eq!(cs.which_is_unsatisfied().unwrap(), "maj computation");
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_alloc_conditionally() {
-        {
-            let mut cs = TestConstraintSystem::<Scalar>::new();
-            let b = AllocatedBit::alloc(&mut cs, Some(false)).unwrap();
-
-            let value = None;
-            // if value is none, fail with SynthesisError
-            let is_err = AllocatedBit::alloc_conditionally(
-                cs.namespace(|| "alloc_conditionally"),
-                value,
-                &b,
-            )
-                .is_err();
-            assert!(is_err);
-        }
-
-        {
-            // since value is true, b must be false, so it should succeed
-            let mut cs = TestConstraintSystem::<Scalar>::new();
-
-            let value = Some(true);
-            let b = AllocatedBit::alloc(&mut cs, Some(false)).unwrap();
-            let allocated_value = AllocatedBit::alloc_conditionally(
-                cs.namespace(|| "alloc_conditionally"),
-                value,
-                &b,
-            )
-                .unwrap();
-
-            assert_eq!(allocated_value.get_value().unwrap(), true);
-            assert!(cs.is_satisfied());
-        }
-
-        {
-            // since value is true, b must be false, so it should fail
-            let mut cs = TestConstraintSystem::<Scalar>::new();
-
-            let value = Some(true);
-            let b = AllocatedBit::alloc(&mut cs, Some(true)).unwrap();
-            AllocatedBit::alloc_conditionally(cs.namespace(|| "alloc_conditionally"), value, &b)
-                .unwrap();
-
-            assert!(!cs.is_satisfied());
-        }
-
-        {
-            // since value is false, we don't care about the value of the bit
-
-            let value = Some(false);
-            //check with false bit
-            let mut cs = TestConstraintSystem::<Scalar>::new();
-            let b1 = AllocatedBit::alloc(&mut cs, Some(false)).unwrap();
-            AllocatedBit::alloc_conditionally(cs.namespace(|| "alloc_conditionally"), value, &b1)
-                .unwrap();
-
-            assert!(cs.is_satisfied());
-
-            //check with true bit
-            let mut cs = TestConstraintSystem::<Scalar>::new();
-            let b2 = AllocatedBit::alloc(&mut cs, Some(true)).unwrap();
-            AllocatedBit::alloc_conditionally(cs.namespace(|| "alloc_conditionally"), value, &b2)
-                .unwrap();
-
-            assert!(cs.is_satisfied());
-        }
-    }
-
-*/
 }
 
