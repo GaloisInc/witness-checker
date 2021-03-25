@@ -111,7 +111,7 @@ pub struct UnversionedExecution(Execution);
 
 impl<'de> Deserialize<'de> for UnversionedExecution {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let mut exec = Execution::deserialize(d)?;
+        let exec = Execution::deserialize(d)?;
         Ok(UnversionedExecution(exec))
     }
 }

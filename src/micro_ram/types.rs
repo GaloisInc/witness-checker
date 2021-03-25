@@ -719,11 +719,11 @@ impl<'a> Flatten<'a> for ByteOffset {
         c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
@@ -762,11 +762,11 @@ impl<'a> Flatten<'a> for WordAddr {
             MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
@@ -1179,7 +1179,6 @@ impl Segment {
         for c in &self.constraints {
             match *c {
                 SegmentConstraint::Pc(pc) => return Some(pc),
-                _ => {},
             }
         }
         None

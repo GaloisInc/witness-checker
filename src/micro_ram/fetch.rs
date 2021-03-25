@@ -45,7 +45,7 @@ impl<'a> Fetch<'a> {
             ports: Vec::with_capacity(len),
         };
 
-        for i in 0 .. len {
+        for _ in 0 .. len {
             let (addr, addr_secret) = b.secret();
             let (instr, instr_secret) = b.secret_default(self.default_instr.clone());
             let write = b.lit(false);

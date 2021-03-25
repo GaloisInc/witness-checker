@@ -15,7 +15,6 @@ use crate::micro_ram::types::{
 pub struct Segment<'a> {
     pub idx: usize,
     len: usize,
-    init_state: TWire<'a, RamState>,
     states: Vec<TWire<'a, RamState>>,
     final_state: TWire<'a, RamState>,
 
@@ -128,7 +127,6 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
         Segment {
             idx,
             len: s.len,
-            init_state,
             states,
             final_state: prev_state,
             fetch_ports,

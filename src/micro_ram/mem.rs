@@ -9,20 +9,18 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Advice, MemSegment, ByteOffset, WordAddr,
+    MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
     MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 use crate::sort;
 
 pub struct Memory<'a> {
-    prover: bool,
     ports: Vec<TWire<'a, MemPort>>,
 }
 
 impl<'a> Memory<'a> {
-    pub fn new(prover: bool) -> Memory<'a> {
+    pub fn new() -> Memory<'a> {
         Memory {
-            prover,
             ports: Vec::new(),
         }
     }
@@ -268,7 +266,7 @@ impl<'a> CyclePorts<'a> {
 /// Get the "misalignment" of an address, equal to `addr % width.bytes()`.  The result is zero for
 /// well-aligned addresses.
 fn addr_misalignment<'a>(
-    cx: &Context<'a>,
+    _cx: &Context<'a>,
     b: &Builder<'a>,
     addr: TWire<'a, u64>,
     width: TWire<'a, MemOpWidth>,

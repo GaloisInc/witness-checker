@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter;
@@ -14,20 +14,15 @@ use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
-use cheesecloth::gadget::arith::BuilderExt as _;
-use cheesecloth::gadget::bit_pack;
 use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
-use cheesecloth::micro_ram::mem::{Memory, extract_bytes_at_offset, extract_low_bytes};
+use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{
-    RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, MemOpWidth, ByteOffset, Opcode, Advice,
-    Segment, TraceChunk, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
-};
+use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk};
 
 
 fn parse_args() -> ArgMatches<'static> {
@@ -227,7 +222,7 @@ fn main() -> io::Result<()> {
 
 
     // Set up memory ports and check consistency.
-    let mut mem = Memory::new(is_prover);
+    let mut mem = Memory::new();
     for seg in &exec.init_mem {
         mem.init_segment(&b, seg);
     }
