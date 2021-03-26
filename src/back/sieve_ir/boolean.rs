@@ -1,6 +1,6 @@
 // Inspired from bellman::gadgets::boolean
 
-use ff::{Field, PrimeField};
+use ff::PrimeField;
 use zki_sieve::{
     WireId,
     Result,
@@ -9,7 +9,6 @@ use zki_sieve::{
 };
 
 use crate::back::sieve_ir::builder_ext::BuilderExt;
-use num_traits::AsPrimitive;
 
 
 /// Represents a variable in the constraint system which is guaranteed

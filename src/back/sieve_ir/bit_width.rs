@@ -1,8 +1,10 @@
 use std::ops::{Add, Sub, Mul};
 use std::cmp::max;
 use num_bigint::{BigUint, BigInt, Sign};
-use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
-use crate::back::sieve_ir::int::Int;
+use crate::back::sieve_ir::{
+    int::Int,
+    boolean::Boolean,
+};
 
 #[derive(Copy, Clone, Debug)]
 pub enum BitWidth {
