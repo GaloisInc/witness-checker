@@ -5,14 +5,9 @@ default:
 
 stages:
   - build
-  - test
 
-build:
+build-and-test:
   stage: build
   script:
     - cargo build
-
-test:
-  stage: test
-  script:
     - cargo test
