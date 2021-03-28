@@ -14,7 +14,8 @@ sieve_ir = ["ff", "zki_sieve"]
 [dependencies]
 zkinterface = { optional = true, version = "1.3.3" }
 zkinterface_bellman = { optional = true, version = "1.3.0" }
-zki_sieve = { optional = true, git = "https://github.mit.edu/sieve-all/zkinterface-sieve.git", branch = "inline-witness" }
+# zki_sieve = { optional = true, git = "https://github.mit.edu/sieve-all/zkinterface-sieve.git", branch = "inline-witness" }
+zki_sieve = { optional = true, git = "ssh://git@github.mit.edu/sieve-all/zkinterface-sieve.git", branch = "inline-witness", path = "../zkinterface-sieve/rust" }
 
 # Use the crate ff_derive. The dependencies must be repeated to use in the macro derive(PrimeField).
 ff = { optional = true, version = "0.8.0", features = ["derive"] }

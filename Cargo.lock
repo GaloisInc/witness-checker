@@ -905,7 +905,7 @@ dependencies = [
 [[package]]
 name = "zki_sieve"
 version = "0.1.1"
-source = "git+https://github.mit.edu/sieve-all/zkinterface-sieve.git?branch=inline-witness#1811b2b909a38157096d28c2fca5d09d1e3f8608"
+source = "git+ssh://git@github.mit.edu/sieve-all/zkinterface-sieve.git?branch=inline-witness#1811b2b909a38157096d28c2fca5d09d1e3f8608"
 dependencies = [
  "colored",
  "flatbuffers",
