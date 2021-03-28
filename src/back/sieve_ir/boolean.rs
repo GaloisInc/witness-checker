@@ -1,10 +1,7 @@
 // Inspired from bellman::gadgets::boolean
 
 use ff::PrimeField;
-use zki_sieve::{
-    WireId,
-    Result,
-};
+use zki_sieve::{Result, WireId};
 
 use crate::back::sieve_ir::builder_ext::BuilderExt;
 
@@ -25,8 +22,7 @@ impl AllocatedBit {
         self.wire
     }
 
-    pub fn alloc(b: &mut BuilderExt, value: Option<bool>) -> Result<Self>
-    {
+    pub fn alloc(b: &mut BuilderExt, value: Option<bool>) -> Result<Self> {
         let field_value = match value {
             Some(false) => Some(vec![0]),
             Some(true) => Some(vec![1]),
@@ -39,18 +35,14 @@ impl AllocatedBit {
         let prod = b.mul(wire, wire_1);
         b.assert_zero(prod);
 
-        Ok(AllocatedBit {
-            wire,
-            value,
-        })
+        Ok(AllocatedBit { wire, value })
     }
 
     /// Calculates `NOT a`.
-    pub fn not(b: &mut BuilderExt, a: &Self) -> Self
-    {
+    pub fn not(b: &mut BuilderExt, a: &Self) -> Self {
         let value = match a.value {
             Some(a_val) => Some(!a_val), // prover mode
-            _ => None // verifier mode
+            _ => None,                   // verifier mode
         };
 
         // Implementing NOT using arithmetic operations only:
@@ -61,19 +53,15 @@ impl AllocatedBit {
         //  1 | 0     |
         let wire = b.sub(b.one, a.get_wire());
 
-        AllocatedBit {
-            wire,
-            value,
-        }
+        AllocatedBit { wire, value }
     }
 
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn xor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
-    {
+    pub fn xor(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
-            _ => None // verifier mode
+            _ => None,                                         // verifier mode
         };
 
         // Implementing XOR using arithmetic operations only:
@@ -96,11 +84,10 @@ impl AllocatedBit {
 
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn and(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
-    {
+    pub fn and(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
-            _ => None // verifier mode
+            _ => None,                                         // verifier mode
         };
 
         // Implementing AND using arithmetic operations only:
@@ -120,11 +107,10 @@ impl AllocatedBit {
     }
 
     /// Calculates `a AND (NOT b)`.
-    pub fn and_not(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
-    {
+    pub fn and_not(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
-            _ => None // verifier mode
+            _ => None,                                          // verifier mode
         };
 
         // Implementing AND-NOT using arithmetic operations only:
@@ -145,11 +131,10 @@ impl AllocatedBit {
     }
 
     /// Calculates `(NOT a) AND (NOT b)`.
-    pub fn nor(mut builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self>
-    {
+    pub fn nor(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
-            _ => None // verifier mode
+            _ => None,                                           // verifier mode
         };
 
         // Implementing NOR using arithmetic operations only:
@@ -171,8 +156,10 @@ impl AllocatedBit {
     }
 }
 
-pub fn u64_into_boolean_vec_le(mut builder: &mut BuilderExt, value: Option<u64>) -> Result<Vec<Boolean>>
-{
+pub fn u64_into_boolean_vec_le(
+    builder: &mut BuilderExt,
+    value: Option<u64>,
+) -> Result<Vec<Boolean>> {
     let values = match value {
         Some(ref value) => {
             let mut tmp = Vec::with_capacity(64);
@@ -188,33 +175,23 @@ pub fn u64_into_boolean_vec_le(mut builder: &mut BuilderExt, value: Option<u64>)
 
     let bits = values
         .into_iter()
-        .map(|b| {
-            Ok(Boolean::from(AllocatedBit::alloc(
-                builder,
-                b,
-            )?))
-        })
+        .map(|b| Ok(Boolean::from(AllocatedBit::alloc(builder, b)?)))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(bits)
 }
 
-pub fn field_into_boolean_vec_le<
-    Scalar: PrimeField,
->(
-    mut builder: &mut BuilderExt,
+pub fn field_into_boolean_vec_le<Scalar: PrimeField>(
+    builder: &mut BuilderExt,
     value: Option<Scalar>,
-) -> Result<Vec<Boolean>>
-{
+) -> Result<Vec<Boolean>> {
     let v = field_into_allocated_bits_le::<Scalar>(builder, value)?;
 
     Ok(v.into_iter().map(Boolean::from).collect())
 }
 
-pub fn field_into_allocated_bits_le<
-    Scalar: PrimeField,
->(
-    mut builder: &mut BuilderExt,
+pub fn field_into_allocated_bits_le<Scalar: PrimeField>(
+    builder: &mut BuilderExt,
     value: Option<Scalar>,
 ) -> Result<Vec<AllocatedBit>> {
     // Deconstruct in big-endian bit order
@@ -283,8 +260,7 @@ impl Boolean {
         }
     }
 
-    pub fn enforce_equal<'l>(mut builder: &mut BuilderExt, a: &'l Self, b: &'l Self) -> Result<()>
-    {
+    pub fn enforce_equal<'l>(builder: &mut BuilderExt, a: &'l Self, b: &'l Self) -> Result<()> {
         match (a, b) {
             (&Boolean::Constant(a), &Boolean::Constant(b)) => {
                 if a == b {
@@ -315,21 +291,23 @@ impl Boolean {
                     }
                     Boolean::Not(ref v) => {
                         let w = AllocatedBit::not(builder, v);
-                        builder.assert_zero(w);
+                        builder.assert_zero(w.wire);
                     }
                     _ => { /* This case will never happen => DO NOTHING */ }
                 }
                 Ok(())
             }
 
-            (&Boolean::Is(ref v), &Boolean::Is(ref w)) | (&Boolean::Not(ref v), &Boolean::Not(ref w)) => {
+            (&Boolean::Is(ref v), &Boolean::Is(ref w))
+            | (&Boolean::Not(ref v), &Boolean::Not(ref w)) => {
                 let xorwire = AllocatedBit::xor(builder, &v, &w)?.get_wire();
                 builder.assert_zero(xorwire);
 
                 Ok(())
             }
 
-            (&Boolean::Is(ref v), &Boolean::Not(ref w)) | (&Boolean::Not(ref v), &Boolean::Is(ref w)) => {
+            (&Boolean::Is(ref v), &Boolean::Not(ref w))
+            | (&Boolean::Not(ref v), &Boolean::Is(ref w)) => {
                 let true_bit = AllocatedBit {
                     wire: builder.one,
                     value: Some(true),
@@ -366,8 +344,7 @@ impl Boolean {
     }
 
     /// Perform XOR over two boolean operands
-    pub fn xor<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self>
-    {
+    pub fn xor<'a>(builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self> {
         match (a, b) {
             (&Boolean::Constant(false), x) | (x, &Boolean::Constant(false)) => Ok(x.clone()),
             (&Boolean::Constant(true), x) | (x, &Boolean::Constant(true)) => Ok(x.not()),
@@ -385,8 +362,7 @@ impl Boolean {
     }
 
     /// Perform AND over two boolean operands
-    pub fn and<'a>(mut builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self>
-    {
+    pub fn and<'a>(builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self> {
         match (a, b) {
             // false AND x is always false
             (&Boolean::Constant(false), _) | (_, &Boolean::Constant(false)) => {
@@ -417,44 +393,59 @@ impl From<AllocatedBit> for Boolean {
     }
 }
 
-
-
 #[cfg(test)]
 mod test {
 
     use super::{field_into_allocated_bits_le, u64_into_boolean_vec_le, AllocatedBit, Boolean};
 
-    use zki_sieve::producers::builder::Builder;
+    use zki_sieve::producers::builder::{new_example_builder, Builder};
     use zki_sieve::producers::examples::*;
-    use zki_sieve::consumers::evaluator::Evaluator;
-    use zki_sieve::{Relation, Message};
+    use zki_sieve::{consumers::evaluator::Evaluator, Source};
+    use zki_sieve::{Message, Relation};
 
-    use ff::{Field, PrimeField};
-    use crate::back::sieve_ir::field::{QuarkScalar, encode_scalar};
     use crate::back::sieve_ir::builder_ext::BuilderExt;
+    use crate::back::sieve_ir::field::{encode_scalar, QuarkScalar};
+    use crate::back::sieve_ir::num::{scalar_from_biguint, scalar_from_unsigned};
+    use ff::{Field, PrimeField};
     use num_bigint::BigUint;
-    use crate::back::sieve_ir::num::{scalar_from_unsigned, scalar_from_biguint};
     use num_traits::{Num, One, Zero};
     use std::ops::Neg;
 
+    fn new_builder() -> BuilderExt {
+        BuilderExt::new::<QuarkScalar>(new_example_builder())
+    }
+
+    fn evaluate(b: BuilderExt) -> Evaluator {
+        let sink = b.finish();
+        let source = Source::from_buffers(vec![
+            sink.instance_buffer,
+            sink.witness_buffer,
+            sink.relation_buffer,
+        ]);
+
+        let mut evaluator = Evaluator::default();
+        source
+            .iter_messages()
+            .for_each(|msg| evaluator.ingest_message(&msg.unwrap()));
+        evaluator
+    }
 
     macro_rules! initialize_everything {
         ($one_:ident, $zero_:ident, $neg_one:ident, $modulus:ident, $header:ident) => {
             let $one_ = BigUint::one();
             let $zero_ = BigUint::zero();
             let $neg_one: QuarkScalar = QuarkScalar::one().neg();
-            let $modulus = BigUint::from_bytes_le(encode_scalar(&$neg_one).as_slice()) + BigUint::one();
+            let $modulus =
+                BigUint::from_bytes_le(encode_scalar(&$neg_one).as_slice()) + BigUint::one();
             let $header = example_header_in_field($modulus.to_bytes_le());
         };
     }
 
-
     #[test]
     fn test_bit_allocated_bit() {
         initialize_everything!(one_, zero_, neg_one, modulus, header);
-        let mut evaluator = Evaluator::default();
 
-        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+        let mut builder = new_builder();
 
         let v = AllocatedBit::alloc(&mut builder, Some(true)).unwrap();
         assert_eq!(v.get_value(), Some(true));
@@ -462,7 +453,7 @@ mod test {
         let w = AllocatedBit::alloc(&mut builder, Some(false)).unwrap();
         assert_eq!(w.get_value(), Some(false));
 
-        evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+        let evaluator = evaluate(builder);
 
         assert_eq!(evaluator.get(v.get_wire()).unwrap(), &one_);
         assert_eq!(evaluator.get(w.get_wire()).unwrap(), &zero_);
@@ -474,18 +465,26 @@ mod test {
 
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let mut builder = new_builder();
                 let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
                 let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
                 let c = AllocatedBit::xor(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), *a_val ^ *b_val);
 
-                let mut evaluator = Evaluator::default();
-                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
-                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
+                let evaluator = evaluate(builder);
+                assert_eq!(
+                    evaluator.get(a.get_wire()).unwrap(),
+                    if *a_val { &one_ } else { &zero_ }
+                );
+                assert_eq!(
+                    evaluator.get(b.get_wire()).unwrap(),
+                    if *b_val { &one_ } else { &zero_ }
+                );
 
-                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+                assert_eq!(
+                    evaluator.get(c.get_wire()).unwrap(),
+                    if c.value.unwrap() { &one_ } else { &zero_ }
+                );
 
                 assert_eq!(evaluator.get_violations().len(), 0 as usize);
             }
@@ -498,18 +497,26 @@ mod test {
 
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let mut builder = new_builder();
                 let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
                 let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
                 let c = AllocatedBit::and(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), *a_val & *b_val);
 
-                let mut evaluator = Evaluator::default();
-                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
-                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
+                let evaluator = evaluate(builder);
+                assert_eq!(
+                    evaluator.get(a.get_wire()).unwrap(),
+                    if *a_val { &one_ } else { &zero_ }
+                );
+                assert_eq!(
+                    evaluator.get(b.get_wire()).unwrap(),
+                    if *b_val { &one_ } else { &zero_ }
+                );
 
-                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+                assert_eq!(
+                    evaluator.get(c.get_wire()).unwrap(),
+                    if c.value.unwrap() { &one_ } else { &zero_ }
+                );
 
                 assert_eq!(evaluator.get_violations().len(), 0 as usize);
             }
@@ -522,18 +529,26 @@ mod test {
 
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let mut builder = new_builder();
                 let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
                 let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
                 let c = AllocatedBit::and_not(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), *a_val & !*b_val);
 
-                let mut evaluator = Evaluator::default();
-                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
-                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
+                let evaluator = evaluate(builder);
+                assert_eq!(
+                    evaluator.get(a.get_wire()).unwrap(),
+                    if *a_val { &one_ } else { &zero_ }
+                );
+                assert_eq!(
+                    evaluator.get(b.get_wire()).unwrap(),
+                    if *b_val { &one_ } else { &zero_ }
+                );
 
-                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+                assert_eq!(
+                    evaluator.get(c.get_wire()).unwrap(),
+                    if c.value.unwrap() { &one_ } else { &zero_ }
+                );
 
                 assert_eq!(evaluator.get_violations().len(), 0 as usize);
             }
@@ -546,18 +561,26 @@ mod test {
 
         for a_val in [false, true].iter() {
             for b_val in [false, true].iter() {
-                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let mut builder = new_builder();
                 let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
                 let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
                 let c = AllocatedBit::nor(&mut builder, &a, &b).unwrap();
                 assert_eq!(c.value.unwrap(), !*a_val & !*b_val);
 
-                let mut evaluator = Evaluator::default();
-                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-                assert_eq!(evaluator.get(a.get_wire()).unwrap(), if *a_val {&one_} else {&zero_});
-                assert_eq!(evaluator.get(b.get_wire()).unwrap(), if *b_val {&one_} else {&zero_});
+                let evaluator = evaluate(builder);
+                assert_eq!(
+                    evaluator.get(a.get_wire()).unwrap(),
+                    if *a_val { &one_ } else { &zero_ }
+                );
+                assert_eq!(
+                    evaluator.get(b.get_wire()).unwrap(),
+                    if *b_val { &one_ } else { &zero_ }
+                );
 
-                assert_eq!(evaluator.get(c.get_wire()).unwrap(), if c.value.unwrap() {&one_} else {&zero_});
+                assert_eq!(
+                    evaluator.get(c.get_wire()).unwrap(),
+                    if c.value.unwrap() { &one_ } else { &zero_ }
+                );
 
                 assert_eq!(evaluator.get_violations().len(), 0);
             }
@@ -573,7 +596,7 @@ mod test {
                 for a_neg in [false, true].iter().cloned() {
                     for b_neg in [false, true].iter().cloned() {
                         {
-                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                            let mut builder = new_builder();
 
                             let mut a = Boolean::from(
                                 AllocatedBit::alloc(&mut builder, Some(a_bool)).unwrap(),
@@ -591,12 +614,14 @@ mod test {
 
                             Boolean::enforce_equal(&mut builder, &a, &b).unwrap();
 
-                            let mut evaluator = Evaluator::default();
-                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-                            assert_eq!(evaluator.get_violations().len() == 0, (a_bool ^ a_neg) == (b_bool ^ b_neg));
+                            let evaluator = evaluate(builder);
+                            assert_eq!(
+                                evaluator.get_violations().len() == 0,
+                                (a_bool ^ a_neg) == (b_bool ^ b_neg)
+                            );
                         }
                         {
-                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                            let mut builder = new_builder();
 
                             let mut a = Boolean::Constant(a_bool);
                             let mut b = Boolean::from(
@@ -612,12 +637,14 @@ mod test {
 
                             Boolean::enforce_equal(&mut builder, &a, &b).unwrap();
 
-                            let mut evaluator = Evaluator::default();
-                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-                            assert_eq!(evaluator.get_violations().len() == 0, (a_bool ^ a_neg) == (b_bool ^ b_neg));
+                            let evaluator = evaluate(builder);
+                            assert_eq!(
+                                evaluator.get_violations().len() == 0,
+                                (a_bool ^ a_neg) == (b_bool ^ b_neg)
+                            );
                         }
                         {
-                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                            let mut builder = new_builder();
 
                             let mut a = Boolean::from(
                                 AllocatedBit::alloc(&mut builder, Some(a_bool)).unwrap(),
@@ -633,12 +660,14 @@ mod test {
 
                             Boolean::enforce_equal(&mut builder, &a, &b).unwrap();
 
-                            let mut evaluator = Evaluator::default();
-                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-                            assert_eq!(evaluator.get_violations().len() == 0, (a_bool ^ a_neg) == (b_bool ^ b_neg))
+                            let evaluator = evaluate(builder);
+                            assert_eq!(
+                                evaluator.get_violations().len() == 0,
+                                (a_bool ^ a_neg) == (b_bool ^ b_neg)
+                            )
                         }
                         {
-                            let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                            let mut builder = new_builder();
 
                             let mut a = Boolean::Constant(a_bool);
                             let mut b = Boolean::Constant(b_bool);
@@ -651,8 +680,8 @@ mod test {
                             }
 
                             let result = Boolean::enforce_equal(&mut builder, &a, &b);
-                            let mut evaluator = Evaluator::default();
-                            evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+
+                            let evaluator = evaluate(builder);
 
                             if (a_bool ^ a_neg) == (b_bool ^ b_neg) {
                                 assert!(result.is_ok());
@@ -669,7 +698,7 @@ mod test {
 
     #[test]
     fn test_boolean_negation() {
-        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+        let mut builder = new_builder();
 
         let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap());
 
@@ -763,29 +792,28 @@ mod test {
 
         for first_operand in variants.iter().cloned() {
             for second_operand in variants.iter().cloned() {
-                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let mut builder = new_builder();
 
                 let a;
                 let b;
 
                 {
-                    let mut dyn_construct = |operand, name| {
-
-                        match operand {
-                            OperandType::True => Boolean::constant(true),
-                            OperandType::False => Boolean::constant(false),
-                            OperandType::AllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
-                            }
-                            OperandType::AllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
-                            }
-                            OperandType::NegatedAllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap()).not()
-                            }
-                            OperandType::NegatedAllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap()).not()
-                            }
+                    let mut dyn_construct = |operand, name| match operand {
+                        OperandType::True => Boolean::constant(true),
+                        OperandType::False => Boolean::constant(false),
+                        OperandType::AllocatedTrue => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
+                        }
+                        OperandType::AllocatedFalse => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
+                        }
+                        OperandType::NegatedAllocatedTrue => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
+                                .not()
+                        }
+                        OperandType::NegatedAllocatedFalse => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
+                                .not()
                         }
                     };
 
@@ -794,10 +822,9 @@ mod test {
                 }
 
                 let c = Boolean::xor(&mut builder, &a, &b).unwrap();
+                let c_wire = c.wire(&builder);
 
-                let mut evaluator = Evaluator::default();
-                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
-
+                let evaluator = evaluate(builder);
 
                 match (first_operand, second_operand, c.clone()) {
                     (OperandType::True, OperandType::True, Boolean::Constant(false)) => {}
@@ -821,7 +848,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -829,7 +856,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -854,7 +881,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -862,7 +889,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -901,7 +928,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -909,7 +936,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
 
@@ -934,7 +961,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -942,7 +969,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
 
@@ -968,29 +995,28 @@ mod test {
 
         for first_operand in variants.iter().cloned() {
             for second_operand in variants.iter().cloned() {
-                let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+                let mut builder = new_builder();
 
                 let a;
                 let b;
 
                 {
-                    let mut dyn_construct = |operand, name| {
-
-                        match operand {
-                            OperandType::True => Boolean::constant(true),
-                            OperandType::False => Boolean::constant(false),
-                            OperandType::AllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
-                            }
-                            OperandType::AllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
-                            }
-                            OperandType::NegatedAllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap()).not()
-                            }
-                            OperandType::NegatedAllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap()).not()
-                            }
+                    let mut dyn_construct = |operand, name| match operand {
+                        OperandType::True => Boolean::constant(true),
+                        OperandType::False => Boolean::constant(false),
+                        OperandType::AllocatedTrue => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
+                        }
+                        OperandType::AllocatedFalse => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
+                        }
+                        OperandType::NegatedAllocatedTrue => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
+                                .not()
+                        }
+                        OperandType::NegatedAllocatedFalse => {
+                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
+                                .not()
                         }
                     };
 
@@ -999,8 +1025,9 @@ mod test {
                 }
 
                 let c = Boolean::and(&mut builder, &a, &b).unwrap();
-                let mut evaluator = Evaluator::default();
-                evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+                let c_wire = c.wire(&builder);
+
+                let evaluator = evaluate(builder);
 
                 match (first_operand, second_operand, c.clone()) {
                     (OperandType::True, OperandType::True, Boolean::Constant(true)) => {}
@@ -1033,7 +1060,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -1041,7 +1068,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1049,7 +1076,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1057,7 +1084,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
 
@@ -1069,7 +1096,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1077,7 +1104,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1085,7 +1112,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1093,7 +1120,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
 
@@ -1108,7 +1135,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1116,7 +1143,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1124,7 +1151,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1132,7 +1159,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
 
@@ -1147,7 +1174,7 @@ mod test {
                         OperandType::AllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
                     (
@@ -1155,7 +1182,7 @@ mod test {
                         OperandType::AllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1163,7 +1190,7 @@ mod test {
                         OperandType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &zero_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
                         assert_eq!(v.value, Some(false));
                     }
                     (
@@ -1171,7 +1198,7 @@ mod test {
                         OperandType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert_eq!(evaluator.get(c.wire(&builder)).unwrap(), &one_);
+                        assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
                         assert_eq!(v.value, Some(true));
                     }
 
@@ -1190,12 +1217,11 @@ mod test {
     #[test]
     fn test_u64_into_boolean_vec_le() {
         initialize_everything!(one_, zero_, neg_one, modulus, header);
-        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+        let mut builder = new_builder();
 
         let bits = u64_into_boolean_vec_le(&mut builder, Some(17234652694787248421)).unwrap();
 
-        let mut evaluator = Evaluator::default();
-        evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+        let evaluator = evaluate(builder);
         assert_eq!(evaluator.get_violations().len(), 0);
 
         assert_eq!(bits.len(), 64);
@@ -1214,23 +1240,19 @@ mod test {
     #[test]
     fn test_field_into_allocated_bits_le() {
         initialize_everything!(one_, zero_, neg_one, modulus, header);
-        let mut builder = BuilderExt::new::<QuarkScalar>(Builder::default());
+        let mut builder = new_builder();
 
-        let r = QuarkScalar::from_str(
-            "139407991430939255523467833655006660152",
-        )
-            .unwrap();
+        let r = QuarkScalar::from_str("139407991430939255523467833655006660152").unwrap();
 
         let bits = field_into_allocated_bits_le(&mut builder, Some(r)).unwrap();
 
-        let mut evaluator = Evaluator::default();
-        evaluator.ingest_message(&Message::Relation(Relation{ header: header.clone(), gates: builder.gates() }) );
+        let evaluator = evaluate(builder);
         assert_eq!(evaluator.get_violations().len(), 0);
 
         assert_eq!(bits.len(), 128);
 
-        assert_eq!(bits[127 -  4].value.unwrap(), true);
-        assert_eq!(bits[127 -  7].value.unwrap(), false);
+        assert_eq!(bits[127 - 4].value.unwrap(), true);
+        assert_eq!(bits[127 - 7].value.unwrap(), false);
         assert_eq!(bits[127 - 16].value.unwrap(), false);
         assert_eq!(bits[127 - 20].value.unwrap(), false);
         assert_eq!(bits[127 - 29].value.unwrap(), true);
@@ -1239,6 +1261,4 @@ mod test {
         assert_eq!(bits[127 - 60].value.unwrap(), false);
         assert_eq!(bits[127 - 74].value.unwrap(), false);
     }
-
 }
-
