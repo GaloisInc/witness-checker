@@ -1,4 +1,4 @@
-use ff::PrimeField;
+use ff::{Field,PrimeField};
 use std::io::Write;
 
 // 2**128 - 159

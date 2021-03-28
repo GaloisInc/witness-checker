@@ -43,7 +43,7 @@ use super::{
     num,
     field::QuarkScalar,
 };
-use zki_sieve::producers::builder::Builder;
+use zki_sieve::producers::builder::new_example_builder;
 use zki_sieve::Result;
 use super::builder_ext::BuilderExt;
 
@@ -70,13 +70,13 @@ impl<'a> Backend<'a> {
         Backend {
             wire_to_repr: HashMap::new(),
             representer: Representer::new(),
-            builder: BuilderExt::new(Builder::default()),
+            builder: BuilderExt::new(new_example_builder()),
         }
     }
 
     pub fn finish(self) -> Result<()> {
-        // TODO: finish API of Builder.
-        // self.builder.finish("cheesecloth")
+        self.builder.finish();
+        Ok(())
     }
 
     pub fn enforce_true(&mut self, wire: Wire<'a>) {

@@ -7,9 +7,7 @@ use std::cmp;
 use num_bigint::BigUint;
 use ff::PrimeField;
 
-use zki_sieve::{
-    WireId, producers::builder::{IBuilder, BuildGate},
-};
+use zki_sieve::WireId;
 use super::{
     int::Int,
     boolean::{AllocatedBit, Boolean},
@@ -36,13 +34,13 @@ pub struct Num<Scalar: PrimeField> {
 
 impl<Scalar: PrimeField> Num<Scalar> {
     pub fn from_biguint(
-        builder: &mut BuilderExt,
+        b: &mut BuilderExt,
         width: u16,
         value: &BigUint,
     ) -> Num<Scalar> {
         let element: Scalar = scalar_from_biguint(value).unwrap();
-        let zki_wire = builder.create_gate(
-            BuildGate::Constant(encode_scalar(&element)));
+        let zki_wire = b.new_constant(encode_scalar(&element));
+
         Num {
             value: Some(element),
             zki_wire,
@@ -77,10 +75,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
             |sum, (exponent, bit)| {
                 let coeff = b.power_of_two(exponent);
                 let bit_wire = bit.wire(b);
-                let term = b.create_gate(
-                    BuildGate::Mul(bit_wire, coeff));
-                b.create_gate(
-                    BuildGate::Add(sum, term))
+                let term = b.mul(bit_wire, coeff);
+                b.add(sum, term)
             },
         )
     }
@@ -169,8 +165,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         // Compute max_value + other * -1 + self
         // TODO: cache max_wire.
-        let max_wire = b.create_gate(
-            BuildGate::Constant(encode_scalar(&max_value)));
+        let max_wire = b.new_constant(encode_scalar(&max_value));
         let other_shifted = b.sub(max_wire, other.zki_wire);
         self.zki_wire = b.add(self.zki_wire, other_shifted);
 
@@ -245,8 +240,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         // Compute max_value + self * -1
         // TODO: cache max_wire.
-        let max_wire = b.create_gate(
-            BuildGate::Constant(encode_scalar(&max_value)));
+        let max_wire = b.new_constant(encode_scalar(&max_value));
         self.zki_wire = b.sub(max_wire, self.zki_wire);
 
         let new_real_bits = self.real_bits + 1;
@@ -343,11 +337,13 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // Compute the inverse of num.
         // We don't prove that it is necessarily the inverse, but we need it to
         // satisfy the constraint below in the case where (is_zero == 0).
-        let inverse = b.create_gate(BuildGate::Witness);
 
-        // TODO: emit the witness value.
         let inverse_value = self.value.map(|val|
-            val.invert().unwrap_or_else(|| Scalar::zero()));
+            encode_scalar(
+                &val.invert()
+                    .unwrap_or_else(|| Scalar::zero())));
+
+        let inverse = b.new_witness(inverse_value);
 
         // Enforce that (num * inverse + is_zero - 1 == 0), then we have:
         //     (num == 0) implies (is_zero == 1)
