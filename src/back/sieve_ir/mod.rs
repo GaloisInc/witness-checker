@@ -7,3 +7,5 @@ mod int_ops;
 mod int;
 mod field;
 mod boolean;
+#[cfg(test)]
+mod boolean_test;
