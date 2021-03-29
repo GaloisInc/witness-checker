@@ -1,6 +1,8 @@
+use bumpalo::Bump;
+use num_bigint::{BigInt, BigUint, Sign};
 use std::any;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -8,8 +10,6 @@ use std::mem;
 use std::ops::{Deref, Range};
 use std::slice;
 use std::str;
-use bumpalo::Bump;
-use num_bigint::{BigUint, BigInt, Sign};
 
 /// A high-level arithmetic/boolean circuit.
 ///
@@ -70,7 +70,7 @@ impl<'a> Circuit<'a> {
                 let gate = self.arena.alloc(gate);
                 intern.insert(gate);
                 gate
-            },
+            }
         }
     }
 
@@ -82,7 +82,7 @@ impl<'a> Circuit<'a> {
                 let ty = self.arena.alloc(ty);
                 intern.insert(ty);
                 ty
-            },
+            }
         }
     }
 
@@ -94,7 +94,7 @@ impl<'a> Circuit<'a> {
                 let wire_list = self.arena.alloc_slice_copy(wire_list);
                 intern.insert(wire_list);
                 wire_list
-            },
+            }
         }
     }
 
@@ -106,7 +106,7 @@ impl<'a> Circuit<'a> {
                 let ty_list = self.arena.alloc_slice_copy(ty_list);
                 intern.insert(ty_list);
                 ty_list
-            },
+            }
         }
     }
 
@@ -116,14 +116,12 @@ impl<'a> Circuit<'a> {
     pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
         let mut intern = self.intern_gadget_kind.borrow_mut();
         match intern.get(HashDynGadgetKind::new(&g)) {
-            Some(&x) => {
-                GadgetKindRef(&x.0)
-            },
+            Some(&x) => GadgetKindRef(&x.0),
             None => {
                 let g = self.arena.alloc(g);
                 intern.insert(HashDynGadgetKind::new(g));
                 GadgetKindRef(g)
-            },
+            }
         }
     }
 
@@ -136,7 +134,7 @@ impl<'a> Circuit<'a> {
                 let s = unsafe { str::from_utf8_unchecked(s_bytes) };
                 intern.insert(s);
                 s
-            },
+            }
         }
     }
 
@@ -148,7 +146,7 @@ impl<'a> Circuit<'a> {
                 let b = self.arena.alloc_slice_copy(b);
                 intern.insert(b);
                 Bits(b)
-            },
+            }
         }
     }
 
@@ -158,42 +156,54 @@ impl<'a> Circuit<'a> {
             GateKind::Binary(op, a, b) => {
                 assert!(
                     a.ty == b.ty,
-                    "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
+                    "type mismatch for {:?}: {:?} != {:?}",
+                    op,
+                    a.ty,
+                    b.ty,
                 );
-            },
+            }
             GateKind::Shift(op, _, b) => match *b.ty {
-                TyKind::Uint(_) => {},
+                TyKind::Uint(_) => {}
                 _ => panic!("{:?} shift amount must be a Uint, not {:?}", op, b.ty),
             },
             GateKind::Compare(op, a, b) => {
                 assert!(
                     a.ty == b.ty,
-                    "type mismatch for {:?}: {:?} != {:?}", op, a.ty, b.ty,
+                    "type mismatch for {:?}: {:?} != {:?}",
+                    op,
+                    a.ty,
+                    b.ty,
                 );
-            },
+            }
             GateKind::Mux(c, t, e) => {
                 assert!(
                     *c.ty == TyKind::BOOL,
-                    "mux condition must be {:?}, not {:?}", TyKind::BOOL, c.ty,
+                    "mux condition must be {:?}, not {:?}",
+                    TyKind::BOOL,
+                    c.ty,
                 );
                 assert!(
                     t.ty == e.ty,
-                    "type mismatch for mux: {:?} != {:?}", c.ty, e.ty,
+                    "type mismatch for mux: {:?} != {:?}",
+                    c.ty,
+                    e.ty,
                 );
-            },
+            }
             GateKind::Extract(w, i) => match *w.ty {
                 TyKind::Bundle(tys) => {
                     if i >= tys.len() {
                         panic!(
                             "index out of range for extract: {} >= {} ({:?})",
-                            i, tys.len(), tys,
+                            i,
+                            tys.len(),
+                            tys,
                         );
                     }
-                },
+                }
                 _ => panic!("bad input type for extract: {:?} (expected Bundle)", w.ty),
             },
             // GateKind::Gadget typechecking happens in the call to `kind.ty`
-            _ => {},
+            _ => {}
         }
 
         Wire(self.intern_gate(Gate {
@@ -212,7 +222,9 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
-    where I: IntoIterator<Item = Ty<'a>> {
+    where
+        I: IntoIterator<Item = Ty<'a>>,
+    {
         let tys = it.into_iter().collect::<Vec<_>>();
         self.ty_bundle(&tys)
     }
@@ -242,7 +254,11 @@ impl<'a> Circuit<'a> {
         ty: Ty<'a>,
         default: T,
     ) -> (Wire<'a>, SecretHandle<'a>) {
-        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+        let val = if self.is_prover {
+            Some(SecretValue::default())
+        } else {
+            None
+        };
         let default = self.bits(ty, default);
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
         let handle = SecretHandle::new(secret, default);
@@ -254,7 +270,9 @@ impl<'a> Circuit<'a> {
     ///
     /// `mk_val` will not be called when running in prover mode.
     pub fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
-    where F: FnOnce() -> T {
+    where
+        F: FnOnce() -> T,
+    {
         let val = if self.is_prover {
             let bits = self.bits(ty, mk_val());
             Some(SecretValue::with_value(bits))
@@ -268,7 +286,11 @@ impl<'a> Circuit<'a> {
     /// Create a new uninitialized secret.  When running in prover mode, the secret must be
     /// initialized later using `SecretData::set_from_lit`.
     pub fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+        let val = if self.is_prover {
+            Some(SecretValue::default())
+        } else {
+            None
+        };
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
         self.secret(secret)
     }
@@ -276,7 +298,10 @@ impl<'a> Circuit<'a> {
     pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
         let sz = match *ty {
             TyKind::Int(sz) | TyKind::Uint(sz) => sz,
-            _ => panic!("can't construct bit representation for non-integer type {:?}", ty),
+            _ => panic!(
+                "can't construct bit representation for non-integer type {:?}",
+                ty
+            ),
         };
         let val = val.as_bits(self, sz);
         assert!(val.width() <= sz.bits());
@@ -327,20 +352,14 @@ impl<'a> Circuit<'a> {
         self.binary(BinOp::Or, a, b)
     }
 
-    pub fn all_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
+    pub fn all_true(&self, wires: impl Iterator<Item = Wire<'a>>) -> Wire<'a> {
         let true_if_empty = self.lit(self.ty(TyKind::BOOL), 1);
-        wires.fold(
-            true_if_empty,
-            |all_true, w| self.and(all_true, w),
-        )
+        wires.fold(true_if_empty, |all_true, w| self.and(all_true, w))
     }
 
-    pub fn any_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
+    pub fn any_true(&self, wires: impl Iterator<Item = Wire<'a>>) -> Wire<'a> {
         let false_if_empty = self.lit(self.ty(TyKind::BOOL), 0);
-        wires.fold(
-            false_if_empty,
-            |any_true, w| self.or(any_true, w),
-        )
+        wires.fold(false_if_empty, |any_true, w| self.or(any_true, w))
     }
 
     pub fn xor(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -401,7 +420,9 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn pack_iter<I>(&self, it: I) -> Wire<'a>
-    where I: IntoIterator<Item = Wire<'a>> {
+    where
+        I: IntoIterator<Item = Wire<'a>>,
+    {
         let ws = it.into_iter().collect::<Vec<_>>();
         self.pack(&ws)
     }
@@ -416,11 +437,12 @@ impl<'a> Circuit<'a> {
     }
 
     pub fn gadget_iter<I>(&self, kind: GadgetKindRef<'a>, it: I) -> Wire<'a>
-    where I: IntoIterator<Item = Wire<'a>> {
+    where
+        I: IntoIterator<Item = Wire<'a>>,
+    {
         let args = it.into_iter().collect::<Vec<_>>();
         self.gadget(kind, &args)
     }
-
 
     pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
         let old = self.current_label.get();
@@ -442,7 +464,6 @@ impl<'a> Circuit<'a> {
         self.current_label.get()
     }
 }
-
 
 pub struct WireDeps<'a> {
     inner: WireDepsInner<'a>,
@@ -490,7 +511,7 @@ impl<'a> Iterator for WireDepsInner<'a> {
             WireDepsInner::Small(ref mut range, ref arr) => {
                 let i = range.next()? as usize;
                 arr.get(i).and_then(|&x| x)
-            },
+            }
             WireDepsInner::Large(ref mut it) => it.next().cloned(),
         }
     }
@@ -502,7 +523,7 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
             WireDepsInner::Small(ref mut range, ref arr) => {
                 let i = range.next_back()? as usize;
                 arr.get(i).and_then(|&x| x)
-            },
+            }
             WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
         }
     }
@@ -523,17 +544,13 @@ impl<'a> DoubleEndedIterator for WireDeps<'a> {
 
 pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
     match w.kind {
-        GateKind::Lit(_, _) |
-        GateKind::Secret(_) => WireDeps::zero(),
-        GateKind::Unary(_, a) |
-        GateKind::Cast(a, _) |
-        GateKind::Extract(a, _) => WireDeps::one(a),
-        GateKind::Binary(_, a, b) |
-        GateKind::Shift(_, a, b) |
-        GateKind::Compare(_, a, b) => WireDeps::two(a, b),
+        GateKind::Lit(_, _) | GateKind::Secret(_) => WireDeps::zero(),
+        GateKind::Unary(_, a) | GateKind::Cast(a, _) | GateKind::Extract(a, _) => WireDeps::one(a),
+        GateKind::Binary(_, a, b) | GateKind::Shift(_, a, b) | GateKind::Compare(_, a, b) => {
+            WireDeps::two(a, b)
+        }
         GateKind::Mux(c, t, e) => WireDeps::three(c, t, e),
-        GateKind::Pack(ws) |
-        GateKind::Gadget(_, ws) => WireDeps::many(ws),
+        GateKind::Pack(ws) | GateKind::Gadget(_, ws) => WireDeps::many(ws),
     }
 }
 
@@ -557,7 +574,7 @@ impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
                 continue;
             }
 
-            let mut maybe_push = |w| {
+            let maybe_push = |w| {
                 if self.seen.contains(&w) || !(self.filter)(w) {
                     false
                 } else {
@@ -580,7 +597,9 @@ impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
 }
 
 pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
-where I: IntoIterator<Item = Wire<'a>> {
+where
+    I: IntoIterator<Item = Wire<'a>>,
+{
     let mut stack = wires.into_iter().collect::<Vec<_>>();
     stack.reverse();
     PostorderIter {
@@ -591,7 +610,10 @@ where I: IntoIterator<Item = Wire<'a>> {
 }
 
 pub fn walk_wires_filtered<'a, I, F>(wires: I, filter: F) -> PostorderIter<'a, F>
-where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
+where
+    I: IntoIterator<Item = Wire<'a>>,
+    F: FnMut(Wire<'a>) -> bool,
+{
     let mut stack = wires.into_iter().collect::<Vec<_>>();
     stack.reverse();
     PostorderIter {
@@ -604,13 +626,14 @@ where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
 /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
 /// once, in some deterministic order (assuming `wires` itself is deterministic).
 pub fn walk_witness<'a, I>(wires: I) -> impl Iterator<Item = Secret<'a>>
-where I: IntoIterator<Item = Wire<'a>> {
+where
+    I: IntoIterator<Item = Wire<'a>>,
+{
     walk_wires(wires).filter_map(|w| match w.kind {
         GateKind::Secret(s) => Some(s),
         _ => None,
     })
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct IntSize(pub u16);
@@ -673,13 +696,10 @@ impl TyKind<'_> {
         match *self {
             TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
-            TyKind::Bundle(tys) => {
-                c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
-            },
+            TyKind::Bundle(tys) => c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c))),
         }
     }
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
@@ -737,7 +757,7 @@ impl<'a> GateKind<'a> {
             GateKind::Gadget(k, ws) => {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
                 k.typecheck(c, &tys)
-            },
+            }
         }
     }
 
@@ -764,20 +784,31 @@ pub enum UnOp {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod,
-    And, Or, Xor,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    And,
+    Or,
+    Xor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum ShiftOp {
-    Shl, Shr,
+    Shl,
+    Shr,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum CmpOp {
-    Eq, Ne, Lt, Le, Gt, Ge,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
-
 
 /// Declare a wrapper around an immutable reference, with `Eq` and `Hash` instances that compare by
 /// address instead of by value.
@@ -899,7 +930,9 @@ impl<'a> SecretData<'a> {
     }
 
     pub fn set(&self, bits: Bits<'a>) {
-        let sv = self.val.as_ref()
+        let sv = self
+            .val
+            .as_ref()
             .expect("can't provide secret values when running in verifier mode");
         sv.set(bits);
     }
@@ -912,7 +945,12 @@ impl<'a> SecretData<'a> {
 
     pub fn set_from_lit(&self, w: Wire<'a>, force: bool) {
         let (ty, bits) = w.kind.as_lit();
-        assert!(ty == self.ty, "type mismatch in secret init: {:?} != {:?}", ty, self.ty);
+        assert!(
+            ty == self.ty,
+            "type mismatch in secret init: {:?} != {:?}",
+            ty,
+            self.ty
+        );
         if force {
             self.set(bits);
         } else {
@@ -946,13 +984,10 @@ impl<'a> Drop for SecretHandle<'a> {
     }
 }
 
-
-
 declare_interned_pointer! {
     #[derive(Debug)]
     pub struct Ty<'a> => TyKind<'a>;
 }
-
 
 pub unsafe trait GadgetKindSupport<'a> {
     fn type_name(&self) -> &'static str;
@@ -963,7 +998,9 @@ pub unsafe trait GadgetKindSupport<'a> {
 macro_rules! impl_gadget_kind_support {
     (<$lt:lifetime> $T:ty) => {
         unsafe impl<$lt> $crate::ir::circuit::GadgetKindSupport<$lt> for $T {
-            fn type_name(&self) -> &'static str { std::any::type_name::<$T>() }
+            fn type_name(&self) -> &'static str {
+                std::any::type_name::<$T>()
+            }
 
             fn eq_dyn(&self, other: &dyn $crate::ir::circuit::GadgetKind<'a>) -> bool {
                 unsafe {
@@ -983,7 +1020,9 @@ macro_rules! impl_gadget_kind_support {
         }
     };
 
-    ($T:ty) => { impl_gadget_kind_support! { <'a> $T } }
+    ($T:ty) => {
+        impl_gadget_kind_support! { <'a> $T }
+    };
 }
 
 /// Defines a kind of gadget.  Instances of a gadget can be added to a `Circuit` using
@@ -1043,7 +1082,6 @@ pub unsafe fn downcast_gadget_kind<'a, 'b, T: GadgetKind<'a>>(
     }
 }
 
-
 /// Helper type for making `dyn GadgetKind` hashable, so it can be stored in the `Circuit`'s
 /// interning tables.
 #[repr(transparent)]
@@ -1069,7 +1107,6 @@ impl Hash for HashDynGadgetKind<'_> {
     }
 }
 
-
 pub struct CellResetGuard<'a, T> {
     cell: &'a Cell<T>,
     old: Cell<T>,
@@ -1091,7 +1128,6 @@ impl<'a, T> Drop for CellResetGuard<'a, T> {
         self.cell.swap(&self.old)
     }
 }
-
 
 /// An arbitrary-sized array of bits.  Used to represent integer values in the circuit and
 /// evaluator.
@@ -1133,7 +1169,7 @@ impl<'a> Bits<'a> {
             TyKind::Uint(sz) => {
                 assert!(self.width() <= sz.bits());
                 BigInt::from_biguint(Sign::Plus, BigUint::from_slice(self.0))
-            },
+            }
             TyKind::Int(sz) => {
                 assert!(self.width() <= sz.bits());
                 let mut i = BigInt::from_biguint(Sign::Plus, BigUint::from_slice(self.0));
@@ -1148,7 +1184,7 @@ impl<'a> Bits<'a> {
                     i -= BigInt::from(1) << sz.bits();
                 }
                 i
-            },
+            }
             _ => panic!("expected an integer type, but got {:?}", ty),
         }
     }
@@ -1247,7 +1283,10 @@ impl TryFrom<Bits<'_>> for u32 {
     type Error = BitsToIntError;
     fn try_from(bits: Bits) -> Result<u32, BitsToIntError> {
         if bits.width() > 32 {
-            return Err(BitsToIntError { actual: bits.width(), expected: 32 });
+            return Err(BitsToIntError {
+                actual: bits.width(),
+                expected: 32,
+            });
         }
         Ok(bits.0[0])
     }
@@ -1257,7 +1296,10 @@ impl TryFrom<Bits<'_>> for u64 {
     type Error = BitsToIntError;
     fn try_from(bits: Bits) -> Result<u64, BitsToIntError> {
         if bits.width() > 64 {
-            return Err(BitsToIntError { actual: bits.width(), expected: 64 });
+            return Err(BitsToIntError {
+                actual: bits.width(),
+                expected: 64,
+            });
         }
         Ok(bits.0[0] as u64 | (bits.0[1] as u64) << 32)
     }

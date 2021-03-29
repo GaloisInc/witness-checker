@@ -29,3 +29,14 @@ pub fn encode_field_order<Scalar: PrimeField>() -> Vec<u8> {
     let order: BigUint = neg_one + BigUint::one();
     order.to_bytes_le()
 }
+
+pub fn _scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Result<Scalar, String> {
+    scalar_from_biguint(&BigUint::from(val))
+}
+
+pub fn scalar_from_biguint<Scalar: PrimeField>(val: &BigUint) -> Result<Scalar, String> {
+    let bytes = val.to_bytes_le();
+    let mut repr: Scalar::Repr = Default::default();
+    repr.as_mut()[..bytes.len()].copy_from_slice(&bytes);
+    Scalar::from_repr(repr).ok_or_else(|| format!("uint {} out of range for Scalar", val))
+}

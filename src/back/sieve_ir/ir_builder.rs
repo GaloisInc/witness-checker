@@ -1,17 +1,16 @@
+use crate::back::sieve_ir::field::encode_field_order;
 use crate::back::sieve_ir::field::encode_scalar;
 use ff::PrimeField;
 use num_bigint::BigUint;
-use zki_sieve::producers::sink::MemorySink;
-use zki_sieve::{
-    producers::builder::{BuildGate, Builder},
-    Source,
-};
-use zki_sieve::{Gate, Value, WireId};
+use zki_sieve::producers::builder::{BuildGate, GateBuilder};
+use zki_sieve::Header;
+use zki_sieve::Sink;
+use zki_sieve::{Value, WireId};
 use BuildGate::*;
 
 /// Extensions to the basic builder.
-pub struct BuilderExt {
-    b: Builder<MemorySink>,
+pub struct IRBuilder<S: Sink> {
+    b: GateBuilder<S>,
     powers_of_two: Vec<WireId>,
 
     pub zero: WireId,
@@ -19,25 +18,22 @@ pub struct BuilderExt {
     pub neg_one: WireId,
 }
 
-impl BuilderExt {
-    pub fn new<Scalar: PrimeField>(mut b: Builder<MemorySink>) -> BuilderExt {
+impl<S: Sink> IRBuilder<S> {
+    pub fn new<Scalar: PrimeField>(sink: S) -> Self {
+        let field_order = encode_field_order::<Scalar>();
+        let mut b = GateBuilder::new(sink, Header::new(field_order));
+
         let zero = b.create_gate(Constant(vec![0]));
         let one = b.create_gate(Constant(vec![1]));
+        let neg_one = b.create_gate(Constant(encode_scalar(&Scalar::one().neg())));
 
-        let minus_one = Scalar::one().neg();
-        let neg_one = b.create_gate(Constant(encode_scalar(&minus_one)));
-
-        BuilderExt {
+        IRBuilder {
             b,
             zero,
             one,
             neg_one,
             powers_of_two: vec![],
         }
-    }
-
-    pub fn create_gate(&mut self, gate: BuildGate) -> WireId {
-        self.b.create_gate(gate)
     }
 
     /// Return a wire representing constant 2^n.
@@ -82,32 +78,7 @@ impl BuilderExt {
         self.b.create_gate(Mul(left, right))
     }
 
-    pub fn finish(self) -> MemorySink {
+    pub fn finish(self) -> S {
         self.b.finish()
-    }
-
-    fn get_gates(self) -> (Vec<Value>, Vec<Gate>) {
-        let sink = self.finish();
-        let source = Source::from_buffers(vec![
-            sink.instance_buffer,
-            sink.witness_buffer,
-            sink.relation_buffer,
-        ]);
-
-        let mut witnesses = Vec::<Value>::new();
-        let mut gates = Vec::<Gate>::new();
-
-        source.iter_messages().for_each(|msg| match msg.unwrap() {
-            zki_sieve::Message::Instance(_) => {}
-            zki_sieve::Message::Witness(witness) => {
-                let values = witness.short_witness.into_iter().map(|a| a.value);
-                witnesses.extend(values);
-            }
-            zki_sieve::Message::Relation(rel) => {
-                gates.extend_from_slice(&rel.gates);
-            }
-        });
-
-        (witnesses, gates)
     }
 }

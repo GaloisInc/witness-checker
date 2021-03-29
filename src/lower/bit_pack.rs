@@ -1,5 +1,5 @@
 use crate::gadget::bit_pack::ConcatBits;
-use crate::ir::circuit::{Circuit, Wire, TyKind, GateKind, UnOp, CmpOp};
+use crate::ir::circuit::{Circuit, GateKind, TyKind, Wire};
 
 /// Expand any `Bundle` arguments to `ConcatBits`, leaving only `Int` and `Uint`.
 pub fn concat_bits_flat<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
@@ -20,10 +20,12 @@ pub fn concat_bits_flat<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wi
 fn flatten<'a>(c: &Circuit<'a>, w: Wire<'a>, out: &mut Vec<Wire<'a>>) {
     match *w.ty {
         TyKind::Bundle(ws) => {
-            for i in 0 .. ws.len() {
+            for i in 0..ws.len() {
                 flatten(c, c.extract(w, i), out);
             }
-        },
-        TyKind::Int(_) | TyKind::Uint(_) => { out.push(w); },
+        }
+        TyKind::Int(_) | TyKind::Uint(_) => {
+            out.push(w);
+        }
     }
 }

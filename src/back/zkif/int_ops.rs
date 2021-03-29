@@ -1,24 +1,23 @@
-use std::cmp;
-use num_traits::Zero;
-use zkinterface_bellman::{
-    bellman::{ConstraintSystem, SynthesisError, LinearCombination},
-    bellman::gadgets::boolean::Boolean,
-    pairing::Engine,
-    ff::PrimeField,
-    zkif_cs::ZkifCS,
-};
 use super::{
-    num::{Num, boolean_lc, scalar_from_unsigned},
-    int::Int,
     bit_width::BitWidth,
+    int::Int,
+    num::{Num, _scalar_from_unsigned, boolean_lc},
+};
+use num_traits::Zero;
+use std::cmp;
+use zkinterface_bellman::{
+    bellman::gadgets::boolean::Boolean,
+    bellman::{ConstraintSystem, LinearCombination, SynthesisError},
+    ff::PrimeField,
+    pairing::Engine,
+    zkif_cs::ZkifCS,
 };
 
 pub fn bitwise_xor<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     cs: CS,
     left: &Int,
     right: &Int,
-) -> Int
-{
+) -> Int {
     left.xor(cs, right).unwrap()
 }
 
@@ -27,14 +26,13 @@ pub fn bitwise_and<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     left: &Int,
     right: &Int,
-) -> Int
-{
-    let out_bits: Vec<Boolean> =
-        left.bits.iter()
-            .zip(right.bits.iter())
-            .map(|(l, r)|
-                Boolean::and(&mut cs, l, r).unwrap()
-            ).collect();
+) -> Int {
+    let out_bits: Vec<Boolean> = left
+        .bits
+        .iter()
+        .zip(right.bits.iter())
+        .map(|(l, r)| Boolean::and(&mut cs, l, r).unwrap())
+        .collect();
 
     Int::from_bits(&out_bits)
 }
@@ -43,34 +41,29 @@ pub fn bitwise_or<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: &mut CS,
     left: &Int,
     right: &Int,
-) -> Int
-{
-    let out_bits: Vec<Boolean> =
-        left.bits.iter()
-            .zip(right.bits.iter())
-            .map(|(l, r)|
-                bool_or(&mut cs, l, r)
-            ).collect();
+) -> Int {
+    let out_bits: Vec<Boolean> = left
+        .bits
+        .iter()
+        .zip(right.bits.iter())
+        .map(|(l, r)| bool_or(&mut cs, l, r))
+        .collect();
 
     Int::from_bits(&out_bits)
 }
 
-pub fn bool_or<'a, Scalar, CS>(
-    cs: CS,
-    a: &'a Boolean,
-    b: &'a Boolean,
-) -> Boolean
-    where Scalar: PrimeField,
-          CS: ConstraintSystem<Scalar>
+pub fn bool_or<'a, Scalar, CS>(cs: CS, a: &'a Boolean, b: &'a Boolean) -> Boolean
+where
+    Scalar: PrimeField,
+    CS: ConstraintSystem<Scalar>,
 {
     Boolean::and(cs, &a.not(), &b.not()).unwrap().not()
 }
 
-pub fn enforce_true<Scalar, CS>(
-    mut cs: CS,
-    bool: &Boolean,
-) where Scalar: PrimeField,
-        CS: ConstraintSystem<Scalar>
+pub fn enforce_true<Scalar, CS>(mut cs: CS, bool: &Boolean)
+where
+    Scalar: PrimeField,
+    CS: ConstraintSystem<Scalar>,
 {
     cs.enforce(
         || "enforce true",
@@ -86,7 +79,12 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     numer_int: &Int,
     denom_num: &Num<Scalar>,
     denom_int: &Int,
-) -> (/*quotient*/ Num<Scalar>, Int, /*rest*/ Num<Scalar>, Int) {
+) -> (
+    /*quotient*/ Num<Scalar>,
+    Int,
+    /*rest*/ Num<Scalar>,
+    Int,
+) {
     let (quot_val, rest_val) = match (numer_int.value.as_ref(), denom_int.value.as_ref()) {
         (Some(numer), Some(denom)) => {
             if denom.is_zero() {
@@ -97,7 +95,7 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
                 (Some(quot_val), Some(rest_val))
             }
         }
-        _ => (None, None)
+        _ => (None, None),
     };
 
     let max_width = cmp::max(numer_int.width(), denom_int.width());
@@ -117,8 +115,11 @@ pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
 
     // Verify that rest < denom || denom == 0.
     let width = denom_int.width();
-    let diff_num = rest_num.zero_extend(width as u16 + 1).unwrap()
-        .sub(&denom_num.zero_extend(width as u16 + 1).unwrap(), &mut cs).unwrap();
+    let diff_num = rest_num
+        .zero_extend(width as u16 + 1)
+        .unwrap()
+        .sub(&denom_num.zero_extend(width as u16 + 1).unwrap(), &mut cs)
+        .unwrap();
     let diff_int = Int::from_num(&mut cs, width + 1, &diff_num);
     let diff_ok = diff_int.is_negative();
     let denom_zero = denom_num.equals_zero(&mut cs);

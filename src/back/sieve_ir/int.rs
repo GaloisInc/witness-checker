@@ -3,22 +3,19 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
+use zki_sieve::{Result, Sink};
 
-use zki_sieve::Result;
-
-use std::cmp;
 use num_bigint::BigUint;
 use num_traits::Zero;
+use std::cmp;
 
 use ff::PrimeField;
 
 use super::{
+    boolean::{AllocatedBit, Boolean},
+    ir_builder::IRBuilder,
     num::Num,
-    boolean::{Boolean, AllocatedBit},
-    builder_ext::BuilderExt,
 };
-
-
 
 /// Represents an interpretation of SIZE `Boolean` objects as a
 /// unsigned integer, or two-complement signed integer.
@@ -38,8 +35,7 @@ impl Int {
     }
 
     /// Construct a constant `Int` from a `BigUint`
-    pub fn constant(width: usize, value: BigUint) -> Self
-    {
+    pub fn constant(width: usize, value: BigUint) -> Self {
         let mut bits = Vec::with_capacity(width);
 
         let digits = value.to_u32_digits();
@@ -58,19 +54,16 @@ impl Int {
 
     /// Allocate an `Int` in the constraint system
     pub fn alloc(
-        mut builder: &mut BuilderExt,
+        builder: &mut IRBuilder<impl Sink>,
         width: usize,
         value: Option<BigUint>,
-    ) -> Result<Self>
-    {
+    ) -> Result<Self> {
         let values = match value {
             Some(ref val) => {
                 let mut v = Vec::with_capacity(width);
 
                 let digits = val.to_u32_digits();
                 for i in 0..width {
-                    let idx = i / 32;
-                    let off = i % 32;
                     let digit = digits.get(i / 32).cloned().unwrap_or(0);
                     let set = digit & (1 << (i % 32)) != 0;
                     v.push(Some(set));
@@ -78,16 +71,12 @@ impl Int {
 
                 v
             }
-            None => vec![None; width]
+            None => vec![None; width],
         };
 
-        let bits = values.into_iter()
-            .map(|v| {
-                Ok(Boolean::from(AllocatedBit::alloc(
-                    builder,
-                    v,
-                )?))
-            })
+        let bits = values
+            .into_iter()
+            .map(|v| Ok(Boolean::from(AllocatedBit::alloc(builder, v)?)))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Int {
@@ -97,7 +86,7 @@ impl Int {
     }
 
     pub fn from_num<Scalar: PrimeField>(
-        b: &mut BuilderExt,
+        b: &mut IRBuilder<impl Sink>,
         width: usize,
         num: &Num<Scalar>,
     ) -> Int {
@@ -132,8 +121,7 @@ impl Int {
 
     /// Converts a little-endian byte order representation of bits into a
     /// `Int`.
-    pub fn from_bits(bits: &[Boolean]) -> Self
-    {
+    pub fn from_bits(bits: &[Boolean]) -> Self {
         let new_bits = bits.to_vec();
 
         let mut digits = Some(vec![0_u32; (bits.len() + 31) / 32]);
@@ -143,23 +131,29 @@ impl Int {
             match b {
                 &Boolean::Constant(b) => {
                     if b {
-                        digits.as_mut().map(|ds| { ds[idx] |= 1 << off; });
+                        digits.as_mut().map(|ds| {
+                            ds[idx] |= 1 << off;
+                        });
                     }
                 }
-                &Boolean::Is(ref b) => {
-                    match b.get_value() {
-                        Some(true) => { digits.as_mut().map(|ds| { ds[idx] |= 1 << off; }); }
-                        Some(false) => {}
-                        None => { digits = None }
+                &Boolean::Is(ref b) => match b.get_value() {
+                    Some(true) => {
+                        digits.as_mut().map(|ds| {
+                            ds[idx] |= 1 << off;
+                        });
                     }
-                }
-                &Boolean::Not(ref b) => {
-                    match b.get_value() {
-                        Some(false) => { digits.as_mut().map(|ds| { ds[idx] |= 1 << off; }); }
-                        Some(true) => {}
-                        None => { digits = None }
+                    Some(false) => {}
+                    None => digits = None,
+                },
+                &Boolean::Not(ref b) => match b.get_value() {
+                    Some(false) => {
+                        digits.as_mut().map(|ds| {
+                            ds[idx] |= 1 << off;
+                        });
                     }
-                }
+                    Some(true) => {}
+                    None => digits = None,
+                },
             }
         }
 
@@ -175,11 +169,14 @@ impl Int {
 
         let fill = Boolean::constant(false);
 
-        let new_bits = Some(&fill).into_iter().cycle() // Generate zeros to insert.
+        let new_bits = Some(&fill)
+            .into_iter()
+            .cycle() // Generate zeros to insert.
             .take(by) // Take the least significant zeros.
             .chain(self.bits.iter()) // Append the bits to keep.
             .take(width) // Truncate to SIZE bits.
-            .cloned().collect::<Vec<_>>();
+            .cloned()
+            .collect::<Vec<_>>();
 
         Int {
             bits: new_bits,
@@ -200,14 +197,14 @@ impl Int {
             Boolean::constant(false)
         };
 
-        let new_bits = self.bits
+        let new_bits = self
+            .bits
             .iter() // The bits are least significant first
             .skip(by) // Skip the bits that will be lost during the shift
             .chain(Some(&fill).into_iter().cycle()) // Rest will be zeros
             .take(width) // Only SIZE bits needed!
             .cloned()
             .collect::<Vec<_>>();
-
 
         let value = match self.value.as_ref() {
             Some(v) => {
@@ -229,28 +226,17 @@ impl Int {
     }
 
     /// XOR this `Int` with another `Int`
-    pub fn xor(
-        &self,
-        mut builder: &mut BuilderExt,
-        other: &Self,
-    ) -> Result<Self>
-    {
+    pub fn xor(&self, builder: &mut IRBuilder<impl Sink>, other: &Self) -> Result<Self> {
         let new_value = match (self.value.as_ref(), other.value.as_ref()) {
-            (Some(a), Some(b)) => {
-                Some(a ^ b)
-            }
-            _ => None
+            (Some(a), Some(b)) => Some(a ^ b),
+            _ => None,
         };
 
-        let bits = self.bits.iter()
+        let bits = self
+            .bits
+            .iter()
             .zip(other.bits.iter())
-            .map(|(a, b)| {
-                Boolean::xor(
-                    builder,
-                    a,
-                    b,
-                )
-            })
+            .map(|(a, b)| Boolean::xor(builder, a, b))
             .collect::<Result<_>>()?;
 
         Ok(Int {

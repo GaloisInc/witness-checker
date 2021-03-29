@@ -1,10 +1,6 @@
-use super::{
-    backend::Num,
-    builder_ext::BuilderExt,
-    int::Int,
-    boolean::Boolean,
-};
+use zki_sieve::Sink;
 
+use super::{backend::Num, boolean::Boolean, ir_builder::IRBuilder, int::Int};
 
 pub struct Representer {
     pub wire_reprs: Vec<WireRepr>,
@@ -25,7 +21,6 @@ impl Representer {
     }
 }
 
-
 // ReprId is a reference to a wire representation.
 #[derive(Copy, Clone, PartialEq)]
 pub struct ReprId(pub usize);
@@ -39,13 +34,19 @@ pub struct WireRepr {
 
 impl From<Num> for WireRepr {
     fn from(num: Num) -> Self {
-        WireRepr { num: Some(num), ..Self::default() }
+        WireRepr {
+            num: Some(num),
+            ..Self::default()
+        }
     }
 }
 
 impl From<Int> for WireRepr {
     fn from(int: Int) -> Self {
-        WireRepr { int: Some(int), ..Self::default() }
+        WireRepr {
+            int: Some(int),
+            ..Self::default()
+        }
     }
 }
 
@@ -56,7 +57,7 @@ impl From<Boolean> for WireRepr {
 }
 
 impl WireRepr {
-    pub fn as_num(&mut self, b: &mut BuilderExt) -> Num {
+    pub fn as_num(&mut self, b: &mut IRBuilder<impl Sink>) -> Num {
         match self.num {
             Some(ref num) => (*num).clone(),
 
@@ -76,7 +77,7 @@ impl WireRepr {
     }
 
     /// Get `self` as a "truncated" num (as by `Num::truncate`), with `real_bits == valid_bits`.
-    pub fn as_num_trunc(&mut self, b: &mut BuilderExt) -> Num {
+    pub fn as_num_trunc(&mut self, b: &mut IRBuilder<impl Sink>) -> Num {
         let mut num = self.as_num(b);
         if num.valid_bits != num.real_bits {
             num = num.truncate(b);
@@ -85,7 +86,7 @@ impl WireRepr {
         num
     }
 
-    pub fn as_int(&mut self, b: &mut BuilderExt, width: usize) -> Int {
+    pub fn as_int(&mut self, b: &mut IRBuilder<impl Sink>, width: usize) -> Int {
         match &self.int {
             Some(u) => {
                 // Currently we don't support treating the same `WireRepr` as multiple widths of
@@ -110,7 +111,7 @@ impl WireRepr {
         }
     }
 
-    pub fn as_boolean(&mut self, b: &mut BuilderExt) -> Boolean {
+    pub fn as_boolean(&mut self, b: &mut IRBuilder<impl Sink>) -> Boolean {
         let i = self.as_int(b, 1);
         assert!(i.bits.len() == 1);
         i.bits[0].clone()

@@ -1,9 +1,9 @@
 // Inspired from bellman::gadgets::boolean
 
-use ff::PrimeField;
+use zki_sieve::Sink;
 use zki_sieve::{Result, WireId};
 
-use crate::back::sieve_ir::builder_ext::BuilderExt;
+use crate::back::sieve_ir::ir_builder::IRBuilder;
 
 /// Represents a variable in the constraint system which is guaranteed
 /// to be either zero or one.
@@ -22,7 +22,7 @@ impl AllocatedBit {
         self.wire
     }
 
-    pub fn alloc(b: &mut BuilderExt, value: Option<bool>) -> Result<Self> {
+    pub fn alloc(b: &mut IRBuilder<impl Sink>, value: Option<bool>) -> Result<Self> {
         let field_value = match value {
             Some(false) => Some(vec![0]),
             Some(true) => Some(vec![1]),
@@ -39,7 +39,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `NOT a`.
-    pub fn not(b: &mut BuilderExt, a: &Self) -> Self {
+    pub fn not(b: &mut IRBuilder<impl Sink>, a: &Self) -> Self {
         let value = match a.value {
             Some(a_val) => Some(!a_val), // prover mode
             _ => None,                   // verifier mode
@@ -58,7 +58,7 @@ impl AllocatedBit {
 
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn xor(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
+    pub fn xor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
             _ => None,                                         // verifier mode
@@ -84,7 +84,7 @@ impl AllocatedBit {
 
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn and(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
+    pub fn and(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
             _ => None,                                         // verifier mode
@@ -107,7 +107,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `a AND (NOT b)`.
-    pub fn and_not(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
+    pub fn and_not(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
             _ => None,                                          // verifier mode
@@ -131,7 +131,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `(NOT a) AND (NOT b)`.
-    pub fn nor(builder: &mut BuilderExt, a: &Self, b: &Self) -> Result<Self> {
+    pub fn nor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
         let result_value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
             _ => None,                                           // verifier mode
@@ -156,81 +156,6 @@ impl AllocatedBit {
     }
 }
 
-pub fn u64_into_boolean_vec_le(
-    builder: &mut BuilderExt,
-    value: Option<u64>,
-) -> Result<Vec<Boolean>> {
-    let values = match value {
-        Some(ref value) => {
-            let mut tmp = Vec::with_capacity(64);
-
-            for i in 0..64 {
-                tmp.push(Some(*value >> i & 1 == 1));
-            }
-
-            tmp
-        }
-        None => vec![None; 64],
-    };
-
-    let bits = values
-        .into_iter()
-        .map(|b| Ok(Boolean::from(AllocatedBit::alloc(builder, b)?)))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(bits)
-}
-
-pub fn field_into_boolean_vec_le<Scalar: PrimeField>(
-    builder: &mut BuilderExt,
-    value: Option<Scalar>,
-) -> Result<Vec<Boolean>> {
-    let v = field_into_allocated_bits_le::<Scalar>(builder, value)?;
-
-    Ok(v.into_iter().map(Boolean::from).collect())
-}
-
-pub fn field_into_allocated_bits_le<Scalar: PrimeField>(
-    builder: &mut BuilderExt,
-    value: Option<Scalar>,
-) -> Result<Vec<AllocatedBit>> {
-    // Deconstruct in big-endian bit order
-    let values = match value {
-        Some(ref value) => {
-            let field_char = Scalar::char_le_bits();
-            let mut field_char = field_char.into_iter().rev();
-
-            let mut tmp = Vec::with_capacity(Scalar::NUM_BITS as usize);
-
-            let mut found_one = false;
-            for b in value.to_le_bits().into_iter().rev().cloned() {
-                // Skip leading bits
-                found_one |= field_char.next().unwrap();
-                if !found_one {
-                    continue;
-                }
-
-                tmp.push(Some(b));
-            }
-
-            assert_eq!(tmp.len(), Scalar::NUM_BITS as usize);
-
-            tmp
-        }
-        None => vec![None; Scalar::NUM_BITS as usize],
-    };
-
-    // Allocate in little-endian order
-    let bits = values
-        .into_iter()
-        .rev()
-        .enumerate()
-        .map(|(i, b)| AllocatedBit::alloc(builder, b))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(bits)
-}
-
 /// This is a boolean value which may be either a constant or
 /// an interpretation of an `AllocatedBit`.
 #[derive(Clone)]
@@ -244,10 +169,10 @@ pub enum Boolean {
 }
 
 impl Boolean {
-    pub fn wire(&self, b: &BuilderExt) -> WireId {
+    pub fn wire(&self, b: &IRBuilder<impl Sink>) -> WireId {
         match self {
             Boolean::Is(bit) => bit.wire,
-            Boolean::Not(bit) => unimplemented!("Negated view of a bit"),
+            Boolean::Not(_bit) => unimplemented!("Negated view of a bit"),
             Boolean::Constant(false) => b.zero,
             Boolean::Constant(true) => b.one,
         }
@@ -260,7 +185,11 @@ impl Boolean {
         }
     }
 
-    pub fn enforce_equal<'l>(builder: &mut BuilderExt, a: &'l Self, b: &'l Self) -> Result<()> {
+    pub fn enforce_equal<'l>(
+        builder: &mut IRBuilder<impl Sink>,
+        a: &'l Self,
+        b: &'l Self,
+    ) -> Result<()> {
         match (a, b) {
             (&Boolean::Constant(a), &Boolean::Constant(b)) => {
                 if a == b {
@@ -344,7 +273,7 @@ impl Boolean {
     }
 
     /// Perform XOR over two boolean operands
-    pub fn xor<'a>(builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self> {
+    pub fn xor<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Result<Self> {
         match (a, b) {
             (&Boolean::Constant(false), x) | (x, &Boolean::Constant(false)) => Ok(x.clone()),
             (&Boolean::Constant(true), x) | (x, &Boolean::Constant(true)) => Ok(x.not()),
@@ -362,7 +291,7 @@ impl Boolean {
     }
 
     /// Perform AND over two boolean operands
-    pub fn and<'a>(builder: &mut BuilderExt, a: &'a Self, b: &'a Self) -> Result<Self> {
+    pub fn and<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Result<Self> {
         match (a, b) {
             // false AND x is always false
             (&Boolean::Constant(false), _) | (_, &Boolean::Constant(false)) => {
@@ -396,38 +325,108 @@ impl From<AllocatedBit> for Boolean {
 #[cfg(test)]
 mod test {
 
-    use super::{field_into_allocated_bits_le, u64_into_boolean_vec_le, AllocatedBit, Boolean};
+    use super::{AllocatedBit, Boolean};
 
-    use zki_sieve::producers::builder::{new_example_builder, Builder};
     use zki_sieve::producers::examples::*;
+    use zki_sieve::producers::sink::MemorySink;
     use zki_sieve::{consumers::evaluator::Evaluator, Source};
-    use zki_sieve::{Message, Relation};
+    use zki_sieve::{Result, Sink};
 
-    use crate::back::sieve_ir::builder_ext::BuilderExt;
+    use crate::back::sieve_ir::ir_builder::IRBuilder;
     use crate::back::sieve_ir::field::{encode_scalar, QuarkScalar};
-    use crate::back::sieve_ir::num::{scalar_from_biguint, scalar_from_unsigned};
+
     use ff::{Field, PrimeField};
     use num_bigint::BigUint;
-    use num_traits::{Num, One, Zero};
+    use num_traits::{One, Zero};
     use std::ops::Neg;
 
-    fn new_builder() -> BuilderExt {
-        BuilderExt::new::<QuarkScalar>(new_example_builder())
+    fn new_builder() -> IRBuilder<MemorySink> {
+        IRBuilder::new::<QuarkScalar>(MemorySink::default())
     }
 
-    fn evaluate(b: BuilderExt) -> Evaluator {
+    fn evaluate(b: IRBuilder<MemorySink>) -> Evaluator {
         let sink = b.finish();
-        let source = Source::from_buffers(vec![
-            sink.instance_buffer,
-            sink.witness_buffer,
-            sink.relation_buffer,
-        ]);
+        let source: Source = sink.into();
 
         let mut evaluator = Evaluator::default();
         source
             .iter_messages()
             .for_each(|msg| evaluator.ingest_message(&msg.unwrap()));
         evaluator
+    }
+
+    pub fn u64_into_boolean_vec_le(
+        builder: &mut IRBuilder<impl Sink>,
+        value: Option<u64>,
+    ) -> Result<Vec<Boolean>> {
+        let values = match value {
+            Some(ref value) => {
+                let mut tmp = Vec::with_capacity(64);
+
+                for i in 0..64 {
+                    tmp.push(Some(*value >> i & 1 == 1));
+                }
+
+                tmp
+            }
+            None => vec![None; 64],
+        };
+
+        let bits = values
+            .into_iter()
+            .map(|b| Ok(Boolean::from(AllocatedBit::alloc(builder, b)?)))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(bits)
+    }
+
+    pub fn _field_into_boolean_vec_le<Scalar: PrimeField, S: Sink>(
+        builder: &mut IRBuilder<S>,
+        value: Option<Scalar>,
+    ) -> Result<Vec<Boolean>> {
+        let v = field_into_allocated_bits_le::<Scalar, S>(builder, value)?;
+
+        Ok(v.into_iter().map(Boolean::from).collect())
+    }
+
+    pub fn field_into_allocated_bits_le<Scalar: PrimeField, S: Sink>(
+        builder: &mut IRBuilder<S>,
+        value: Option<Scalar>,
+    ) -> Result<Vec<AllocatedBit>> {
+        // Deconstruct in big-endian bit order
+        let values = match value {
+            Some(ref value) => {
+                let field_char = Scalar::char_le_bits();
+                let mut field_char = field_char.into_iter().rev();
+
+                let mut tmp = Vec::with_capacity(Scalar::NUM_BITS as usize);
+
+                let mut found_one = false;
+                for b in value.to_le_bits().into_iter().rev().cloned() {
+                    // Skip leading bits
+                    found_one |= field_char.next().unwrap();
+                    if !found_one {
+                        continue;
+                    }
+
+                    tmp.push(Some(b));
+                }
+
+                assert_eq!(tmp.len(), Scalar::NUM_BITS as usize);
+
+                tmp
+            }
+            None => vec![None; Scalar::NUM_BITS as usize],
+        };
+
+        // Allocate in little-endian order
+        let bits = values
+            .into_iter()
+            .rev()
+            .map(|b| AllocatedBit::alloc(builder, b))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(bits)
     }
 
     macro_rules! initialize_everything {

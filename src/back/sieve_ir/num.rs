@@ -3,18 +3,17 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
-use std::cmp;
-use num_bigint::BigUint;
 use ff::PrimeField;
+use num_bigint::BigUint;
+use std::cmp;
 
-use zki_sieve::WireId;
 use super::{
-    int::Int,
     boolean::{AllocatedBit, Boolean},
-    field::encode_scalar,
-    builder_ext::BuilderExt,
+    ir_builder::IRBuilder,
+    field::{encode_scalar, scalar_from_biguint},
+    int::Int,
 };
-
+use zki_sieve::{Sink, WireId};
 
 /// A number, represented as a single field element.
 #[derive(Clone)]
@@ -33,11 +32,7 @@ pub struct Num<Scalar: PrimeField> {
 }
 
 impl<Scalar: PrimeField> Num<Scalar> {
-    pub fn from_biguint(
-        b: &mut BuilderExt,
-        width: u16,
-        value: &BigUint,
-    ) -> Num<Scalar> {
+    pub fn from_biguint(b: &mut IRBuilder<impl Sink>, width: u16, value: &BigUint) -> Num<Scalar> {
         let element: Scalar = scalar_from_biguint(value).unwrap();
         let zki_wire = b.new_constant(encode_scalar(&element));
 
@@ -49,10 +44,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         }
     }
 
-    pub fn from_int(
-        builder: &mut BuilderExt,
-        int: &Int,
-    ) -> Num<Scalar> {
+    pub fn from_int(builder: &mut IRBuilder<impl Sink>, int: &Int) -> Num<Scalar> {
         let value = int.value.as_ref().map(|x| scalar_from_biguint(x).unwrap());
         let zki_wire = Self::compose_bits(builder, &int.bits);
         let width = int.width() as u16;
@@ -65,27 +57,24 @@ impl<Scalar: PrimeField> Num<Scalar> {
         }
     }
 
-    fn compose_bits(b: &mut BuilderExt, bits: &[Boolean]) -> WireId {
+    fn compose_bits(b: &mut IRBuilder<impl Sink>, bits: &[Boolean]) -> WireId {
         if bits.len() == 0 {
             return b.zero;
         }
 
-        bits.iter().enumerate().skip(1).fold(
-            bits[0].wire(b),
-            |sum, (exponent, bit)| {
+        bits.iter()
+            .enumerate()
+            .skip(1)
+            .fold(bits[0].wire(b), |sum, (exponent, bit)| {
                 let coeff = b.power_of_two(exponent);
                 let bit_wire = bit.wire(b);
                 let term = b.mul(bit_wire, coeff);
                 b.add(sum, term)
-            },
-        )
+            })
     }
 
     /// Decompose this number into bits, least-significant first.  Returns `self.real_bits` bits.
-    pub fn to_bits(
-        &self,
-        b: &mut BuilderExt,
-    ) -> Vec<Boolean> {
+    pub fn to_bits(&self, b: &mut IRBuilder<impl Sink>) -> Vec<Boolean> {
         let n_bits = self.real_bits as usize;
 
         let values: Vec<Option<bool>> = match &self.value {
@@ -93,12 +82,13 @@ impl<Scalar: PrimeField> Num<Scalar> {
                 let bits = val.to_le_bits();
                 bits.iter().take(n_bits).map(|b| Some(*b)).collect()
             }
-            None => vec![None; n_bits]
+            None => vec![None; n_bits],
         };
 
-        let bits: Vec<Boolean> = values.into_iter().map(|value|
-            Boolean::from(AllocatedBit::alloc(b, value).unwrap())
-        ).collect();
+        let bits: Vec<Boolean> = values
+            .into_iter()
+            .map(|value| Boolean::from(AllocatedBit::alloc(b, value).unwrap()))
+            .collect();
 
         // Enforce that the bit representation is equivalent to this Num.
         let recomposed_wire = Self::compose_bits(b, &bits);
@@ -114,13 +104,10 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn add_assign(
         mut self,
         other: &Self,
-        builder: &mut BuilderExt,
+        builder: &mut IRBuilder<impl Sink>,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
-            (
-                Some(ref mut self_val),
-                Some(ref other_val)
-            ) => self_val.add_assign(other_val),
+            (Some(ref mut self_val), Some(ref other_val)) => self_val.add_assign(other_val),
             _ => {}
         }
 
@@ -130,7 +117,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
                 "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
-                self.real_bits, other.real_bits, Scalar::CAPACITY,
+                self.real_bits,
+                other.real_bits,
+                Scalar::CAPACITY,
             ));
         }
         self.real_bits = new_real_bits;
@@ -138,11 +127,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-    pub fn sub(
-        mut self,
-        other: &Self,
-        b: &mut BuilderExt,
-    ) -> Result<Self, String> {
+    pub fn sub(mut self, other: &Self, b: &mut IRBuilder<impl Sink>) -> Result<Self, String> {
         // `a - b` might underflow in the field, producing garbage.  We compute `a + (2^N - b)`
         // instead, with `N` large enough that `2^N - b` can't underflow.  This makes `a.sub(b)`
         // essentially equivalent to `a.add(b.neg())`, except it saves a bit.  `2^N - b` is at most
@@ -156,10 +141,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let max_value: Scalar = scalar_from_biguint(&(BigUint::from(1_u8) << other.real_bits))?;
 
         match (&mut self.value, &other.value) {
-            (
-                Some(ref mut self_val),
-                Some(ref other_val)
-            ) => self_val.add_assign(max_value - other_val),
+            (Some(ref mut self_val), Some(ref other_val)) => {
+                self_val.add_assign(max_value - other_val)
+            }
             _ => {}
         }
 
@@ -173,7 +157,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
                 "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
-                self.real_bits, other.real_bits, Scalar::CAPACITY,
+                self.real_bits,
+                other.real_bits,
+                Scalar::CAPACITY,
             ));
         }
         self.real_bits = new_real_bits;
@@ -182,16 +168,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-    pub fn mul(
-        mut self,
-        other: &Self,
-        b: &mut BuilderExt,
-    ) -> Result<Self, String> {
+    pub fn mul(mut self, other: &Self, b: &mut IRBuilder<impl Sink>) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
-            (
-                Some(ref mut self_val),
-                Some(ref other_val)
-            ) => self_val.mul_assign(other_val),
+            (Some(ref mut self_val), Some(ref other_val)) => self_val.mul_assign(other_val),
             _ => {}
         }
 
@@ -199,10 +178,18 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         fn mul_bits(b1: u16, b2: u16) -> u16 {
             // If `bits == 0`, then the value must be zero, so the product is also zero.
-            if b1 == 0 || b2 == 0 { 0 }
+            if b1 == 0 || b2 == 0 {
+                0
+            }
             // If `bits == 1`, then the value must be 0 or 1.  The product can either be zero or
             // the value of the other input.
-            else if b1 == 1 { b2 } else if b2 == 1 { b1 } else { b1 + b2 }
+            else if b1 == 1 {
+                b2
+            } else if b2 == 1 {
+                b1
+            } else {
+                b1 + b2
+            }
         }
         let new_real_bits = mul_bits(self.real_bits, other.real_bits);
         // NB: This is the one case where `real_bits` is allowed to exactly equal the number of
@@ -214,7 +201,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::NUM_BITS as u16 {
             return Err(format!(
                 "product of {} bits and {} bits doesn't fit in a field element ({} bits)",
-                self.real_bits, other.real_bits, Scalar::NUM_BITS,
+                self.real_bits,
+                other.real_bits,
+                Scalar::NUM_BITS,
             ));
         }
         self.real_bits = new_real_bits;
@@ -225,13 +214,11 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-    pub fn neg(
-        mut self,
-        b: &mut BuilderExt,
-    ) -> Result<Self, String> {
+    pub fn neg(mut self, b: &mut IRBuilder<impl Sink>) -> Result<Self, String> {
         // Computing `0 - a` in the field could underflow, producing garbage.  We instead compute
         // `2^N - a`, which never underflows, but does increase `real_bits` by one.
-        let max_value: Scalar = scalar_from_biguint::<Scalar>(&(BigUint::from(1_u8) << self.real_bits))?;
+        let max_value: Scalar =
+            scalar_from_biguint::<Scalar>(&(BigUint::from(1_u8) << self.real_bits))?;
 
         self.value = match self.value {
             Some(val) => Some(max_value - val),
@@ -247,7 +234,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
                 "negation of {} bits doesn't fit in a field element ({} bits)",
-                self.real_bits, Scalar::CAPACITY,
+                self.real_bits,
+                Scalar::CAPACITY,
             ));
         }
         self.real_bits = new_real_bits;
@@ -260,7 +248,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         mut self,
         else_: &Self,
         cond: &Self,
-        b: &mut BuilderExt,
+        b: &mut IRBuilder<impl Sink>,
     ) -> Result<Self, String> {
         if cond.real_bits == 0 || cond.valid_bits == 0 {
             // This probably won't ever happen, but if it does, we know the logical value of
@@ -298,14 +286,10 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-
     /// Truncate `self` modulo `2^valid_bits`, producing a new `Num` with `real_bits ==
     /// valid_bits`.
     // TODO: simple take the right wire in the bit recomposition (like `compose_bits`).
-    pub fn truncate(
-        mut self,
-        b: &mut BuilderExt,
-    ) -> Self {
+    pub fn truncate(self, b: &mut IRBuilder<impl Sink>) -> Self {
         if self.real_bits == self.valid_bits {
             return self;
         }
@@ -314,10 +298,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Self::from_int(b, &int)
     }
 
-    pub fn equals_zero(
-        &self,
-        b: &mut BuilderExt,
-    ) -> Boolean {
+    pub fn equals_zero(&self, b: &mut IRBuilder<impl Sink>) -> Boolean {
         let is_zero_bool = {
             let value = self.value.map(|val| val.is_zero());
             Boolean::from(AllocatedBit::alloc(b, value).unwrap())
@@ -338,10 +319,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // We don't prove that it is necessarily the inverse, but we need it to
         // satisfy the constraint below in the case where (is_zero == 0).
 
-        let inverse_value = self.value.map(|val|
-            encode_scalar(
-                &val.invert()
-                    .unwrap_or_else(|| Scalar::zero())));
+        let inverse_value = self
+            .value
+            .map(|val| encode_scalar(&val.invert().unwrap_or_else(|| Scalar::zero())));
 
         let inverse = b.new_witness(inverse_value);
 
@@ -375,16 +355,4 @@ impl<Scalar: PrimeField> Num<Scalar> {
         extended.valid_bits = new_width;
         Ok(extended)
     }
-}
-
-pub fn scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Result<Scalar, String> {
-    scalar_from_biguint(&BigUint::from(val))
-}
-
-pub fn scalar_from_biguint<Scalar: PrimeField>(val: &BigUint) -> Result<Scalar, String> {
-    let bytes = val.to_bytes_le();
-    let mut repr: Scalar::Repr = Default::default();
-    repr.as_mut()[..bytes.len()].copy_from_slice(&bytes);
-    Scalar::from_repr(repr)
-        .ok_or_else(|| format!("uint {} out of range for Scalar", val))
 }

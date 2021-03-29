@@ -3,22 +3,18 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
-use std::cmp;
-use std::ops::{Add, Sub, Mul, AddAssign};
 use num_bigint::BigUint;
+use std::cmp;
+use std::ops::{Add, AddAssign, Mul, Sub};
 
+use super::{bit_width::BitWidth, int::Int};
 use zkinterface_bellman::{
-    bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
-    pairing::Engine,
+    bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},
     ff::{Field, PrimeField},
+    pairing::Engine,
     zkif_cs::ZkifCS,
 };
-use super::{
-    bit_width::BitWidth,
-    int::Int,
-};
-
 
 /// A number, represented as a single field element.
 #[derive(Clone)]
@@ -37,10 +33,7 @@ pub struct Num<Scalar: PrimeField> {
 }
 
 impl<Scalar: PrimeField> Num<Scalar> {
-    pub fn from_biguint(
-        width: u16,
-        value: &BigUint,
-    ) -> Num<Scalar> {
+    pub fn from_biguint(width: u16, value: &BigUint) -> Num<Scalar> {
         let element: Scalar = scalar_from_biguint(value).unwrap();
         Num {
             value: Some(element.clone()),
@@ -54,11 +47,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         mut cs: CS,
         width: u16,
         value: Option<BigUint>,
-    ) -> Result<Self, SynthesisError>
-    {
+    ) -> Result<Self, SynthesisError> {
         let value = value.map(|val| scalar_from_biguint(&val).unwrap());
-        let var = cs.alloc(|| "num", ||
-            value.ok_or(SynthesisError::AssignmentMissing))?;
+        let var = cs.alloc(|| "num", || value.ok_or(SynthesisError::AssignmentMissing))?;
         Ok(Num {
             value,
             lc: LinearCombination::zero() + var,
@@ -67,9 +58,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         })
     }
 
-    pub fn from_int<CS: ConstraintSystem<Scalar>>(
-        int: &Int,
-    ) -> Num<Scalar> {
+    pub fn from_int<CS: ConstraintSystem<Scalar>>(int: &Int) -> Num<Scalar> {
         let value = int.value.as_ref().map(|x| scalar_from_biguint(x).unwrap());
         let lc = Self::lc_from_bits::<CS>(&int.bits);
         let width = int.width() as u16;
@@ -83,8 +72,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
     }
 
     pub fn lc_from_bits<CS: ConstraintSystem<Scalar>>(
-        bits: &[Boolean]) -> LinearCombination<Scalar>
-    {
+        bits: &[Boolean],
+    ) -> LinearCombination<Scalar> {
         let mut lc = LinearCombination::zero();
         let one = CS::one();
         let mut coeff = Scalar::one();
@@ -96,10 +85,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     }
 
     /// Decompose this number into bits, least-significant first.  Returns `self.real_bits` bits.
-    pub fn alloc_bits<CS: ConstraintSystem<Scalar>>(
-        &self,
-        mut cs: CS,
-    ) -> Vec<Boolean> {
+    pub fn alloc_bits<CS: ConstraintSystem<Scalar>>(&self, mut cs: CS) -> Vec<Boolean> {
         let n_bits = self.real_bits as usize;
 
         let values: Vec<Option<bool>> = match &self.value {
@@ -107,17 +93,19 @@ impl<Scalar: PrimeField> Num<Scalar> {
                 let bits = val.to_le_bits();
                 bits.iter().take(n_bits).map(|b| Some(*b)).collect()
             }
-            None => vec![None; n_bits]
+            None => vec![None; n_bits],
         };
 
-        let bits: Vec<Boolean> = values.into_iter()
+        let bits: Vec<Boolean> = values
+            .into_iter()
             .enumerate()
-            .map(|(i, val)|
-                Boolean::from(AllocatedBit::alloc(
-                    cs.namespace(|| format!("allocated bit {}", i)),
-                    val,
-                ).unwrap())
-            ).collect();
+            .map(|(i, val)| {
+                Boolean::from(
+                    AllocatedBit::alloc(cs.namespace(|| format!("allocated bit {}", i)), val)
+                        .unwrap(),
+                )
+            })
+            .collect();
 
         let lc = Self::lc_from_bits::<CS>(&bits);
 
@@ -142,10 +130,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         _cs: &mut impl ConstraintSystem<Scalar>,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
-            (
-                Some(ref mut self_val),
-                Some(ref other_val)
-            ) => self_val.add_assign(other_val),
+            (Some(ref mut self_val), Some(ref other_val)) => self_val.add_assign(other_val),
             _ => {}
         }
 
@@ -154,7 +139,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
                 "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
-                self.real_bits, other.real_bits, Scalar::CAPACITY,
+                self.real_bits,
+                other.real_bits,
+                Scalar::CAPACITY,
             ));
         }
         self.real_bits = new_real_bits;
@@ -180,10 +167,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << other.real_bits))?;
 
         match (&mut self.value, &other.value) {
-            (
-                Some(ref mut self_val),
-                Some(ref other_val)
-            ) => self_val.add_assign(max_value - other_val),
+            (Some(ref mut self_val), Some(ref other_val)) => {
+                self_val.add_assign(max_value - other_val)
+            }
             _ => {}
         }
 
@@ -193,7 +179,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
                 "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
-                self.real_bits, other.real_bits, Scalar::CAPACITY,
+                self.real_bits,
+                other.real_bits,
+                Scalar::CAPACITY,
             ));
         }
         self.real_bits = new_real_bits;
@@ -207,17 +195,16 @@ impl<Scalar: PrimeField> Num<Scalar> {
         cs: &mut impl ConstraintSystem<Scalar>,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
-            (
-                Some(ref mut self_val),
-                Some(ref other_val)
-            ) => self_val.mul_assign(other_val),
+            (Some(ref mut self_val), Some(ref other_val)) => self_val.mul_assign(other_val),
             _ => {}
         }
 
-        let product = cs.alloc(
-            || "product",
-            || self.value.ok_or(SynthesisError::AssignmentMissing),
-        ).unwrap();
+        let product = cs
+            .alloc(
+                || "product",
+                || self.value.ok_or(SynthesisError::AssignmentMissing),
+            )
+            .unwrap();
         let product_lc = LinearCombination::<Scalar>::zero() + product;
 
         cs.enforce(
@@ -231,12 +218,18 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         fn mul_bits(b1: u16, b2: u16) -> u16 {
             // If `bits == 0`, then the value must be zero, so the product is also zero.
-            if b1 == 0 || b2 == 0 { 0 }
+            if b1 == 0 || b2 == 0 {
+                0
+            }
             // If `bits == 1`, then the value must be 0 or 1.  The product can either be zero or
             // the value of the other input.
-            else if b1 == 1 { b2 }
-            else if b2 == 1 { b1 }
-            else { b1 + b2 }
+            else if b1 == 1 {
+                b2
+            } else if b2 == 1 {
+                b1
+            } else {
+                b1 + b2
+            }
         }
         let new_real_bits = mul_bits(self.real_bits, other.real_bits);
         // NB: This is the one case where `real_bits` is allowed to exactly equal the number of
@@ -248,7 +241,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::NUM_BITS as u16 {
             return Err(format!(
                 "product of {} bits and {} bits doesn't fit in a field element ({} bits)",
-                self.real_bits, other.real_bits, Scalar::NUM_BITS,
+                self.real_bits,
+                other.real_bits,
+                Scalar::NUM_BITS,
             ));
         }
         self.real_bits = new_real_bits;
@@ -259,10 +254,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-    pub fn neg(
-        mut self,
-        _cs: &mut impl ConstraintSystem<Scalar>,
-    ) -> Result<Self, String> {
+    pub fn neg(mut self, _cs: &mut impl ConstraintSystem<Scalar>) -> Result<Self, String> {
         // Computing `0 - a` in the field could underflow, producing garbage.  We instead compute
         // `2^N - a`, which never underflows, but does increase `real_bits` by one.
         let max_value = scalar_from_biguint(&(BigUint::from(1_u8) << self.real_bits))?;
@@ -278,7 +270,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
                 "negation of {} bits doesn't fit in a field element ({} bits)",
-                self.real_bits, Scalar::CAPACITY,
+                self.real_bits,
+                Scalar::CAPACITY,
             ));
         }
         self.real_bits = new_real_bits;
@@ -313,10 +306,12 @@ impl<Scalar: PrimeField> Num<Scalar> {
             None => None,
         };
 
-        let out_var = cs.alloc(
-            || "mux",
-            || self.value.ok_or(SynthesisError::AssignmentMissing),
-        ).unwrap();
+        let out_var = cs
+            .alloc(
+                || "mux",
+                || self.value.ok_or(SynthesisError::AssignmentMissing),
+            )
+            .unwrap();
         let out_lc = LinearCombination::<Scalar>::zero() + out_var;
 
         // cond * (then - else) + else = out
@@ -339,13 +334,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-
     /// Truncate `self` modulo `2^valid_bits`, producing a new `Num` with `real_bits ==
     /// valid_bits`.
-    pub fn truncate<CS: ConstraintSystem<Scalar>>(
-        mut self,
-        cs: &mut CS,
-    ) -> Self {
+    pub fn truncate<CS: ConstraintSystem<Scalar>>(mut self, cs: &mut CS) -> Self {
         if self.real_bits == self.valid_bits {
             return self;
         }
@@ -354,14 +345,10 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Self::from_int::<CS>(&int)
     }
 
-    pub fn equals_zero<CS: ConstraintSystem<Scalar>>(
-        &self,
-        cs: &mut CS,
-    ) -> Boolean {
+    pub fn equals_zero<CS: ConstraintSystem<Scalar>>(&self, cs: &mut CS) -> Boolean {
         let is_zero = {
             let value = self.value.map(|val| val.is_zero());
-            Boolean::from(AllocatedBit::alloc::<Scalar, &mut CS>(
-                cs, value).unwrap())
+            Boolean::from(AllocatedBit::alloc::<Scalar, &mut CS>(cs, value).unwrap())
         };
         let is_zero_lc = boolean_lc::<Scalar, CS>(&is_zero);
 
@@ -372,13 +359,18 @@ impl<Scalar: PrimeField> Num<Scalar> {
             |lc| lc,
         );
 
-        let self_inv = cs.alloc(
-            || "inv",
-            || Ok(
-                self.value.unwrap().invert()
-                    .unwrap_or_else(|| Scalar::zero())
-            ),
-        ).unwrap();
+        let self_inv = cs
+            .alloc(
+                || "inv",
+                || {
+                    Ok(self
+                        .value
+                        .unwrap()
+                        .invert()
+                        .unwrap_or_else(|| Scalar::zero()))
+                },
+            )
+            .unwrap();
         cs.enforce(
             || "self=0 => eq=1",
             |lc| lc + &self.lc,
@@ -411,15 +403,13 @@ impl<Scalar: PrimeField> Num<Scalar> {
     }
 }
 
-
 pub fn boolean_lc<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     bool: &Boolean,
 ) -> LinearCombination<Scalar> {
     bool.lc(CS::one(), Scalar::one())
 }
 
-
-pub fn scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Result<Scalar, String> {
+pub fn _scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Result<Scalar, String> {
     scalar_from_biguint(&BigUint::from(val))
 }
 
@@ -427,6 +417,5 @@ pub fn scalar_from_biguint<Scalar: PrimeField>(val: &BigUint) -> Result<Scalar, 
     let bytes = val.to_bytes_le();
     let mut repr: Scalar::Repr = Default::default();
     repr.as_mut()[..bytes.len()].copy_from_slice(&bytes);
-    Scalar::from_repr(repr)
-        .ok_or_else(|| format!("uint {} out of range for Scalar", val))
+    Scalar::from_repr(repr).ok_or_else(|| format!("uint {} out of range for Scalar", val))
 }

@@ -1,10 +1,7 @@
-use std::ops::{Add, Sub, Mul};
+use crate::back::sieve_ir::{boolean::Boolean, int::Int};
+use num_bigint::{BigInt, BigUint, Sign};
 use std::cmp::max;
-use num_bigint::{BigUint, BigInt, Sign};
-use crate::back::sieve_ir::{
-    int::Int,
-    boolean::Boolean,
-};
+use std::ops::{Add, Mul, Sub};
 
 #[derive(Copy, Clone, Debug)]
 pub enum BitWidth {
@@ -20,7 +17,7 @@ impl BitWidth {
     }
 
     /// Whether this bit width would fit into a bit representation.
-    pub fn fits_into(self, bit_capacity: usize) -> bool {
+    pub fn _fits_into(self, bit_capacity: usize) -> bool {
         match self {
             Unknown => false,
             Max(w, false) => w <= bit_capacity,
@@ -84,9 +81,7 @@ impl Add<Self> for BitWidth {
             (Max(_, _), Max(0, _)) => self,
             (Max(0, _), Max(_, _)) => other,
             // x + y = add one bit, propagate signed-ness
-            (Max(w1, s1), Max(w2, s2)) => Max(
-                max(w1, w2) + 1,
-                s1 || s2),
+            (Max(w1, s1), Max(w2, s2)) => Max(max(w1, w2) + 1, s1 || s2),
             _ => Unknown,
         }
     }
@@ -102,9 +97,7 @@ impl Sub<Self> for BitWidth {
             // 0 - x = x, always signed.
             (Max(0, _), Max(w, _)) => Max(w, true),
             // x - y = add one bit, always signed.
-            (Max(w1, _), Max(w2, _)) => Max(
-                max(w1, w2) + 1,
-                true),
+            (Max(w1, _), Max(w2, _)) => Max(max(w1, w2) + 1, true),
             _ => Unknown,
         }
     }
@@ -116,14 +109,10 @@ impl Mul<Self> for BitWidth {
     fn mul(self, other: Self) -> Self {
         match (self, other) {
             // x * 1 = same width, propagate signed-ness.
-            (Max(w, s1), Max(1, s2)) => Max(
-                w, s1 || s2),
-            (Max(1, s1), Max(w, s2)) => Max(
-                w, s1 || s2),
+            (Max(w, s1), Max(1, s2)) => Max(w, s1 || s2),
+            (Max(1, s1), Max(w, s2)) => Max(w, s1 || s2),
             // x * y = accumulate widths, propagate signed-ness.
-            (Max(w1, s1), Max(w2, s2)) => Max(
-                w1 + w2,
-                s1 || s2),
+            (Max(w1, s1), Max(w2, s2)) => Max(w1 + w2, s1 || s2),
             _ => Unknown,
         }
     }

@@ -1,80 +1,57 @@
-use std::cmp;
-use num_traits::Zero;
+use super::{boolean::Boolean, ir_builder::IRBuilder, int::Int, num::Num};
 use ff::PrimeField;
+use num_traits::Zero;
+use std::cmp;
+use zki_sieve::Sink;
 
-use super::{
-    num::Num,
-    int::Int,
-    boolean::Boolean,
-    builder_ext::BuilderExt,
-};
-
-pub fn bitwise_xor(
-    mut builder: &mut BuilderExt,
-    left: &Int,
-    right: &Int,
-) -> Int
-{
+pub fn bitwise_xor(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
     left.xor(builder, right).unwrap()
 }
 
 // TODO: Implement directly on the type but fields are private.
-pub fn bitwise_and(
-    mut builder: &mut BuilderExt,
-    left: &Int,
-    right: &Int,
-) -> Int
-{
-    let out_bits: Vec<Boolean> =
-        left.bits.iter()
-            .zip(right.bits.iter())
-            .map(|(l, r)|
-                Boolean::and(builder, l, r).unwrap()
-            ).collect();
+pub fn bitwise_and(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
+    let out_bits: Vec<Boolean> = left
+        .bits
+        .iter()
+        .zip(right.bits.iter())
+        .map(|(l, r)| Boolean::and(builder, l, r).unwrap())
+        .collect();
 
     Int::from_bits(&out_bits)
 }
 
-pub fn bitwise_or(
-    mut builder: &mut BuilderExt,
-    left: &Int,
-    right: &Int,
-) -> Int
-{
-    let out_bits: Vec<Boolean> =
-        left.bits.iter()
-            .zip(right.bits.iter())
-            .map(|(l, r)|
-                bool_or(builder, l, r)
-            ).collect();
+pub fn bitwise_or(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
+    let out_bits: Vec<Boolean> = left
+        .bits
+        .iter()
+        .zip(right.bits.iter())
+        .map(|(l, r)| bool_or(builder, l, r))
+        .collect();
 
     Int::from_bits(&out_bits)
 }
 
-pub fn bool_or<'a>(
-    mut builder: &mut BuilderExt,
-    a: &'a Boolean,
-    b: &'a Boolean,
-) -> Boolean
-{
+pub fn bool_or<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Boolean, b: &'a Boolean) -> Boolean {
     Boolean::and(builder, &a.not(), &b.not()).unwrap().not()
 }
 
-pub fn enforce_true(
-    b: &mut BuilderExt,
-    bool: &Boolean,
-) {
+pub fn enforce_true(b: &mut IRBuilder<impl Sink>, bool: &Boolean) {
     let not = bool.not().wire(b);
     b.assert_zero(not);
 }
 
 pub fn div<Scalar: PrimeField>(
-    mut builder: &mut BuilderExt,
+    builder: &mut IRBuilder<impl Sink>,
     numer_num: &Num<Scalar>,
     numer_int: &Int,
     denom_num: &Num<Scalar>,
     denom_int: &Int,
-) -> (/*quotient*/ Num<Scalar>, Int, /*rest*/ Num<Scalar>, Int) {
+) -> (
+    /*quotient*/ Num<Scalar>,
+    Int,
+    /*rest*/ Num<Scalar>,
+    Int,
+) {
     let (quot_val, rest_val) = match (numer_int.value.as_ref(), denom_int.value.as_ref()) {
         (Some(numer), Some(denom)) => {
             if denom.is_zero() {
@@ -85,7 +62,7 @@ pub fn div<Scalar: PrimeField>(
                 (Some(quot_val), Some(rest_val))
             }
         }
-        _ => (None, None)
+        _ => (None, None),
     };
 
     let max_width = cmp::max(numer_int.width(), denom_int.width());
@@ -105,8 +82,11 @@ pub fn div<Scalar: PrimeField>(
 
     // Verify that rest < denom || denom == 0.
     let width = denom_int.width();
-    let diff_num = rest_num.zero_extend(width as u16 + 1).unwrap()
-        .sub(&denom_num.zero_extend(width as u16 + 1).unwrap(), builder).unwrap();
+    let diff_num = rest_num
+        .zero_extend(width as u16 + 1)
+        .unwrap()
+        .sub(&denom_num.zero_extend(width as u16 + 1).unwrap(), builder)
+        .unwrap();
     let diff_int = Int::from_num(builder, width + 1, &diff_num);
     let diff_ok = diff_int.is_negative();
     let denom_zero = denom_num.equals_zero(builder);

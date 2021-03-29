@@ -1,3 +1,5 @@
+use num_bigint::BigUint;
+use num_traits::{One, Zero};
 /// # Wire representations
 ///
 /// We use two different representations of wire values: a bitwise representation (`Int`) where a
@@ -25,16 +27,24 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use std::path::Path;
 use std::ops::Sub;
-use num_bigint::BigUint;
-use num_traits::{Zero, One};
+use std::path::Path;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
-    self, Wire, Gate, TyKind, GateKind, UnOp, BinOp, ShiftOp, CmpOp, Ty, Circuit,
+    self, BinOp, Circuit, CmpOp, Gate, GateKind, ShiftOp, Ty, TyKind, UnOp, Wire,
 };
 
+use super::{
+    bit_width::BitWidth,
+    field::QuarkScalar,
+    int::Int,
+    int_ops,
+    int_ops::{bool_or, enforce_true},
+    num,
+    num::{_scalar_from_unsigned, boolean_lc},
+    representer::{ReprId, Representer, WireRepr},
+};
 use zkinterface::Result;
 use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
@@ -42,22 +52,12 @@ use zkinterface_bellman::{
     ff::{Field, PrimeField},
     zkif_cs::ZkifCS,
 };
-use super::{
-    int_ops,
-    int::Int,
-    bit_width::BitWidth,
-    representer::{Representer, ReprId, WireRepr},
-    int_ops::{bool_or, enforce_true},
-    num, num::{boolean_lc, scalar_from_unsigned},
-    field::QuarkScalar,
-};
 
 // TODO: template with trait PrimeField instead of a specific Scalar.
 // Alternative on 255 bits: zkinterface_bellman::bls12_381::Scalar
 pub type Scalar = QuarkScalar;
 pub type Num = num::Num<Scalar>;
 pub type CS = ZkifCS<Scalar>;
-
 
 /// zkInterface backend based on Bellman.
 ///
@@ -101,10 +101,9 @@ impl<'a> Backend<'a> {
             return *wid; // This Wire was already processed.
         }
 
-        let order = circuit::walk_wires_filtered(
-            iter::once(wire),
-            |w| !self.wire_to_repr.contains_key(&w),
-        ).collect::<Vec<_>>();
+        let order =
+            circuit::walk_wires_filtered(iter::once(wire), |w| !self.wire_to_repr.contains_key(&w))
+                .collect::<Vec<_>>();
 
         for wire in order {
             let wid = self.make_repr(wire);
@@ -119,16 +118,14 @@ impl<'a> Backend<'a> {
         // but some no-op gates return directly the ReprId of their argument.
 
         let repr = match wire.kind {
-            GateKind::Lit(val, ty) => {
-                match *ty {
-                    TyKind::Uint(sz) | TyKind::Int(sz) => {
-                        let num = Num::from_biguint(sz.bits(), &val.to_biguint());
-                        WireRepr::from(num)
-                    }
-
-                    _ => unimplemented!("Literal {:?}", ty),
+            GateKind::Lit(val, ty) => match *ty {
+                TyKind::Uint(sz) | TyKind::Int(sz) => {
+                    let num = Num::from_biguint(sz.bits(), &val.to_biguint());
+                    WireRepr::from(num)
                 }
-            }
+
+                _ => unimplemented!("Literal {:?}", ty),
+            },
 
             GateKind::Secret(secret) => {
                 match *secret.ty {
@@ -138,7 +135,8 @@ impl<'a> Backend<'a> {
                             &mut self.cs,
                             sz.bits() as usize,
                             secret.val().map(|val| val.to_biguint()),
-                        ).unwrap();
+                        )
+                        .unwrap();
                         WireRepr::from(int)
                     }
 
@@ -165,9 +163,12 @@ impl<'a> Backend<'a> {
                         match op {
                             UnOp::Neg => {
                                 let num = self.representer.mut_repr(aw).as_num();
-                                let out_num = num.neg(&mut self.cs)
+                                let out_num = num
+                                    .neg(&mut self.cs)
                                     .or_else(|_| {
-                                        let num = self.representer.mut_repr(aw)
+                                        let num = self
+                                            .representer
+                                            .mut_repr(aw)
                                             .as_num_trunc(&mut self.cs);
                                         num.neg(&mut self.cs)
                                     })
@@ -177,11 +178,12 @@ impl<'a> Backend<'a> {
 
                             UnOp::Not => {
                                 // TODO: could compute this as `-num - 1`
-                                let int = self.representer.mut_repr(aw)
+                                let int = self
+                                    .representer
+                                    .mut_repr(aw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
-                                let not_bits: Vec<Boolean> = int.bits.iter().map(|bit|
-                                    bit.not()
-                                ).collect();
+                                let not_bits: Vec<Boolean> =
+                                    int.bits.iter().map(|bit| bit.not()).collect();
                                 let not = Int::from_bits(&not_bits);
                                 WireRepr::from(not)
                             }
@@ -202,17 +204,17 @@ impl<'a> Backend<'a> {
                         let rb = self.representer.mut_repr(rw).as_boolean(&mut self.cs);
 
                         let out_bool = match op {
-                            BinOp::Xor | BinOp::Add | BinOp::Sub =>
-                                Boolean::xor(&mut self.cs, &lb, &rb).unwrap(),
+                            BinOp::Xor | BinOp::Add | BinOp::Sub => {
+                                Boolean::xor(&mut self.cs, &lb, &rb).unwrap()
+                            }
 
-                            BinOp::And | BinOp::Mul =>
-                                Boolean::and(&mut self.cs, &lb, &rb).unwrap(),
+                            BinOp::And | BinOp::Mul => {
+                                Boolean::and(&mut self.cs, &lb, &rb).unwrap()
+                            }
 
-                            BinOp::Or =>
-                                bool_or(&mut self.cs, &lb, &rb),
+                            BinOp::Or => bool_or(&mut self.cs, &lb, &rb),
 
-                            BinOp::Div | BinOp::Mod =>
-                                unimplemented!("{:?} for {:?}", op, wire.ty),
+                            BinOp::Div | BinOp::Mod => unimplemented!("{:?} for {:?}", op, wire.ty),
                         };
 
                         WireRepr::from(out_bool)
@@ -225,13 +227,11 @@ impl<'a> Backend<'a> {
                                 let left = self.representer.mut_repr(lw).as_num();
                                 let right = self.representer.mut_repr(rw).as_num();
 
-                                let do_bin_op = |l: Num, r: Num, cs: &mut ZkifCS<Scalar>| {
-                                    match op {
-                                        BinOp::Add => l.add(&r, cs),
-                                        BinOp::Sub => l.sub(&r, cs),
-                                        BinOp::Mul => l.mul(&r, cs),
-                                        _ => unreachable!(),
-                                    }
+                                let do_bin_op = |l: Num, r: Num, cs: &mut ZkifCS<Scalar>| match op {
+                                    BinOp::Add => l.add(&r, cs),
+                                    BinOp::Sub => l.sub(&r, cs),
+                                    BinOp::Mul => l.mul(&r, cs),
+                                    _ => unreachable!(),
                                 };
 
                                 // The operation might fail if the `real_bits` of `left` and
@@ -239,9 +239,13 @@ impl<'a> Backend<'a> {
                                 // the `real_bits` as much as possible, then try again.
                                 let out_num = do_bin_op(left, right, &mut self.cs)
                                     .or_else(|_| {
-                                        let left = self.representer.mut_repr(lw)
+                                        let left = self
+                                            .representer
+                                            .mut_repr(lw)
                                             .as_num_trunc(&mut self.cs);
-                                        let right = self.representer.mut_repr(rw)
+                                        let right = self
+                                            .representer
+                                            .mut_repr(rw)
                                             .as_num_trunc(&mut self.cs);
                                         do_bin_op(left, right, &mut self.cs)
                                     })
@@ -255,19 +259,25 @@ impl<'a> Backend<'a> {
                                 // FIXME: this is incorrect for signed division
                                 // Needs truncated `Num`s, with no bogus high bits that could
                                 // affect the result.
-                                let numer_num = self.representer.mut_repr(lw)
-                                    .as_num_trunc(&mut self.cs);
-                                let numer_int = self.representer.mut_repr(lw)
+                                let numer_num =
+                                    self.representer.mut_repr(lw).as_num_trunc(&mut self.cs);
+                                let numer_int = self
+                                    .representer
+                                    .mut_repr(lw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
-                                let denom_num = self.representer.mut_repr(rw)
-                                    .as_num_trunc(&mut self.cs);
-                                let denom_int = self.representer.mut_repr(rw)
+                                let denom_num =
+                                    self.representer.mut_repr(rw).as_num_trunc(&mut self.cs);
+                                let denom_int = self
+                                    .representer
+                                    .mut_repr(rw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int_ops::div(
                                     &mut self.cs,
-                                    &numer_num, &numer_int,
-                                    &denom_num, &denom_int,
+                                    &numer_num,
+                                    &numer_int,
+                                    &denom_num,
+                                    &denom_int,
                                 );
 
                                 let (_out_num, out_int) = match op {
@@ -282,20 +292,21 @@ impl<'a> Backend<'a> {
 
                             // Bitwise ops work on bit decompositions.
                             BinOp::Xor | BinOp::And | BinOp::Or => {
-                                let lu = self.representer.mut_repr(lw)
+                                let lu = self
+                                    .representer
+                                    .mut_repr(lw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
-                                let ru = self.representer.mut_repr(rw)
+                                let ru = self
+                                    .representer
+                                    .mut_repr(rw)
                                     .as_int(&mut self.cs, sz.bits() as usize);
 
                                 let out_int = match op {
-                                    BinOp::Xor =>
-                                        int_ops::bitwise_xor(&mut self.cs, &lu, &ru),
+                                    BinOp::Xor => int_ops::bitwise_xor(&mut self.cs, &lu, &ru),
 
-                                    BinOp::And =>
-                                        int_ops::bitwise_and(&mut self.cs, &lu, &ru),
+                                    BinOp::And => int_ops::bitwise_and(&mut self.cs, &lu, &ru),
 
-                                    BinOp::Or =>
-                                        int_ops::bitwise_or(&mut self.cs, &lu, &ru),
+                                    BinOp::Or => int_ops::bitwise_or(&mut self.cs, &lu, &ru),
 
                                     _ => unreachable!(),
                                 };
@@ -338,7 +349,8 @@ impl<'a> Backend<'a> {
 
                 assert!(
                     as_lit(right).map_or(false, |val| val.is_zero()),
-                    "only comparisons to zero are supported (not {:?})", right,
+                    "only comparisons to zero are supported (not {:?})",
+                    right,
                 );
 
                 let yes = match op {
@@ -381,30 +393,28 @@ impl<'a> Backend<'a> {
                     (TyKind::Int(sz1), TyKind::Uint(sz2)) if sz1 == sz2 => return aw,
                     (TyKind::Uint(sz1), TyKind::Int(sz2)) if sz1 == sz2 => return aw,
 
-                    (TyKind::Uint(sz1), TyKind::Uint(sz2)) |
-                    (TyKind::Uint(sz1), TyKind::Int(sz2)) => {
+                    (TyKind::Uint(sz1), TyKind::Uint(sz2))
+                    | (TyKind::Uint(sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
                         bits.resize(sz2.bits() as usize, Boolean::constant(false));
                         WireRepr::from(Int::from_bits(&bits))
-                    },
+                    }
 
-                    (TyKind::Int(sz1), TyKind::Uint(sz2)) |
-                    (TyKind::Int(sz1), TyKind::Int(sz2)) => {
+                    (TyKind::Int(sz1), TyKind::Uint(sz2))
+                    | (TyKind::Int(sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
                         let last = bits.last().unwrap().clone();
                         bits.resize(sz2.bits() as usize, last);
                         WireRepr::from(Int::from_bits(&bits))
-                    },
+                    }
 
                     _ => unimplemented!("Cannot cast {:?} to {:?}", a.ty, ty),
                 }
             }
 
-            GateKind::Pack(_wires) =>
-                unimplemented!("PACK"),
+            GateKind::Pack(_wires) => unimplemented!("PACK"),
 
-            GateKind::Extract(a, _index) =>
-                unimplemented!("EXTRACT {:?}", a.ty),
+            GateKind::Extract(a, _index) => unimplemented!("EXTRACT {:?}", a.ty),
 
             GateKind::Gadget(gk, ws) => {
                 if let Some(g) = gk.cast::<ConcatBits>() {
@@ -422,12 +432,12 @@ impl<'a> Backend<'a> {
                     let aw = self.wire(a);
                     let width = a.ty.integer_size().bits() as usize;
                     let int = self.representer.mut_repr(aw).as_int(&mut self.cs, width);
-                    let bits = &int.bits[g.start as usize .. g.end as usize];
+                    let bits = &int.bits[g.start as usize..g.end as usize];
                     WireRepr::from(Int::from_bits(bits))
                 } else {
                     unimplemented!("GADGET {}", gk.name());
                 }
-            },
+            }
         };
 
         self.representer.new_repr(repr)
@@ -475,7 +485,7 @@ fn test_zkif() -> Result<()> {
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
         let value = int.value.unwrap();
-        assert_eq!(Ok(value), scalar_from_unsigned::<Scalar>(expect as u64));
+        assert_eq!(Ok(value), _scalar_from_unsigned::<Scalar>(expect as u64));
     }
 
     check_num(&b, lit, 11);

@@ -1,4 +1,3 @@
-use num::scalar_from_unsigned;
 use num_bigint::BigUint;
 use num_traits::Zero;
 /// # Wire representations
@@ -26,13 +25,13 @@ use num_traits::Zero;
 /// highest-valued field elements are not safe to use.  The `Num` type will automatically truncate
 /// if the operation might return a value that is out of range.
 use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::iter;
-use std::path::Path;
+use std::{convert::TryFrom, iter};
+use zki_sieve::Sink;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire};
 
+use super::ir_builder::IRBuilder;
 use super::{
     boolean::Boolean,
     field::QuarkScalar,
@@ -42,12 +41,7 @@ use super::{
     num,
     representer::{ReprId, Representer, WireRepr},
 };
-use super::{builder_ext::BuilderExt, field::encode_field_order};
-use zki_sieve::{producers::builder::Builder, Result};
-use zki_sieve::{
-    producers::{builder::new_example_builder, sink::MemorySink},
-    FilesSink, Header,
-};
+use zki_sieve::Result;
 
 // TODO: template with trait PrimeField instead of a specific Scalar.
 // Alternative on 255 bits: zkinterface_bellman::bls12_381::Scalar
@@ -59,24 +53,19 @@ pub type Num = num::Num<Scalar>;
 /// - Walk through gates.
 /// - Allocate and retrieve representations of wires.
 /// - Write files.
-pub struct Backend<'a> {
+pub struct Backend<'a, S: Sink> {
     wire_to_repr: HashMap<Wire<'a>, ReprId>,
     representer: Representer,
-    builder: BuilderExt,
+    builder: IRBuilder<S>,
 }
 
-impl<'a> Backend<'a> {
+impl<'a, S: Sink> Backend<'a, S> {
     /// Must call finish() to finalize the files in the workspace.
-    pub fn new(workspace: impl AsRef<Path>, proving: bool) -> Backend<'a> {
-        // TODO: let sink = FilesSink::new(workspace).unwrap();
-        let sink = MemorySink::default();
-        let field = encode_field_order::<Scalar>();
-        let builder_base = Builder::new(sink, Header::new(field));
-        let builder = BuilderExt::new::<Scalar>(builder_base);
+    pub fn new(sink: S, _proving: bool) -> Self {
         Backend {
             wire_to_repr: HashMap::new(),
             representer: Representer::new(),
-            builder,
+            builder: IRBuilder::new::<Scalar>(sink),
         }
     }
 
@@ -240,7 +229,7 @@ impl<'a> Backend<'a> {
                                 let left = self.get_num(lw);
                                 let right = self.get_num(rw);
 
-                                let do_bin_op = |l: Num, r: Num, b: &mut BuilderExt| match op {
+                                let do_bin_op = |l: Num, r: Num, b: &mut IRBuilder<S>| match op {
                                     BinOp::Add => l.add_assign(&r, b),
                                     BinOp::Sub => l.sub(&r, b),
                                     BinOp::Mul => l.mul(&r, b),
@@ -388,15 +377,15 @@ impl<'a> Backend<'a> {
                     (TyKind::Int(sz1), TyKind::Uint(sz2)) if sz1 == sz2 => return aw,
                     (TyKind::Uint(sz1), TyKind::Int(sz2)) if sz1 == sz2 => return aw,
 
-                    (TyKind::Uint(sz1), TyKind::Uint(sz2))
-                    | (TyKind::Uint(sz1), TyKind::Int(sz2)) => {
+                    (TyKind::Uint(_sz1), TyKind::Uint(sz2))
+                    | (TyKind::Uint(_sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
                         bits.resize(sz2.bits() as usize, Boolean::constant(false));
                         WireRepr::from(Int::from_bits(&bits))
                     }
 
-                    (TyKind::Int(sz1), TyKind::Uint(sz2))
-                    | (TyKind::Int(sz1), TyKind::Int(sz2)) => {
+                    (TyKind::Int(_sz1), TyKind::Uint(sz2))
+                    | (TyKind::Int(_sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
                         let last = bits.last().unwrap().clone();
                         bits.resize(sz2.bits() as usize, last);
@@ -412,7 +401,7 @@ impl<'a> Backend<'a> {
             GateKind::Extract(a, _index) => unimplemented!("EXTRACT {:?}", a.ty),
 
             GateKind::Gadget(gk, ws) => {
-                if let Some(g) = gk.cast::<ConcatBits>() {
+                if let Some(_) = gk.cast::<ConcatBits>() {
                     let mut bits = Vec::new();
                     for &a in ws {
                         let aw = self.represent(a);
@@ -448,9 +437,11 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 
 #[test]
 fn test_backend_sieve_ir() -> Result<()> {
+    use super::field::_scalar_from_unsigned;
     use crate::ir::circuit::Circuit;
+    use zki_sieve::producers::sink::MemorySink;
 
-    let mut b = Backend::new(Path::new("local/test"), true);
+    let mut b = Backend::new(MemorySink::default(), true);
 
     let arena = bumpalo::Bump::new();
     let is_prover = true;
@@ -471,19 +462,19 @@ fn test_backend_sieve_ir() -> Result<()> {
     b.represent(is_ge_zero1);
     b.represent(is_ge_zero2);
 
-    fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
+    fn check_int<'a>(b: &Backend<'a, impl Sink>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.int.as_ref().unwrap();
         assert_eq!(int.value, Some(BigUint::from(expect)));
     }
 
-    fn check_num<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
+    fn check_num<'a>(b: &Backend<'a, impl Sink>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
         let value = int.value.unwrap();
-        assert_eq!(Ok(value), scalar_from_unsigned::<Scalar>(expect as u64));
+        assert_eq!(Ok(value), _scalar_from_unsigned::<Scalar>(expect as u64));
     }
 
     check_num(&b, lit, 11);
