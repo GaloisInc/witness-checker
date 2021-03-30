@@ -41,8 +41,8 @@ use super::{
     num,
     representer::{ReprId, Representer, WireRepr},
 };
-use zki_sieve::Result;
 use zki_sieve::consumers::evaluator::Evaluator;
+use zki_sieve::Result;
 
 // TODO: template with trait PrimeField instead of a specific Scalar.
 // Alternative on 255 bits: zkinterface_bellman::bls12_381::Scalar
@@ -144,7 +144,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                             sz.bits() as usize,
                             secret.val().map(|val| val.to_biguint()),
                         )
-                            .unwrap();
+                        .unwrap();
                         WireRepr::from(int)
                     }
 

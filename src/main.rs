@@ -47,6 +47,13 @@ fn parse_args() -> ArgMatches<'static> {
                 .help("output zkinterface circuit representation in this directory"),
         )
         .arg(
+            Arg::with_name("sieve-ir-out")
+                .long("sieve-ir-out")
+                .takes_value(true)
+                .value_name("DIR/")
+                .help("output SIEVE IR circuit representation in this directory"),
+        )
+        .arg(
             Arg::with_name("validate-only")
                 .long("validate-only")
                 .help("check only that the trace is valid; don't require it to demonstrate a bug"),
