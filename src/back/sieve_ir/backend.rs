@@ -26,7 +26,7 @@ use num_traits::Zero;
 /// if the operation might return a value that is out of range.
 use std::collections::HashMap;
 use std::{convert::TryFrom, iter};
-use zki_sieve::Sink;
+use zki_sieve::{Sink, Source};
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire};
@@ -42,6 +42,7 @@ use super::{
     representer::{ReprId, Representer, WireRepr},
 };
 use zki_sieve::Result;
+use zki_sieve::consumers::evaluator::Evaluator;
 
 // TODO: template with trait PrimeField instead of a specific Scalar.
 // Alternative on 255 bits: zkinterface_bellman::bls12_381::Scalar
@@ -69,9 +70,8 @@ impl<'a, S: Sink> Backend<'a, S> {
         }
     }
 
-    pub fn finish(self) -> Result<()> {
-        self.builder.finish();
-        Ok(())
+    pub fn finish(self) -> Result<S> {
+        Ok(self.builder.finish())
     }
 
     pub fn enforce_true(&mut self, wire: Wire<'a>) {
@@ -144,7 +144,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                             sz.bits() as usize,
                             secret.val().map(|val| val.to_biguint()),
                         )
-                        .unwrap();
+                            .unwrap();
                         WireRepr::from(int)
                     }
 
@@ -449,8 +449,16 @@ fn test_backend_sieve_ir() -> Result<()> {
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let (sec1, _) = c.new_secret(c.ty(TyKind::I64)); // 12
-    let (sec2, _) = c.new_secret(c.ty(TyKind::I64)); // 13
+    let sec1 = {
+        let (wire, handle) = c.new_secret(c.ty(TyKind::I64));
+        handle.set(&c, 12);
+        wire
+    };
+    let sec2 = {
+        let (wire, handle) = c.new_secret(c.ty(TyKind::I64));
+        handle.set(&c, 13);
+        wire
+    };
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);
@@ -484,5 +492,10 @@ fn test_backend_sieve_ir() -> Result<()> {
     check_int(&b, diff1, 12 * 13 - 11);
     check_int(&b, diff2, (11 - 12 * 13) as u64);
 
-    b.finish()
+    let sink = b.finish()?;
+    let source: Source = sink.into();
+    let evaluator = Evaluator::from_messages(source.iter_messages());
+    assert_eq!(evaluator.get_violations(), Vec::<String>::new());
+
+    Ok(())
 }

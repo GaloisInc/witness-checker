@@ -1,17 +1,15 @@
 use super::boolean::{AllocatedBit, Boolean};
 
-use zki_sieve::producers::examples::*;
 use zki_sieve::producers::sink::MemorySink;
 use zki_sieve::{consumers::evaluator::Evaluator, Source};
 use zki_sieve::{Result, Sink};
 
-use crate::back::sieve_ir::field::{encode_scalar, QuarkScalar};
+use crate::back::sieve_ir::field::QuarkScalar;
 use crate::back::sieve_ir::ir_builder::IRBuilder;
 
 use ff::{Field, PrimeField};
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
-use std::ops::Neg;
 
 fn new_builder() -> IRBuilder<MemorySink> {
     IRBuilder::new::<QuarkScalar>(MemorySink::default())
@@ -20,12 +18,7 @@ fn new_builder() -> IRBuilder<MemorySink> {
 fn evaluate(b: IRBuilder<MemorySink>) -> Evaluator {
     let sink = b.finish();
     let source: Source = sink.into();
-
-    let mut evaluator = Evaluator::default();
-    source
-        .iter_messages()
-        .for_each(|msg| evaluator.ingest_message(&msg.unwrap()));
-    evaluator
+    Evaluator::from_messages(source.iter_messages())
 }
 
 pub fn u64_into_boolean_vec_le(
@@ -103,18 +96,15 @@ pub fn field_into_allocated_bits_le<Scalar: PrimeField, S: Sink>(
 }
 
 macro_rules! initialize_everything {
-    ($one_:ident, $zero_:ident, $neg_one:ident, $modulus:ident, $header:ident) => {
+    ($one_:ident, $zero_:ident) => {
         let $one_ = BigUint::one();
         let $zero_ = BigUint::zero();
-        let $neg_one: QuarkScalar = QuarkScalar::one().neg();
-        let $modulus = BigUint::from_bytes_le(encode_scalar(&$neg_one).as_slice()) + BigUint::one();
-        let $header = example_header_in_field($modulus.to_bytes_le());
     };
 }
 
 #[test]
 fn test_bit_allocated_bit() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     let mut builder = new_builder();
 
@@ -132,7 +122,7 @@ fn test_bit_allocated_bit() {
 
 #[test]
 fn test_bit_xor() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
@@ -164,7 +154,7 @@ fn test_bit_xor() {
 
 #[test]
 fn test_bit_and() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
@@ -196,7 +186,7 @@ fn test_bit_and() {
 
 #[test]
 fn test_bit_and_not() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
@@ -228,7 +218,7 @@ fn test_bit_and_not() {
 
 #[test]
 fn test_bit_nor() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
@@ -260,7 +250,7 @@ fn test_bit_nor() {
 
 #[test]
 fn test_boolean_enforce_equal() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     for a_bool in [false, true].iter().cloned() {
         for b_bool in [false, true].iter().cloned() {
@@ -455,7 +445,7 @@ fn test_boolean_xor() {
         OperandType::NegatedAllocatedFalse,
     ];
 
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     for first_operand in variants.iter().cloned() {
         for second_operand in variants.iter().cloned() {
@@ -640,7 +630,7 @@ fn test_boolean_and() {
         OperandType::NegatedAllocatedFalse,
     ];
 
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
 
     for first_operand in variants.iter().cloned() {
         for second_operand in variants.iter().cloned() {
@@ -845,7 +835,7 @@ fn test_boolean_and() {
 
 #[test]
 fn test_u64_into_boolean_vec_le() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
     let mut builder = new_builder();
 
     let bits = u64_into_boolean_vec_le(&mut builder, Some(17234652694787248421)).unwrap();
@@ -868,7 +858,7 @@ fn test_u64_into_boolean_vec_le() {
 
 #[test]
 fn test_field_into_allocated_bits_le() {
-    initialize_everything!(one_, zero_, neg_one, modulus, header);
+    initialize_everything!(one_, zero_);
     let mut builder = new_builder();
 
     let r = QuarkScalar::from_str("139407991430939255523467833655006660152").unwrap();
