@@ -426,7 +426,7 @@ fn main() -> io::Result<()> {
     let gadget_supported = |g: GadgetKindRef| {
         use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
         let mut ok = false;
-        if args.is_present("zkif-out") {
+        if args.is_present("zkif-out") || args.is_present("sieve-ir-out") {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
         }
@@ -442,8 +442,7 @@ fn main() -> io::Result<()> {
     passes.run(lower::bundle::simplify);
     passes.run(lower::const_fold::const_fold(&c));
     passes.run(lower::int::non_constant_shift);
-    #[cfg(feature = "bellman")]
-    if args.is_present("zkif-out") {
+    if args.is_present("zkif-out") || args.is_present("sieve-ir-out") {
         passes.run(lower::int::compare_to_greater_or_equal_to_zero);
     }
     passes.run(lower::bool_::mux);
