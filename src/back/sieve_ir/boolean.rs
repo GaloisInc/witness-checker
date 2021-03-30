@@ -169,10 +169,10 @@ pub enum Boolean {
 }
 
 impl Boolean {
-    pub fn wire(&self, b: &IRBuilder<impl Sink>) -> WireId {
+    pub fn wire(&self, b: &mut IRBuilder<impl Sink>) -> WireId {
         match self {
             Boolean::Is(bit) => bit.wire,
-            Boolean::Not(_bit) => unimplemented!("Negated view of a bit"),
+            Boolean::Not(bit) => AllocatedBit::not(b, bit).wire,
             Boolean::Constant(false) => b.zero,
             Boolean::Constant(true) => b.one,
         }

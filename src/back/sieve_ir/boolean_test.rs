@@ -477,7 +477,7 @@ fn test_boolean_xor() {
             }
 
             let c = Boolean::xor(&mut builder, &a, &b).unwrap();
-            let c_wire = c.wire(&builder);
+            let c_wire = c.wire(&mut builder);
 
             let evaluator = evaluate(builder);
 
@@ -662,7 +662,7 @@ fn test_boolean_and() {
             }
 
             let c = Boolean::and(&mut builder, &a, &b).unwrap();
-            let c_wire = c.wire(&builder);
+            let c_wire = c.wire(&mut builder);
 
             let evaluator = evaluate(builder);
 
