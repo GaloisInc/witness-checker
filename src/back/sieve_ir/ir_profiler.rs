@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use zki_sieve::producers::builder::BuildGate;
 use BuildGate::*;
 
@@ -10,7 +10,7 @@ pub struct IRProfiler {
     notes: Vec<String>,
 
     duplicate_count: usize,
-    duplicate_culprits: HashSet<String>,
+    duplicate_culprits: HashMap<String, usize>,
 }
 
 impl IRProfiler {
@@ -23,6 +23,10 @@ impl IRProfiler {
         self.notes.pop();
     }
 
+    fn current_note(&self) -> &str {
+        self.notes.last().map(|s| s.as_str()).unwrap_or("")
+    }
+
     pub fn notify_gate(&mut self, gate: &BuildGate) {
         match gate {
             BuildGate::Instance(_) => return,
@@ -33,12 +37,13 @@ impl IRProfiler {
         let previous = self.gates.insert(gate.clone(), ());
         if previous.is_some() {
             self.duplicate_count += 1;
-            self.duplicate_culprits
-                .insert(self.current_note().to_string());
+            let culprit = self.current_note().to_string();
+            let count = self.duplicate_culprits.entry(culprit).or_insert(0);
+            *count += 1;
 
             if self.warnings_panic {
                 panic!(
-                    "IRProfiler found a duplicated gate {:?} in {}",
+                    "IRProfiler (with warnings_panic=true) found a duplicated gate {:?} in {}",
                     gate,
                     self.current_note()
                 );
@@ -46,19 +51,15 @@ impl IRProfiler {
         }
     }
 
-    fn current_note(&self) -> &str {
-        self.notes.last().map(|s| s.as_str()).unwrap_or("")
-    }
-
     pub fn print_report(&self) {
         println!(
-            "IRProfiler found {} duplicates out of {} unique gates ({}%) from these contexts:",
+            "IRProfiler found {}% of duplicates ({} / {} unique gates), created from these contexts:",
+            100 * self.duplicate_count / self.gates.len(),
             self.duplicate_count,
             self.gates.len(),
-            100 * self.duplicate_count / self.gates.len(),
         );
-        for culprit in self.duplicate_culprits.iter() {
-            println!("{}", culprit.as_str());
+        for (culprit, count) in self.duplicate_culprits.iter() {
+            println!("{}: {}%", culprit.as_str(), 100 * count / self.gates.len());
         }
         println!();
     }

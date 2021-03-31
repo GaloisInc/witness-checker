@@ -43,6 +43,7 @@ impl<S: Sink> IRBuilder<S> {
         irb.zero = irb.create_gate(Constant(vec![0]));
         irb.one = irb.create_gate(Constant(vec![1]));
         irb.neg_one = irb.create_gate(Constant(encode_scalar(&Scalar::one().neg())));
+        irb.powers_of_two.push(irb.one);
 
         irb
     }
