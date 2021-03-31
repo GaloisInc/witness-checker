@@ -57,7 +57,7 @@ pub type Num = num::Num<Scalar>;
 pub struct Backend<'a, S: Sink> {
     wire_to_repr: HashMap<Wire<'a>, ReprId>,
     representer: Representer,
-    builder: IRBuilder<S>,
+    pub builder: IRBuilder<S>,
 }
 
 impl<'a, S: Sink> Backend<'a, S> {
@@ -492,6 +492,7 @@ fn test_backend_sieve_ir() -> Result<()> {
     check_int(&b, diff1, 12 * 13 - 11);
     check_int(&b, diff2, (11 - 12 * 13) as u64);
 
+    b.builder.b.print_report();
     let sink = b.finish()?;
     let source: Source = sink.into();
     let evaluator = Evaluator::from_messages(source.iter_messages());

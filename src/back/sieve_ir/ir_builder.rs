@@ -1,8 +1,9 @@
 use crate::back::sieve_ir::field::encode_field_order;
 use crate::back::sieve_ir::field::encode_scalar;
+use crate::back::sieve_ir::ir_profiler::IRProfiler;
 use ff::PrimeField;
 use num_bigint::BigUint;
-use zki_sieve::producers::builder::{BuildGate, GateBuilder};
+use zki_sieve::producers::builder::{BuildGate, GateBuilder, GateBuilderT};
 use zki_sieve::Header;
 use zki_sieve::Sink;
 use zki_sieve::{Value, WireId};
@@ -10,18 +11,19 @@ use BuildGate::*;
 
 /// Extensions to the basic builder.
 pub struct IRBuilder<S: Sink> {
-    b: GateBuilder<S>,
-    powers_of_two: Vec<WireId>,
+    pub b: IRProfiler<GateBuilder<S>>,
 
     pub zero: WireId,
     pub one: WireId,
     pub neg_one: WireId,
+    powers_of_two: Vec<WireId>,
 }
 
 impl<S: Sink> IRBuilder<S> {
     pub fn new<Scalar: PrimeField>(sink: S) -> Self {
         let field_order = encode_field_order::<Scalar>();
-        let mut b = GateBuilder::new(sink, Header::new(field_order));
+        let b = GateBuilder::new(sink, Header::new(field_order));
+        let mut b = IRProfiler::new(b);
 
         let zero = b.create_gate(Constant(vec![0]));
         let one = b.create_gate(Constant(vec![1]));
@@ -79,6 +81,6 @@ impl<S: Sink> IRBuilder<S> {
     }
 
     pub fn finish(self) -> S {
-        self.b.finish()
+        self.b.b.finish()
     }
 }
