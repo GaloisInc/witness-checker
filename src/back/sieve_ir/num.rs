@@ -9,9 +9,9 @@ use std::cmp;
 
 use super::{
     boolean::{AllocatedBit, Boolean},
-    ir_builder::IRBuilder,
     field::{encode_scalar, scalar_from_biguint},
     int::Int,
+    ir_builder::IRBuilder,
 };
 use zki_sieve::{Sink, WireId};
 
@@ -75,6 +75,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
     /// Decompose this number into bits, least-significant first.  Returns `self.real_bits` bits.
     pub fn to_bits(&self, b: &mut IRBuilder<impl Sink>) -> Vec<Boolean> {
+        b.prof.enter_note("to_bits");
+
         let n_bits = self.real_bits as usize;
 
         let values: Vec<Option<bool>> = match &self.value {
@@ -95,6 +97,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let difference = b.sub(self.zki_wire, recomposed_wire);
         b.assert_zero(difference);
 
+        b.prof.exit_note();
         bits
     }
 

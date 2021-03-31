@@ -1,6 +1,6 @@
 use zki_sieve::Sink;
 
-use super::{backend::Num, boolean::Boolean, ir_builder::IRBuilder, int::Int};
+use super::{backend::Num, boolean::Boolean, int::Int, ir_builder::IRBuilder};
 
 pub struct Representer {
     pub wire_reprs: Vec<WireRepr>,
@@ -58,7 +58,9 @@ impl From<Boolean> for WireRepr {
 
 impl WireRepr {
     pub fn as_num(&mut self, b: &mut IRBuilder<impl Sink>) -> Num {
-        match self.num {
+        b.prof.enter_note("WireRepr::as_num");
+
+        let num = match self.num {
             Some(ref num) => (*num).clone(),
 
             None => {
@@ -73,21 +75,29 @@ impl WireRepr {
                 self.num = Some(num.clone());
                 num
             }
-        }
+        };
+        b.prof.exit_note();
+        num
     }
 
     /// Get `self` as a "truncated" num (as by `Num::truncate`), with `real_bits == valid_bits`.
     pub fn as_num_trunc(&mut self, b: &mut IRBuilder<impl Sink>) -> Num {
+        b.prof.enter_note("WireRepr::as_num_trunc");
+
         let mut num = self.as_num(b);
         if num.valid_bits != num.real_bits {
             num = num.truncate(b);
             self.num = Some(num.clone());
         }
+
+        b.prof.exit_note();
         num
     }
 
     pub fn as_int(&mut self, b: &mut IRBuilder<impl Sink>, width: usize) -> Int {
-        match &self.int {
+        b.prof.enter_note(&format!("WireRepr::as_int({})", width));
+
+        let int = match &self.int {
             Some(u) => {
                 // Currently we don't support treating the same `WireRepr` as multiple widths of
                 // int - and anyway, it should never happen, since the width is set based on the
@@ -108,7 +118,9 @@ impl WireRepr {
                 self.int = Some(int.clone());
                 int
             }
-        }
+        };
+        b.prof.exit_note();
+        int
     }
 
     pub fn as_boolean(&mut self, b: &mut IRBuilder<impl Sink>) -> Boolean {
