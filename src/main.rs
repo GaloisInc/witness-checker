@@ -528,36 +528,30 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(feature = "sieve_ir")]
-    if let Some(workspace) = args.value_of_os("sieve-ir-out") {
+    if let Some(workspace) = args.value_of("sieve-ir-out") {
         use cheesecloth::back::sieve_ir::backend::{Backend, Scalar};
         use zki_sieve::{
-            cli::{cli, Options},
+            cli::{cli, Options, StructOpt},
             FilesSink,
         };
 
         // Generate the circuit and witness.
-        let mut sink = FilesSink::new_clean(&workspace).unwrap();
+        let sink = FilesSink::new_clean(&workspace).unwrap();
         let mut backend = Backend::new(sink, true);
 
         let accepted = flags[0];
         backend.enforce_true(accepted);
 
+        backend.builder.b.print_report();
+
         // Write files.
         backend.finish().unwrap();
 
-        // eprintln!("validating SIEVE IR...");
-        //
-        // // Validate the circuit and witness.
-        // cli(&Options {
-        //     tool: "simulate".to_string(),
-        //     paths: vec![workspace.to_path_buf()],
-        // }).unwrap();
-        //
-        // // Print statistics.
-        // cli(&Options {
-        //     tool: "stats".to_string(),
-        //     paths: vec![workspace.to_path_buf()],
-        // }).unwrap();
+        // Validate the circuit and witness.
+        eprintln!("\nValidating SIEVE IR files...");
+        cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
+        cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
+        cli(&Options::from_iter(&["zki_sieve", "metrics", workspace])).unwrap();
     }
 
     // Unused in some configurations.
