@@ -20,7 +20,7 @@ impl IRProfiler {
     }
 
     pub fn exit_note(&mut self) {
-        self.notes.pop();
+        self.notes.pop().expect("More exit_note than enter_note");
     }
 
     fn current_note(&self) -> &str {
@@ -29,8 +29,8 @@ impl IRProfiler {
 
     pub fn notify_gate(&mut self, gate: &BuildGate) {
         match gate {
-            BuildGate::Instance(_) => return,
-            BuildGate::Witness(_) => return,
+            Instance(_) => return,
+            Witness(_) => return,
             _ => {}
         };
 
@@ -52,15 +52,25 @@ impl IRProfiler {
     }
 
     pub fn print_report(&self) {
-        println!(
+        eprintln!(
             "IRProfiler found {}% of duplicates ({} / {} unique gates), created from these contexts:",
             100 * self.duplicate_count / self.gates.len(),
             self.duplicate_count,
             self.gates.len(),
         );
         for (culprit, count) in self.duplicate_culprits.iter() {
-            println!("{}: {}%", culprit.as_str(), 100 * count / self.gates.len());
+            eprintln!(
+                "{} {:.2}%",
+                culprit.as_str(),
+                100f32 * *count as f32 / self.gates.len() as f32
+            );
         }
-        println!();
+        if !self.notes.is_empty() {
+            eprintln!(
+                "IRProfiler incorrect usage: More enter_note than exit_note ({}).",
+                self.current_note()
+            );
+        }
+        eprintln!();
     }
 }

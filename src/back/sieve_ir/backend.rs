@@ -116,7 +116,7 @@ impl<'a, S: Sink> Backend<'a, S> {
         for wire in order {
             self.builder
                 .prof
-                .enter_note(&format!("{:?}", wire.kind.variant_name()));
+                .enter_note(&format!("{}", wire.kind.variant_name()));
 
             let wid = self.make_repr(wire);
             self.wire_to_repr.insert(wire, wid);

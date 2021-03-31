@@ -1,4 +1,4 @@
-use super::{boolean::Boolean, ir_builder::IRBuilder, int::Int, num::Num};
+use super::{boolean::Boolean, int::Int, ir_builder::IRBuilder, num::Num};
 use ff::PrimeField;
 use num_traits::Zero;
 use std::cmp;
@@ -52,6 +52,8 @@ pub fn div<Scalar: PrimeField>(
     /*rest*/ Num<Scalar>,
     Int,
 ) {
+    builder.prof.enter_note("int_opts::div");
+
     let (quot_val, rest_val) = match (numer_int.value.as_ref(), denom_int.value.as_ref()) {
         (Some(numer), Some(denom)) => {
             if denom.is_zero() {
@@ -94,6 +96,7 @@ pub fn div<Scalar: PrimeField>(
 
     enforce_true(builder, &ok);
 
+    builder.prof.exit_note();
     (quot_num, quot_int, rest_num, rest_int)
 }
 
