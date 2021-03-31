@@ -26,7 +26,7 @@ use num_traits::Zero;
 /// if the operation might return a value that is out of range.
 use std::collections::HashMap;
 use std::{convert::TryFrom, iter};
-use zki_sieve::{Sink, Source};
+use zki_sieve::Sink;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire};
@@ -41,7 +41,6 @@ use super::{
     num,
     representer::{ReprId, Representer, WireRepr},
 };
-use zki_sieve::consumers::evaluator::Evaluator;
 use zki_sieve::Result;
 
 // TODO: template with trait PrimeField instead of a specific Scalar.
@@ -115,8 +114,14 @@ impl<'a, S: Sink> Backend<'a, S> {
                 .collect::<Vec<_>>();
 
         for wire in order {
+            self.builder
+                .prof
+                .enter_note(&format!("{:?}", wire.kind.variant_name()));
+
             let wid = self.make_repr(wire);
             self.wire_to_repr.insert(wire, wid);
+
+            self.builder.prof.exit_note();
         }
 
         self.wire_to_repr.get(&wire).cloned().unwrap()

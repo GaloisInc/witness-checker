@@ -1,44 +1,48 @@
-use std::collections::HashMap;
-use zki_sieve::producers::builder::{BuildGate, GateBuilderT};
+use std::collections::{HashMap, HashSet};
+use zki_sieve::producers::builder::BuildGate;
 
-pub struct IRProfiler<B: GateBuilderT> {
-    pub b: B,
-
+#[derive(Default)]
+pub struct IRProfiler {
     gates: HashMap<BuildGate, ()>,
+    notes: Vec<String>,
 
-    pub gate_count: usize,
-    pub duplicate_count: usize,
+    duplicate_count: usize,
+    duplicate_culprits: HashSet<String>,
 }
 
-impl<B: GateBuilderT> GateBuilderT for IRProfiler<B> {
-    fn create_gate(&mut self, gate: BuildGate) -> u64 {
-        self.notify_gate(&gate);
-        self.b.create_gate(gate)
-    }
-}
-
-impl<B: GateBuilderT> IRProfiler<B> {
-    pub fn new(builder: B) -> Self {
-        Self {
-            b: builder,
-            gates: Default::default(),
-            gate_count: 0,
-            duplicate_count: 0,
-        }
+impl IRProfiler {
+    pub fn enter_note(&mut self, note: &str) {
+        self.notes
+            .push(format!("{}\t{}", self.current_note(), note));
     }
 
-    fn notify_gate(&mut self, gate: &BuildGate) {
-        self.gate_count += 1;
+    pub fn exit_note(&mut self) {
+        self.notes.pop();
+    }
+
+    pub fn notify_gate(&mut self, gate: &BuildGate) {
         let previous = self.gates.insert(gate.clone(), ());
         if previous.is_some() {
             self.duplicate_count += 1;
+            self.duplicate_culprits
+                .insert(self.current_note().to_string());
         }
+    }
+
+    fn current_note(&self) -> &str {
+        self.notes.last().map(|s| s.as_str()).unwrap_or("")
     }
 
     pub fn print_report(&self) {
         println!(
-            "IRProfiler found {} duplicates out of {} total gates",
-            self.duplicate_count, self.gate_count
+            "IRProfiler found {} duplicates out of {} unique gates ({}%) from these contexts:",
+            self.duplicate_count,
+            self.gates.len(),
+            100 * self.duplicate_count / self.gates.len(),
         );
+        for culprit in self.duplicate_culprits.iter() {
+            println!("{}", culprit.as_str());
+        }
+        println!();
     }
 }

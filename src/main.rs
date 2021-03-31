@@ -542,7 +542,7 @@ fn main() -> io::Result<()> {
         let accepted = flags[0];
         backend.enforce_true(accepted);
 
-        backend.builder.b.print_report();
+        backend.builder.prof.print_report();
 
         // Write files.
         backend.finish().unwrap();

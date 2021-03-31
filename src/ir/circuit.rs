@@ -774,6 +774,45 @@ impl<'a> GateKind<'a> {
             _ => panic!("expected GateKind::Lit"),
         }
     }
+
+    pub fn variant_name(&self) -> &str {
+        use BinOp::*;
+        use CmpOp::*;
+        use GateKind::*;
+        use UnOp::*;
+        match self {
+            Lit(_, _) => "Lit",
+            Secret(_) => "Secret",
+            Unary(op, _) => match op {
+                Not => "Not",
+                Neg => "Neg",
+            },
+            Binary(op, _, _) => match op {
+                Add => "Add",
+                Sub => "Sub",
+                Mul => "Mul",
+                Div => "Div",
+                Mod => "Mod",
+                And => "And",
+                Or => "Or",
+                Xor => "Xor",
+            },
+            Shift(_, _, _) => "Shift",
+            Compare(op, _, _) => match op {
+                Eq => "Eq",
+                Ne => "Ne",
+                Lt => "Lt",
+                Le => "Le",
+                Gt => "Gt",
+                Ge => "Ge",
+            },
+            Mux(_, _, _) => "Mux",
+            Cast(_, _) => "Cast",
+            Pack(_) => "Pack",
+            Extract(_, _) => "Extract",
+            Gadget(_, _) => "Gadget",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
