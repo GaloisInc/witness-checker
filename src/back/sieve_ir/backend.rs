@@ -444,9 +444,12 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 fn test_backend_sieve_ir() -> Result<()> {
     use super::field::_scalar_from_unsigned;
     use crate::ir::circuit::Circuit;
+    use zki_sieve::consumers::evaluator::Evaluator;
     use zki_sieve::producers::sink::MemorySink;
+    use zki_sieve::Source;
 
     let mut b = Backend::new(MemorySink::default(), true);
+    b.builder.prof.warnings_panic = false;
 
     let arena = bumpalo::Bump::new();
     let is_prover = true;
@@ -497,7 +500,7 @@ fn test_backend_sieve_ir() -> Result<()> {
     check_int(&b, diff1, 12 * 13 - 11);
     check_int(&b, diff2, (11 - 12 * 13) as u64);
 
-    b.builder.b.print_report();
+    b.builder.prof.print_report();
     let sink = b.finish()?;
     let source: Source = sink.into();
     let evaluator = Evaluator::from_messages(source.iter_messages());

@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use zki_sieve::producers::builder::BuildGate;
+use BuildGate::*;
 
 #[derive(Default)]
 pub struct IRProfiler {
+    pub warnings_panic: bool,
+
     gates: HashMap<BuildGate, ()>,
     notes: Vec<String>,
 
@@ -21,11 +24,25 @@ impl IRProfiler {
     }
 
     pub fn notify_gate(&mut self, gate: &BuildGate) {
+        match gate {
+            BuildGate::Instance(_) => return,
+            BuildGate::Witness(_) => return,
+            _ => {}
+        };
+
         let previous = self.gates.insert(gate.clone(), ());
         if previous.is_some() {
             self.duplicate_count += 1;
             self.duplicate_culprits
                 .insert(self.current_note().to_string());
+
+            if self.warnings_panic {
+                panic!(
+                    "IRProfiler found a duplicated gate {:?} in {}",
+                    gate,
+                    self.current_note()
+                );
+            }
         }
     }
 
