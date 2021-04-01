@@ -157,6 +157,10 @@ pub enum Boolean {
 }
 
 impl Boolean {
+    pub fn alloc(b: &mut IRBuilder<impl Sink>, value: Option<bool>) -> Self {
+        Boolean::Is(AllocatedBit::alloc(b, value))
+    }
+
     pub fn wire(&self, b: &mut IRBuilder<impl Sink>) -> WireId {
         match self {
             Boolean::Is(bit) => bit.wire,

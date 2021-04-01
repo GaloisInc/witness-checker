@@ -40,7 +40,7 @@ pub fn u64_into_boolean_vec_le(
 
     let bits = values
         .into_iter()
-        .map(|b| Boolean::from(AllocatedBit::alloc(builder, b)))
+        .map(|b| Boolean::alloc(builder, b))
         .collect();
 
     Ok(bits)
@@ -275,8 +275,8 @@ fn test_boolean_enforce_equal() {
                     {
                         let mut builder = new_builder();
 
-                        let mut a = Boolean::from(AllocatedBit::alloc(&mut builder, Some(a_bool)));
-                        let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(b_bool)));
+                        let mut a = Boolean::alloc(&mut builder, Some(a_bool));
+                        let mut b = Boolean::alloc(&mut builder, Some(b_bool));
 
                         if a_neg {
                             a = a.not();
@@ -297,7 +297,7 @@ fn test_boolean_enforce_equal() {
                         let mut builder = new_builder();
 
                         let mut a = Boolean::Constant(a_bool);
-                        let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(b_bool)));
+                        let mut b = Boolean::alloc(&mut builder, Some(b_bool));
 
                         if a_neg {
                             a = a.not();
@@ -317,7 +317,7 @@ fn test_boolean_enforce_equal() {
                     {
                         let mut builder = new_builder();
 
-                        let mut a = Boolean::from(AllocatedBit::alloc(&mut builder, Some(a_bool)));
+                        let mut a = Boolean::alloc(&mut builder, Some(a_bool));
                         let mut b = Boolean::Constant(b_bool);
 
                         if a_neg {
@@ -369,7 +369,7 @@ fn test_boolean_enforce_equal() {
 fn test_boolean_negation() {
     let mut builder = new_builder();
 
-    let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)));
+    let mut b = Boolean::alloc(&mut builder, Some(true));
 
     match b {
         Boolean::Is(_) => {}
@@ -470,17 +470,13 @@ fn test_boolean_xor() {
                 let mut dyn_construct = |operand, name| match operand {
                     OperandType::True => Boolean::constant(true),
                     OperandType::False => Boolean::constant(false),
-                    OperandType::AllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)))
-                    }
-                    OperandType::AllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)))
-                    }
+                    OperandType::AllocatedTrue => Boolean::alloc(&mut builder, Some(true)),
+                    OperandType::AllocatedFalse => Boolean::alloc(&mut builder, Some(false)),
                     OperandType::NegatedAllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true))).not()
+                        Boolean::alloc(&mut builder, Some(true)).not()
                     }
                     OperandType::NegatedAllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false))).not()
+                        Boolean::alloc(&mut builder, Some(false)).not()
                     }
                 };
 
@@ -655,17 +651,13 @@ fn test_boolean_and() {
                 let mut dyn_construct = |operand, name| match operand {
                     OperandType::True => Boolean::constant(true),
                     OperandType::False => Boolean::constant(false),
-                    OperandType::AllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)))
-                    }
-                    OperandType::AllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)))
-                    }
+                    OperandType::AllocatedTrue => Boolean::alloc(&mut builder, Some(true)),
+                    OperandType::AllocatedFalse => Boolean::alloc(&mut builder, Some(false)),
                     OperandType::NegatedAllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true))).not()
+                        Boolean::alloc(&mut builder, Some(true)).not()
                     }
                     OperandType::NegatedAllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false))).not()
+                        Boolean::alloc(&mut builder, Some(false)).not()
                     }
                 };
 
