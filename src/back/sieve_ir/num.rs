@@ -8,7 +8,7 @@ use num_bigint::BigUint;
 use std::cmp;
 
 use super::{
-    boolean::{AllocatedBit, Boolean},
+    boolean::Boolean,
     field::{encode_scalar, scalar_from_biguint},
     int::Int,
     ir_builder::IRBuilder,
@@ -289,10 +289,16 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
+    /// is_truncated means that the range of values of this Num is exactly the valid range.
+    pub fn is_truncated(&self) -> bool {
+        return self.real_bits == self.valid_bits;
+    }
+
     /// Truncate `self` modulo `2^valid_bits`, producing a new `Num` with `real_bits ==
     /// valid_bits`.
+    /// Note: WireRepr.as_num_trunc is better for this, because it caches the Int representation.
     // TODO: simple take the right wire in the bit recomposition (like `compose_bits`).
-    pub fn truncate(self, b: &mut IRBuilder<impl Sink>) -> Self {
+    fn _truncate(self, b: &mut IRBuilder<impl Sink>) -> Self {
         if self.real_bits == self.valid_bits {
             return self;
         }

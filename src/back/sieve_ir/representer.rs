@@ -81,17 +81,30 @@ impl WireRepr {
     }
 
     /// Get `self` as a "truncated" num (as by `Num::truncate`), with `real_bits == valid_bits`.
-    pub fn as_num_trunc(&mut self, b: &mut IRBuilder<impl Sink>) -> Num {
+    pub fn as_num_trunc(&mut self, b: &mut IRBuilder<impl Sink>, width: usize) -> Num {
         b.prof.enter_note("WireRepr::as_num_trunc");
 
-        let mut num = self.as_num(b);
-        if num.valid_bits != num.real_bits {
-            num = num.truncate(b);
-            self.num = Some(num.clone());
+        // Maybe we have a truncated Num already.
+        if let Some(ref num) = self.num {
+            assert_eq!(
+                num.valid_bits as usize, width,
+                "multiple bit widths for a wire is not supported"
+            );
+            if num.is_truncated() {
+                b.prof.exit_note();
+                return (*num).clone();
+            }
         }
 
+        // Otherwise we need an Int representation.
+        // Maybe we have it in self.int already, otherwise build it from self.num.
+        let int = self.as_int(b, width);
+
+        let trunc_num = Num::from_int(b, &int);
+        self.num = Some(trunc_num.clone());
+
         b.prof.exit_note();
-        num
+        trunc_num
     }
 
     pub fn as_int(&mut self, b: &mut IRBuilder<impl Sink>, width: usize) -> Int {
@@ -102,7 +115,11 @@ impl WireRepr {
                 // Currently we don't support treating the same `WireRepr` as multiple widths of
                 // int - and anyway, it should never happen, since the width is set based on the
                 // type of the wire.
-                assert_eq!(u.width(), width);
+                assert_eq!(
+                    u.width(),
+                    width,
+                    "multiple bit widths for a wire is not supported"
+                );
                 u.clone()
             }
 

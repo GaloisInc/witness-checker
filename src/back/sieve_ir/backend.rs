@@ -86,10 +86,10 @@ impl<'a, S: Sink> Backend<'a, S> {
         self.representer.mut_repr(repr_id).as_num(&mut self.builder)
     }
 
-    fn get_num_trunc(&mut self, repr_id: ReprId) -> Num {
+    fn get_num_trunc(&mut self, repr_id: ReprId, width: impl Into<usize>) -> Num {
         self.representer
             .mut_repr(repr_id)
-            .as_num_trunc(&mut self.builder)
+            .as_num_trunc(&mut self.builder, width.into())
     }
 
     fn get_int(&mut self, repr_id: ReprId, width: impl Into<usize>) -> Int {
@@ -178,7 +178,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                                 let out_num = num
                                     .neg(&mut self.builder)
                                     .or_else(|_| {
-                                        let num = self.get_num_trunc(aw);
+                                        let num = self.get_num_trunc(aw, sz.bits());
                                         num.neg(&mut self.builder)
                                     })
                                     .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
@@ -243,8 +243,8 @@ impl<'a, S: Sink> Backend<'a, S> {
                                 // the `real_bits` as much as possible, then try again.
                                 let out_num = do_bin_op(left, right, &mut self.builder)
                                     .or_else(|_| {
-                                        let left = self.get_num_trunc(lw);
-                                        let right = self.get_num_trunc(rw);
+                                        let left = self.get_num_trunc(lw, sz.bits());
+                                        let right = self.get_num_trunc(rw, sz.bits());
                                         do_bin_op(left, right, &mut self.builder)
                                     })
                                     .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
@@ -257,9 +257,9 @@ impl<'a, S: Sink> Backend<'a, S> {
                                 // FIXME: this is incorrect for signed division
                                 // Needs truncated `Num`s, with no bogus high bits that could
                                 // affect the result.
-                                let numer_num = self.get_num_trunc(lw);
+                                let numer_num = self.get_num_trunc(lw, sz.bits());
                                 let numer_int = self.get_int(lw, sz.bits());
-                                let denom_num = self.get_num_trunc(rw);
+                                let denom_num = self.get_num_trunc(rw, sz.bits());
                                 let denom_int = self.get_int(rw, sz.bits());
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int_ops::div(
@@ -340,7 +340,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                 let yes = match op {
                     CmpOp::Eq => {
                         // Needs a truncated `Num`, with no bogus high bits.
-                        let left = self.get_num_trunc(lw);
+                        let left = self.get_num_trunc(lw, width);
                         left.equals_zero(&mut self.builder)
                     }
 
@@ -359,7 +359,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                 let cw = self.represent(cond);
                 let tw = self.represent(then_);
                 let ew = self.represent(else_);
-                let cond = self.get_num_trunc(cw);
+                let cond = self.get_num_trunc(cw, 1 as usize);
                 let then_ = self.get_num(tw);
                 let else_ = self.get_num(ew);
                 let out_num = then_
