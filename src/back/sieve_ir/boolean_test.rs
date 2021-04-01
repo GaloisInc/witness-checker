@@ -40,8 +40,8 @@ pub fn u64_into_boolean_vec_le(
 
     let bits = values
         .into_iter()
-        .map(|b| Ok(Boolean::from(AllocatedBit::alloc(builder, b)?)))
-        .collect::<Result<Vec<_>>>()?;
+        .map(|b| Boolean::from(AllocatedBit::alloc(builder, b)))
+        .collect();
 
     Ok(bits)
 }
@@ -90,7 +90,7 @@ pub fn field_into_allocated_bits_le<Scalar: PrimeField, S: Sink>(
         .into_iter()
         .rev()
         .map(|b| AllocatedBit::alloc(builder, b))
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
     Ok(bits)
 }
@@ -108,10 +108,10 @@ fn test_bit_allocated_bit() {
 
     let mut builder = new_builder();
 
-    let v = AllocatedBit::alloc(&mut builder, Some(true)).unwrap();
+    let v = AllocatedBit::alloc(&mut builder, Some(true));
     assert_eq!(v.get_value(), Some(true));
 
-    let w = AllocatedBit::alloc(&mut builder, Some(false)).unwrap();
+    let w = AllocatedBit::alloc(&mut builder, Some(false));
     assert_eq!(w.get_value(), Some(false));
 
     let evaluator = evaluate(builder);
@@ -127,9 +127,9 @@ fn test_bit_xor() {
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
             let mut builder = new_builder();
-            let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
-            let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
-            let c = AllocatedBit::xor(&mut builder, &a, &b).unwrap();
+            let a = AllocatedBit::alloc(&mut builder, Some(*a_val));
+            let b = AllocatedBit::alloc(&mut builder, Some(*b_val));
+            let c = AllocatedBit::xor(&mut builder, &a, &b);
             assert_eq!(c.get_value().unwrap(), *a_val ^ *b_val);
 
             let evaluator = evaluate(builder);
@@ -144,7 +144,11 @@ fn test_bit_xor() {
 
             assert_eq!(
                 evaluator.get(c.get_wire()).unwrap(),
-                if c.get_value().unwrap() { &one_ } else { &zero_ }
+                if c.get_value().unwrap() {
+                    &one_
+                } else {
+                    &zero_
+                }
             );
 
             assert_eq!(evaluator.get_violations().len(), 0 as usize);
@@ -159,9 +163,9 @@ fn test_bit_and() {
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
             let mut builder = new_builder();
-            let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
-            let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
-            let c = AllocatedBit::and(&mut builder, &a, &b).unwrap();
+            let a = AllocatedBit::alloc(&mut builder, Some(*a_val));
+            let b = AllocatedBit::alloc(&mut builder, Some(*b_val));
+            let c = AllocatedBit::and(&mut builder, &a, &b);
             assert_eq!(c.get_value().unwrap(), *a_val & *b_val);
 
             let evaluator = evaluate(builder);
@@ -176,7 +180,11 @@ fn test_bit_and() {
 
             assert_eq!(
                 evaluator.get(c.get_wire()).unwrap(),
-                if c.get_value().unwrap() { &one_ } else { &zero_ }
+                if c.get_value().unwrap() {
+                    &one_
+                } else {
+                    &zero_
+                }
             );
 
             assert_eq!(evaluator.get_violations().len(), 0 as usize);
@@ -191,9 +199,9 @@ fn test_bit_and_not() {
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
             let mut builder = new_builder();
-            let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
-            let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
-            let c = AllocatedBit::and_not(&mut builder, &a, &b).unwrap();
+            let a = AllocatedBit::alloc(&mut builder, Some(*a_val));
+            let b = AllocatedBit::alloc(&mut builder, Some(*b_val));
+            let c = AllocatedBit::and_not(&mut builder, &a, &b);
             assert_eq!(c.get_value().unwrap(), *a_val & !*b_val);
 
             let evaluator = evaluate(builder);
@@ -208,7 +216,11 @@ fn test_bit_and_not() {
 
             assert_eq!(
                 evaluator.get(c.get_wire()).unwrap(),
-                if c.get_value().unwrap() { &one_ } else { &zero_ }
+                if c.get_value().unwrap() {
+                    &one_
+                } else {
+                    &zero_
+                }
             );
 
             assert_eq!(evaluator.get_violations().len(), 0 as usize);
@@ -223,9 +235,9 @@ fn test_bit_nor() {
     for a_val in [false, true].iter() {
         for b_val in [false, true].iter() {
             let mut builder = new_builder();
-            let a = AllocatedBit::alloc(&mut builder, Some(*a_val)).unwrap();
-            let b = AllocatedBit::alloc(&mut builder, Some(*b_val)).unwrap();
-            let c = AllocatedBit::nor(&mut builder, &a, &b).unwrap();
+            let a = AllocatedBit::alloc(&mut builder, Some(*a_val));
+            let b = AllocatedBit::alloc(&mut builder, Some(*b_val));
+            let c = AllocatedBit::nor(&mut builder, &a, &b);
             assert_eq!(c.get_value().unwrap(), !*a_val & !*b_val);
 
             let evaluator = evaluate(builder);
@@ -240,7 +252,11 @@ fn test_bit_nor() {
 
             assert_eq!(
                 evaluator.get(c.get_wire()).unwrap(),
-                if c.get_value().unwrap() { &one_ } else { &zero_ }
+                if c.get_value().unwrap() {
+                    &one_
+                } else {
+                    &zero_
+                }
             );
 
             assert_eq!(evaluator.get_violations().len(), 0);
@@ -259,10 +275,8 @@ fn test_boolean_enforce_equal() {
                     {
                         let mut builder = new_builder();
 
-                        let mut a =
-                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(a_bool)).unwrap());
-                        let mut b =
-                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(b_bool)).unwrap());
+                        let mut a = Boolean::from(AllocatedBit::alloc(&mut builder, Some(a_bool)));
+                        let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(b_bool)));
 
                         if a_neg {
                             a = a.not();
@@ -283,8 +297,7 @@ fn test_boolean_enforce_equal() {
                         let mut builder = new_builder();
 
                         let mut a = Boolean::Constant(a_bool);
-                        let mut b =
-                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(b_bool)).unwrap());
+                        let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(b_bool)));
 
                         if a_neg {
                             a = a.not();
@@ -304,8 +317,7 @@ fn test_boolean_enforce_equal() {
                     {
                         let mut builder = new_builder();
 
-                        let mut a =
-                            Boolean::from(AllocatedBit::alloc(&mut builder, Some(a_bool)).unwrap());
+                        let mut a = Boolean::from(AllocatedBit::alloc(&mut builder, Some(a_bool)));
                         let mut b = Boolean::Constant(b_bool);
 
                         if a_neg {
@@ -357,7 +369,7 @@ fn test_boolean_enforce_equal() {
 fn test_boolean_negation() {
     let mut builder = new_builder();
 
-    let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap());
+    let mut b = Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)));
 
     match b {
         Boolean::Is(_) => {}
@@ -459,16 +471,16 @@ fn test_boolean_xor() {
                     OperandType::True => Boolean::constant(true),
                     OperandType::False => Boolean::constant(false),
                     OperandType::AllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)))
                     }
                     OperandType::AllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)))
                     }
                     OperandType::NegatedAllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap()).not()
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true))).not()
                     }
                     OperandType::NegatedAllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap()).not()
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false))).not()
                     }
                 };
 
@@ -476,7 +488,7 @@ fn test_boolean_xor() {
                 b = dyn_construct(second_operand, "b");
             }
 
-            let c = Boolean::xor(&mut builder, &a, &b).unwrap();
+            let c = Boolean::xor(&mut builder, &a, &b);
             let c_wire = c.wire(&mut builder);
 
             let evaluator = evaluate(builder);
@@ -644,16 +656,16 @@ fn test_boolean_and() {
                     OperandType::True => Boolean::constant(true),
                     OperandType::False => Boolean::constant(false),
                     OperandType::AllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap())
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)))
                     }
                     OperandType::AllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap())
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)))
                     }
                     OperandType::NegatedAllocatedTrue => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true)).unwrap()).not()
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(true))).not()
                     }
                     OperandType::NegatedAllocatedFalse => {
-                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false)).unwrap()).not()
+                        Boolean::from(AllocatedBit::alloc(&mut builder, Some(false))).not()
                     }
                 };
 
@@ -661,7 +673,7 @@ fn test_boolean_and() {
                 b = dyn_construct(second_operand, "b");
             }
 
-            let c = Boolean::and(&mut builder, &a, &b).unwrap();
+            let c = Boolean::and(&mut builder, &a, &b);
             let c_wire = c.wire(&mut builder);
 
             let evaluator = evaluate(builder);

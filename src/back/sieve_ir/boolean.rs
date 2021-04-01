@@ -22,7 +22,7 @@ impl AllocatedBit {
         self.wire
     }
 
-    pub fn alloc(b: &mut IRBuilder<impl Sink>, value: Option<bool>) -> Result<Self> {
+    pub fn alloc(b: &mut IRBuilder<impl Sink>, value: Option<bool>) -> Self {
         let field_value = match value {
             Some(false) => Some(vec![0]),
             Some(true) => Some(vec![1]),
@@ -35,7 +35,7 @@ impl AllocatedBit {
         let prod = b.mul(wire, wire_1);
         b.assert_zero(prod);
 
-        Ok(AllocatedBit { wire, value })
+        AllocatedBit { wire, value }
     }
 
     /// Calculates `NOT a`.
@@ -58,8 +58,8 @@ impl AllocatedBit {
 
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn xor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
-        let result_value = match (a.value, b.value) {
+    pub fn xor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+        let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
             _ => None,                                         // verifier mode
         };
@@ -74,18 +74,15 @@ impl AllocatedBit {
         //  1 | 1 |  0  |     0
 
         let tmp_wire = builder.sub(a.get_wire(), b.get_wire());
-        let result_wire = builder.mul(tmp_wire, tmp_wire);
+        let wire = builder.mul(tmp_wire, tmp_wire);
 
-        Ok(AllocatedBit {
-            wire: result_wire,
-            value: result_value,
-        })
+        AllocatedBit { wire, value }
     }
 
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn and(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
-        let result_value = match (a.value, b.value) {
+    pub fn and(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+        let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
             _ => None,                                         // verifier mode
         };
@@ -100,15 +97,12 @@ impl AllocatedBit {
         //  1 | 1 |  1  |  1
         let wire = builder.mul(a.get_wire(), b.get_wire());
 
-        Ok(AllocatedBit {
-            wire,
-            value: result_value,
-        })
+        AllocatedBit { wire, value }
     }
 
     /// Calculates `a AND (NOT b)`.
-    pub fn and_not(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
-        let result_value = match (a.value, b.value) {
+    pub fn and_not(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+        let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
             _ => None,                                          // verifier mode
         };
@@ -124,15 +118,12 @@ impl AllocatedBit {
         let right_wire = builder.sub(builder.one, b.get_wire());
         let wire = builder.mul(a.get_wire(), right_wire);
 
-        Ok(AllocatedBit {
-            wire,
-            value: result_value,
-        })
+        AllocatedBit { wire, value }
     }
 
     /// Calculates `(NOT a) AND (NOT b)`.
-    pub fn nor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Result<Self> {
-        let result_value = match (a.value, b.value) {
+    pub fn nor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+        let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
             _ => None,                                           // verifier mode
         };
@@ -149,10 +140,7 @@ impl AllocatedBit {
         let right_wire = builder.sub(builder.one, b.get_wire());
         let wire = builder.mul(left_wire, right_wire);
 
-        Ok(AllocatedBit {
-            wire,
-            value: result_value,
-        })
+        AllocatedBit { wire, value }
     }
 }
 
@@ -208,7 +196,7 @@ impl Boolean {
                     Boolean::Not(ref v) => {
                         builder.assert_zero(v.get_wire());
                     }
-                    _ => { /* This case will never happen => DO NOTHING */ }
+                    _ => unreachable!(),
                 }
                 Ok(())
             }
@@ -222,14 +210,14 @@ impl Boolean {
                         let w = AllocatedBit::not(builder, v);
                         builder.assert_zero(w.wire);
                     }
-                    _ => { /* This case will never happen => DO NOTHING */ }
+                    _ => unreachable!(),
                 }
                 Ok(())
             }
 
             (&Boolean::Is(ref v), &Boolean::Is(ref w))
             | (&Boolean::Not(ref v), &Boolean::Not(ref w)) => {
-                let xorwire = AllocatedBit::xor(builder, &v, &w)?.get_wire();
+                let xorwire = AllocatedBit::xor(builder, &v, &w).get_wire();
                 builder.assert_zero(xorwire);
 
                 Ok(())
@@ -241,8 +229,8 @@ impl Boolean {
                     wire: builder.one,
                     value: Some(true),
                 };
-                let not_w = AllocatedBit::xor(builder, &w, &true_bit)?;
-                let xor_wire = AllocatedBit::xor(builder, &v, &not_w)?.get_wire();
+                let not_w = AllocatedBit::xor(builder, &w, &true_bit);
+                let xor_wire = AllocatedBit::xor(builder, &v, &not_w).get_wire();
                 builder.assert_zero(xor_wire);
 
                 Ok(())
@@ -273,44 +261,44 @@ impl Boolean {
     }
 
     /// Perform XOR over two boolean operands
-    pub fn xor<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Result<Self> {
+    pub fn xor<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Self {
         match (a, b) {
-            (&Boolean::Constant(false), x) | (x, &Boolean::Constant(false)) => Ok(x.clone()),
-            (&Boolean::Constant(true), x) | (x, &Boolean::Constant(true)) => Ok(x.not()),
+            (&Boolean::Constant(false), x) | (x, &Boolean::Constant(false)) => x.clone(),
+            (&Boolean::Constant(true), x) | (x, &Boolean::Constant(true)) => x.not(),
             // a XOR (NOT b) = NOT(a XOR b)
             (is @ &Boolean::Is(_), not @ &Boolean::Not(_))
             | (not @ &Boolean::Not(_), is @ &Boolean::Is(_)) => {
-                Ok(Boolean::xor(builder, is, &not.not())?.not())
+                Boolean::xor(builder, is, &not.not()).not()
             }
             // a XOR b = (NOT a) XOR (NOT b)
             (&Boolean::Is(ref a), &Boolean::Is(ref b))
             | (&Boolean::Not(ref a), &Boolean::Not(ref b)) => {
-                Ok(Boolean::Is(AllocatedBit::xor(builder, a, b)?))
+                Boolean::Is(AllocatedBit::xor(builder, a, b))
             }
         }
     }
 
     /// Perform AND over two boolean operands
-    pub fn and<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Result<Self> {
+    pub fn and<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Self {
         match (a, b) {
             // false AND x is always false
             (&Boolean::Constant(false), _) | (_, &Boolean::Constant(false)) => {
-                Ok(Boolean::Constant(false))
+                Boolean::Constant(false)
             }
             // true AND x is always x
-            (&Boolean::Constant(true), x) | (x, &Boolean::Constant(true)) => Ok(x.clone()),
+            (&Boolean::Constant(true), x) | (x, &Boolean::Constant(true)) => x.clone(),
             // a AND (NOT b)
             (&Boolean::Is(ref is), &Boolean::Not(ref not))
             | (&Boolean::Not(ref not), &Boolean::Is(ref is)) => {
-                Ok(Boolean::Is(AllocatedBit::and_not(builder, is, not)?))
+                Boolean::Is(AllocatedBit::and_not(builder, is, not))
             }
             // (NOT a) AND (NOT b) = a NOR b
             (&Boolean::Not(ref a), &Boolean::Not(ref b)) => {
-                Ok(Boolean::Is(AllocatedBit::nor(builder, a, b)?))
+                Boolean::Is(AllocatedBit::nor(builder, a, b))
             }
             // a AND b
             (&Boolean::Is(ref a), &Boolean::Is(ref b)) => {
-                Ok(Boolean::Is(AllocatedBit::and(builder, a, b)?))
+                Boolean::Is(AllocatedBit::and(builder, a, b))
             }
         }
     }

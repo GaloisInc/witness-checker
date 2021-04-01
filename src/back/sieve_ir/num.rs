@@ -89,7 +89,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         let bits: Vec<Boolean> = values
             .into_iter()
-            .map(|value| Boolean::from(AllocatedBit::alloc(b, value).unwrap()))
+            .map(|value| Boolean::from(AllocatedBit::alloc(b, value)))
             .collect();
 
         // Enforce that the bit representation is equivalent to this Num.
@@ -304,7 +304,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn equals_zero(&self, b: &mut IRBuilder<impl Sink>) -> Boolean {
         let is_zero_bool = {
             let value = self.value.map(|val| val.is_zero());
-            Boolean::from(AllocatedBit::alloc(b, value).unwrap())
+            Boolean::from(AllocatedBit::alloc(b, value))
         };
         // TODO: the boolean constraint of AllocatedBit should not be necessary
         // because the constraints below already enforce booleanness.

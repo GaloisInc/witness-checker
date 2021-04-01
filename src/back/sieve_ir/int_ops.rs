@@ -5,7 +5,7 @@ use std::cmp;
 use zki_sieve::Sink;
 
 pub fn bitwise_xor(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
-    left.xor(builder, right).unwrap()
+    left.xor(builder, right)
 }
 
 // TODO: Implement directly on the type but fields are private.
@@ -14,7 +14,7 @@ pub fn bitwise_and(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) 
         .bits
         .iter()
         .zip(right.bits.iter())
-        .map(|(l, r)| Boolean::and(builder, l, r).unwrap())
+        .map(|(l, r)| Boolean::and(builder, l, r))
         .collect();
 
     Int::from_bits(&out_bits)
@@ -32,7 +32,7 @@ pub fn bitwise_or(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -
 }
 
 pub fn bool_or<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Boolean, b: &'a Boolean) -> Boolean {
-    Boolean::and(builder, &a.not(), &b.not()).unwrap().not()
+    Boolean::and(builder, &a.not(), &b.not()).not()
 }
 
 pub fn enforce_true(b: &mut IRBuilder<impl Sink>, bool: &Boolean) {
@@ -68,8 +68,8 @@ pub fn div<Scalar: PrimeField>(
     };
 
     let max_width = cmp::max(numer_int.width(), denom_int.width());
-    let quot_int = Int::alloc(builder, max_width, quot_val).unwrap();
-    let rest_int = Int::alloc(builder, denom_int.width(), rest_val).unwrap();
+    let quot_int = Int::alloc(builder, max_width, quot_val);
+    let rest_int = Int::alloc(builder, denom_int.width(), rest_val);
 
     let quot_num = Num::from_int(builder, &quot_int);
     let rest_num = Num::from_int(builder, &rest_int);

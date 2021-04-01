@@ -148,8 +148,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                             &mut self.builder,
                             sz.bits() as usize,
                             secret.val().map(|val| val.to_biguint()),
-                        )
-                        .unwrap();
+                        );
                         WireRepr::from(int)
                     }
 
@@ -212,12 +211,10 @@ impl<'a, S: Sink> Backend<'a, S> {
 
                         let out_bool = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub => {
-                                Boolean::xor(&mut self.builder, &lb, &rb).unwrap()
+                                Boolean::xor(&mut self.builder, &lb, &rb)
                             }
 
-                            BinOp::And | BinOp::Mul => {
-                                Boolean::and(&mut self.builder, &lb, &rb).unwrap()
-                            }
+                            BinOp::And | BinOp::Mul => Boolean::and(&mut self.builder, &lb, &rb),
 
                             BinOp::Or => bool_or(&mut self.builder, &lb, &rb),
 

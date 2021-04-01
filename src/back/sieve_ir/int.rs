@@ -3,7 +3,7 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
-use zki_sieve::{Result, Sink};
+use zki_sieve::Sink;
 
 use num_bigint::BigUint;
 use num_traits::Zero;
@@ -53,11 +53,7 @@ impl Int {
     }
 
     /// Allocate an `Int` in the constraint system
-    pub fn alloc(
-        builder: &mut IRBuilder<impl Sink>,
-        width: usize,
-        value: Option<BigUint>,
-    ) -> Result<Self> {
+    pub fn alloc(builder: &mut IRBuilder<impl Sink>, width: usize, value: Option<BigUint>) -> Self {
         let values = match value {
             Some(ref val) => {
                 let mut v = Vec::with_capacity(width);
@@ -76,13 +72,10 @@ impl Int {
 
         let bits = values
             .into_iter()
-            .map(|v| Ok(Boolean::from(AllocatedBit::alloc(builder, v)?)))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|v| Boolean::from(AllocatedBit::alloc(builder, v)))
+            .collect();
 
-        Ok(Int {
-            bits: bits,
-            value: value,
-        })
+        Int { bits, value }
     }
 
     pub fn from_num<Scalar: PrimeField>(
@@ -226,8 +219,8 @@ impl Int {
     }
 
     /// XOR this `Int` with another `Int`
-    pub fn xor(&self, builder: &mut IRBuilder<impl Sink>, other: &Self) -> Result<Self> {
-        let new_value = match (self.value.as_ref(), other.value.as_ref()) {
+    pub fn xor(&self, builder: &mut IRBuilder<impl Sink>, other: &Self) -> Self {
+        let value = match (self.value.as_ref(), other.value.as_ref()) {
             (Some(a), Some(b)) => Some(a ^ b),
             _ => None,
         };
@@ -237,11 +230,8 @@ impl Int {
             .iter()
             .zip(other.bits.iter())
             .map(|(a, b)| Boolean::xor(builder, a, b))
-            .collect::<Result<_>>()?;
+            .collect();
 
-        Ok(Int {
-            bits: bits,
-            value: new_value,
-        })
+        Int { bits, value }
     }
 }
