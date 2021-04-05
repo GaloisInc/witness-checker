@@ -502,6 +502,7 @@ fn test_backend_sieve_ir() -> Result<()> {
     check_int(&b, diff2, (11 - 12 * 13) as u64);
 
     b.builder.prof.print_report();
+    b.builder.b.print_report();
     let sink = b.finish()?;
     let source: Source = sink.into();
     let evaluator = Evaluator::from_messages(source.iter_messages());

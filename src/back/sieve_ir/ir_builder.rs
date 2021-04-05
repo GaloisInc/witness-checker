@@ -1,5 +1,6 @@
 use crate::back::sieve_ir::field::encode_field_order;
 use crate::back::sieve_ir::field::encode_scalar;
+use crate::back::sieve_ir::ir_cache::IRCache;
 use crate::back::sieve_ir::ir_profiler::IRProfiler;
 use ff::PrimeField;
 use num_bigint::BigUint;
@@ -11,7 +12,7 @@ use BuildGate::*;
 
 /// Extensions to the basic builder.
 pub struct IRBuilder<S: Sink> {
-    b: GateBuilder<S>,
+    pub b: IRCache<S>,
     pub prof: IRProfiler,
 
     pub zero: WireId,
@@ -21,7 +22,7 @@ pub struct IRBuilder<S: Sink> {
 }
 
 impl<S: Sink> GateBuilderT for IRBuilder<S> {
-    fn create_gate(&mut self, gate: BuildGate) -> u64 {
+    fn create_gate(&mut self, gate: BuildGate) -> WireId {
         self.prof.notify_gate(&gate);
         self.b.create_gate(gate)
     }
@@ -30,9 +31,12 @@ impl<S: Sink> GateBuilderT for IRBuilder<S> {
 impl<S: Sink> IRBuilder<S> {
     pub fn new<Scalar: PrimeField>(sink: S) -> Self {
         let field_order = encode_field_order::<Scalar>();
+        let header = Header::new(field_order);
+        let builder = GateBuilder::new(sink, header);
+        let cached_builder = IRCache::new(builder);
 
         let mut irb = IRBuilder {
-            b: GateBuilder::new(sink, Header::new(field_order)),
+            b: cached_builder,
             prof: IRProfiler::default(),
             zero: 0,
             one: 0,

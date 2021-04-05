@@ -529,7 +529,7 @@ fn main() -> io::Result<()> {
 
     #[cfg(feature = "sieve_ir")]
     if let Some(workspace) = args.value_of("sieve-ir-out") {
-        use cheesecloth::back::sieve_ir::backend::{Backend, Scalar};
+        use cheesecloth::back::sieve_ir::backend::Backend;
         use zki_sieve::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -542,7 +542,9 @@ fn main() -> io::Result<()> {
         let accepted = flags[0];
         backend.enforce_true(accepted);
 
+        eprintln!();
         backend.builder.prof.print_report();
+        backend.builder.b.print_report();
 
         // Write files.
         backend.finish().unwrap();

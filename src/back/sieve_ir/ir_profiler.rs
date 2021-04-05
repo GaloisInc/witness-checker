@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use zki_sieve::producers::builder::BuildGate;
 use BuildGate::*;
 
@@ -6,7 +6,7 @@ use BuildGate::*;
 pub struct IRProfiler {
     pub warnings_panic: bool,
 
-    gates: HashMap<BuildGate, ()>,
+    gates: HashSet<BuildGate>,
     notes: Vec<String>,
 
     duplicate_count: usize,
@@ -34,8 +34,8 @@ impl IRProfiler {
             _ => {}
         };
 
-        let previous = self.gates.insert(gate.clone(), ());
-        if previous.is_some() {
+        let new = self.gates.insert(gate.clone());
+        if !new {
             self.duplicate_count += 1;
             let culprit = self.current_note().to_string();
             let count = self.duplicate_culprits.entry(culprit).or_insert(0);
