@@ -5,7 +5,7 @@ mod field;
 mod int;
 mod int_ops;
 pub mod ir_builder;
-mod ir_cache;
+mod ir_dedup;
 mod ir_profiler;
 mod num;
 mod representer;

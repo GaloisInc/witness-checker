@@ -1,6 +1,6 @@
 use crate::back::sieve_ir::field::encode_field_order;
 use crate::back::sieve_ir::field::encode_scalar;
-use crate::back::sieve_ir::ir_cache::IRCache;
+use crate::back::sieve_ir::ir_dedup::IRDedup;
 use crate::back::sieve_ir::ir_profiler::IRProfiler;
 use ff::PrimeField;
 use num_bigint::BigUint;
@@ -62,17 +62,29 @@ pub trait IRBuilderT: GateBuilderT {
 /// Extensions to the basic builder.
 pub struct IRBuilder<S: Sink> {
     gate_builder: GateBuilder<S>,
-    pub cache: IRCache,
-    pub prof: IRProfiler,
+
+    /// If dedup is enabled, gates will be deduplicated. Default: enabled.
+    pub dedup: Option<IRDedup>,
+
+    /// If profiler is enabled, it will track duplicate gates. Default: disabled.
+    pub prof: Option<IRProfiler>,
 
     powers_of_two: Vec<WireId>,
 }
 
 impl<S: Sink> GateBuilderT for IRBuilder<S> {
     fn create_gate(&mut self, gate: BuildGate) -> WireId {
-        self.prof.notify_gate(&gate);
         let b = &mut self.gate_builder;
-        self.cache.create_gate(b, gate)
+
+        if let Some(prof) = &mut self.prof {
+            prof.notify_gate(&gate);
+        }
+
+        if let Some(dedup) = &mut self.dedup {
+            dedup.create_gate(b, gate)
+        } else {
+            b.create_gate(gate)
+        }
     }
 }
 
@@ -91,11 +103,15 @@ impl<S: Sink> IRBuilderT for IRBuilder<S> {
     }
 
     fn annotate(&mut self, note: &str) {
-        self.prof.annotate(note);
+        if let Some(prof) = &mut self.prof {
+            prof.annotate(note);
+        }
     }
 
     fn deannotate(&mut self) {
-        self.prof.deannotate();
+        if let Some(prof) = &mut self.prof {
+            prof.deannotate();
+        }
     }
 }
 
@@ -107,8 +123,8 @@ impl<S: Sink> IRBuilder<S> {
 
         let mut irb = IRBuilder {
             gate_builder: GateBuilder::new(sink, header),
-            cache: IRCache::default(),
-            prof: IRProfiler::default(),
+            dedup: Some(IRDedup::default()),
+            prof: None, // Some(IRProfiler::default()),
             powers_of_two: vec![],
         };
 
@@ -125,5 +141,13 @@ impl<S: Sink> IRBuilder<S> {
 
     pub fn finish(self) -> S {
         self.gate_builder.finish()
+    }
+
+    pub fn disable_dedup(&mut self) {
+        self.dedup = None;
+    }
+
+    pub fn enable_profiler(&mut self) {
+        self.prof = Some(IRProfiler::default());
     }
 }

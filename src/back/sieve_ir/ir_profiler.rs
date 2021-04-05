@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::mem::size_of;
 use zki_sieve::producers::builder::BuildGate;
 use BuildGate::*;
 
@@ -52,11 +53,14 @@ impl IRProfiler {
     }
 
     pub fn print_report(&self) {
+        // Wild estimate of HashSet size.
+        let ram = self.gates.capacity() * size_of::<(BuildGate, u64)>();
         eprintln!(
-            "IRProfiler found {}% of duplicates ({} / {} unique gates), created from these contexts:",
+            "IRProfiler found {}% of duplicates ({} / {} unique gates) using ~{}MB of memory\nThese contexts created duplicates:",
             100 * self.duplicate_count / self.gates.len(),
             self.duplicate_count,
             self.gates.len(),
+            ram / 1024 / 1024,
         );
         for (culprit, count) in self.duplicate_culprits.iter() {
             eprintln!(
@@ -67,7 +71,7 @@ impl IRProfiler {
         }
         if !self.notes.is_empty() {
             eprintln!(
-                "IRProfiler incorrect usage: More annotate than deannotate ({}).",
+                "WARN IRProfiler incorrect usage: More annotate than deannotate ({}).",
                 self.current_note()
             );
         }

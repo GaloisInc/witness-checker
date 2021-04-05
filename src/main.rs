@@ -542,6 +542,8 @@ fn main() -> io::Result<()> {
         let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
         let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+        ir_builder.enable_profiler();
+        // ir_builder.disable_dedup(); // If using too much memory.
         let mut backend = Backend::new(&mut ir_builder);
 
         let accepted = flags[0];
@@ -549,8 +551,8 @@ fn main() -> io::Result<()> {
         backend.finish();
 
         eprintln!();
-        ir_builder.prof.print_report();
-        ir_builder.cache.print_report();
+        ir_builder.prof.as_ref().map(|p| p.print_report());
+        ir_builder.dedup.as_ref().map(|p| p.print_report());
         ir_builder.finish();
 
         // Validate the circuit and witness.

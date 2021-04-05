@@ -6,13 +6,13 @@ use zki_sieve::WireId;
 use BuildGate::*;
 
 #[derive(Default)]
-pub struct IRCache {
+pub struct IRDedup {
     // NICE-TO-HAVE: LRU cache to save memory. Must be deterministic.
     gate_cache: HashMap<BuildGate, WireId>,
     hit_count: usize,
 }
 
-impl IRCache {
+impl IRDedup {
     pub fn create_gate(&mut self, builder: &mut impl GateBuilderT, gate: BuildGate) -> WireId {
         // Don’t cache allocations.
         match gate {
@@ -38,12 +38,13 @@ impl IRCache {
     }
 
     pub fn print_report(&self) {
+        // Wild estimate of HashMap size.
         let ram = self.gate_cache.capacity() * size_of::<(BuildGate, WireId, u64)>();
         eprintln!(
-            "IRCache: size {} gates, ~{}MB memory, {} hits\n",
+            "IRDedup removed {} duplicate gates using a cache of {} gates in ~{}MB of memory\n",
+            self.hit_count,
             self.gate_cache.len(),
             ram / 1024 / 1024,
-            self.hit_count,
         );
     }
 }

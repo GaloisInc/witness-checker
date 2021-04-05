@@ -439,7 +439,11 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     use zki_sieve::Source;
 
     let mut ir_builder = IRBuilder::new::<Scalar>(MemorySink::default());
-    ir_builder.prof.warnings_panic = false;
+
+    // If you want a stacktrace to debug duplicate gates, set warnings_panic to true.
+    ir_builder.enable_profiler();
+    ir_builder.prof.as_mut().map(|p| p.warnings_panic = false);
+
     let mut back = Backend::new(&mut ir_builder);
 
     let arena = bumpalo::Bump::new();
@@ -492,8 +496,8 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     check_int(&back, diff2, (11 - 12 * 13) as u64);
 
     back.finish();
-    ir_builder.prof.print_report();
-    ir_builder.cache.print_report();
+    ir_builder.prof.as_ref().map(|p| p.print_report());
+    ir_builder.dedup.as_ref().map(|p| p.print_report());
     let sink = ir_builder.finish();
     let source: Source = sink.into();
     let evaluator = Evaluator::from_messages(source.iter_messages());
