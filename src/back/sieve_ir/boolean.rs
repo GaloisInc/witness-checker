@@ -1,9 +1,8 @@
 // Inspired from bellman::gadgets::boolean
 
-use zki_sieve::Sink;
 use zki_sieve::{Result, WireId};
 
-use crate::back::sieve_ir::ir_builder::IRBuilder;
+use crate::back::sieve_ir::ir_builder::IRBuilderT;
 
 /// Represents a variable in the constraint system which is guaranteed
 /// to be either zero or one.
@@ -22,7 +21,7 @@ impl AllocatedBit {
         self.wire
     }
 
-    pub fn alloc(b: &mut IRBuilder<impl Sink>, value: Option<bool>) -> Self {
+    pub fn alloc(b: &mut impl IRBuilderT, value: Option<bool>) -> Self {
         let field_value = match value {
             Some(false) => Some(vec![0]),
             Some(true) => Some(vec![1]),
@@ -31,7 +30,7 @@ impl AllocatedBit {
         let wire = b.new_witness(field_value);
 
         // (x - 1) * x == 0
-        let wire_1 = b.add(wire, b.neg_one);
+        let wire_1 = b.add(wire, b.neg_one());
         let prod = b.mul(wire, wire_1);
         b.assert_zero(prod);
 
@@ -39,7 +38,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `NOT a`.
-    pub fn not(b: &mut IRBuilder<impl Sink>, a: &Self) -> Self {
+    pub fn not(b: &mut impl IRBuilderT, a: &Self) -> Self {
         let value = match a.value {
             Some(a_val) => Some(!a_val), // prover mode
             _ => None,                   // verifier mode
@@ -51,14 +50,14 @@ impl AllocatedBit {
         // ---|-------|
         //  0 | 1     |
         //  1 | 0     |
-        let wire = b.sub(b.one, a.get_wire());
+        let wire = b.sub(b.one(), a.get_wire());
 
         AllocatedBit { wire, value }
     }
 
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn xor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+    pub fn xor(builder: &mut impl IRBuilderT, a: &Self, b: &Self) -> Self {
         let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val ^ b_val), // prover mode
             _ => None,                                         // verifier mode
@@ -81,7 +80,7 @@ impl AllocatedBit {
 
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn and(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+    pub fn and(builder: &mut impl IRBuilderT, a: &Self, b: &Self) -> Self {
         let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & b_val), // prover mode
             _ => None,                                         // verifier mode
@@ -101,7 +100,7 @@ impl AllocatedBit {
     }
 
     /// Calculates `a AND (NOT b)`.
-    pub fn and_not(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+    pub fn and_not(builder: &mut impl IRBuilderT, a: &Self, b: &Self) -> Self {
         let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(a_val & !b_val), // prover mode
             _ => None,                                          // verifier mode
@@ -115,14 +114,14 @@ impl AllocatedBit {
         //  0 | 1 |  0   |  0
         //  1 | 0 |  1   |  1
         //  1 | 1 |  0   |  0
-        let right_wire = builder.sub(builder.one, b.get_wire());
+        let right_wire = builder.sub(builder.one(), b.get_wire());
         let wire = builder.mul(a.get_wire(), right_wire);
 
         AllocatedBit { wire, value }
     }
 
     /// Calculates `(NOT a) AND (NOT b)`.
-    pub fn nor(builder: &mut IRBuilder<impl Sink>, a: &Self, b: &Self) -> Self {
+    pub fn nor(builder: &mut impl IRBuilderT, a: &Self, b: &Self) -> Self {
         let value = match (a.value, b.value) {
             (Some(a_val), Some(b_val)) => Some(!a_val & !b_val), // prover mode
             _ => None,                                           // verifier mode
@@ -136,8 +135,8 @@ impl AllocatedBit {
         //  0 | 1 |    0    |     0
         //  1 | 0 |    0    |     0
         //  1 | 1 |    0    |     0
-        let left_wire = builder.sub(builder.one, a.get_wire());
-        let right_wire = builder.sub(builder.one, b.get_wire());
+        let left_wire = builder.sub(builder.one(), a.get_wire());
+        let right_wire = builder.sub(builder.one(), b.get_wire());
         let wire = builder.mul(left_wire, right_wire);
 
         AllocatedBit { wire, value }
@@ -157,16 +156,16 @@ pub enum Boolean {
 }
 
 impl Boolean {
-    pub fn alloc(b: &mut IRBuilder<impl Sink>, value: Option<bool>) -> Self {
+    pub fn alloc(b: &mut impl IRBuilderT, value: Option<bool>) -> Self {
         Boolean::Is(AllocatedBit::alloc(b, value))
     }
 
-    pub fn wire(&self, b: &mut IRBuilder<impl Sink>) -> WireId {
+    pub fn wire(&self, b: &mut impl IRBuilderT) -> WireId {
         match self {
             Boolean::Is(bit) => bit.wire,
             Boolean::Not(bit) => AllocatedBit::not(b, bit).wire,
-            Boolean::Constant(false) => b.zero,
-            Boolean::Constant(true) => b.one,
+            Boolean::Constant(false) => b.zero(),
+            Boolean::Constant(true) => b.one(),
         }
     }
 
@@ -177,12 +176,12 @@ impl Boolean {
         }
     }
 
-    pub fn enforce_true(&self, builder: &mut IRBuilder<impl Sink>) -> Result<()> {
+    pub fn enforce_true(&self, builder: &mut impl IRBuilderT) -> Result<()> {
         Self::enforce_equal(builder, self, &Boolean::Constant(true))
     }
 
     pub fn enforce_equal<'l>(
-        builder: &mut IRBuilder<impl Sink>,
+        builder: &mut impl IRBuilderT,
         a: &'l Self,
         b: &'l Self,
     ) -> Result<()> {
@@ -234,7 +233,7 @@ impl Boolean {
             (&Boolean::Is(ref v), &Boolean::Not(ref w))
             | (&Boolean::Not(ref v), &Boolean::Is(ref w)) => {
                 let true_bit = AllocatedBit {
-                    wire: builder.one,
+                    wire: builder.one(),
                     value: Some(true),
                 };
                 let not_w = AllocatedBit::xor(builder, &w, &true_bit);
@@ -269,7 +268,7 @@ impl Boolean {
     }
 
     /// Perform XOR over two boolean operands
-    pub fn xor<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Self {
+    pub fn xor<'a>(builder: &mut impl IRBuilderT, a: &'a Self, b: &'a Self) -> Self {
         match (a, b) {
             (&Boolean::Constant(false), x) | (x, &Boolean::Constant(false)) => x.clone(),
             (&Boolean::Constant(true), x) | (x, &Boolean::Constant(true)) => x.not(),
@@ -287,7 +286,7 @@ impl Boolean {
     }
 
     /// Perform AND over two boolean operands
-    pub fn and<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Self, b: &'a Self) -> Self {
+    pub fn and<'a>(builder: &mut impl IRBuilderT, a: &'a Self, b: &'a Self) -> Self {
         match (a, b) {
             // false AND x is always false
             (&Boolean::Constant(false), _) | (_, &Boolean::Constant(false)) => {

@@ -11,9 +11,9 @@ use super::{
     boolean::Boolean,
     field::{encode_scalar, scalar_from_biguint},
     int::Int,
-    ir_builder::IRBuilder,
+    ir_builder::IRBuilderT,
 };
-use zki_sieve::{Sink, WireId};
+use zki_sieve::WireId;
 
 /// A number, represented as a single field element.
 #[derive(Clone)]
@@ -32,7 +32,7 @@ pub struct Num<Scalar: PrimeField> {
 }
 
 impl<Scalar: PrimeField> Num<Scalar> {
-    pub fn from_biguint(b: &mut IRBuilder<impl Sink>, width: u16, value: &BigUint) -> Num<Scalar> {
+    pub fn from_biguint(b: &mut impl IRBuilderT, width: u16, value: &BigUint) -> Num<Scalar> {
         let element: Scalar = scalar_from_biguint(value).unwrap();
         let zki_wire = b.new_constant(encode_scalar(&element));
 
@@ -44,7 +44,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         }
     }
 
-    pub fn from_int(builder: &mut IRBuilder<impl Sink>, int: &Int) -> Num<Scalar> {
+    pub fn from_int(builder: &mut impl IRBuilderT, int: &Int) -> Num<Scalar> {
         let value = int.value.as_ref().map(|x| scalar_from_biguint(x).unwrap());
         let zki_wire = Self::compose_bits(builder, &int.bits);
         let width = int.width() as u16;
@@ -57,9 +57,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         }
     }
 
-    fn compose_bits(b: &mut IRBuilder<impl Sink>, bits: &[Boolean]) -> WireId {
+    fn compose_bits(b: &mut impl IRBuilderT, bits: &[Boolean]) -> WireId {
         if bits.len() == 0 {
-            return b.zero;
+            return b.zero();
         }
 
         bits.iter()
@@ -74,8 +74,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
     }
 
     /// Decompose this number into bits, least-significant first.  Returns `self.real_bits` bits.
-    pub fn to_bits(&self, b: &mut IRBuilder<impl Sink>) -> Vec<Boolean> {
-        b.prof.enter_note("to_bits");
+    pub fn to_bits(&self, b: &mut impl IRBuilderT) -> Vec<Boolean> {
+        b.annotate("to_bits");
 
         let n_bits = self.real_bits as usize;
 
@@ -97,7 +97,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let difference = b.sub(self.zki_wire, recomposed_wire);
         b.assert_zero(difference);
 
-        b.prof.exit_note();
+        b.deannotate();
         bits
     }
 
@@ -107,7 +107,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn add_assign(
         mut self,
         other: &Self,
-        builder: &mut IRBuilder<impl Sink>,
+        builder: &mut impl IRBuilderT,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (Some(ref mut self_val), Some(ref other_val)) => self_val.add_assign(other_val),
@@ -130,7 +130,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-    pub fn sub(mut self, other: &Self, b: &mut IRBuilder<impl Sink>) -> Result<Self, String> {
+    pub fn sub(mut self, other: &Self, b: &mut impl IRBuilderT) -> Result<Self, String> {
         // `a - b` might underflow in the field, producing garbage.  We compute `a + (2^N - b)`
         // instead, with `N` large enough that `2^N - b` can't underflow.  This makes `a.sub(b)`
         // essentially equivalent to `a.add(b.neg())`, except it saves a bit.  `2^N - b` is at most
@@ -171,7 +171,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-    pub fn mul(mut self, other: &Self, b: &mut IRBuilder<impl Sink>) -> Result<Self, String> {
+    pub fn mul(mut self, other: &Self, b: &mut impl IRBuilderT) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
             (Some(ref mut self_val), Some(ref other_val)) => self_val.mul_assign(other_val),
             _ => {}
@@ -217,7 +217,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Ok(self)
     }
 
-    pub fn neg(mut self, b: &mut IRBuilder<impl Sink>) -> Result<Self, String> {
+    pub fn neg(mut self, b: &mut impl IRBuilderT) -> Result<Self, String> {
         // Computing `0 - a` in the field could underflow, producing garbage.  We instead compute
         // `2^N - a`, which never underflows, but does increase `real_bits` by one.
         let max_value: Scalar =
@@ -251,7 +251,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         mut self,
         else_: &Self,
         cond: &Self,
-        b: &mut IRBuilder<impl Sink>,
+        b: &mut impl IRBuilderT,
     ) -> Result<Self, String> {
         if cond.real_bits == 0 || cond.valid_bits == 0 {
             // This probably won't ever happen, but if it does, we know the logical value of
@@ -298,7 +298,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
     /// valid_bits`.
     /// Note: WireRepr.as_num_trunc is better for this, because it caches the Int representation.
     // TODO: simple take the right wire in the bit recomposition (like `compose_bits`).
-    fn _truncate(self, b: &mut IRBuilder<impl Sink>) -> Self {
+    fn _truncate(self, b: &mut impl IRBuilderT) -> Self {
         if self.real_bits == self.valid_bits {
             return self;
         }
@@ -307,7 +307,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         Self::from_int(b, &int)
     }
 
-    pub fn equals_zero(&self, b: &mut IRBuilder<impl Sink>) -> Boolean {
+    pub fn equals_zero(&self, b: &mut impl IRBuilderT) -> Boolean {
         let is_zero_bool = {
             let value = self.value.map(|val| val.is_zero());
             Boolean::alloc(b, value)
@@ -339,7 +339,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // (is_zero != 1) implies (num != 0)
         let num_inverse = b.mul(num, inverse);
         let n_i_iz = b.add(num_inverse, is_zero);
-        let n_i_iz_1 = b.add(n_i_iz, b.neg_one);
+        let n_i_iz_1 = b.add(n_i_iz, b.neg_one());
         b.assert_zero(n_i_iz_1);
 
         is_zero_bool

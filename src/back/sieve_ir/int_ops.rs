@@ -1,15 +1,14 @@
-use super::{boolean::Boolean, int::Int, ir_builder::IRBuilder, num::Num};
+use super::{boolean::Boolean, int::Int, ir_builder::IRBuilderT, num::Num};
 use ff::PrimeField;
 use num_traits::Zero;
 use std::cmp;
-use zki_sieve::Sink;
 
-pub fn bitwise_xor(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
+pub fn bitwise_xor(builder: &mut impl IRBuilderT, left: &Int, right: &Int) -> Int {
     left.xor(builder, right)
 }
 
 // NICE-TO-HAVE: Implement directly on the Int type
-pub fn bitwise_and(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
+pub fn bitwise_and(builder: &mut impl IRBuilderT, left: &Int, right: &Int) -> Int {
     let out_bits: Vec<Boolean> = left
         .bits
         .iter()
@@ -20,7 +19,7 @@ pub fn bitwise_and(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) 
     Int::from_bits(&out_bits)
 }
 
-pub fn bitwise_or(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
+pub fn bitwise_or(builder: &mut impl IRBuilderT, left: &Int, right: &Int) -> Int {
     let out_bits: Vec<Boolean> = left
         .bits
         .iter()
@@ -31,12 +30,12 @@ pub fn bitwise_or(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -
     Int::from_bits(&out_bits)
 }
 
-pub fn bool_or<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Boolean, b: &'a Boolean) -> Boolean {
+pub fn bool_or<'a>(builder: &mut impl IRBuilderT, a: &'a Boolean, b: &'a Boolean) -> Boolean {
     Boolean::and(builder, &a.not(), &b.not()).not()
 }
 
 pub fn div<Scalar: PrimeField>(
-    builder: &mut IRBuilder<impl Sink>,
+    builder: &mut impl IRBuilderT,
     numer_num: &Num<Scalar>,
     numer_int: &Int,
     denom_num: &Num<Scalar>,
@@ -47,7 +46,7 @@ pub fn div<Scalar: PrimeField>(
     /*rest*/ Num<Scalar>,
     Int,
 ) {
-    builder.prof.enter_note("int_opts::div");
+    builder.annotate("int_opts::div");
 
     let (quot_val, rest_val) = match (numer_int.value.as_ref(), denom_int.value.as_ref()) {
         (Some(numer), Some(denom)) => {
@@ -91,7 +90,7 @@ pub fn div<Scalar: PrimeField>(
 
     ok.enforce_true(builder).unwrap();
 
-    builder.prof.exit_note();
+    builder.deannotate();
     (quot_num, quot_int, rest_num, rest_int)
 }
 

@@ -14,13 +14,13 @@ pub struct IRProfiler {
 }
 
 impl IRProfiler {
-    pub fn enter_note(&mut self, note: &str) {
+    pub fn annotate(&mut self, note: &str) {
         self.notes
             .push(format!("{}\t/ {}", self.current_note(), note));
     }
 
-    pub fn exit_note(&mut self) {
-        self.notes.pop().expect("More exit_note than enter_note");
+    pub fn deannotate(&mut self) {
+        self.notes.pop().expect("More deannotate than annotate");
     }
 
     fn current_note(&self) -> &str {
@@ -67,7 +67,7 @@ impl IRProfiler {
         }
         if !self.notes.is_empty() {
             eprintln!(
-                "IRProfiler incorrect usage: More enter_note than exit_note ({}).",
+                "IRProfiler incorrect usage: More annotate than deannotate ({}).",
                 self.current_note()
             );
         }

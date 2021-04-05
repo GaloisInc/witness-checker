@@ -4,7 +4,7 @@ mod boolean;
 mod field;
 mod int;
 mod int_ops;
-mod ir_builder;
+pub mod ir_builder;
 mod ir_cache;
 mod ir_profiler;
 mod num;

@@ -8,8 +8,10 @@ use num_bigint::BigInt;
 use zki_sieve::FilesSink;
 
 fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
-    use cheesecloth::back::sieve_ir::backend::Backend;
-    use std::fs::remove_file;
+    use cheesecloth::back::sieve_ir::{
+        backend::{Backend, Scalar},
+        ir_builder::IRBuilder,
+    };
 
     let ws = vec![w];
     let ws = run_pass(&c, ws, lower::int::compare_to_greater_or_equal_to_zero);
@@ -24,9 +26,11 @@ fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
     let dir = tempfile::tempdir().unwrap();
 
     let sink = FilesSink::new_clean(&dir.path()).unwrap();
-    let mut backend = Backend::new(sink, true);
+    let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+    let mut backend = Backend::new(&mut ir_builder);
     backend.enforce_true(w);
-    backend.finish().unwrap();
+    backend.finish();
+    ir_builder.finish();
 
     // TODO: Validate the circuit and witness.
     // let mut reader = Reader::new();

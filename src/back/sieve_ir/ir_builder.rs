@@ -10,51 +10,76 @@ use zki_sieve::Sink;
 use zki_sieve::{Value, WireId};
 use BuildGate::*;
 
+pub trait IRBuilderT: GateBuilderT {
+    fn zero(&self) -> WireId {
+        0
+    }
+    fn one(&self) -> WireId {
+        1
+    }
+    fn neg_one(&self) -> WireId {
+        2
+    }
+
+    fn new_constant(&mut self, value: Value) -> WireId {
+        self.create_gate(Constant(value))
+    }
+
+    fn new_witness(&mut self, value: Option<Value>) -> WireId {
+        self.create_gate(Witness(value))
+    }
+
+    fn assert_zero(&mut self, wire: WireId) {
+        self.create_gate(AssertZero(wire));
+    }
+
+    fn add(&mut self, left: WireId, right: WireId) -> WireId {
+        self.create_gate(Add(left, right))
+    }
+
+    fn sub(&mut self, left: WireId, right: WireId) -> WireId {
+        let neg_right = self.neg(right);
+        self.create_gate(Add(left, neg_right))
+    }
+
+    fn neg(&mut self, wire: WireId) -> WireId {
+        self.create_gate(Mul(wire, self.neg_one()))
+    }
+
+    fn mul(&mut self, left: WireId, right: WireId) -> WireId {
+        self.create_gate(Mul(left, right))
+    }
+
+    fn power_of_two(&mut self, n: usize) -> WireId;
+
+    /// Give a name to the current context for diagnostics. Multiple calls create a hierarchy of annotations.
+    fn annotate(&mut self, _note: &str) {}
+
+    /// Exit the last context that was started with annotate().
+    fn deannotate(&mut self) {}
+}
+
 /// Extensions to the basic builder.
 pub struct IRBuilder<S: Sink> {
-    pub b: IRCache<S>,
+    gate_builder: GateBuilder<S>,
+    pub cache: IRCache,
     pub prof: IRProfiler,
 
-    pub zero: WireId,
-    pub one: WireId,
-    pub neg_one: WireId,
     powers_of_two: Vec<WireId>,
 }
 
 impl<S: Sink> GateBuilderT for IRBuilder<S> {
     fn create_gate(&mut self, gate: BuildGate) -> WireId {
         self.prof.notify_gate(&gate);
-        self.b.create_gate(gate)
+        let b = &mut self.gate_builder;
+        self.cache.create_gate(b, gate)
     }
 }
 
-impl<S: Sink> IRBuilder<S> {
-    pub fn new<Scalar: PrimeField>(sink: S) -> Self {
-        let field_order = encode_field_order::<Scalar>();
-        let header = Header::new(field_order);
-        let builder = GateBuilder::new(sink, header);
-        let cached_builder = IRCache::new(builder);
-
-        let mut irb = IRBuilder {
-            b: cached_builder,
-            prof: IRProfiler::default(),
-            zero: 0,
-            one: 0,
-            neg_one: 0,
-            powers_of_two: vec![],
-        };
-
-        irb.zero = irb.create_gate(Constant(vec![0]));
-        irb.one = irb.create_gate(Constant(vec![1]));
-        irb.neg_one = irb.create_gate(Constant(encode_scalar(&Scalar::one().neg())));
-        irb.powers_of_two.push(irb.one);
-
-        irb
-    }
-
+impl<S: Sink> IRBuilderT for IRBuilder<S> {
     /// Return a wire representing constant 2^n.
     /// Cache the constant gates from 0 to n.
-    pub fn power_of_two(&mut self, n: usize) -> WireId {
+    fn power_of_two(&mut self, n: usize) -> WireId {
         while self.powers_of_two.len() <= n {
             let exponent = self.powers_of_two.len() as u32;
             let value = BigUint::from(2 as u32).pow(exponent);
@@ -65,36 +90,40 @@ impl<S: Sink> IRBuilder<S> {
         return self.powers_of_two[n];
     }
 
-    pub fn new_constant(&mut self, value: Value) -> WireId {
-        self.create_gate(Constant(value))
+    fn annotate(&mut self, note: &str) {
+        self.prof.annotate(note);
     }
 
-    pub fn new_witness(&mut self, value: Option<Value>) -> WireId {
-        self.create_gate(Witness(value))
+    fn deannotate(&mut self) {
+        self.prof.deannotate();
     }
+}
 
-    pub fn assert_zero(&mut self, wire: WireId) {
-        self.create_gate(AssertZero(wire));
-    }
+impl<S: Sink> IRBuilder<S> {
+    /// Must call finish().
+    pub fn new<Scalar: PrimeField>(sink: S) -> Self {
+        let field_order = encode_field_order::<Scalar>();
+        let header = Header::new(field_order);
 
-    pub fn add(&mut self, left: WireId, right: WireId) -> WireId {
-        self.create_gate(Add(left, right))
-    }
+        let mut irb = IRBuilder {
+            gate_builder: GateBuilder::new(sink, header),
+            cache: IRCache::default(),
+            prof: IRProfiler::default(),
+            powers_of_two: vec![],
+        };
 
-    pub fn sub(&mut self, left: WireId, right: WireId) -> WireId {
-        let neg_right = self.neg(right);
-        self.create_gate(Add(left, neg_right))
-    }
+        let zero = irb.create_gate(Constant(vec![0]));
+        assert_eq!(zero, irb.zero());
+        let one = irb.create_gate(Constant(vec![1]));
+        assert_eq!(one, irb.one());
+        let neg_one = irb.create_gate(Constant(encode_scalar(&Scalar::one().neg())));
+        assert_eq!(neg_one, irb.neg_one());
+        irb.powers_of_two.push(irb.one());
 
-    pub fn neg(&mut self, wire: WireId) -> WireId {
-        self.create_gate(Mul(wire, self.neg_one))
-    }
-
-    pub fn mul(&mut self, left: WireId, right: WireId) -> WireId {
-        self.create_gate(Mul(left, right))
+        irb
     }
 
     pub fn finish(self) -> S {
-        self.b.finish()
+        self.gate_builder.finish()
     }
 }

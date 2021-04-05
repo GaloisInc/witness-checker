@@ -26,12 +26,11 @@ use num_traits::Zero;
 /// if the operation might return a value that is out of range.
 use std::collections::HashMap;
 use std::{convert::TryFrom, iter};
-use zki_sieve::Sink;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire};
 
-use super::ir_builder::IRBuilder;
+use super::ir_builder::IRBuilderT;
 use super::{
     boolean::Boolean,
     field::QuarkScalar,
@@ -41,7 +40,6 @@ use super::{
     num,
     representer::{ReprId, Representer, WireRepr},
 };
-use zki_sieve::Result;
 
 // NICE-TO-HAVE: template with trait PrimeField instead of a specific Scalar.
 // Alternative on 255 bits: zkinterface_bellman::bls12_381::Scalar
@@ -53,58 +51,51 @@ pub type Num = num::Num<Scalar>;
 /// - Walk through gates.
 /// - Allocate and retrieve representations of wires.
 /// - Write files.
-pub struct Backend<'a, S: Sink> {
-    wire_to_repr: HashMap<Wire<'a>, ReprId>,
+pub struct Backend<'w, 'irb, IRB: IRBuilderT> {
+    wire_to_repr: HashMap<Wire<'w>, ReprId>,
     representer: Representer,
-    pub builder: IRBuilder<S>,
+    builder: &'irb mut IRB,
 }
 
-impl<'a, S: Sink> Backend<'a, S> {
+impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
     /// Must call finish() to finalize the files in the workspace.
-    pub fn new(sink: S, _proving: bool) -> Self {
+    pub fn new(ir_builder: &'irb mut IRB) -> Self {
         Backend {
             wire_to_repr: HashMap::new(),
             representer: Representer::new(),
-            builder: IRBuilder::new::<Scalar>(sink),
+            builder: ir_builder,
         }
     }
 
-    pub fn finish(self) -> Result<S> {
-        Ok(self.builder.finish())
-    }
+    pub fn finish(self) {}
 
-    pub fn enforce_true(&mut self, wire: Wire<'a>) {
+    pub fn enforce_true(&mut self, wire: Wire<'w>) {
         let repr_id = self.represent(wire);
-        let bool = self
-            .representer
-            .mut_repr(repr_id)
-            .as_boolean(&mut self.builder);
-        bool.enforce_true(&mut self.builder).unwrap();
+        let bool = self.representer.mut_repr(repr_id).as_boolean(self.builder);
+        bool.enforce_true(self.builder).unwrap();
     }
 
     fn get_num(&mut self, repr_id: ReprId) -> Num {
-        self.representer.mut_repr(repr_id).as_num(&mut self.builder)
+        self.representer.mut_repr(repr_id).as_num(self.builder)
     }
 
     fn get_num_trunc(&mut self, repr_id: ReprId, width: impl Into<usize>) -> Num {
         self.representer
             .mut_repr(repr_id)
-            .as_num_trunc(&mut self.builder, width.into())
+            .as_num_trunc(self.builder, width.into())
     }
 
     fn get_int(&mut self, repr_id: ReprId, width: impl Into<usize>) -> Int {
         self.representer
             .mut_repr(repr_id)
-            .as_int(&mut self.builder, width.into())
+            .as_int(self.builder, width.into())
     }
 
     fn get_boolean(&mut self, repr_id: ReprId) -> Boolean {
-        self.representer
-            .mut_repr(repr_id)
-            .as_boolean(&mut self.builder)
+        self.representer.mut_repr(repr_id).as_boolean(self.builder)
     }
 
-    fn represent(&mut self, wire: Wire<'a>) -> ReprId {
+    fn represent(&mut self, wire: Wire<'w>) -> ReprId {
         if let Some(wid) = self.wire_to_repr.get(&wire) {
             return *wid; // This Wire was already processed.
         }
@@ -115,26 +106,25 @@ impl<'a, S: Sink> Backend<'a, S> {
 
         for wire in order {
             self.builder
-                .prof
-                .enter_note(&format!("{}", wire.kind.variant_name()));
+                .annotate(&format!("{}", wire.kind.variant_name()));
 
             let wid = self.make_repr(wire);
             self.wire_to_repr.insert(wire, wid);
 
-            self.builder.prof.exit_note();
+            self.builder.deannotate();
         }
 
         self.wire_to_repr.get(&wire).cloned().unwrap()
     }
 
-    fn make_repr(&mut self, wire: Wire<'a>) -> ReprId {
+    fn make_repr(&mut self, wire: Wire<'w>) -> ReprId {
         // Most gates create a representation for a new wire,
         // but some no-op gates return directly the ReprId of their argument.
 
         let repr = match wire.kind {
             GateKind::Lit(val, ty) => match *ty {
                 TyKind::Uint(sz) | TyKind::Int(sz) => {
-                    let num = Num::from_biguint(&mut self.builder, sz.bits(), &val.to_biguint());
+                    let num = Num::from_biguint(self.builder, sz.bits(), &val.to_biguint());
                     WireRepr::from(num)
                 }
 
@@ -145,7 +135,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                     TyKind::Uint(sz) | TyKind::Int(sz) => {
                         // TODO: can we use Num::alloc here instead?
                         let int = Int::alloc(
-                            &mut self.builder,
+                            self.builder,
                             sz.bits() as usize,
                             secret.val().map(|val| val.to_biguint()),
                         );
@@ -176,10 +166,10 @@ impl<'a, S: Sink> Backend<'a, S> {
                             UnOp::Neg => {
                                 let num = self.get_num(aw);
                                 let out_num = num
-                                    .neg(&mut self.builder)
+                                    .neg(self.builder)
                                     .or_else(|_| {
                                         let num = self.get_num_trunc(aw, sz.bits());
-                                        num.neg(&mut self.builder)
+                                        num.neg(self.builder)
                                     })
                                     .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
                                 WireRepr::from(out_num)
@@ -211,12 +201,12 @@ impl<'a, S: Sink> Backend<'a, S> {
 
                         let out_bool = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub => {
-                                Boolean::xor(&mut self.builder, &lb, &rb)
+                                Boolean::xor(self.builder, &lb, &rb)
                             }
 
-                            BinOp::And | BinOp::Mul => Boolean::and(&mut self.builder, &lb, &rb),
+                            BinOp::And | BinOp::Mul => Boolean::and(self.builder, &lb, &rb),
 
-                            BinOp::Or => bool_or(&mut self.builder, &lb, &rb),
+                            BinOp::Or => bool_or(self.builder, &lb, &rb),
 
                             BinOp::Div | BinOp::Mod => unimplemented!("{:?} for {:?}", op, wire.ty),
                         };
@@ -231,7 +221,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                                 let left = self.get_num(lw);
                                 let right = self.get_num(rw);
 
-                                let do_bin_op = |l: Num, r: Num, b: &mut IRBuilder<S>| match op {
+                                let do_bin_op = |l: Num, r: Num, b: &mut IRB| match op {
                                     BinOp::Add => l.add_assign(&r, b),
                                     BinOp::Sub => l.sub(&r, b),
                                     BinOp::Mul => l.mul(&r, b),
@@ -241,11 +231,11 @@ impl<'a, S: Sink> Backend<'a, S> {
                                 // The operation might fail if the `real_bits` of `left` and
                                 // `right` are too big.  In that case, use `as_num_trunc` to reduce
                                 // the `real_bits` as much as possible, then try again.
-                                let out_num = do_bin_op(left, right, &mut self.builder)
+                                let out_num = do_bin_op(left, right, self.builder)
                                     .or_else(|_| {
                                         let left = self.get_num_trunc(lw, sz.bits());
                                         let right = self.get_num_trunc(rw, sz.bits());
-                                        do_bin_op(left, right, &mut self.builder)
+                                        do_bin_op(left, right, self.builder)
                                     })
                                     .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
 
@@ -267,7 +257,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                                 let denom_int = self.get_int(rw, sz.bits());
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int_ops::div(
-                                    &mut self.builder,
+                                    self.builder,
                                     &numer_num,
                                     &numer_int,
                                     &denom_num,
@@ -290,11 +280,11 @@ impl<'a, S: Sink> Backend<'a, S> {
                                 let ru = self.get_int(rw, sz.bits());
 
                                 let out_int = match op {
-                                    BinOp::Xor => int_ops::bitwise_xor(&mut self.builder, &lu, &ru),
+                                    BinOp::Xor => int_ops::bitwise_xor(self.builder, &lu, &ru),
 
-                                    BinOp::And => int_ops::bitwise_and(&mut self.builder, &lu, &ru),
+                                    BinOp::And => int_ops::bitwise_and(self.builder, &lu, &ru),
 
-                                    BinOp::Or => int_ops::bitwise_or(&mut self.builder, &lu, &ru),
+                                    BinOp::Or => int_ops::bitwise_or(self.builder, &lu, &ru),
 
                                     _ => unreachable!(),
                                 };
@@ -345,7 +335,7 @@ impl<'a, S: Sink> Backend<'a, S> {
                     CmpOp::Eq => {
                         // Needs a truncated `Num`, with no bogus high bits.
                         let left = self.get_num_trunc(lw, width);
-                        left.equals_zero(&mut self.builder)
+                        left.equals_zero(self.builder)
                     }
 
                     CmpOp::Ge => {
@@ -366,11 +356,9 @@ impl<'a, S: Sink> Backend<'a, S> {
                 let cond = self.get_num_trunc(cw, 1 as usize);
                 let then_ = self.get_num(tw);
                 let else_ = self.get_num(ew);
-                let out_num = then_
-                    .mux(&else_, &cond, &mut self.builder)
-                    .unwrap_or_else(|e| {
-                        panic!("failed to mux: {}", e);
-                    });
+                let out_num = then_.mux(&else_, &cond, self.builder).unwrap_or_else(|e| {
+                    panic!("failed to mux: {}", e);
+                });
                 WireRepr::from(out_num)
             }
 
@@ -442,15 +430,17 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 }
 
 #[test]
-fn test_backend_sieve_ir() -> Result<()> {
+fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     use super::field::_scalar_from_unsigned;
+    use super::ir_builder::IRBuilder;
     use crate::ir::circuit::Circuit;
     use zki_sieve::consumers::evaluator::Evaluator;
     use zki_sieve::producers::sink::MemorySink;
     use zki_sieve::Source;
 
-    let mut b = Backend::new(MemorySink::default(), true);
-    b.builder.prof.warnings_panic = false;
+    let mut ir_builder = IRBuilder::new::<Scalar>(MemorySink::default());
+    ir_builder.prof.warnings_panic = false;
+    let mut back = Backend::new(&mut ir_builder);
 
     let arena = bumpalo::Bump::new();
     let is_prover = true;
@@ -475,18 +465,18 @@ fn test_backend_sieve_ir() -> Result<()> {
     let diff2 = c.sub(lit, prod);
     let is_ge_zero2 = c.compare(CmpOp::Ge, diff2, zero);
 
-    b.represent(is_zero);
-    b.represent(is_ge_zero1);
-    b.represent(is_ge_zero2);
+    back.represent(is_zero);
+    back.represent(is_ge_zero1);
+    back.represent(is_ge_zero2);
 
-    fn check_int<'a>(b: &Backend<'a, impl Sink>, w: Wire<'a>, expect: u64) {
+    fn check_int<'w, 'irb>(b: &Backend<'w, 'irb, impl IRBuilderT>, w: Wire<'w>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.int.as_ref().unwrap();
         assert_eq!(int.value, Some(BigUint::from(expect)));
     }
 
-    fn check_num<'a>(b: &Backend<'a, impl Sink>, w: Wire<'a>, expect: u64) {
+    fn check_num<'w, 'irb>(b: &Backend<'w, 'irb, impl IRBuilderT>, w: Wire<'w>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
@@ -494,16 +484,17 @@ fn test_backend_sieve_ir() -> Result<()> {
         assert_eq!(Ok(value), _scalar_from_unsigned::<Scalar>(expect as u64));
     }
 
-    check_num(&b, lit, 11);
-    check_int(&b, sec1, 12);
-    check_int(&b, sec2, 13);
-    check_num(&b, prod, 12 * 13);
-    check_int(&b, diff1, 12 * 13 - 11);
-    check_int(&b, diff2, (11 - 12 * 13) as u64);
+    check_num(&back, lit, 11);
+    check_int(&back, sec1, 12);
+    check_int(&back, sec2, 13);
+    check_num(&back, prod, 12 * 13);
+    check_int(&back, diff1, 12 * 13 - 11);
+    check_int(&back, diff2, (11 - 12 * 13) as u64);
 
-    b.builder.prof.print_report();
-    b.builder.b.print_report();
-    let sink = b.finish()?;
+    back.finish();
+    ir_builder.prof.print_report();
+    ir_builder.cache.print_report();
+    let sink = ir_builder.finish();
     let source: Source = sink.into();
     let evaluator = Evaluator::from_messages(source.iter_messages());
     assert_eq!(evaluator.get_violations(), Vec::<String>::new());

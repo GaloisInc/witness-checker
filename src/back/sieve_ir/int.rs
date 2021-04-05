@@ -3,8 +3,6 @@
 // License MIT
 // Copyright (c) 2017-2019 Electric Coin Company
 
-use zki_sieve::Sink;
-
 use num_bigint::BigUint;
 use num_traits::Zero;
 use std::cmp;
@@ -13,7 +11,7 @@ use ff::PrimeField;
 
 use super::{
     boolean::{AllocatedBit, Boolean},
-    ir_builder::IRBuilder,
+    ir_builder::IRBuilderT,
     num::Num,
 };
 
@@ -53,7 +51,7 @@ impl Int {
     }
 
     /// Allocate an `Int` in the constraint system
-    pub fn alloc(builder: &mut IRBuilder<impl Sink>, width: usize, value: Option<BigUint>) -> Self {
+    pub fn alloc(builder: &mut impl IRBuilderT, width: usize, value: Option<BigUint>) -> Self {
         let values = match value {
             Some(ref val) => {
                 let mut v = Vec::with_capacity(width);
@@ -79,7 +77,7 @@ impl Int {
     }
 
     pub fn from_num<Scalar: PrimeField>(
-        b: &mut IRBuilder<impl Sink>,
+        b: &mut impl IRBuilderT,
         width: usize,
         num: &Num<Scalar>,
     ) -> Int {
@@ -219,7 +217,7 @@ impl Int {
     }
 
     /// XOR this `Int` with another `Int`
-    pub fn xor(&self, builder: &mut IRBuilder<impl Sink>, other: &Self) -> Self {
+    pub fn xor(&self, builder: &mut impl IRBuilderT, other: &Self) -> Self {
         let value = match (self.value.as_ref(), other.value.as_ref()) {
             (Some(a), Some(b)) => Some(a ^ b),
             _ => None,

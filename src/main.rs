@@ -529,7 +529,10 @@ fn main() -> io::Result<()> {
 
     #[cfg(feature = "sieve_ir")]
     if let Some(workspace) = args.value_of("sieve-ir-out") {
-        use cheesecloth::back::sieve_ir::backend::Backend;
+        use cheesecloth::back::sieve_ir::{
+            backend::{Backend, Scalar},
+            ir_builder::IRBuilder,
+        };
         use zki_sieve::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -537,17 +540,18 @@ fn main() -> io::Result<()> {
 
         // Generate the circuit and witness.
         let sink = FilesSink::new_clean(&workspace).unwrap();
-        let mut backend = Backend::new(sink, true);
+        sink.print_filenames();
+        let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+        let mut backend = Backend::new(&mut ir_builder);
 
         let accepted = flags[0];
         backend.enforce_true(accepted);
+        backend.finish();
 
         eprintln!();
-        backend.builder.prof.print_report();
-        backend.builder.b.print_report();
-
-        // Write files.
-        backend.finish().unwrap();
+        ir_builder.prof.print_report();
+        ir_builder.cache.print_report();
+        ir_builder.finish();
 
         // Validate the circuit and witness.
         eprintln!("\nValidating SIEVE IR files...");

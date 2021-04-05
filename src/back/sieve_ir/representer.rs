@@ -1,6 +1,4 @@
-use zki_sieve::Sink;
-
-use super::{backend::Num, boolean::Boolean, int::Int, ir_builder::IRBuilder};
+use super::{backend::Num, boolean::Boolean, int::Int, ir_builder::IRBuilderT};
 
 pub struct Representer {
     pub wire_reprs: Vec<WireRepr>,
@@ -66,8 +64,8 @@ impl From<Boolean> for WireRepr {
 }
 
 impl WireRepr {
-    pub fn as_num(&mut self, b: &mut IRBuilder<impl Sink>) -> Num {
-        b.prof.enter_note("WireRepr::as_num");
+    pub fn as_num(&mut self, b: &mut impl IRBuilderT) -> Num {
+        b.annotate("WireRepr::as_num");
 
         let num = match self.num {
             Some(ref num) => (*num).clone(),
@@ -85,13 +83,13 @@ impl WireRepr {
                 num
             }
         };
-        b.prof.exit_note();
+        b.deannotate();
         num
     }
 
     /// Get `self` as a "truncated" num (as by `Num::truncate`), with `real_bits == valid_bits`.
-    pub fn as_num_trunc(&mut self, b: &mut IRBuilder<impl Sink>, width: usize) -> Num {
-        b.prof.enter_note("WireRepr::as_num_trunc");
+    pub fn as_num_trunc(&mut self, b: &mut impl IRBuilderT, width: usize) -> Num {
+        b.annotate("WireRepr::as_num_trunc");
 
         // Maybe we have a truncated Num already.
         if let Some(ref num) = self.num {
@@ -100,7 +98,7 @@ impl WireRepr {
                 "multiple bit widths for a wire is not supported"
             );
             if num.is_truncated() {
-                b.prof.exit_note();
+                b.deannotate();
                 return (*num).clone();
             }
         }
@@ -112,12 +110,12 @@ impl WireRepr {
         let trunc_num = Num::from_int(b, &int);
         self.num = Some(trunc_num.clone());
 
-        b.prof.exit_note();
+        b.deannotate();
         trunc_num
     }
 
-    pub fn as_int(&mut self, b: &mut IRBuilder<impl Sink>, width: usize) -> Int {
-        b.prof.enter_note(&format!("WireRepr::as_int({})", width));
+    pub fn as_int(&mut self, b: &mut impl IRBuilderT, width: usize) -> Int {
+        b.annotate(&format!("WireRepr::as_int({})", width));
 
         let int = match &self.int {
             Some(u) => {
@@ -145,11 +143,11 @@ impl WireRepr {
                 int
             }
         };
-        b.prof.exit_note();
+        b.deannotate();
         int
     }
 
-    pub fn as_boolean(&mut self, b: &mut IRBuilder<impl Sink>) -> Boolean {
+    pub fn as_boolean(&mut self, b: &mut impl IRBuilderT) -> Boolean {
         let i = self.as_int(b, 1);
         assert!(i.bits.len() == 1);
         i.bits[0].clone()
