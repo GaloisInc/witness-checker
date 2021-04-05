@@ -50,6 +50,15 @@ impl From<Int> for WireRepr {
     }
 }
 
+impl From<(Num, Int)> for WireRepr {
+    fn from((num, int): (Num, Int)) -> Self {
+        WireRepr {
+            num: Some(num),
+            int: Some(int),
+        }
+    }
+}
+
 impl From<Boolean> for WireRepr {
     fn from(b: Boolean) -> Self {
         Self::from(Int::from_bits(&[b]))

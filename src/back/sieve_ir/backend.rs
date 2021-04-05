@@ -37,13 +37,13 @@ use super::{
     field::QuarkScalar,
     int::Int,
     int_ops,
-    int_ops::{bool_or, enforce_true},
+    int_ops::bool_or,
     num,
     representer::{ReprId, Representer, WireRepr},
 };
 use zki_sieve::Result;
 
-// TODO: template with trait PrimeField instead of a specific Scalar.
+// NICE-TO-HAVE: template with trait PrimeField instead of a specific Scalar.
 // Alternative on 255 bits: zkinterface_bellman::bls12_381::Scalar
 pub type Scalar = QuarkScalar;
 pub type Num = num::Num<Scalar>;
@@ -79,7 +79,7 @@ impl<'a, S: Sink> Backend<'a, S> {
             .representer
             .mut_repr(repr_id)
             .as_boolean(&mut self.builder);
-        enforce_true(&mut self.builder, &bool);
+        bool.enforce_true(&mut self.builder).unwrap();
     }
 
     fn get_num(&mut self, repr_id: ReprId) -> Num {
@@ -254,7 +254,11 @@ impl<'a, S: Sink> Backend<'a, S> {
 
                             // Ops using both number and bits representations.
                             BinOp::Div | BinOp::Mod => {
-                                // FIXME: this is incorrect for signed division
+                                if wire.ty.is_int() {
+                                    // NICE-TO-HAVE: implement signed division
+                                    unimplemented!("signed division");
+                                }
+
                                 // Needs truncated `Num`s, with no bogus high bits that could
                                 // affect the result.
                                 let numer_num = self.get_num_trunc(lw, sz.bits());
@@ -270,14 +274,14 @@ impl<'a, S: Sink> Backend<'a, S> {
                                     &denom_int,
                                 );
 
-                                let (_out_num, out_int) = match op {
+                                let (out_num, out_int) = match op {
                                     BinOp::Div => (quot_num, quot_int),
                                     BinOp::Mod => (rest_num, rest_int),
                                     _ => unreachable!(),
                                 };
 
-                                // TODO? Could cache out_num into the repr.
-                                WireRepr::from(out_int)
+                                // Save both Num and Int representations since we have them.
+                                WireRepr::from((out_num, out_int))
                             }
 
                             // Bitwise ops work on bit decompositions.

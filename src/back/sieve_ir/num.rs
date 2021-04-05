@@ -200,7 +200,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // product will be less than `2^(b1 + b2)` by at least `2^b1 + 2^b2`; in the worst case
         // (`b1 = b2 = NUM_BITS / 2`), this is a fairly large number, like `2^64`.  We assume the
         // prime modulus is much closer to `2^NUM_BITS` than that, so the product will fit.
-        // FIXME: Check the assumption that the prime modulus is `>= 2^NUM_BITS - 2^(NUM_BITS/2)`.
+        // The prime modulus must be `>= 2^NUM_BITS - 2^(NUM_BITS/2)`, see test_backend_scalar().
         if new_real_bits > Scalar::NUM_BITS as u16 {
             return Err(format!(
                 "product of {} bits and {} bits doesn't fit in a field element ({} bits)",

@@ -177,6 +177,10 @@ impl Boolean {
         }
     }
 
+    pub fn enforce_true(&self, builder: &mut IRBuilder<impl Sink>) -> Result<()> {
+        Self::enforce_equal(builder, self, &Boolean::Constant(true))
+    }
+
     pub fn enforce_equal<'l>(
         builder: &mut IRBuilder<impl Sink>,
         a: &'l Self,

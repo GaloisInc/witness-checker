@@ -8,7 +8,7 @@ pub fn bitwise_xor(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) 
     left.xor(builder, right)
 }
 
-// TODO: Implement directly on the type but fields are private.
+// NICE-TO-HAVE: Implement directly on the Int type
 pub fn bitwise_and(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -> Int {
     let out_bits: Vec<Boolean> = left
         .bits
@@ -33,11 +33,6 @@ pub fn bitwise_or(builder: &mut IRBuilder<impl Sink>, left: &Int, right: &Int) -
 
 pub fn bool_or<'a>(builder: &mut IRBuilder<impl Sink>, a: &'a Boolean, b: &'a Boolean) -> Boolean {
     Boolean::and(builder, &a.not(), &b.not()).not()
-}
-
-pub fn enforce_true(b: &mut IRBuilder<impl Sink>, bool: &Boolean) {
-    let not = bool.not().wire(b);
-    b.assert_zero(not);
 }
 
 pub fn div<Scalar: PrimeField>(
@@ -94,7 +89,7 @@ pub fn div<Scalar: PrimeField>(
     let denom_zero = denom_num.equals_zero(builder);
     let ok = bool_or(builder, &diff_ok, &denom_zero);
 
-    enforce_true(builder, &ok);
+    ok.enforce_true(builder).unwrap();
 
     builder.prof.exit_note();
     (quot_num, quot_int, rest_num, rest_int)
