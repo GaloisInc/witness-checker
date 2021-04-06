@@ -64,6 +64,7 @@ pub struct IRBuilder<S: Sink> {
     gate_builder: GateBuilder<S>,
 
     /// If dedup is enabled, gates will be deduplicated. Default: enabled.
+    /// This affects the resulting relation.
     pub dedup: Option<IRDedup>,
 
     /// If profiler is enabled, it will track duplicate gates. Default: disabled.

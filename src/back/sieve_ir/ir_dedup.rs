@@ -12,6 +12,7 @@ use BuildGate::*;
 /// IRDedup maintains a cache of gates and WireIds with a bound on memory usage.
 /// It uses a FIFO queue to make it clear how it is deterministic:
 /// when the cache is full, it evicts the oldest gate in order of insertion.
+// NICE-TO-HAVE: this could use a LRU, as long as its behavior is clear and stable.
 #[derive(Default)]
 pub struct IRDedup {
     gate_cache: HashMap<BuildGate, WireId>,
