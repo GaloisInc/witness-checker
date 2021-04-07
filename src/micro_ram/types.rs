@@ -1116,7 +1116,7 @@ impl Execution {
         for &i in self.advice.keys() {
             let i = usize::try_from(i)
                 .map_err(|e| format!("advice key {} out of range: {}", i, e))?;
-            if i > trace_len { // account for the advice converted into pst-state indices (so > instead of >=)
+            if i > trace_len { // account for the advice converted into post-state indices (so > instead of >=)
                 return Err(format!(
                     "`advice` key out of range: the index is {} but `trace` has only {} states",
                     i, trace_len,
