@@ -3,7 +3,7 @@
 # This tests segment graphs that split and merge.
 
 - [0,1,0,0]
-- [public-pc]
+- [public-pc, heap_init]
 -
   program:
     - [cmpae, 1, 0, true, 10]   # cmpae r1, r0, 10
