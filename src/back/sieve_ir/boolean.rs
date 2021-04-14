@@ -33,8 +33,14 @@ impl AllocatedBit {
         let wire_1 = b.add(wire, b.neg_one());
         let prod = b.mul(wire, wire_1);
         b.assert_zero(prod);
+        b.free(wire_1);
+        b.free(prod);
 
         AllocatedBit { wire, value }
+    }
+
+    pub fn dealloc(&mut self, b: &mut impl IRBuilderT) {
+        b.free(self.wire);
     }
 
     /// Calculates `NOT a`.
@@ -74,6 +80,7 @@ impl AllocatedBit {
 
         let tmp_wire = builder.sub(a.get_wire(), b.get_wire());
         let wire = builder.mul(tmp_wire, tmp_wire);
+        builder.free(tmp_wire);
 
         AllocatedBit { wire, value }
     }
@@ -116,6 +123,7 @@ impl AllocatedBit {
         //  1 | 1 |  0   |  0
         let right_wire = builder.sub(builder.one(), b.get_wire());
         let wire = builder.mul(a.get_wire(), right_wire);
+        builder.free(right_wire);
 
         AllocatedBit { wire, value }
     }
@@ -138,6 +146,8 @@ impl AllocatedBit {
         let left_wire = builder.sub(builder.one(), a.get_wire());
         let right_wire = builder.sub(builder.one(), b.get_wire());
         let wire = builder.mul(left_wire, right_wire);
+        builder.free(left_wire);
+        builder.free(right_wire);
 
         AllocatedBit { wire, value }
     }
@@ -158,6 +168,15 @@ pub enum Boolean {
 impl Boolean {
     pub fn alloc(b: &mut impl IRBuilderT, value: Option<bool>) -> Self {
         Boolean::Is(AllocatedBit::alloc(b, value))
+    }
+
+    pub fn dealloc(&mut self, b: &mut impl IRBuilderT) {
+        match self {
+            Boolean::Is(bit) | Boolean::Not(bit) => {
+                bit.dealloc(b);
+            }
+            _ => { /* DO NOTHING */ }
+        }
     }
 
     pub fn wire(&self, b: &mut impl IRBuilderT) -> WireId {
@@ -197,8 +216,9 @@ impl Boolean {
             (&Boolean::Constant(true), c) | (c, &Boolean::Constant(true)) => {
                 match &c {
                     Boolean::Is(ref v) => {
-                        let w = AllocatedBit::not(builder, v);
+                        let mut w = AllocatedBit::not(builder, v);
                         builder.assert_zero(w.get_wire());
+                        w.dealloc(builder);
                     }
                     Boolean::Not(ref v) => {
                         builder.assert_zero(v.get_wire());
@@ -214,8 +234,9 @@ impl Boolean {
                         builder.assert_zero(v.get_wire());
                     }
                     Boolean::Not(ref v) => {
-                        let w = AllocatedBit::not(builder, v);
+                        let mut w = AllocatedBit::not(builder, v);
                         builder.assert_zero(w.wire);
+                        w.dealloc(builder);
                     }
                     _ => unreachable!(),
                 }
@@ -224,8 +245,9 @@ impl Boolean {
 
             (&Boolean::Is(ref v), &Boolean::Is(ref w))
             | (&Boolean::Not(ref v), &Boolean::Not(ref w)) => {
-                let xorwire = AllocatedBit::xor(builder, &v, &w).get_wire();
+                let mut xorwire = AllocatedBit::xor(builder, &v, &w).get_wire();
                 builder.assert_zero(xorwire);
+                builder.free(xorwire);
 
                 Ok(())
             }
@@ -236,9 +258,11 @@ impl Boolean {
                     wire: builder.one(),
                     value: Some(true),
                 };
-                let not_w = AllocatedBit::xor(builder, &w, &true_bit);
-                let xor_wire = AllocatedBit::xor(builder, &v, &not_w).get_wire();
+                let mut not_w = AllocatedBit::xor(builder, &w, &true_bit);
+                let mut xor_wire = AllocatedBit::xor(builder, &v, &not_w).get_wire();
                 builder.assert_zero(xor_wire);
+                not_w.dealloc(builder);
+                builder.free(xor_wire);
 
                 Ok(())
             }

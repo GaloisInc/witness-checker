@@ -50,6 +50,14 @@ pub trait IRBuilderT: GateBuilderT {
         self.create_gate(Mul(left, right))
     }
 
+    fn free(&mut self, left: WireId) {
+        if self.is_freeable(left.clone()) {
+            self.create_gate(Free(left, None));
+        }
+    }
+
+    fn is_freeable(&mut self, left: WireId) -> bool;
+
     fn power_of_two(&mut self, n: usize) -> WireId;
 
     /// Give a name to the current context for diagnostics. Multiple calls create a hierarchy of annotations.
@@ -101,6 +109,17 @@ impl<S: Sink> IRBuilderT for IRBuilder<S> {
         }
 
         return self.powers_of_two[n];
+    }
+
+    fn is_freeable(&mut self, wire: WireId) -> bool {
+        use zki_sieve::producers::build_gates::NO_OUTPUT;
+        // if the wire is none of the constant defined in this buider, then it can be freed.
+        ((wire != NO_OUTPUT)
+            && (wire != self.zero())
+            && (wire != self.one())
+            && (wire != self.neg_one())
+            && !self.powers_of_two.contains(&wire)
+        )
     }
 
     fn annotate(&mut self, note: &str) {

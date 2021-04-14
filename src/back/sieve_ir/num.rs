@@ -69,7 +69,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
                 let coeff = b.power_of_two(exponent);
                 let bit_wire = bit.wire(b);
                 let term = b.mul(bit_wire, coeff);
-                b.add(sum, term)
+                let res = b.add(sum, term);
+                b.free(term);
+                res
             })
     }
 
@@ -96,6 +98,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let recomposed_wire = Self::compose_bits(b, &bits);
         let difference = b.sub(self.zki_wire, recomposed_wire);
         b.assert_zero(difference);
+        b.free(difference);
 
         b.deannotate();
         bits
@@ -155,6 +158,10 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let max_wire = b.new_constant(encode_scalar(&max_value));
         let other_shifted = b.sub(max_wire, other.zki_wire);
         self.zki_wire = b.add(self.zki_wire, other_shifted);
+
+        // TODO: remove the following line once 'max_wire' is cached
+        b.free(max_wire);
+        b.free(other_shifted);
 
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
@@ -233,6 +240,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let max_wire = b.new_constant(encode_scalar(&max_value));
         self.zki_wire = b.sub(max_wire, self.zki_wire);
 
+        // TODO: remove the following line once 'max_wire' is cached
+        b.free(max_wire);
+
         let new_real_bits = self.real_bits + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
@@ -280,6 +290,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let cond_self_else = b.mul(self_else, cond.zki_wire);
         self.zki_wire = b.add(cond_self_else, else_.zki_wire);
 
+        b.free(self_else);
+        b.free(cond_self_else);
+
         // We know from the check above that `self` has `real_bits == 1`, meaning its value is
         // either 0 or 1.  This means the result is either exactly `then_` or exactly `else_`, and
         // there's no need to increment `real_bits`.
@@ -324,6 +337,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let product = b.mul(is_zero, num);
         b.assert_zero(product);
 
+        b.free(product);
+
         // Compute the inverse of num.
         // We don't prove that it is necessarily the inverse, but we need it to
         // satisfy the constraint below in the case where (is_zero == 0).
@@ -341,6 +356,11 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let n_i_iz = b.add(num_inverse, is_zero);
         let n_i_iz_1 = b.add(n_i_iz, b.neg_one());
         b.assert_zero(n_i_iz_1);
+
+        b.free(inverse);
+        b.free(num_inverse);
+        b.free(n_i_iz);
+        b.free(n_i_iz_1);
 
         is_zero_bool
     }

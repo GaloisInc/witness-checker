@@ -75,6 +75,10 @@ pub fn div<Scalar: PrimeField>(
     let num_minus_rest = builder.sub(numer_num.zki_wire, rest_num.zki_wire);
     let diff_all = builder.sub(quo_times_denom, num_minus_rest);
     builder.assert_zero(diff_all);
+    builder.free(quo_times_denom);
+    builder.free(num_minus_rest);
+    builder.free(diff_all);
+
 
     // Verify that rest < denom || denom == 0.
     let width = denom_int.width();
