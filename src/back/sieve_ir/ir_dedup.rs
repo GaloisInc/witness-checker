@@ -2,8 +2,9 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use zki_sieve::producers::builder::{BuildGate, GateBuilderT};
-use zki_sieve::WireId;
 use BuildGate::*;
+use std::rc::Rc;
+use crate::back::sieve_ir::ir_builder::IRWire;
 
 /// IRDedup deduplicates gates. When the caller attempts to create a gate,
 ///   - either create a new gate and return a fresh WireId,
@@ -15,7 +16,7 @@ use BuildGate::*;
 // NICE-TO-HAVE: this could use a LRU, as long as its behavior is clear and stable.
 #[derive(Default)]
 pub struct IRDedup {
-    gate_cache: HashMap<BuildGate, WireId>,
+    gate_cache: HashMap<BuildGate, IRWire>,
     gate_queue: VecDeque<BuildGate>,
     hit_count: usize,
 }
@@ -31,10 +32,10 @@ impl IRDedup {
     /// Default: 1M gates.
     pub const MAX_SIZE: usize = 1000 * 1000;
 
-    pub fn create_gate(&mut self, builder: &mut impl GateBuilderT, gate: BuildGate) -> WireId {
+    pub fn create_gate(&mut self, builder: Rc<dyn GateBuilderT>, gate: BuildGate) -> IRWire {
         // Don't cache allocations.
         match gate {
-            Instance(_) | Witness(_) => return builder.create_gate(gate),
+            Instance(_) | Witness(_) => return IRWire::new(builder.create_gate(gate), Rc::downgrade(&builder)),
             _ => {}
         };
 
@@ -44,16 +45,16 @@ impl IRDedup {
             Occupied(entry) => {
                 // Return cached gate.
                 self.hit_count += 1;
-                *entry.get()
+                entry.get().clone()
             }
             Vacant(entry) => {
                 // Build the new gate.
                 let gate = entry.key();
-                let out_id = builder.create_gate(gate.clone());
+                let out_id = IRWire::new(builder.create_gate(gate.clone()), Rc::downgrade(&builder));
 
                 // Insert the new gate in the cache.
                 queue.push_back(gate.clone());
-                entry.insert(out_id);
+                entry.insert(out_id.clone());
 
                 // Remove the oldest gate to limit size.
                 if queue.len() >= Self::MAX_SIZE {
@@ -68,7 +69,7 @@ impl IRDedup {
 
     pub fn print_report(&self) {
         // Wild estimate of HashMap size.
-        let ram = self.gate_cache.capacity() * size_of::<(BuildGate, WireId, u64)>()
+        let ram = self.gate_cache.capacity() * size_of::<(BuildGate, IRWire, u64)>()
             + self.gate_queue.capacity() * size_of::<BuildGate>();
 
         eprintln!(

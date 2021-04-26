@@ -76,10 +76,6 @@ impl Int {
         Int { bits, value }
     }
 
-    pub fn dealloc(&mut self, builder: &mut impl IRBuilderT) {
-        self.bits.as_mut_slice().into_iter().for_each(|v| v.dealloc(builder));
-    }
-
     pub fn from_num<Scalar: PrimeField>(
         b: &mut impl IRBuilderT,
         width: usize,

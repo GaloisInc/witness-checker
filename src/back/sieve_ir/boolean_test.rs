@@ -5,7 +5,7 @@ use zki_sieve::{consumers::evaluator::Evaluator, Source};
 use zki_sieve::{Result, Sink};
 
 use crate::back::sieve_ir::field::QuarkScalar;
-use crate::back::sieve_ir::ir_builder::IRBuilder;
+use crate::back::sieve_ir::ir_builder::{IRBuilder, IRBuilderT};
 
 use ff::{Field, PrimeField};
 use num_bigint::BigUint;
@@ -22,7 +22,7 @@ fn evaluate(b: IRBuilder<MemorySink>) -> Evaluator {
 }
 
 pub fn u64_into_boolean_vec_le(
-    builder: &mut IRBuilder<impl Sink>,
+    builder: &mut IRBuilderT,
     value: Option<u64>,
 ) -> Result<Vec<Boolean>> {
     let values = match value {
@@ -55,8 +55,8 @@ pub fn _field_into_boolean_vec_le<Scalar: PrimeField, S: Sink>(
     Ok(v.into_iter().map(Boolean::from).collect())
 }
 
-pub fn field_into_allocated_bits_le<Scalar: PrimeField, S: Sink>(
-    builder: &mut IRBuilder<S>,
+pub fn field_into_allocated_bits_le<Scalar: PrimeField>(
+    builder: &mut IRBuilderT,
     value: Option<Scalar>,
 ) -> Result<Vec<AllocatedBit>> {
     // Deconstruct in big-endian bit order
@@ -116,8 +116,8 @@ fn test_bit_allocated_bit() {
 
     let evaluator = evaluate(builder);
 
-    assert_eq!(evaluator.get(v.get_wire()).unwrap(), &one_);
-    assert_eq!(evaluator.get(w.get_wire()).unwrap(), &zero_);
+    assert_eq!(evaluator.get(v.get_wire().wire()).unwrap(), &one_);
+    assert_eq!(evaluator.get(w.get_wire().wire()).unwrap(), &zero_);
 }
 
 #[test]
@@ -134,16 +134,16 @@ fn test_bit_xor() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire()).unwrap(),
+                evaluator.get(a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire()).unwrap(),
+                evaluator.get(b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire()).unwrap(),
+                evaluator.get(c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -170,16 +170,16 @@ fn test_bit_and() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire()).unwrap(),
+                evaluator.get(a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire()).unwrap(),
+                evaluator.get(b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire()).unwrap(),
+                evaluator.get(c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -206,16 +206,16 @@ fn test_bit_and_not() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire()).unwrap(),
+                evaluator.get(a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire()).unwrap(),
+                evaluator.get(b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire()).unwrap(),
+                evaluator.get(c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -242,16 +242,16 @@ fn test_bit_nor() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire()).unwrap(),
+                evaluator.get(a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire()).unwrap(),
+                evaluator.get(b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire()).unwrap(),
+                evaluator.get(c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -485,7 +485,7 @@ fn test_boolean_xor() {
             }
 
             let c = Boolean::xor(&mut builder, &a, &b);
-            let c_wire = c.wire(&mut builder);
+            let c_wire = c.wire(&mut builder).wire();
 
             let evaluator = evaluate(builder);
 
@@ -666,7 +666,7 @@ fn test_boolean_and() {
             }
 
             let c = Boolean::and(&mut builder, &a, &b);
-            let c_wire = c.wire(&mut builder);
+            let c_wire = c.wire(&mut builder).wire();
 
             let evaluator = evaluate(builder);
 
