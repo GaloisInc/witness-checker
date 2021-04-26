@@ -206,7 +206,10 @@ impl<S: 'static + Sink> IRBuilder<S> {
     }
 
     pub fn finish(self) -> S {
-        return self.gate_builder.deref().finish();
+        // We can use Rc::try_unwrap() here since we ensures that self.gate_builder is never cloned,
+        // so no other Rc<GateBuilder> will exist. And this will never enter the panic!()
+        let b = Rc::try_unwrap(self.gate_builder).unwrap_or_else(|_| panic!("Another reference to the GateBuilder exists elsewhere, while it should not!"));
+        b.finish()
     }
 
     pub fn disable_dedup(&mut self) {

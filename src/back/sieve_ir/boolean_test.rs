@@ -22,7 +22,7 @@ fn evaluate(b: IRBuilder<MemorySink>) -> Evaluator {
 }
 
 pub fn u64_into_boolean_vec_le(
-    builder: &mut IRBuilderT,
+    builder: &mut IRBuilder<impl Sink + 'static>,
     value: Option<u64>,
 ) -> Result<Vec<Boolean>> {
     let values = match value {
@@ -46,7 +46,7 @@ pub fn u64_into_boolean_vec_le(
     Ok(bits)
 }
 
-pub fn _field_into_boolean_vec_le<Scalar: PrimeField, S: Sink>(
+pub fn _field_into_boolean_vec_le<Scalar: PrimeField, S: Sink + 'static>(
     builder: &mut IRBuilder<S>,
     value: Option<Scalar>,
 ) -> Result<Vec<Boolean>> {
@@ -55,8 +55,8 @@ pub fn _field_into_boolean_vec_le<Scalar: PrimeField, S: Sink>(
     Ok(v.into_iter().map(Boolean::from).collect())
 }
 
-pub fn field_into_allocated_bits_le<Scalar: PrimeField>(
-    builder: &mut IRBuilderT,
+pub fn field_into_allocated_bits_le<Scalar: PrimeField, S: Sink + 'static>(
+    builder: &mut IRBuilder<S>,
     value: Option<Scalar>,
 ) -> Result<Vec<AllocatedBit>> {
     // Deconstruct in big-endian bit order
