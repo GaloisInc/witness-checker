@@ -152,4 +152,15 @@ impl WireRepr {
         assert!(i.bits.len() == 1);
         i.bits[0].clone()
     }
+
+    pub fn deallocate(&mut self) {
+        if let Some(int) = &self.int {
+            drop(int);
+        }
+        self.int = None;
+        if let Some(num) = &self.num {
+            drop(num);
+        }
+        self.num = None;
+    }
 }

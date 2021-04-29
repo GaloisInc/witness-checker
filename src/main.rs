@@ -538,22 +538,26 @@ fn main() -> io::Result<()> {
             FilesSink,
         };
 
-        // Generate the circuit and witness.
-        let sink = FilesSink::new_clean(&workspace).unwrap();
-        sink.print_filenames();
-        let mut ir_builder = IRBuilder::new::<Scalar>(sink);
-        ir_builder.enable_profiler();
-        ir_builder.disable_dedup(); // If using too much memory.
-        let mut backend = Backend::new(&mut ir_builder);
+        { // restrict ir_builder to its own scope
+            // Generate the circuit and witness.
+            let sink = FilesSink::new_clean(&workspace).unwrap();
+            sink.print_filenames();
+            let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+            // ir_builder.enable_profiler();
+            ir_builder.disable_dedup(); // If using too much memory.
 
-        let accepted = flags[0];
-        backend.enforce_true(accepted);
-        backend.finish();
+            { // restrict backend to its own scope to save memory
+                let mut backend = Backend::new(&mut ir_builder);
 
-        eprintln!();
-        ir_builder.prof.as_ref().map(|p| p.print_report());
-        ir_builder.dedup.as_ref().map(|p| p.print_report());
-        ir_builder.finish();
+                let accepted = flags[0];
+                backend.enforce_true(accepted);
+                backend.finish();
+            }
+            eprintln!();
+            ir_builder.prof.as_ref().map(|p| p.print_report());
+            ir_builder.dedup.as_ref().map(|p| p.print_report());
+            ir_builder.finish();
+        }
 
         // Validate the circuit and witness.
         eprintln!("\nValidating SIEVE IR files...");
