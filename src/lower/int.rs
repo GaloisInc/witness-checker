@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Circuit, CircuitTrait, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
 
 // TODO: mod -> div + sub
 

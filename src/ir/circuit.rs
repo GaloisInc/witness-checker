@@ -10,6 +10,8 @@ use std::slice;
 use std::str;
 use bumpalo::Bump;
 use num_bigint::{BigUint, BigInt, Sign};
+use overridable_trait::define_overridable_trait;
+
 
 /// A high-level arithmetic/boolean circuit.
 ///
@@ -56,10 +58,6 @@ impl<'a> Circuit<'a> {
             current_label: Cell::new(""),
             is_prover,
         }
-    }
-
-    pub fn is_prover(&self) -> bool {
-        self.is_prover
     }
 
     fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {
@@ -110,23 +108,6 @@ impl<'a> Circuit<'a> {
         }
     }
 
-    /// Intern a gadget kind so it can be used to construct `Gadget` gates.  It's legal to intern
-    /// the same `GadgetKind` more than once, so this can be used inside stateless lowering passes
-    /// (among other things).
-    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
-        let mut intern = self.intern_gadget_kind.borrow_mut();
-        match intern.get(HashDynGadgetKind::new(&g)) {
-            Some(&x) => {
-                GadgetKindRef(&x.0)
-            },
-            None => {
-                let g = self.arena.alloc(g);
-                intern.insert(HashDynGadgetKind::new(g));
-                GadgetKindRef(g)
-            },
-        }
-    }
-
     fn intern_str(&self, s: &str) -> &'a str {
         let mut intern = self.intern_str.borrow_mut();
         match intern.get(s) {
@@ -148,6 +129,34 @@ impl<'a> Circuit<'a> {
                 let b = self.arena.alloc_slice_copy(b);
                 intern.insert(b);
                 Bits(b)
+            },
+        }
+    }
+}
+
+define_overridable_trait! {
+    lifetime 'a;
+    trait CircuitTrait;
+    dyn trait CircuitDyn;
+    struct Circuit;
+
+    pub fn is_prover(&self) -> bool {
+        self.is_prover
+    }
+
+    /// Intern a gadget kind so it can be used to construct `Gadget` gates.  It's legal to intern
+    /// the same `GadgetKind` more than once, so this can be used inside stateless lowering passes
+    /// (among other things).
+    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
+        let mut intern = self.intern_gadget_kind.borrow_mut();
+        match intern.get(HashDynGadgetKind::new(&g)) {
+            Some(&x) => {
+                GadgetKindRef(&x.0)
+            },
+            None => {
+                let g = self.arena.alloc(g);
+                intern.insert(HashDynGadgetKind::new(g));
+                GadgetKindRef(g)
             },
         }
     }
@@ -217,7 +226,7 @@ impl<'a> Circuit<'a> {
         self.ty_bundle(&tys)
     }
 
-    pub fn lit(&self, ty: Ty<'a>, val: impl AsBits) -> Wire<'a> {
+    pub fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
         let val = self.bits(ty, val);
         self.gate(GateKind::Lit(val, ty))
     }
@@ -283,6 +292,7 @@ impl<'a> Circuit<'a> {
         val
     }
 
+
     pub fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
         self.gate(GateKind::Unary(op, arg))
     }
@@ -327,7 +337,7 @@ impl<'a> Circuit<'a> {
         self.binary(BinOp::Or, a, b)
     }
 
-    pub fn all_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
+    pub fn all_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a> {
         let true_if_empty = self.lit(self.ty(TyKind::BOOL), 1);
         wires.fold(
             true_if_empty,
@@ -335,7 +345,7 @@ impl<'a> Circuit<'a> {
         )
     }
 
-    pub fn any_true(&self, wires: impl Iterator<Item=Wire<'a>>) -> Wire<'a> {
+    pub fn any_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a> {
         let false_if_empty = self.lit(self.ty(TyKind::BOOL), 0);
         wires.fold(
             false_if_empty,
@@ -423,9 +433,8 @@ impl<'a> Circuit<'a> {
 
 
     pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
-        let old = self.current_label.get();
-        let new = self.intern_str(&format!("{}/{}", old, label));
-        CellResetGuard::new(&self.current_label, new)
+        let old = self.current_label();
+        self.scoped_label_exact(format_args!("{}/{}", old, label))
     }
 
     pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
@@ -671,8 +680,8 @@ impl TyKind<'_> {
 
     pub fn transfer<'b>(&self, c: &Circuit<'b>) -> Ty<'b> {
         match *self {
-            TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
-            TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
+            TyKind::Uint(sz) => CircuitTrait::ty(c, TyKind::Uint(sz)),
+            TyKind::Int(sz) => CircuitTrait::ty(c, TyKind::Int(sz)),
             TyKind::Bundle(tys) => {
                 c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
             },
@@ -726,7 +735,7 @@ impl<'a> GateKind<'a> {
             GateKind::Unary(_, w) => w.ty,
             GateKind::Binary(_, w, _) => w.ty,
             GateKind::Shift(_, w, _) => w.ty,
-            GateKind::Compare(_, _, _) => c.ty(TyKind::BOOL),
+            GateKind::Compare(_, _, _) => CircuitTrait::ty(c, TyKind::BOOL),
             GateKind::Mux(_, w, _) => w.ty,
             GateKind::Cast(_, ty) => ty,
             GateKind::Pack(ws) => c.ty_bundle_iter(ws.iter().map(|&w| w.ty)),

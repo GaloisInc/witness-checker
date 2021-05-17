@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use serde::Deserialize;
 use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
+use crate::ir::circuit::{Circuit, CircuitTrait, Wire, Ty, TyKind, IntSize};
 use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };

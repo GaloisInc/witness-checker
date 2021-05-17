@@ -1,5 +1,5 @@
 use num_bigint::BigUint;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, GadgetKind, GadgetKindRef};
+use crate::ir::circuit::{Circuit, CircuitTrait, Wire, Ty, TyKind, GadgetKind, GadgetKindRef};
 use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
 
 /// Add two unsigned integers and check for overflow.

@@ -1,7 +1,7 @@
 use num_bigint::BigInt;
 use num_traits::{Zero, One};
 use crate::eval::{self, CachingEvaluator, Evaluator, Value};
-use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
+use crate::ir::circuit::{Circuit, CircuitTrait, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
 
 macro_rules! match_identities {
     (
