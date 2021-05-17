@@ -137,8 +137,8 @@ impl<'a> Circuit<'a> {
 define_overridable_trait! {
     lifetime 'a;
     trait CircuitTrait;
-    dyn trait CircuitDyn;
     struct Circuit;
+    dyn DynCircuit;
 
     pub fn is_prover(&self) -> bool {
         self.is_prover
@@ -147,7 +147,8 @@ define_overridable_trait! {
     /// Intern a gadget kind so it can be used to construct `Gadget` gates.  It's legal to intern
     /// the same `GadgetKind` more than once, so this can be used inside stateless lowering passes
     /// (among other things).
-    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
+    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a>
+    where Self: Sized {
         let mut intern = self.intern_gadget_kind.borrow_mut();
         match intern.get(HashDynGadgetKind::new(&g)) {
             Some(&x) => {
@@ -221,12 +222,13 @@ define_overridable_trait! {
     }
 
     pub fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
-    where I: IntoIterator<Item = Ty<'a>> {
+    where I: IntoIterator<Item = Ty<'a>>, Self: Sized {
         let tys = it.into_iter().collect::<Vec<_>>();
         self.ty_bundle(&tys)
     }
 
-    pub fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
+    pub fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a>
+    where Self: Sized {
         let val = self.bits(ty, val);
         self.gate(GateKind::Lit(val, ty))
     }
@@ -250,7 +252,8 @@ define_overridable_trait! {
         &self,
         ty: Ty<'a>,
         default: T,
-    ) -> (Wire<'a>, SecretHandle<'a>) {
+    ) -> (Wire<'a>, SecretHandle<'a>)
+    where Self: Sized {
         let val = if self.is_prover { Some(SecretValue::default()) } else { None };
         let default = self.bits(ty, default);
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
@@ -263,7 +266,7 @@ define_overridable_trait! {
     ///
     /// `mk_val` will not be called when running in prover mode.
     pub fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
-    where F: FnOnce() -> T {
+    where F: FnOnce() -> T, Self: Sized {
         let val = if self.is_prover {
             let bits = self.bits(ty, mk_val());
             Some(SecretValue::with_value(bits))
@@ -282,7 +285,8 @@ define_overridable_trait! {
         self.secret(secret)
     }
 
-    pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
+    pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a>
+    where Self: Sized {
         let sz = match *ty {
             TyKind::Int(sz) | TyKind::Uint(sz) => sz,
             _ => panic!("can't construct bit representation for non-integer type {:?}", ty),
@@ -337,7 +341,8 @@ define_overridable_trait! {
         self.binary(BinOp::Or, a, b)
     }
 
-    pub fn all_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a> {
+    pub fn all_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a>
+    where Self: Sized {
         let true_if_empty = self.lit(self.ty(TyKind::BOOL), 1);
         wires.fold(
             true_if_empty,
@@ -345,7 +350,8 @@ define_overridable_trait! {
         )
     }
 
-    pub fn any_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a> {
+    pub fn any_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a>
+    where Self: Sized {
         let false_if_empty = self.lit(self.ty(TyKind::BOOL), 0);
         wires.fold(
             false_if_empty,
@@ -411,7 +417,7 @@ define_overridable_trait! {
     }
 
     pub fn pack_iter<I>(&self, it: I) -> Wire<'a>
-    where I: IntoIterator<Item = Wire<'a>> {
+    where I: IntoIterator<Item = Wire<'a>>, Self: Sized {
         let ws = it.into_iter().collect::<Vec<_>>();
         self.pack(&ws)
     }
@@ -426,23 +432,26 @@ define_overridable_trait! {
     }
 
     pub fn gadget_iter<I>(&self, kind: GadgetKindRef<'a>, it: I) -> Wire<'a>
-    where I: IntoIterator<Item = Wire<'a>> {
+    where I: IntoIterator<Item = Wire<'a>>, Self: Sized {
         let args = it.into_iter().collect::<Vec<_>>();
         self.gadget(kind, &args)
     }
 
 
-    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str>
+    where Self: Sized {
         let old = self.current_label();
         self.scoped_label_exact(format_args!("{}/{}", old, label))
     }
 
-    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
+    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R
+    where Self: Sized {
         let _g = self.scoped_label(label);
         f()
     }
 
-    pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+    pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str>
+    where Self: Sized {
         let new = self.intern_str(&label.to_string());
         CellResetGuard::new(&self.current_label, new)
     }
@@ -450,6 +459,10 @@ define_overridable_trait! {
     pub fn current_label(&self) -> &'a str {
         self.current_label.get()
     }
+}
+
+
+impl<'a> DynCircuit<'a> {
 }
 
 
