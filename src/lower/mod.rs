@@ -168,9 +168,42 @@ where C: CircuitTrait<'a>, F: Fn(&C, GateKind<'a>) -> Wire<'a> {
     }
 }
 
+
+pub struct OptAdapter<C, F> {
+    f: F,
+    active: bool,
+    pub c: C,
+}
+
+impl<C, F> OptAdapter<C, F> {
+    pub fn new(c: C, active: bool, f: F) -> OptAdapter<C, F> {
+        OptAdapter { c, active, f }
+    }
+}
+
+impl<'a, C, F> CircuitTrait<'a> for OptAdapter<C, F>
+where C: CircuitTrait<'a>, F: Fn(&C, GateKind<'a>) -> Wire<'a> {
+    type Inner = C;
+    fn inner(&self) -> &C { &self.c }
+
+    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+        eprintln!("optadapter gate, {}, {:?}", self.active, gk);
+        if self.active {
+            (self.f)(self.inner(), gk)
+        } else {
+            self.inner().gate(gk)
+        }
+    }
+}
+
+
 pub trait AddPass: Sized {
     fn add_pass<F>(self, f: F) -> Adapter<Self, F> {
         Adapter::new(self, f)
+    }
+
+    fn add_opt_pass<F>(self, active: bool, f: F) -> OptAdapter<Self, F> {
+        OptAdapter::new(self, active, f)
     }
 }
 

@@ -385,20 +385,19 @@ fn main() -> io::Result<()> {
     passes.run(lower::bundle::unbundle_mux);
     passes.run(lower::bundle::simplify);
     passes.run(lower::const_fold::const_fold(&c));
-    passes.run(lower::int::non_constant_shift);
-    #[cfg(feature = "bellman")]
-    if args.is_present("zkif-out") {
-        passes.run(lower::int::compare_to_greater_or_equal_to_zero);
-    }
+    //passes.run(lower::simple_pass(lower::int::non_constant_shift));
+    //passes.run(lower::simple_pass(lower::int::compare_to_greater_or_equal_to_zero));
     let (c, flags) = passes.finish();
 
-    let c = Circuit::new(&arena, is_prover)
-        .add_pass(lower::bool_::mux)
-        .add_pass(lower::bool_::compare_to_logic)
-        .add_pass(lower::bool_::not_to_xor)
-        ;
+    let c = Circuit::new(&arena, is_prover);
+    let c = c.add_pass(lower::bool_::not_to_xor);
+    let c = c.add_pass(lower::bool_::compare_to_logic);
+    let c = c.add_pass(lower::bool_::mux);
+    #[cfg(feature = "bellman")]
+    let c = c.add_opt_pass(args.is_present("zkif-out"),
+        lower::int::compare_to_greater_or_equal_to_zero);
+    let c = c.add_pass(lower::int::non_constant_shift);
     let flags = lower::run_pass_debug(&c, flags, |c, _, gk| c.gate(gk));
-    let c = c.c.c.c;
 
     if args.is_present("stats") {
         eprintln!(" ===== stats: after lowering =====");
