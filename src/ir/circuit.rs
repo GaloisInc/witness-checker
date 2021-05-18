@@ -809,6 +809,12 @@ pub enum GateKind<'a> {
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
 }
 
+impl<'a> Gate<'a> {
+    pub fn is_lit(&self) -> bool {
+        self.kind.is_lit()
+    }
+}
+
 impl<'a> GateKind<'a> {
     pub fn ty(&self, c: &impl CircuitTrait<'a>) -> Ty<'a> {
         match *self {
@@ -829,6 +835,13 @@ impl<'a> GateKind<'a> {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
                 k.typecheck(c.as_base(), &tys)
             },
+        }
+    }
+
+    pub fn is_lit(&self) -> bool {
+        match *self {
+            GateKind::Lit(..) => true,
+            _ => false,
         }
     }
 
@@ -1355,6 +1368,17 @@ impl AsBits for BigInt {
 
     fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
         AnyAsBits::BigInt(self)
+    }
+}
+
+impl AsBits for &'_ BigInt {
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
+        (*self).as_bits(c, width)
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::BigInt(*self)
     }
 }
 

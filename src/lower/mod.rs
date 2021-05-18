@@ -139,6 +139,14 @@ pub fn run_pass_debug<'new, C: CircuitTrait<'new>>(
     })
 }
 
+/// Recursively copy a `Wire` into a new `Circuit`.
+pub fn transfer<'old, 'new, C: CircuitTrait<'new>>(
+    c: &C,
+    wire: Vec<Wire<'old>>,
+) -> Vec<Wire<'new>> {
+    run_pass(c, wire, |c, _, gk| c.gate(gk))
+}
+
 
 pub fn simple_pass<'a, C: CircuitTrait<'a>, F: FnMut(&C, GateKind<'a>) -> Wire<'a>>(
     mut f: F,
@@ -187,7 +195,6 @@ where C: CircuitTrait<'a>, F: Fn(&C, GateKind<'a>) -> Wire<'a> {
     fn inner(&self) -> &C { &self.c }
 
     fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
-        eprintln!("optadapter gate, {}, {:?}", self.active, gk);
         if self.active {
             (self.f)(self.inner(), gk)
         } else {

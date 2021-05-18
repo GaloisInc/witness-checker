@@ -159,6 +159,27 @@ impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, 
 }
 
 
+pub struct LiteralEvaluator;
+
+impl<'a> SecretEvaluator<'a> for LiteralEvaluator {
+    fn eval_secret(&mut self, _s: Secret<'a>) -> Option<Value> {
+        None
+    }
+}
+
+impl<'a> Evaluator<'a> for LiteralEvaluator {
+    fn eval_wire(&mut self, w: Wire<'a>) -> Option<Value> {
+        match w.kind {
+            GateKind::Lit(bits, ty) => Some(Value::from_lit(ty, bits)),
+            _ => None,
+        }
+    }
+
+    fn eval_gadget(&mut self, _k: GadgetKindRef<'a>, _ws: &[Wire<'a>]) -> Option<Value> {
+        None // TODO
+    }
+}
+
 
 fn safe_div(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x / y }
