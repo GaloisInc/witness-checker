@@ -1,3 +1,4 @@
+use std::alloc::Layout;
 use std::any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -120,8 +121,24 @@ impl<'a> Circuit<'a> {
             },
         }
     }
+}
 
-    fn intern_bits(&self, b: &[u32]) -> Bits<'a> {
+define_overridable_trait! {
+    lifetime 'a;
+    trait CircuitTrait;
+    struct Circuit;
+    dyn DynCircuit;
+
+    // TODO: temporary function - remove once refactoring is done
+    pub fn as_base(&self) -> &Circuit<'a> {
+        self
+    }
+
+    pub fn is_prover(&self) -> bool {
+        self.is_prover
+    }
+
+    pub fn intern_bits(&self, b: &[u32]) -> Bits<'a> {
         let mut intern = self.intern_bits.borrow_mut();
         match intern.get(b) {
             Some(&x) => Bits(x),
@@ -132,23 +149,11 @@ impl<'a> Circuit<'a> {
             },
         }
     }
-}
-
-define_overridable_trait! {
-    lifetime 'a;
-    trait CircuitTrait;
-    struct Circuit;
-    dyn DynCircuit;
-
-    pub fn is_prover(&self) -> bool {
-        self.is_prover
-    }
 
     /// Intern a gadget kind so it can be used to construct `Gadget` gates.  It's legal to intern
     /// the same `GadgetKind` more than once, so this can be used inside stateless lowering passes
     /// (among other things).
-    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a>
-    where Self: Sized {
+    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
         let mut intern = self.intern_gadget_kind.borrow_mut();
         match intern.get(HashDynGadgetKind::new(&g)) {
             Some(&x) => {
@@ -156,6 +161,30 @@ define_overridable_trait! {
             },
             None => {
                 let g = self.arena.alloc(g);
+                intern.insert(HashDynGadgetKind::new(g));
+                GadgetKindRef(g)
+            },
+        }
+    }
+
+    pub fn intern_gadget_kind_dyn(&self, g: &dyn GadgetKind<'a>) -> GadgetKindRef<'a> {
+        let mut intern = self.intern_gadget_kind.borrow_mut();
+        match intern.get(HashDynGadgetKind::new(g)) {
+            Some(&x) => {
+                GadgetKindRef(&x.0)
+            },
+            None => {
+                let g = unsafe {
+                    // Clone `g` into the arena.  This is tricky since we don't know its concrete
+                    // type.
+                    let layout = Layout::from_size_align(
+                        mem::size_of_val(g),
+                        mem::align_of_val(g),
+                    ).unwrap();
+                    let dest = self.arena.alloc_layout(layout);
+                    g.clone_dyn(dest.as_ptr());
+                    &*g.make_dyn(dest.as_ptr())
+                };
                 intern.insert(HashDynGadgetKind::new(g));
                 GadgetKindRef(g)
             },
@@ -222,14 +251,18 @@ define_overridable_trait! {
     }
 
     pub fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
-    where I: IntoIterator<Item = Ty<'a>>, Self: Sized {
+    where I: IntoIterator<Item = Ty<'a>> {
         let tys = it.into_iter().collect::<Vec<_>>();
         self.ty_bundle(&tys)
     }
 
-    pub fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a>
-    where Self: Sized {
+    pub fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
         let val = self.bits(ty, val);
+        self.gate(GateKind::Lit(val, ty))
+    }
+
+    pub fn lit_dyn(&self, ty: Ty<'a>, val: AnyAsBits) -> Wire<'a> {
+        let val = self.bits_dyn(ty, val);
         self.gate(GateKind::Lit(val, ty))
     }
 
@@ -252,8 +285,7 @@ define_overridable_trait! {
         &self,
         ty: Ty<'a>,
         default: T,
-    ) -> (Wire<'a>, SecretHandle<'a>)
-    where Self: Sized {
+    ) -> (Wire<'a>, SecretHandle<'a>) {
         let val = if self.is_prover { Some(SecretValue::default()) } else { None };
         let default = self.bits(ty, default);
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
@@ -266,7 +298,7 @@ define_overridable_trait! {
     ///
     /// `mk_val` will not be called when running in prover mode.
     pub fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
-    where F: FnOnce() -> T, Self: Sized {
+    where F: FnOnce() -> T {
         let val = if self.is_prover {
             let bits = self.bits(ty, mk_val());
             Some(SecretValue::with_value(bits))
@@ -285,8 +317,7 @@ define_overridable_trait! {
         self.secret(secret)
     }
 
-    pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a>
-    where Self: Sized {
+    pub fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
         let sz = match *ty {
             TyKind::Int(sz) | TyKind::Uint(sz) => sz,
             _ => panic!("can't construct bit representation for non-integer type {:?}", ty),
@@ -294,6 +325,10 @@ define_overridable_trait! {
         let val = val.as_bits(self, sz);
         assert!(val.width() <= sz.bits());
         val
+    }
+
+    pub fn bits_dyn(&self, ty: Ty<'a>, val: AnyAsBits) -> Bits<'a> {
+        self.bits(ty, val)
     }
 
 
@@ -341,8 +376,7 @@ define_overridable_trait! {
         self.binary(BinOp::Or, a, b)
     }
 
-    pub fn all_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a>
-    where Self: Sized {
+    pub fn all_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a> {
         let true_if_empty = self.lit(self.ty(TyKind::BOOL), 1);
         wires.fold(
             true_if_empty,
@@ -350,8 +384,7 @@ define_overridable_trait! {
         )
     }
 
-    pub fn any_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a>
-    where Self: Sized {
+    pub fn any_true<I: Iterator<Item=Wire<'a>>>(&self, wires: I) -> Wire<'a> {
         let false_if_empty = self.lit(self.ty(TyKind::BOOL), 0);
         wires.fold(
             false_if_empty,
@@ -417,7 +450,7 @@ define_overridable_trait! {
     }
 
     pub fn pack_iter<I>(&self, it: I) -> Wire<'a>
-    where I: IntoIterator<Item = Wire<'a>>, Self: Sized {
+    where I: IntoIterator<Item = Wire<'a>> {
         let ws = it.into_iter().collect::<Vec<_>>();
         self.pack(&ws)
     }
@@ -432,27 +465,29 @@ define_overridable_trait! {
     }
 
     pub fn gadget_iter<I>(&self, kind: GadgetKindRef<'a>, it: I) -> Wire<'a>
-    where I: IntoIterator<Item = Wire<'a>>, Self: Sized {
+    where I: IntoIterator<Item = Wire<'a>> {
         let args = it.into_iter().collect::<Vec<_>>();
         self.gadget(kind, &args)
     }
 
 
-    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str>
-    where Self: Sized {
+    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
         let old = self.current_label();
         self.scoped_label_exact(format_args!("{}/{}", old, label))
     }
 
-    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R
-    where Self: Sized {
+    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
         let _g = self.scoped_label(label);
         f()
     }
 
-    pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str>
-    where Self: Sized {
+    pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
         let new = self.intern_str(&label.to_string());
+        CellResetGuard::new(&self.current_label, new)
+    }
+
+    pub fn scoped_label_exact_dyn(&self, label: &str) -> CellResetGuard<&'a str> {
+        let new = self.intern_str(label);
         CellResetGuard::new(&self.current_label, new)
     }
 
@@ -461,8 +496,34 @@ define_overridable_trait! {
     }
 }
 
+impl<'a, 'b> CircuitTrait<'a> for &'b DynCircuit<'a> {
+    type Inner = DynCircuit<'a>;
+    fn inner(&self) -> &DynCircuit<'a> { &**self }
+}
+
 
 impl<'a> DynCircuit<'a> {
+    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
+        self.intern_gadget_kind_dyn(&g)
+    }
+
+    pub fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
+        self.lit_dyn(ty, val.as_any())
+    }
+
+    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+        let old = self.current_label();
+        self.scoped_label_exact_dyn(&format!("{}/{}", old, label))
+    }
+
+    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
+        let _g = self.scoped_label(label);
+        f()
+    }
+
+    pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+        self.scoped_label_exact_dyn(&label.to_string())
+    }
 }
 
 
@@ -980,6 +1041,11 @@ pub unsafe trait GadgetKindSupport<'a> {
     fn type_name(&self) -> &'static str;
     fn eq_dyn(&self, other: &dyn GadgetKind<'a>) -> bool;
     fn hash_dyn(&self, state: &mut dyn Hasher);
+    /// Clone `self` into `*dest`.  `dest` must be properly aligned.
+    unsafe fn clone_dyn(&self, dest: *mut u8);
+    /// Create a new `&dyn GadgetKindSupport` with the same type as `self` but a different data
+    /// pointer.
+    unsafe fn make_dyn(&self, data: *const u8) -> *const dyn GadgetKind<'a>;
 }
 
 macro_rules! impl_gadget_kind_support {
@@ -1001,6 +1067,14 @@ macro_rules! impl_gadget_kind_support {
                 // Hash the type name first.  Otherwise all empty structs would have the same hash.
                 core::hash::Hash::hash(self.type_name(), &mut state);
                 core::hash::Hash::hash(self, &mut state);
+            }
+
+            unsafe fn clone_dyn(&self, dest: *mut u8) {
+                (dest as *mut Self).write(core::clone::Clone::clone(self))
+            }
+
+            unsafe fn make_dyn(&self, data: *const u8) -> *const dyn GadgetKind<'a> {
+                &*(data as *const Self)
             }
         }
     };
@@ -1179,73 +1253,147 @@ impl<'a> Bits<'a> {
 pub trait AsBits {
     /// Convert `self` to `Bits`, interned in circuit `c`.  `width` is the size of the output;
     /// signed integers should be sign-extended to this width before conversion.
-    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a>;
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized;
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AnyAsBits<'a> {
+    Bits(Bits<'a>),
+    BigUint(&'a BigUint),
+    BigInt(&'a BigInt),
+    U32(u32),
+    U64(u64),
 }
 
 impl AsBits for Bits<'_> {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, _width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         c.intern_bits(self.0)
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::Bits(*self)
     }
 }
 
 impl AsBits for BigUint {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, _width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         c.intern_bits(&self.to_u32_digits())
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::BigUint(self)
     }
 }
 
 impl AsBits for u8 {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         (*self as u32).as_bits(c, width)
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::U32(*self as u32)
     }
 }
 
 impl AsBits for u16 {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         (*self as u32).as_bits(c, width)
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::U32(*self as u32)
     }
 }
 
 impl AsBits for u32 {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, _width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         c.intern_bits(&[*self])
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::U32(*self)
     }
 }
 
 impl AsBits for u64 {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, _width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, _width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         let lo = *self as u32;
         let hi = (*self >> 32) as u32;
         c.intern_bits(&[lo, hi])
     }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::U64(*self)
+    }
 }
 
 impl AsBits for BigInt {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         let mask = (BigInt::from(1) << width.bits()) - 1;
         let (sign, val) = (self & &mask).into_parts();
         assert!(sign != Sign::Minus);
         val.as_bits(c, width)
     }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::BigInt(self)
+    }
 }
 
 impl AsBits for i32 {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         if width == IntSize(32) {
             (*self as u32).as_bits(c, width)
         } else {
             BigInt::from(*self).as_bits(c, width)
         }
     }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::U32(*self as u32)
+    }
 }
 
 impl AsBits for i64 {
-    fn as_bits<'a>(&self, c: &Circuit<'a>, width: IntSize) -> Bits<'a> {
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
         if width == IntSize(64) {
             (*self as u64).as_bits(c, width)
         } else {
             BigInt::from(*self).as_bits(c, width)
         }
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        AnyAsBits::U64(*self as u64)
+    }
+}
+
+impl AsBits for AnyAsBits<'_> {
+    fn as_bits<'a, C>(&self, c: &C, width: IntSize) -> Bits<'a>
+    where C: CircuitTrait<'a> + ?Sized {
+        match *self {
+            AnyAsBits::Bits(x) => x.as_bits(c, width),
+            AnyAsBits::BigUint(x) => x.as_bits(c, width),
+            AnyAsBits::BigInt(x) => x.as_bits(c, width),
+            AnyAsBits::U32(x) => x.as_bits(c, width),
+            AnyAsBits::U64(x) => x.as_bits(c, width),
+        }
+    }
+
+    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
+        *self
     }
 }
 

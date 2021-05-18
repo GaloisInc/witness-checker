@@ -4,19 +4,19 @@ use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
-use crate::ir::circuit::{Circuit, CircuitTrait, Wire, Ty, TyKind, CellResetGuard};
+use crate::ir::circuit::{CircuitTrait, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
 
 
 pub struct Builder<'a> {
-    c: &'a Circuit<'a>,
+    c: &'a DynCircuit<'a>,
 }
 
 impl<'a> Builder<'a> {
-    pub fn new(c: &'a Circuit<'a>) -> Builder<'a> {
+    pub fn new(c: &'a DynCircuit<'a>) -> Builder<'a> {
         Builder { c: c }
     }
 
-    pub fn circuit(&self) -> &Circuit<'a> {
+    pub fn circuit(&self) -> & &'a DynCircuit<'a> {
         &self.c
     }
 
@@ -129,7 +129,7 @@ pub trait Repr<'a> {
 pub trait Flatten<'a>: Repr<'a>
 where <Self as Repr<'a>>::Repr: Sized {
     /// Compute a type that can be used to represent `Self` as a single `Wire`.
-    fn wire_type(c: &Circuit<'a>) -> Ty<'a>;
+    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a>;
 
     /// Convert a `TWire<Self>` to a single `Wire`, whose type is given by `wire_type`.
     fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a>;
@@ -350,7 +350,7 @@ impl<'a> Repr<'a> for bool {
 }
 
 impl<'a> Flatten<'a> for bool {
-    fn wire_type(c: &Circuit<'a>) -> Ty<'a> { c.ty(TyKind::BOOL) }
+    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> { c.ty(TyKind::BOOL) }
     fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
     fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         assert!(*w.ty == TyKind::BOOL);
@@ -416,7 +416,7 @@ macro_rules! integer_impls {
         }
 
         impl<'a> Flatten<'a> for $T {
-            fn wire_type(c: &Circuit<'a>) -> Ty<'a> { c.ty(TyKind::$K) }
+            fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> { c.ty(TyKind::$K) }
             fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
             fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::$K);
@@ -508,7 +508,7 @@ macro_rules! tuple_impl {
         }
 
         impl<'a, $($A: Flatten<'a>,)*> Flatten<'a> for ($($A,)*) {
-            fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+            fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
                 c.ty_bundle(&[$($A::wire_type(c),)*])
             }
 
@@ -625,7 +625,7 @@ macro_rules! array_impls {
             }
 
             impl<'a, A: Flatten<'a>> Flatten<'a> for [A; $n] {
-                fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+                fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
                     c.ty_bundle(&[A::wire_type(c); $n])
                 }
 

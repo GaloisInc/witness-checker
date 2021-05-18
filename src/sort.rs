@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::Circuit;
+use crate::ir::circuit::{Circuit, CircuitTrait};
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 use crate::micro_ram::routing::RoutingBuilder;
 
@@ -73,7 +73,7 @@ where
     let outputs = (0 .. xs.len()).map(|_| routing_builder.add_output()).collect::<Vec<_>>();
     let mut routing = routing_builder.finish_exact(b);
 
-    let perm = sorting_permutation(b.circuit(), xs, compare);
+    let perm = sorting_permutation(b.circuit().as_base(), xs, compare);
     if let Some(ref perm) = perm {
         for (i, &j) in perm.iter().enumerate() {
             routing.connect(inputs[i], outputs[j]);
@@ -94,7 +94,7 @@ where
 mod test {
     use std::convert::TryInto;
     use bumpalo::Bump;
-    use crate::ir::circuit::Circuit;
+    use crate::ir::circuit::DynCircuit;
     use super::*;
 
     fn init() {
@@ -104,7 +104,7 @@ mod test {
     fn check_benes_sort(inputs: &[u32]) {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true);
-        let b = Builder::new(&c);
+        let b = Builder::new(DynCircuit::new(&c));
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();

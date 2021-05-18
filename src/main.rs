@@ -12,7 +12,7 @@ use num_traits::One;
 use cheesecloth::wire_assert;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, CircuitTrait, Wire, GateKind, GadgetKindRef};
+use cheesecloth::ir::circuit::{Circuit, CircuitTrait, DynCircuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
@@ -179,7 +179,7 @@ fn main() -> io::Result<()> {
 
     let arena = Bump::new();
     let c = Circuit::new(&arena, is_prover);
-    let b = Builder::new(&c);
+    let b = Builder::new(DynCircuit::new(&c));
     let cx = Context::new(&c);
 
     // Load the program and trace from files

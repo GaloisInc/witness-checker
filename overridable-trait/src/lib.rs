@@ -111,21 +111,35 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
     }).collect::<Vec<_>>();
 
 
-    let no_inner_impl_funcs = funcs.iter().filter(|f| is_public(&f.vis)).map(|f| {
-        let name = &f.sig.ident;
-        let args = f.sig.inputs.iter().filter_map(|arg| match arg {
-            &FnArg::Receiver(_) => None,
-            &FnArg::Typed(ref pt) => Some(&pt.pat),
-        });
-        ImplItemMethod {
-            vis: Visibility::Inherited,
-            block: parse_quote!({
-                <TT as #Trait>::#name(&self.0, #(#args,)*)
-            }),
-            .. f.clone()
-        }
-    }).collect::<Vec<_>>();
+    let dyn_trait_funcs = funcs.iter()
+        .filter(|f| is_public(&f.vis) && !has_generics(&f.sig))
+        .map(|f| {
+            TraitItemMethod {
+                attrs: f.attrs.clone(),
+                sig: f.sig.clone(),
+                default: None,
+                semi_token: None,
+            }
+        }).collect::<Vec<_>>();
 
+    let dyn_for_trait_impl_funcs = funcs.iter()
+        .filter(|f| is_public(&f.vis) && !has_generics(&f.sig))
+        .map(|f| {
+            let name = &f.sig.ident;
+            let args = f.sig.inputs.iter().filter_map(|arg| match arg {
+                &FnArg::Receiver(_) => None,
+                &FnArg::Typed(ref pt) => Some(&pt.pat),
+            });
+
+            TraitItemMethod {
+                attrs: f.attrs.clone(),
+                sig: f.sig.clone(),
+                default: Some(parse_quote!({
+                    <Self as #Trait>::#name(self, #(#args,)*)
+                })),
+                semi_token: None,
+            }
+        }).collect::<Vec<_>>();
 
     let trait_for_dyn_impl_funcs = funcs.iter().filter(|f| is_public(&f.vis)).map(|f| {
         let name = &f.sig.ident;
@@ -137,7 +151,7 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
         let body = if !has_generics(&f.sig) {
             // Non-generic functions can be dispatched to the inner `dyn #Trait`.
             parse_quote!({
-                self.0.#name(#(#args,)*)
+                DynTrait::#name(&self.0, #(#args,)*)
             })
         } else {
             // Generic functions dispatch to inherent methods on `#Dyn`, which the user must define
@@ -160,7 +174,7 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
 
     TokenStream::from(quote! {
         pub trait #Trait<#lt> {
-            type Inner: #Trait<#lt>;
+            type Inner: #Trait<#lt> + ?Sized;
             fn inner(&self) -> &Self::Inner;
             #(#trait_funcs)*
         }
@@ -177,64 +191,44 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
         }
 
 
-        pub enum VoidInner {}
-        impl<#lt> #Trait<#lt> for VoidInner {
-            type Inner = Self;
-            fn inner(&self) -> &VoidInner {
-                panic!("called inner() on VoidInner")
+        mod __overridable_trait_dyn {
+            use super::*;
+
+            trait DynTrait<#lt> {
+                #(#dyn_trait_funcs)*
+            }
+
+            impl<#lt, T: #Trait<#lt>> DynTrait<#lt> for T {
+                #(#dyn_for_trait_impl_funcs)*
+            }
+
+            #[repr(transparent)]
+            pub struct #Dyn<'a>(dyn DynTrait<'a> + 'a);
+
+            impl<'a> #Dyn<'a> {
+                // We isolate the unsafety into this single obviously-correct function so we can be
+                // sure the compiler is checking our handling of the tricky `&'x dyn Foo<'y> + 'z`
+                // lifetime situation below.
+                fn from_raw<'b>(
+                    x: &'b (dyn DynTrait<'a> + 'a),
+                ) -> &'b #Dyn<'a> {
+                    unsafe { mem::transmute(x) }
+                }
+
+                pub fn new<C: #Trait<'a> + 'a>(x: &C) -> &#Dyn<'a> {
+                    #Dyn::from_raw(x as &dyn DynTrait)
+                }
+            }
+
+            impl<'a> #Trait<'a> for #Dyn<'a> {
+                type Inner = Self;
+                fn inner(&self) -> &Self { self }
+
+                #(#trait_for_dyn_impl_funcs)*
             }
         }
 
-        #[repr(transparent)]
-        struct NoInner<T>(T);
-
-        // Note the name of the type parameter used here must not conflict with the generics of any
-        // of the methods.
-        impl<#lt, TT: #Trait<#lt>> #Trait<#lt> for NoInner<TT> {
-            type Inner = VoidInner;
-            fn inner(&self) -> &VoidInner {
-                panic!("called inner() on NoInner<T>")
-            }
-
-            #(#no_inner_impl_funcs)*
-        }
-
-        impl<'a, T> From<&'a T> for &'a NoInner<T> {
-            fn from(x: &'a T) -> &'a NoInner<T> {
-                unsafe { std::mem::transmute(x) }
-            }
-        }
-
-
-        #[repr(transparent)]
-        pub struct #Dyn<'a>(dyn #Trait<'a, Inner=VoidInner> + 'a);
-
-        impl<'a> #Dyn<'a> {
-            // We isolate the unsafety into this single obviously-correct function so we can be
-            // sure the compiler is checking our handling of the tricky `&'x dyn Foo<'y> + 'z`
-            // lifetime situation below.
-            fn from_raw<'b>(
-                x: &'b (dyn #Trait<'a, Inner=VoidInner> + 'a),
-            ) -> &'b #Dyn<'a> {
-                unsafe { mem::transmute(x) }
-            }
-        }
-
-        impl<'a, 'b, C: #Trait<'a> + 'a> From<&'b C> for &'b #Dyn<'a> {
-            fn from(x: &'b C) -> &'b #Dyn<'a> {
-                let y = <&NoInner<C>>::from(x);
-                #Dyn::from_raw(y as &dyn #Trait<Inner=VoidInner>)
-            }
-        }
-
-        impl<'a> #Trait<'a> for #Dyn<'a> {
-            type Inner = VoidInner;
-            fn inner(&self) -> &VoidInner {
-                panic!("shouldn't use `inner` on Dyn")
-            }
-
-            #(#trait_for_dyn_impl_funcs)*
-        }
+        pub use self::__overridable_trait_dyn::#Dyn;
     })
 }
 
