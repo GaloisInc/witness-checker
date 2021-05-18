@@ -5,8 +5,8 @@ use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 
 use crate::ir::circuit::{
-    self, Circuit, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp,
-    CmpOp,
+    self, Circuit, CircuitTrait, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp,
+    BinOp, ShiftOp, CmpOp,
 };
 
 use self::Value::Single;
@@ -118,9 +118,10 @@ pub struct CachingEvaluator<'a, 'c, S> {
     secret_eval: S,
 }
 impl<'a, 'c, S: Default> CachingEvaluator<'a, 'c, S> {
-    pub fn new(c: &'c Circuit<'a>) -> Self {
+    pub fn new(c: &'c impl CircuitTrait<'a>) -> Self {
         CachingEvaluator {
-            c,
+            // TODO: remove as_base - we only need it for `GadgetKind::decompose`
+            c: c.as_base(),
             cache: HashMap::new(),
             secret_eval: S::default(),
         }

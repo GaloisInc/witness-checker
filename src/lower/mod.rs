@@ -112,7 +112,7 @@ pub fn run_pass_debug<'new>(
     let old_c = Circuit::new(&arena, c.is_prover());
     let wire = run_pass(&old_c, wire, |c, _, gk| c.gate(gk));
     let mut old_ev = CachingEvaluator::<eval::RevealSecrets>::new(&old_c);
-    let mut new_ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+    let mut new_ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
     run_pass(c, wire, |c, old, gk| {
         let old_val = old_ev.eval_wire(old);
         let new = f(c, old, gk);

@@ -276,7 +276,7 @@ fn addr_misalignment<'a>(
     for lit_width in MemOpWidth::iter() {
         let cond = b.eq(width, b.lit(lit_width));
         let new_offset = TWire::<ByteOffset>::new(b.circuit().cast(
-            bit_pack::extract_bits(b.circuit().as_base(), addr.repr, 0, lit_width.log_bytes() as u16),
+            bit_pack::extract_bits(b.circuit(), addr.repr, 0, lit_width.log_bytes() as u16),
             ByteOffset::wire_type(b.circuit()),
         ));
         offset = b.mux(cond, new_offset, offset);

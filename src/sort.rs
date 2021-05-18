@@ -1,12 +1,12 @@
 use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::{Circuit, CircuitTrait};
+use crate::ir::circuit::CircuitTrait;
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 use crate::micro_ram::routing::RoutingBuilder;
 
 
 fn sorting_permutation<'a, T, F>(
-    c: &Circuit<'a>,
+    c: &impl CircuitTrait<'a>,
     xs: &mut [TWire<'a, T>],
     compare: &mut F,
 ) -> Option<Vec<usize>>
@@ -73,7 +73,7 @@ where
     let outputs = (0 .. xs.len()).map(|_| routing_builder.add_output()).collect::<Vec<_>>();
     let mut routing = routing_builder.finish_exact(b);
 
-    let perm = sorting_permutation(b.circuit().as_base(), xs, compare);
+    let perm = sorting_permutation(b.circuit(), xs, compare);
     if let Some(ref perm) = perm {
         for (i, &j) in perm.iter().enumerate() {
             routing.connect(inputs[i], outputs[j]);
@@ -94,7 +94,7 @@ where
 mod test {
     use std::convert::TryInto;
     use bumpalo::Bump;
-    use crate::ir::circuit::DynCircuit;
+    use crate::ir::circuit::{Circuit, DynCircuit};
     use super::*;
 
     fn init() {
