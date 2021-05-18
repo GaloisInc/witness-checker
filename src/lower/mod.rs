@@ -138,3 +138,40 @@ pub fn run_pass_debug<'new, C: CircuitTrait<'new>>(
         new
     })
 }
+
+
+pub fn simple_pass<'a, C: CircuitTrait<'a>, F: FnMut(&C, GateKind<'a>) -> Wire<'a>>(
+    mut f: F,
+) -> impl FnMut(&C, Wire, GateKind<'a>) -> Wire<'a> {
+    move |c, _, gk| f(c, gk)
+}
+
+
+pub struct Adapter<C, F> {
+    f: F,
+    pub c: C,
+}
+
+impl<C, F> Adapter<C, F> {
+    pub fn new(c: C, f: F) -> Adapter<C, F> {
+        Adapter { c, f }
+    }
+}
+
+impl<'a, C, F> CircuitTrait<'a> for Adapter<C, F>
+where C: CircuitTrait<'a>, F: Fn(&C, GateKind<'a>) -> Wire<'a> {
+    type Inner = C;
+    fn inner(&self) -> &C { &self.c }
+
+    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+        (self.f)(self.inner(), gk)
+    }
+}
+
+pub trait AddPass: Sized {
+    fn add_pass<F>(self, f: F) -> Adapter<Self, F> {
+        Adapter::new(self, f)
+    }
+}
+
+impl<'a, T: CircuitTrait<'a>> AddPass for T {}

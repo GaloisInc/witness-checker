@@ -14,7 +14,7 @@ use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, CircuitTrait, DynCircuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
-use cheesecloth::lower::{self, run_pass, run_pass_debug};
+use cheesecloth::lower::{self, run_pass, run_pass_debug, AddPass};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
@@ -390,15 +390,15 @@ fn main() -> io::Result<()> {
     if args.is_present("zkif-out") {
         passes.run(lower::int::compare_to_greater_or_equal_to_zero);
     }
-    //passes.run(lower::bool_::mux);
-    //passes.run(lower::bool_::compare_to_logic);
-    //passes.run(lower::bool_::not_to_xor);
     let (c, flags) = passes.finish();
 
-    let c = Circuit::new(&arena, is_prover); 
-    let c = lower::bool_::Adapter(c);
+    let c = Circuit::new(&arena, is_prover)
+        .add_pass(lower::bool_::mux)
+        .add_pass(lower::bool_::compare_to_logic)
+        .add_pass(lower::bool_::not_to_xor)
+        ;
     let flags = lower::run_pass_debug(&c, flags, |c, _, gk| c.gate(gk));
-    let c = c.0;
+    let c = c.c.c.c;
 
     if args.is_present("stats") {
         eprintln!(" ===== stats: after lowering =====");
