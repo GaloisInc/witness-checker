@@ -1,21 +1,53 @@
+use std::ops::Deref;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     Ident, Lifetime, ImplItemMethod, TraitItemMethod, Visibility, FnArg, GenericParam, Signature,
+    Attribute,
 };
 use syn::{parse_macro_input, parse_quote, Token};
 use syn::parse::{self, Parse, ParseStream};
 
+
 mod kw {
     syn::custom_keyword!(lifetime);
+    syn::custom_keyword!(overridable);
 }
+
+
+#[derive(Clone)]
+struct MethodDef {
+    inner: ImplItemMethod,
+    overridable: bool,
+}
+
+impl Parse for MethodDef {
+    fn parse(input: ParseStream) -> parse::Result<Self> {
+        // Handle attrs (such as doc comments) that come before the `overridable` keyword.
+        let mut attrs = input.call(Attribute::parse_outer)?;
+        let overridable = input.parse::<Option<kw::overridable>>()?.is_some();
+        let mut inner = input.parse::<ImplItemMethod>()?;
+        attrs.extend(inner.attrs);
+        inner.attrs = attrs;
+
+        Ok(MethodDef { inner, overridable })
+    }
+}
+
+impl Deref for MethodDef {
+    type Target = ImplItemMethod;
+    fn deref(&self) -> &ImplItemMethod {
+        &self.inner
+    }
+}
+
 
 struct Args {
     lifetime: Lifetime,
     trait_name: Ident,
     struct_name: Ident,
     dyn_name: Ident,
-    funcs: Vec<ImplItemMethod>,
+    funcs: Vec<MethodDef>,
 }
 
 impl Parse for Args {
@@ -51,6 +83,7 @@ impl Parse for Args {
     }
 }
 
+
 fn is_public(vis: &Visibility) -> bool {
     match vis {
         &Visibility::Public(_) => true,
@@ -68,6 +101,7 @@ fn has_generics(sig: &Signature) -> bool {
     }
     false
 }
+
 
 #[proc_macro]
 pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
@@ -88,27 +122,37 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
             &FnArg::Typed(ref pt) => Some(&pt.pat),
         });
 
+        // Functions marked `overridable` dispatch to the same function on `self.inner()`.  All
+        // other functions use the provided body by default, usually resulting in one or more calls
+        // to overridable functions.
+        let body = if f.overridable {
+            parse_quote!({
+                <Self::Inner as #Trait>::#name(self.inner(), #(#args,)*)
+            })
+        } else {
+            f.block.clone()
+        };
+
         TraitItemMethod {
             attrs: f.attrs.clone(),
             sig: f.sig.clone(),
-            default: Some(parse_quote!({
-                <Self::Inner as #Trait>::#name(self.inner(), #(#args,)*)
-                //self.inner().#name(#(#args,)*)
-            })),
+            default: Some(body),
             semi_token: None,
         }
     }).collect::<Vec<_>>();
 
     let impl_funcs_private = funcs.iter().filter(|f| !is_public(&f.vis)).map(|f| {
-        f.clone()
+        f.inner.clone()
     }).collect::<Vec<_>>();
 
-    let impl_funcs_public = funcs.iter().filter(|f| is_public(&f.vis)).map(|f| {
-        ImplItemMethod {
-            vis: Visibility::Inherited,
-            .. f.clone()
-        }
-    }).collect::<Vec<_>>();
+    let impl_funcs_public = funcs.iter()
+        .filter(|f| is_public(&f.vis) && f.overridable)
+        .map(|f| {
+            ImplItemMethod {
+                vis: Visibility::Inherited,
+                .. f.inner.clone()
+            }
+        }).collect::<Vec<_>>();
 
 
     let dyn_trait_funcs = funcs.iter()

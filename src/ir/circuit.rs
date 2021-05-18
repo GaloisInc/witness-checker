@@ -108,19 +108,6 @@ impl<'a> Circuit<'a> {
             },
         }
     }
-
-    fn intern_str(&self, s: &str) -> &'a str {
-        let mut intern = self.intern_str.borrow_mut();
-        match intern.get(s) {
-            Some(&x) => x,
-            None => {
-                let s_bytes = self.arena.alloc_slice_copy(s.as_bytes());
-                let s = unsafe { str::from_utf8_unchecked(s_bytes) };
-                intern.insert(s);
-                s
-            },
-        }
-    }
 }
 
 define_overridable_trait! {
@@ -130,15 +117,15 @@ define_overridable_trait! {
     dyn DynCircuit;
 
     // TODO: temporary function - remove once refactoring is done
-    pub fn as_base(&self) -> &Circuit<'a> {
+    overridable pub fn as_base(&self) -> &Circuit<'a> {
         self
     }
 
-    pub fn is_prover(&self) -> bool {
+    overridable pub fn is_prover(&self) -> bool {
         self.is_prover
     }
 
-    pub fn intern_bits(&self, b: &[u32]) -> Bits<'a> {
+    overridable pub fn intern_bits(&self, b: &[u32]) -> Bits<'a> {
         let mut intern = self.intern_bits.borrow_mut();
         match intern.get(b) {
             Some(&x) => Bits(x),
@@ -150,10 +137,23 @@ define_overridable_trait! {
         }
     }
 
+    overridable pub fn intern_str(&self, s: &str) -> &'a str {
+        let mut intern = self.intern_str.borrow_mut();
+        match intern.get(s) {
+            Some(&x) => x,
+            None => {
+                let s_bytes = self.arena.alloc_slice_copy(s.as_bytes());
+                let s = unsafe { str::from_utf8_unchecked(s_bytes) };
+                intern.insert(s);
+                s
+            },
+        }
+    }
+
     /// Intern a gadget kind so it can be used to construct `Gadget` gates.  It's legal to intern
     /// the same `GadgetKind` more than once, so this can be used inside stateless lowering passes
     /// (among other things).
-    pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
+    overridable pub fn intern_gadget_kind<G: GadgetKind<'a>>(&self, g: G) -> GadgetKindRef<'a> {
         let mut intern = self.intern_gadget_kind.borrow_mut();
         match intern.get(HashDynGadgetKind::new(&g)) {
             Some(&x) => {
@@ -167,7 +167,7 @@ define_overridable_trait! {
         }
     }
 
-    pub fn intern_gadget_kind_dyn(&self, g: &dyn GadgetKind<'a>) -> GadgetKindRef<'a> {
+    overridable pub fn intern_gadget_kind_dyn(&self, g: &dyn GadgetKind<'a>) -> GadgetKindRef<'a> {
         let mut intern = self.intern_gadget_kind.borrow_mut();
         match intern.get(HashDynGadgetKind::new(g)) {
             Some(&x) => {
@@ -191,7 +191,7 @@ define_overridable_trait! {
         }
     }
 
-    pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
+    overridable pub fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         // Forbid constructing gates that violate type-safety invariants.
         match kind {
             GateKind::Binary(op, a, b) => {
@@ -242,12 +242,20 @@ define_overridable_trait! {
         }))
     }
 
-    pub fn ty(&self, kind: TyKind<'a>) -> Ty<'a> {
+    overridable pub fn wire_list(&self, wire_list: &[Wire<'a>]) -> &'a [Wire<'a>] {
+        self.intern_wire_list(wire_list)
+    }
+
+    overridable pub fn ty(&self, kind: TyKind<'a>) -> Ty<'a> {
         Ty(self.intern_ty(kind))
     }
 
+    overridable pub fn ty_list(&self, ty_list: &[Ty<'a>]) -> &'a [Ty<'a>] {
+        self.intern_ty_list(ty_list)
+    }
+
     pub fn ty_bundle(&self, tys: &[Ty<'a>]) -> Ty<'a> {
-        self.ty(TyKind::Bundle(self.intern_ty_list(tys)))
+        self.ty(TyKind::Bundle(self.ty_list(tys)))
     }
 
     pub fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
@@ -274,14 +282,14 @@ define_overridable_trait! {
     /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
     /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
     /// automatically.
-    pub fn new_secret(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
+    overridable pub fn new_secret(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
         let default = self.intern_bits(&[]);
         self.new_secret_default(ty, default)
     }
 
     /// Like `new_secret`, but dropping the `SecretHandle` without setting a value will set the
     /// value to `default` instead of zero.
-    pub fn new_secret_default<T: AsBits>(
+    overridable pub fn new_secret_default<T: AsBits>(
         &self,
         ty: Ty<'a>,
         default: T,
@@ -297,7 +305,7 @@ define_overridable_trait! {
     /// running in prover mode), and return a `Wire` that carries that value.
     ///
     /// `mk_val` will not be called when running in prover mode.
-    pub fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
+    overridable pub fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
     where F: FnOnce() -> T {
         let val = if self.is_prover {
             let bits = self.bits(ty, mk_val());
@@ -311,7 +319,7 @@ define_overridable_trait! {
 
     /// Create a new uninitialized secret.  When running in prover mode, the secret must be
     /// initialized later using `SecretData::set_from_lit`.
-    pub fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
+    overridable pub fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
         let val = if self.is_prover { Some(SecretValue::default()) } else { None };
         let secret = Secret(self.arena.alloc(SecretData { ty, val }));
         self.secret(secret)
@@ -445,7 +453,7 @@ define_overridable_trait! {
     }
 
     pub fn pack(&self, ws: &[Wire<'a>]) -> Wire<'a> {
-        let ws = self.intern_wire_list(ws);
+        let ws = self.wire_list(ws);
         self.gate(GateKind::Pack(ws))
     }
 
@@ -460,7 +468,7 @@ define_overridable_trait! {
     }
 
     pub fn gadget(&self, kind: GadgetKindRef<'a>, args: &[Wire<'a>]) -> Wire<'a> {
-        let args = self.intern_wire_list(args);
+        let args = self.wire_list(args);
         self.gate(GateKind::Gadget(kind, args))
     }
 
@@ -481,17 +489,17 @@ define_overridable_trait! {
         f()
     }
 
-    pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+    overridable pub fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
         let new = self.intern_str(&label.to_string());
         CellResetGuard::new(&self.current_label, new)
     }
 
-    pub fn scoped_label_exact_dyn(&self, label: &str) -> CellResetGuard<&'a str> {
+    overridable pub fn scoped_label_exact_dyn(&self, label: &str) -> CellResetGuard<&'a str> {
         let new = self.intern_str(label);
         CellResetGuard::new(&self.current_label, new)
     }
 
-    pub fn current_label(&self) -> &'a str {
+    overridable pub fn current_label(&self) -> &'a str {
         self.current_label.get()
     }
 }
