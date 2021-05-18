@@ -378,7 +378,6 @@ fn main() -> io::Result<()> {
         ok
     };
 
-    passes.run(lower::bit_pack::concat_bits_flat);
     let (c, flags) = passes.finish();
 
     let c = Circuit::new(&arena, is_prover);
@@ -394,6 +393,7 @@ fn main() -> io::Result<()> {
     let c = c.add_pass(lower::bundle::simplify);
     let c = c.add_pass(lower::bundle::unbundle_mux);
     let c = lower::gadget::DecomposeGadgets(c, gadget_supported);
+    let c = c.add_pass(lower::bit_pack::concat_bits_flat);
     let flags = lower::run_pass_debug(&c, flags, |c, _, gk| c.gate(gk));
 
     if args.is_present("stats") {
