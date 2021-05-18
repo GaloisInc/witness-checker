@@ -379,9 +379,6 @@ fn main() -> io::Result<()> {
     };
 
     passes.run(lower::bit_pack::concat_bits_flat);
-    // TODO: need a better way to handle passes that must be run to fixpoint
-    passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
-    passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
     let (c, flags) = passes.finish();
 
     let c = Circuit::new(&arena, is_prover);
@@ -396,6 +393,7 @@ fn main() -> io::Result<()> {
     let c = lower::const_fold::ConstFold(c);
     let c = c.add_pass(lower::bundle::simplify);
     let c = c.add_pass(lower::bundle::unbundle_mux);
+    let c = lower::gadget::DecomposeGadgets(c, gadget_supported);
     let flags = lower::run_pass_debug(&c, flags, |c, _, gk| c.gate(gk));
 
     if args.is_present("stats") {

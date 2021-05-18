@@ -147,6 +147,18 @@ pub fn transfer<'old, 'new, C: CircuitTrait<'new>>(
     run_pass(c, wire, |c, _, gk| c.gate(gk))
 }
 
+/// Recursively copy a `Wire` into a new `Circuit`.  Wires listed in `seen` will be copied instead
+/// of being recursively copied.
+pub fn transfer_partial<'new, C: CircuitTrait<'new>>(
+    c: &C,
+    seen: impl IntoIterator<Item = Wire<'new>>,
+    wire: Vec<Wire<'new>>,
+) -> Vec<Wire<'new>> {
+    let mut rp = RunPass::new(c, |c, _, gk| c.gate(gk));
+    rp.m.extend(seen.into_iter().map(|w| (w, w)));
+    wire.into_iter().map(|w| rp.wire(w)).collect()
+}
+
 
 pub fn simple_pass<'a, C: CircuitTrait<'a>, F: FnMut(&C, GateKind<'a>) -> Wire<'a>>(
     mut f: F,
