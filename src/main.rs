@@ -382,8 +382,6 @@ fn main() -> io::Result<()> {
     // TODO: need a better way to handle passes that must be run to fixpoint
     passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
     passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
-    passes.run(lower::bundle::unbundle_mux);
-    passes.run(lower::bundle::simplify);
     let (c, flags) = passes.finish();
 
     let c = Circuit::new(&arena, is_prover);
@@ -396,6 +394,8 @@ fn main() -> io::Result<()> {
         lower::int::compare_to_greater_or_equal_to_zero);
     let c = c.add_pass(lower::int::non_constant_shift);
     let c = lower::const_fold::ConstFold(c);
+    let c = c.add_pass(lower::bundle::simplify);
+    let c = c.add_pass(lower::bundle::unbundle_mux);
     let flags = lower::run_pass_debug(&c, flags, |c, _, gk| c.gate(gk));
 
     if args.is_present("stats") {
