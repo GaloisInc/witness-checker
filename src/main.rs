@@ -178,9 +178,36 @@ fn main() -> io::Result<()> {
     let is_prover = !args.is_present("verifier-mode");
 
     let arena = Bump::new();
+
+    let gadget_supported = |g: GadgetKindRef| {
+        use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
+        let mut ok = false;
+        if args.is_present("zkif-out") {
+            ok = ok || g.cast::<ConcatBits>().is_some();
+            ok = ok || g.cast::<ExtractBits>().is_some();
+        }
+        if args.is_present("scale-out") {
+        }
+        ok
+    };
+
     let c = Circuit::new(&arena, is_prover);
+    //let c = lower::const_fold::ConstFold(c);
+    let c = c.add_pass(lower::bool_::not_to_xor);
+    let c = c.add_pass(lower::bool_::compare_to_logic);
+    let c = c.add_pass(lower::bool_::mux);
+    #[cfg(feature = "bellman")]
+    let c = c.add_opt_pass(args.is_present("zkif-out"),
+        lower::int::compare_to_greater_or_equal_to_zero);
+    let c = c.add_pass(lower::int::non_constant_shift);
+    let c = lower::const_fold::ConstFold(c);
+    let c = c.add_pass(lower::bundle::simplify);
+    let c = c.add_pass(lower::bundle::unbundle_mux);
+    let c = lower::gadget::DecomposeGadgets(c, |g| !gadget_supported(g));
+    let c = c.add_pass(lower::bit_pack::concat_bits_flat);
+
     let b = Builder::new(DynCircuit::new(&c));
-    let cx = Context::new(&c);
+    let cx = Context::new(c.as_base());
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
@@ -355,46 +382,6 @@ fn main() -> io::Result<()> {
             .chain(asserts.into_iter())
             .chain(bugs.into_iter())
             .collect::<Vec<_>>();
-
-    if args.is_present("stats") {
-        eprintln!(" ===== stats: before lowering =====");
-        debug::count_gates::count_gates(&flags);
-        eprintln!(" ===== end stats (before lowering) =====");
-    }
-
-    let mut arena1 = Bump::new();
-    let mut arena2 = Bump::new();
-    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags, is_prover);
-
-    let gadget_supported = |g: GadgetKindRef| {
-        use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
-        let mut ok = false;
-        if args.is_present("zkif-out") {
-            ok = ok || g.cast::<ConcatBits>().is_some();
-            ok = ok || g.cast::<ExtractBits>().is_some();
-        }
-        if args.is_present("scale-out") {
-        }
-        ok
-    };
-
-    let (c, flags) = passes.finish();
-
-    let c = Circuit::new(&arena, is_prover);
-    //let c = lower::const_fold::ConstFold(c);
-    let c = c.add_pass(lower::bool_::not_to_xor);
-    let c = c.add_pass(lower::bool_::compare_to_logic);
-    let c = c.add_pass(lower::bool_::mux);
-    #[cfg(feature = "bellman")]
-    let c = c.add_opt_pass(args.is_present("zkif-out"),
-        lower::int::compare_to_greater_or_equal_to_zero);
-    let c = c.add_pass(lower::int::non_constant_shift);
-    let c = lower::const_fold::ConstFold(c);
-    let c = c.add_pass(lower::bundle::simplify);
-    let c = c.add_pass(lower::bundle::unbundle_mux);
-    let c = lower::gadget::DecomposeGadgets(c, gadget_supported);
-    let c = c.add_pass(lower::bit_pack::concat_bits_flat);
-    let flags = lower::run_pass_debug(&c, flags, |c, _, gk| c.gate(gk));
 
     if args.is_present("stats") {
         eprintln!(" ===== stats: after lowering =====");
