@@ -802,7 +802,7 @@ pub enum GateKind<'a> {
 }
 
 impl<'a> GateKind<'a> {
-    pub fn ty(&self, c: &Circuit<'a>) -> Ty<'a> {
+    pub fn ty(&self, c: &impl CircuitTrait<'a>) -> Ty<'a> {
         match *self {
             GateKind::Lit(_, ty) => ty,
             GateKind::Secret(s) => s.ty,
@@ -819,7 +819,7 @@ impl<'a> GateKind<'a> {
             },
             GateKind::Gadget(k, ws) => {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
-                k.typecheck(c, &tys)
+                k.typecheck(c.as_base(), &tys)
             },
         }
     }

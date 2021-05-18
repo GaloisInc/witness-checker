@@ -10,16 +10,19 @@ pub mod bundle;
 pub mod gadget;
 pub mod const_fold;
 
-struct RunPass<'a, 'old, 'new, F> {
-    c: &'a Circuit<'new>,
+struct RunPass<'a, 'old, 'new, C, F> {
+    c: &'a C,
     f: F,
     m: HashMap<Wire<'old>, Wire<'new>>,
     ty_m: HashMap<Ty<'old>, Ty<'new>>,
 }
 
-impl<'a, 'old, 'new, F> RunPass<'a, 'old, 'new, F>
-where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
-    fn new(c: &'a Circuit<'new>, f: F) -> RunPass<'a, 'old, 'new, F> {
+impl<'a, 'old, 'new, C, F> RunPass<'a, 'old, 'new, C, F>
+where
+    F: FnMut(&C, Wire<'old>, GateKind<'new>) -> Wire<'new>,
+    C: CircuitTrait<'new>,
+{
+    fn new(c: &'a C, f: F) -> RunPass<'a, 'old, 'new, C, F> {
         RunPass {
             c, f,
             m: HashMap::new(),
@@ -64,7 +67,7 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
                 GateKind::Pack(ws) => self.c.pack_iter(ws.iter().map(|&w| get(w))).kind,
                 GateKind::Extract(w, i) => GateKind::Extract(get(w), i),
                 GateKind::Gadget(g, ws) => {
-                    let g = g.transfer(self.c);
+                    let g = g.transfer(self.c.as_base());
                     self.c.gadget_iter(g, ws.iter().map(|&w| get(w))).kind
                 },
             };
@@ -92,10 +95,10 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
     }
 }
 
-pub fn run_pass<'old, 'new>(
-    c: &Circuit<'new>,
+pub fn run_pass<'old, 'new, C: CircuitTrait<'new>>(
+    c: &C,
     wire: Vec<Wire<'old>>,
-    f: impl FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new>,
+    f: impl FnMut(&C, Wire<'old>, GateKind<'new>) -> Wire<'new>,
 ) -> Vec<Wire<'new>> {
     let mut rp = RunPass::new(c, f);
     wire.into_iter().map(|w| rp.wire(w)).collect()
@@ -103,10 +106,10 @@ pub fn run_pass<'old, 'new>(
 
 /// Run a transformation pass, with extra checks to detect if a pass changes the behavior of the
 /// circuit.
-pub fn run_pass_debug<'new>(
-    c: &Circuit<'new>,
+pub fn run_pass_debug<'new, C: CircuitTrait<'new>>(
+    c: &C,
     wire: Vec<Wire>,
-    mut f: impl FnMut(&Circuit<'new>, Wire, GateKind<'new>) -> Wire<'new>,
+    mut f: impl FnMut(&C, Wire, GateKind<'new>) -> Wire<'new>,
 ) -> Vec<Wire<'new>> {
     let arena = bumpalo::Bump::new();
     let old_c = Circuit::new(&arena, c.is_prover());
@@ -117,9 +120,9 @@ pub fn run_pass_debug<'new>(
         let old_val = old_ev.eval_wire(old);
         let new = f(c, old, gk);
         let new_val = new_ev.eval_wire(new);
-        if old.ty.transfer(c) == new.ty && old_val != new_val {
+        if old.ty.transfer(c.as_base()) == new.ty && old_val != new_val {
             let old_g = crate::debug::graphviz::make_graph(&old_c, vec![old].into_iter()).unwrap();
-            let new_g = crate::debug::graphviz::make_graph(&c, vec![new].into_iter()).unwrap();
+            let new_g = crate::debug::graphviz::make_graph(c.as_base(), vec![new].into_iter()).unwrap();
             std::fs::write("pass_debug_old.dot", old_g).unwrap();
             std::fs::write("pass_debug_new.dot", new_g).unwrap();
             panic!(

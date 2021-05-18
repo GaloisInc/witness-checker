@@ -390,10 +390,15 @@ fn main() -> io::Result<()> {
     if args.is_present("zkif-out") {
         passes.run(lower::int::compare_to_greater_or_equal_to_zero);
     }
-    passes.run(lower::bool_::mux);
-    passes.run(lower::bool_::compare_to_logic);
-    passes.run(lower::bool_::not_to_xor);
+    //passes.run(lower::bool_::mux);
+    //passes.run(lower::bool_::compare_to_logic);
+    //passes.run(lower::bool_::not_to_xor);
     let (c, flags) = passes.finish();
+
+    let c = Circuit::new(&arena, is_prover); 
+    let c = lower::bool_::Adapter(c);
+    let flags = lower::run_pass_debug(&c, flags, |c, _, gk| c.gate(gk));
+    let c = c.0;
 
     if args.is_present("stats") {
         eprintln!(" ===== stats: after lowering =====");

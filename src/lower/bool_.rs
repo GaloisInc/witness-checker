@@ -37,3 +37,40 @@ pub fn mux<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
     }
     c.gate(gk)
 }
+
+
+
+pub struct Adapter<C>(pub C);
+
+impl<'a, C: CircuitTrait<'a>> CircuitTrait<'a> for Adapter<C> {
+    type Inner = C;
+    fn inner(&self) -> &C { &self.0 }
+
+    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+        if *gk.ty(self) != TyKind::BOOL {
+            return self.inner().gate(gk);
+        }
+
+        let c = self;
+        if let GateKind::Mux(cond, t, e) = gk {
+            c.or(c.and(cond, t), c.and(c.not(cond), e))
+        } else if let GateKind::Compare(op, a, b) = gk {
+            if *a.ty != TyKind::BOOL {
+                return self.inner().gate(gk);
+            }
+            match op {
+                CmpOp::Eq => c.not(c.xor(a, b)),
+                CmpOp::Ne => c.xor(a, b),
+                CmpOp::Lt => c.and(c.not(a), b),
+                CmpOp::Le => c.or(c.not(a), b),
+                CmpOp::Gt => c.and(c.not(b), a),
+                CmpOp::Ge => c.or(c.not(b), a),
+            }
+        } else if let GateKind::Unary(UnOp::Not, a) = gk {
+            let one = c.lit(a.ty, 1);
+            c.xor(a, one)
+        } else {
+            self.inner().gate(gk)
+        }
+    }
+}
