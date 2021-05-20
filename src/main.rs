@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter;
-use std::mem::{self, MaybeUninit};
 use std::path::Path;
-use std::ptr;
 use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
 use num_traits::One;
@@ -12,9 +10,9 @@ use num_traits::One;
 use cheesecloth::wire_assert;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, CircuitTrait, DynCircuit, Wire, GateKind, GadgetKindRef};
+use cheesecloth::ir::circuit::{Circuit, CircuitTrait, DynCircuit, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
-use cheesecloth::lower::{self, run_pass, run_pass_debug, AddPass};
+use cheesecloth::lower::{self, AddPass};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
@@ -98,73 +96,6 @@ fn check_last<'a>(
     }
 }
 
-
-struct PassRunner<'a> {
-    // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have
-    // overlapping `&` and `&mut` references.
-    cur: MaybeUninit<&'a mut Bump>,
-    next: MaybeUninit<&'a mut Bump>,
-    /// Invariant: the underlying `Gate` of every wire in `wires` is allocated from the `cur`
-    /// arena.
-    wires: MaybeUninit<Vec<Wire<'a>>>,
-    is_prover: bool,
-}
-
-const DEBUG_PASSES: bool = false;
-
-impl<'a> PassRunner<'a> {
-    pub fn new(
-        a: &'a mut Bump,
-        b: &'a mut Bump,
-        wires: Vec<Wire>,
-        is_prover: bool,
-    ) -> PassRunner<'a> {
-        a.reset();
-        b.reset();
-        let cur = MaybeUninit::new(a);
-        let next = MaybeUninit::new(b);
-        let wires = unsafe {
-            // Transfer all wires into the `cur` arena.
-            let arena: &Bump = &**cur.as_ptr();
-            let c = Circuit::new(arena, is_prover);
-            let wires = run_pass(&c, wires, |c, _old, gk| c.gate(gk));
-            MaybeUninit::new(wires)
-        };
-
-        PassRunner { cur, next, wires, is_prover }
-    }
-
-    // FIXME: using `'a` instead of a fresh lifetime (`for <'b>`) potentially allows the closure to
-    // stash a `GateKind` or `Wire` somewhere and use it after the arena has been `reset`.
-    // However, this also makes it hard to apply stateful transformation passes (`const_fold`).
-    pub fn run(&mut self, f: impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a>) {
-        unsafe {
-            {
-                let arena: &Bump = &**self.next.as_ptr();
-                let c = Circuit::new(arena, self.is_prover);
-                let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
-                let wires = if DEBUG_PASSES {
-                    run_pass_debug(&c, wires, f)
-                } else {
-                    run_pass(&c, wires, f)
-                };
-                *self.wires.as_mut_ptr() = wires;
-            }
-            // All `wires` are now allocated from `self.next`, leaving `self.cur` unused.
-            (*self.cur.as_mut_ptr()).reset();
-            ptr::swap(self.cur.as_mut_ptr(), self.next.as_mut_ptr());
-        }
-    }
-
-    pub fn finish(self) -> (Circuit<'a>, Vec<Wire<'a>>) {
-        unsafe {
-            let arena: &Bump = &**self.cur.as_ptr();
-            let c = Circuit::new(arena, self.is_prover);
-            let wires = ptr::read(self.wires.as_ptr());
-            (c, wires)
-        }
-    }
-}
 
 fn main() -> io::Result<()> {
     let args = parse_args();
