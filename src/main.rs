@@ -1,33 +1,29 @@
-use bumpalo::Bump;
-use clap::{App, Arg, ArgMatches};
-use num_traits::One;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter;
 use std::mem::{self, MaybeUninit};
 use std::path::Path;
 use std::ptr;
+use bumpalo::Bump;
+use clap::{App, Arg, ArgMatches};
+use num_traits::One;
 
+use cheesecloth::wire_assert;
 use cheesecloth::debug;
-use cheesecloth::eval::{self, CachingEvaluator, Evaluator};
-use cheesecloth::gadget::arith::BuilderExt as _;
-use cheesecloth::gadget::bit_pack;
-use cheesecloth::ir::circuit::{Circuit, GadgetKindRef, GateKind, Wire};
+use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
+use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
-use cheesecloth::micro_ram::mem::{extract_bytes_at_offset, extract_low_bytes, Memory};
+use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{
-    Advice, ByteOffset, MemOpKind, MemOpWidth, MemPort, Opcode, RamInstr, RamState, RamStateRepr,
-    Segment, TraceChunk, MEM_PORT_UNUSED_CYCLE, REG_NONE, REG_PC, WORD_BYTES,
-};
-use cheesecloth::wire_assert;
+use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk};
+
 
 fn parse_args() -> ArgMatches<'static> {
     App::new("witness-checker")
@@ -84,41 +80,45 @@ fn parse_args() -> ArgMatches<'static> {
         .get_matches()
 }
 
-fn check_first<'a>(cx: &Context<'a>, b: &Builder<'a>, s: &TWire<'a, RamState>) {
+
+fn check_first<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    s: &TWire<'a, RamState>,
+) {
     let _g = b.scoped_label("check_first");
     let pc = s.pc;
     wire_assert!(
-        cx,
-        b.eq(pc, b.lit(0)),
+        cx, b.eq(pc, b.lit(0)),
         "initial pc is {} (expected {})",
-        cx.eval(pc),
-        0,
+        cx.eval(pc), 0,
     );
     for (i, &r) in s.regs.iter().enumerate().skip(1) {
         wire_assert!(
-            cx,
-            b.eq(r, b.lit(0)),
+            cx, b.eq(r, b.lit(0)),
             "initial r{} has value {} (expected {})",
-            i,
-            cx.eval(r),
-            0,
+            i, cx.eval(r), 0,
         );
     }
 }
 
-fn check_last<'a>(cx: &Context<'a>, b: &Builder<'a>, s: &TWire<'a, RamState>, expect_zero: bool) {
+fn check_last<'a>(
+    cx: &Context<'a>,
+    b: &Builder<'a>,
+    s: &TWire<'a, RamState>,
+    expect_zero: bool,
+) {
     let _g = b.scoped_label("check_last");
     let r0 = s.regs[0];
     if expect_zero {
         wire_assert!(
-            cx,
-            b.eq(r0, b.lit(0)),
+            cx, b.eq(r0, b.lit(0)),
             "final r0 is {} (expected {})",
-            cx.eval(r0),
-            0,
+            cx.eval(r0), 0,
         );
     }
 }
+
 
 struct PassRunner<'a> {
     // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have
@@ -152,12 +152,7 @@ impl<'a> PassRunner<'a> {
             MaybeUninit::new(wires)
         };
 
-        PassRunner {
-            cur,
-            next,
-            wires,
-            is_prover,
-        }
+        PassRunner { cur, next, wires, is_prover }
     }
 
     // FIXME: using `'a` instead of a fresh lifetime (`for <'b>`) potentially allows the closure to
@@ -202,7 +197,7 @@ fn main() -> io::Result<()> {
     }
 
     #[cfg(not(feature = "sieve_ir"))]
-    if args.is_present("sieve_ir-out") {
+    if args.is_present("sieve-ir-out") {
         eprintln!("error: sieve_ir output is not supported - build with `--features sieve_ir`");
         std::process::exit(1);
     }
@@ -252,6 +247,7 @@ fn main() -> io::Result<()> {
         exec.trace = vec![new_chunk];
     }
 
+
     // Set up memory ports and check consistency.
     let mut mem = Memory::new(is_prover);
     for seg in &exec.init_mem {
@@ -262,10 +258,8 @@ fn main() -> io::Result<()> {
     let mut fetch = Fetch::new(&b, &exec.program);
 
     // Generate IR code to check the trace.
-    let check_steps = args
-        .value_of("check-steps")
-        .and_then(|c| c.parse::<usize>().ok())
-        .unwrap_or(0);
+    let check_steps = args.value_of("check-steps")
+        .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
     let mut segments_map = HashMap::new();
     let mut segment_builder = SegmentBuilder {
         cx: &cx,
@@ -279,26 +273,16 @@ fn main() -> io::Result<()> {
 
     let init_state = provided_init_state.clone().unwrap_or_else(|| {
         let mut regs = vec![0; exec.params.num_regs];
-        regs[0] = exec
-            .init_mem
-            .iter()
-            .map(|ms| ms.start + ms.len)
-            .max()
-            .unwrap_or(0);
-        RamState {
-            cycle: 0,
-            pc: 0,
-            regs,
-            live: true,
-        }
+        regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
+        RamState { cycle: 0, pc: 0, regs, live: true }
     });
     if provided_init_state.is_some() {
         let init_state_wire = b.lit(init_state.clone());
         check_first(&cx, &b, &init_state_wire);
     }
 
-    let mut seg_graph_builder =
-        SegGraphBuilder::new(&b, &exec.segments, &exec.params, init_state.clone());
+    let mut seg_graph_builder = SegGraphBuilder::new(
+        &b, &exec.segments, &exec.params, init_state.clone());
 
     for item in seg_graph_builder.get_order() {
         let idx = match item {
@@ -306,7 +290,7 @@ fn main() -> io::Result<()> {
             SegGraphItem::Network => {
                 seg_graph_builder.build_network(&b);
                 continue;
-            }
+            },
         };
 
         let seg_def = &exec.segments[idx];
@@ -319,21 +303,13 @@ fn main() -> io::Result<()> {
 
     let mut seg_graph = seg_graph_builder.finish(&cx, &b);
 
-    let mut segments = (0..exec.segments.len())
-        .map(|i| {
-            segments_map
-                .remove(&i)
-                .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
-        })
-        .collect::<Vec<_>>();
+    let mut segments = (0 .. exec.segments.len()).map(|i| {
+        segments_map.remove(&i)
+            .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
+    }).collect::<Vec<_>>();
     drop(segments_map);
 
-    check_last(
-        &cx,
-        &b,
-        segments.last().unwrap().final_state(),
-        args.is_present("expect-zero"),
-    );
+    check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
 
     // Fill in advice and other secrets.
     let mut cycle = 0;
@@ -357,14 +333,7 @@ fn main() -> io::Result<()> {
 
         let seg = &mut segments[chunk.segment];
         assert_eq!(seg.idx, chunk.segment);
-        seg.set_states(
-            &b,
-            &exec.program,
-            cycle,
-            &prev_state,
-            &chunk.states,
-            &exec.advice,
-        );
+        seg.set_states(&b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
         seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
 
         if let Some(prev_segment) = prev_segment {
@@ -408,10 +377,11 @@ fn main() -> io::Result<()> {
 
     // Concatenate accepted, asserts, bugs.
     let num_asserts = asserts.len();
-    let flags = iter::once(accepted)
-        .chain(asserts.into_iter())
-        .chain(bugs.into_iter())
-        .collect::<Vec<_>>();
+    let flags =
+        iter::once(accepted)
+            .chain(asserts.into_iter())
+            .chain(bugs.into_iter())
+            .collect::<Vec<_>>();
 
     if args.is_present("stats") {
         eprintln!(" ===== stats: before lowering =====");
@@ -458,31 +428,16 @@ fn main() -> io::Result<()> {
 
     {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
-        let flag_vals = flags
-            .iter()
-            .map(|&w| {
-                ev.eval_wire(w)
-                    .as_ref()
-                    .and_then(|v| v.as_single())
-                    .unwrap()
-                    .is_one()
-            })
-            .collect::<Vec<_>>();
+        let flag_vals = flags.iter().map(|&w| {
+            ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
+        }).collect::<Vec<_>>();
 
-        let asserts_ok: u32 = flag_vals[1..1 + num_asserts]
-            .iter()
-            .map(|&ok| ok as u32)
-            .sum();
-        let bugs_ok: u32 = flag_vals[1 + num_asserts..]
-            .iter()
-            .map(|&ok| ok as u32)
-            .sum();
+        let asserts_ok: u32 = flag_vals[1 .. 1 + num_asserts].iter().map(|&ok| ok as u32).sum();
+        let bugs_ok: u32 = flag_vals[1 + num_asserts ..].iter().map(|&ok| ok as u32).sum();
 
         eprintln!(
             "internal evaluator: {} asserts passed, {} failed; found {} bugs; overall status: {}",
-            asserts_ok,
-            num_asserts as u32 - asserts_ok,
-            bugs_ok,
+            asserts_ok, num_asserts as u32 - asserts_ok, bugs_ok,
             if flag_vals[0] { "GOOD" } else { "BAD" },
         );
     }
@@ -491,10 +446,7 @@ fn main() -> io::Result<()> {
     if let Some(dest) = args.value_of_os("zkif-out") {
         use cheesecloth::back::zkif::backend::{Backend, Scalar};
         use std::fs::remove_file;
-        use zkinterface::{
-            clean_workspace,
-            cli::{cli, Options},
-        };
+        use zkinterface::{cli::{cli, Options}, clean_workspace};
 
         let accepted = flags[0];
 
@@ -516,15 +468,13 @@ fn main() -> io::Result<()> {
         cli(&Options {
             tool: "simulate".to_string(),
             paths: vec![workspace.to_path_buf()],
-        })
-        .unwrap();
+        }).unwrap();
 
         // Print statistics.
         cli(&Options {
             tool: "stats".to_string(),
             paths: vec![workspace.to_path_buf()],
-        })
-        .unwrap();
+        }).unwrap();
     }
 
     #[cfg(feature = "sieve_ir")]

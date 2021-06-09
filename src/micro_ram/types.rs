@@ -719,11 +719,11 @@ impl<'a> Flatten<'a> for ByteOffset {
         c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
@@ -762,11 +762,11 @@ impl<'a> Flatten<'a> for WordAddr {
             MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
@@ -1116,7 +1116,7 @@ impl Execution {
         for &i in self.advice.keys() {
             let i = usize::try_from(i)
                 .map_err(|e| format!("advice key {} out of range: {}", i, e))?;
-            if i >= trace_len {
+            if i > trace_len { // account for the advice converted into post-state indices (so > instead of >=)
                 return Err(format!(
                     "`advice` key out of range: the index is {} but `trace` has only {} states",
                     i, trace_len,
@@ -1134,6 +1134,10 @@ pub struct MemSegment {
     pub len: u64,
     pub read_only: bool,
     pub secret: bool,
+    /// Whether the segment is used to initialize the heap. Defaults to `false` if field is
+    /// missing.
+    #[serde(default="bool::default")]
+    pub heap_init: bool,
     #[serde(default)]
     pub data: Vec<u64>,
 }
@@ -1179,7 +1183,6 @@ impl Segment {
         for c in &self.constraints {
             match *c {
                 SegmentConstraint::Pc(pc) => return Some(pc),
-                _ => {},
             }
         }
         None

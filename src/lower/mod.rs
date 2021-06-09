@@ -125,10 +125,11 @@ pub fn run_pass_debug<'new>(
             panic!(
                 "pass changed gate value:\n\
                 \x20 old gate: {:?}\n\
+                \x20 gate kind: {:?}\n\
                 \x20 new gate: {:?}\n\
                 \x20 old value: {:?}\n\
                 \x20 new value: {:?}\n",
-                old, new, old_val, new_val,
+                old, gk, new, old_val, new_val,
             );
         }
         new

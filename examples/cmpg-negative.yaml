@@ -1,0 +1,37 @@
+- [0,1,0,0]
+- [public-pc]
+-
+  program:
+    - [load8, 0, null, true, 8]   # load8 r0, 8
+    - [load8, 1, null, true, 16]  # load8 r1, 16
+    - [cmpg, 0, 0, false, 1]      # cmpg r1, r0, r1
+
+  params:
+    num_regs: 2
+    trace_len: 4
+
+  init_mem:
+    - start: 1
+      len: 2
+      read_only: true
+      secret: true
+      # -1, 1
+      data: [18446744073709551615, 1]
+
+  segments:
+    - constraints: [[pc, 0]]
+      len: 3
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [18446744073709551615, 0]]
+        - [2, [18446744073709551615, 1]]
+        - [3, [0, 1]]
+
+  advice:
+    1: [[MemOp, 8, 18446744073709551615, read, 8]]
+    2: [[MemOp, 16, 1, read, 8]]

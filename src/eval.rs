@@ -38,7 +38,7 @@ impl Value {
             },
             TyKind::Int(sz) => {
                 let out_of_range =
-                    (i.is_positive() && i.bits() > sz.bits() as u64) ||
+                    (i.is_positive() && i.bits() >= sz.bits() as u64) ||
                         (i.is_negative() && i.bits() >= sz.bits() as u64);
                 let i = if out_of_range {
                     let mask = (BigInt::from(1) << sz.bits()) - 1;
@@ -255,4 +255,24 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Va
             e.eval_gadget(k, ws)?
         },
     })
+}
+
+
+#[cfg(test)]
+mod test {
+    use bumpalo::Bump;
+    use super::*;
+
+    #[test]
+    fn value_trunc_uint_to_int() {
+        let arena = Bump::new();
+        let c = Circuit::new(&arena, true);
+        let ty_i8 = c.ty(TyKind::I8);
+
+        for &x in [0_u8, 1, 126, 127, 128, 129, 254, 255].iter() {
+            let i = BigInt::from(x);
+            let j = Value::trunc(ty_i8, i).unwrap_single().unwrap();
+            assert_eq!(j, BigInt::from(x as i8));
+        }
+    }
 }

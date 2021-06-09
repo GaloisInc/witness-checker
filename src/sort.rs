@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use log::*;
 use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::Circuit;
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};

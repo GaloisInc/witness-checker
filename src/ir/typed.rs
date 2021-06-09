@@ -564,6 +564,7 @@ macro_rules! tuple_impl {
 
         impl<'a, $($A: Secret<'a>,)*> Secret<'a> for ($($A,)*) {
             fn secret(bld: &Builder<'a>) -> Self::Repr {
+                #![allow(unused)]       // `bld` in the zero-element case
                 ($(bld.secret_uninit::<$A>(),)*)
             }
 

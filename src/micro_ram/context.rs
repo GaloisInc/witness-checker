@@ -10,10 +10,12 @@ use crate::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
 macro_rules! wire_assert {
     ($cx:ident, $cond:expr, $($args:tt)*) => {
         {
-            let cx = $cx;
             let cond = $cond;
             $cx.assert(cond, move |$cx| {
                 eprintln!("invalid trace: {}", format_args!($($args)*));
+                // Suppress unused variable warning regarding $cx, without disabling the warning
+                // for the entire block.
+                let _ = $cx;
             });
         }
     };
@@ -28,10 +30,12 @@ macro_rules! wire_assert {
 macro_rules! wire_bug_if {
     ($cx:ident, $cond:expr, $($args:tt)*) => {
         {
-            let cx = $cx;
             let cond = $cond;
             $cx.bug_if(cond, move |$cx| {
                 eprintln!("found bug: {}", format_args!($($args)*));
+                // Suppress unused variable warning regarding $cx, without disabling the warning
+                // for the entire block.
+                let _ = $cx;
             });
         }
     };

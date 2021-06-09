@@ -50,7 +50,7 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
     }
 
     /// Finish building the routing network circuit.
-    pub fn finish(mut self, b: &Builder<'a>) -> Routing<'a, T>
+    pub fn finish(self, b: &Builder<'a>) -> Routing<'a, T>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a> + Default, T::Repr: Clone {
         self.finish_with_default(b, T::default())
     }
@@ -75,7 +75,7 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
 
     /// Finish building the routing network circuit.  Panics if the number of inputs is not equal
     /// to the number of outputs.
-    pub fn finish_exact(mut self, b: &Builder<'a>) -> Routing<'a, T>
+    pub fn finish_exact(self, b: &Builder<'a>) -> Routing<'a, T>
     where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
         assert!(self.inputs.len() == self.num_outputs);
         let n = self.inputs.len();
@@ -144,7 +144,7 @@ impl<'a, T: Repr<'a>> Routing<'a, T> {
         // each fake input `i` to the corresponding output `i`.
         let n = self.fwd.len();
         let size = n.next_power_of_two();
-        let mut l2r = self.fwd.into_iter().map(|id| id.0)
+        let l2r = self.fwd.into_iter().map(|id| id.0)
             .chain(n .. size)
             .collect::<Vec<_>>();
 
@@ -318,7 +318,6 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
     let mut it1 = mid_outputs1.into_iter();
     let mut outputs = Vec::with_capacity(n);
     let mut output_secrets = Vec::with_capacity(size / 2);
-    let mut jj = 0;
     while let Some(x) = it0.next() {
         match it1.next() {
             Some(y) => {
@@ -331,7 +330,6 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
                 outputs.push(x);
             },
         }
-        jj += 1;
     }
     assert!(output_secrets.len() <= size / 2);
     output_secrets.resize_with(size / 2, || None);
