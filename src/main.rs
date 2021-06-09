@@ -249,7 +249,7 @@ fn main() -> io::Result<()> {
 
 
     // Set up memory ports and check consistency.
-    let mut mem = Memory::new(is_prover);
+    let mut mem = Memory::new();
     for seg in &exec.init_mem {
         mem.init_segment(&b, seg);
     }
