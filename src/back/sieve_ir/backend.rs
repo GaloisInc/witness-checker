@@ -55,6 +55,7 @@ pub struct Backend<'w, 'irb, IRB: IRBuilderT> {
     wire_to_repr: HashMap<Wire<'w>, ReprId>,
     representer: Representer,
     usage: HashMap<Wire<'w>, u64>, // tells the number of times a given wire is used as an input.
+    optim: bool,
     builder: &'irb mut IRB,
 }
 
@@ -65,6 +66,7 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
             wire_to_repr: HashMap::new(),
             representer: Representer::new(),
             usage: HashMap::new(),
+            optim: true,
             builder: ir_builder,
         }
     }
@@ -133,7 +135,7 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
     }
 
     fn forget_wire_if_required(&mut self, wire: &Wire<'w>, repr: ReprId) {
-        if self.usage.get(&wire) == Some(&0) {
+        if self.optim && self.usage.get(&wire) == Some(&0) {
             self.representer.mut_repr(repr).deallocate();
         }
     }
@@ -346,7 +348,6 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                     ShiftOp::Shl => lu.shift_left(amount),
                     ShiftOp::Shr => lu.shift_right(amount, left.ty.is_int()),
                 };
-                // self.forget_wire_if_required(&left, lw);
                 WireRepr::from(shifted)
             }
 
@@ -407,7 +408,6 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                     | (TyKind::Uint(_sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
                         bits.resize(sz2.bits() as usize, Boolean::constant(false));
-                        // self.forget_wire_if_required(&a, aw);
                         WireRepr::from(Int::from_bits(&bits))
                     }
 
@@ -416,7 +416,6 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                         let mut bits = int.bits.clone();
                         let last = bits.last().unwrap().clone();
                         bits.resize(sz2.bits() as usize, last);
-                        // self.forget_wire_if_required(&a, aw);
                         WireRepr::from(Int::from_bits(&bits))
                     }
 
@@ -481,6 +480,7 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     ir_builder.prof.as_mut().map(|p| p.warnings_panic = false);
 
     let mut back = Backend::new(&mut ir_builder);
+    back.optim = false;
 
     let arena = bumpalo::Bump::new();
     let is_prover = true;
