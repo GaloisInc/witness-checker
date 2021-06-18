@@ -1,7 +1,6 @@
 use std::convert::TryFrom;
 use std::fmt;
-use std::mem::{self, MaybeUninit};
-use std::ptr;
+use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
@@ -549,6 +548,7 @@ macro_rules! tuple_impl {
 
         impl<'a, $($A: Secret<'a>,)*> Secret<'a> for ($($A,)*) {
             fn secret(bld: &Builder<'a>) -> Self::Repr {
+                #![allow(unused)]       // `bld` in the zero-element case
                 ($(bld.secret_uninit::<$A>(),)*)
             }
 

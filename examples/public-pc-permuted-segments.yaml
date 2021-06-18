@@ -15,7 +15,6 @@
 
   params:
     num_regs: 3
-    trace_len: 6
 
   segments:
     # Segments go in order 0 -> 2 -> 1 -> 3

@@ -85,6 +85,13 @@ fn is_zero(val: &Option<BigInt>) -> bool {
     val.as_ref().map_or(false, |i| i.is_zero())
 }
 
+/// Returns `true` if `val` is definitely nonzero.
+///
+/// This is not the same as `!is_zero(val)`, which returns `true` when `val` is *possibly* nonzero.
+fn is_non_zero(val: &Option<BigInt>) -> bool {
+    val.as_ref().map_or(false, |i| !i.is_zero())
+}
+
 fn is_one(val: &Option<BigInt>) -> bool {
     val.as_ref().map_or(false, |i| i.is_one())
 }
@@ -140,12 +147,16 @@ fn try_identities<'a>(
             BinOp::Mul, (_, is_one) => a,
             // 0 / x = 0
             BinOp::Div, (is_zero, _) => c.lit(ty, 0),
-            // x / x = 1
-            BinOp::Div, (_, _) if a == b => c.lit(ty, 1),
+            // x / 1 = x
+            BinOp::Div, (_, is_one) => a,
+            // x / x = 1  (x must be nonzero, since we define 0 / 0 = 0)
+            BinOp::Div, (_, is_non_zero) if a == b => c.lit(ty, 1),
             // 0 % x = 0
             BinOp::Mod, (is_zero, _) => c.lit(ty, 0),
-            // x % x = 0
-            BinOp::Mod, (_, _) if a == b => c.lit(ty, 0),
+            // x % 1 = 0
+            BinOp::Mod, (_, is_one) => c.lit(ty, 0),
+            // x % x = 0  (applies even when x is zero, since we define 0 % 0 = 0)
+            BinOp::Mod, (_, is_non_zero) if a == b => c.lit(ty, 0),
 
             // 0 & x = x & 0 = 0
             BinOp::And, (is_zero, _) => c.lit(ty, 0),
@@ -196,11 +207,11 @@ fn try_identities<'a>(
             CmpOp::Lt, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
 
             // (unsigned) x >= 0, 0 <= x: true
-            CmpOp::Ge, (_, is_zero) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 1),
-            CmpOp::Le, (is_zero, _) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Ge, (_, is_zero) if a.ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Le, (is_zero, _) if a.ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 1),
             // (unsigned) x < 0, 0 > x: false
-            CmpOp::Lt, (_, is_zero) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
-            CmpOp::Gt, (is_zero, _) if ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Lt, (_, is_zero) if a.ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Gt, (is_zero, _) if a.ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
         },
         GateKind::Mux(c, t, e) => match_identities! {
             (), (c);

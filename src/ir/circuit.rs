@@ -1,6 +1,6 @@
 use std::any;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -557,7 +557,7 @@ impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
                 continue;
             }
 
-            let mut maybe_push = |w| {
+            let maybe_push = |w| {
                 if self.seen.contains(&w) || !(self.filter)(w) {
                     false
                 } else {

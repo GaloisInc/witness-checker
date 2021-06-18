@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter;
@@ -14,20 +14,15 @@ use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
-use cheesecloth::gadget::arith::BuilderExt as _;
-use cheesecloth::gadget::bit_pack;
 use cheesecloth::lower::{self, run_pass, run_pass_debug};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
-use cheesecloth::micro_ram::mem::{Memory, extract_bytes_at_offset, extract_low_bytes};
+use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{
-    CalcIntermediate, Execution, RamInstr, RamState, RamStateRepr, MemPort, MemOpKind, MemOpWidth, ByteOffset, Opcode, Advice,
-    Segment, TraceChunk, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
-};
+use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk};
 use cheesecloth::mode;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, with_mode};
 use cheesecloth::mode::tainted;
@@ -498,7 +493,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
         let new_segment = Segment {
             constraints: vec![],
-            len: chunk.states.len() - 1,
+            len: exec.params.trace_len.unwrap() - 1,
             successors: vec![],
             enter_from_network: false,
             exit_to_network: false,
@@ -517,7 +512,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
 
     // Set up memory ports and check consistency.
-    let mut mem = Memory::new(is_prover);
+    let mut mem = Memory::new();
     for seg in &exec.init_mem {
         mem.init_segment(&b, seg);
     }
@@ -541,7 +536,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     let init_state = provided_init_state.clone().unwrap_or_else(|| {
         let mut regs = vec![0; exec.params.num_regs];
-        regs[0] = exec.init_mem.iter().map(|ms| ms.start + ms.len).max().unwrap_or(0);
+        regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
         RamState { cycle: 0, pc: 0, regs, live: true }
     });
     if provided_init_state.is_some() {

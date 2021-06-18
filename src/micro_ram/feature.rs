@@ -30,6 +30,8 @@ define_features! {
     /// advice, rather than the index of the post-state.  For example, the advice for the first
     /// step is placed at index 0 with this feature, rather than index 1.
     PreAdvice = "pre-advice",
+    /// Initialized heap.
+    HeapInit = "heap_init",
 }
 
 
@@ -56,6 +58,11 @@ macro_rules! define_versions {
 define_versions! {
     (0,1,0,0) = {},
     (0,1,1,0) = { PublicPc PreAdvice },
+    // 0.1.2.0 removes `params.trace_len`, which we already ignore in all public-pc traces, and
+    // also removes `flag` from states, which we ignore always.
+    (0,1,2,0) = { PublicPc PreAdvice },
+    // 0.1.3.0 adds the heap init feature.
+    (0,1,3,0) = { PublicPc PreAdvice HeapInit},
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {

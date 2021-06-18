@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::iter;
 use std::mem;
-use crate::ir::typed::{TWire, TSecretHandle, Builder, Repr};
+use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::routing::{Routing, RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::types::{self, RamState, Params};
@@ -211,7 +211,7 @@ impl<'a> SegGraphBuilder<'a> {
             let mut it = self.segments[idx].preds.iter();
             let first_pred = it.next()
                 .unwrap_or_else(|| panic!("segment {} has no predecessors", idx));
-            let mut first = self.get_predecessor(b, *first_pred);
+            let first = self.get_predecessor(b, *first_pred);
             let state = it.fold(first, |acc, pred| {
                 let state = self.get_predecessor(b, *pred);
                 b.mux(state.live, state, acc)
@@ -284,7 +284,7 @@ impl<'a> SegGraphBuilder<'a> {
         self.network = NetworkState::After(routing.finish_with_default(b, default));
     }
 
-    pub fn finish(mut self, cx: &Context<'a>, b: &Builder<'a>) -> SegGraph<'a> {
+    pub fn finish(self, cx: &Context<'a>, b: &Builder<'a>) -> SegGraph<'a> {
         let _g = b.scoped_label("seg_graph/finish");
         // Add equality assertions to constrain the CycleBreakNode secrets.  We do this first
         // because the later steps involve dismantling `self` to extract its `TSecretHandle`s.
@@ -334,7 +334,7 @@ impl<'a> SegGraphBuilder<'a> {
             debug_assert!(edge_list[start..end].iter().all(|&(ii, _)| ii == i));
 
             let mut wires = Vec::with_capacity(end - start + 1);
-            for &(ii, j) in &edge_list[start..end] {
+            for &(_, j) in &edge_list[start..end] {
                 wires.push(*self.edges[&(i, j)].wire());
             }
             if let Some(to_net_live) = self.to_net.get(&i) {

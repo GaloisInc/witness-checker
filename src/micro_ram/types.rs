@@ -767,11 +767,11 @@ impl<'a> Flatten<'a> for ByteOffset {
         c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
@@ -810,11 +810,11 @@ impl<'a> Flatten<'a> for WordAddr {
             MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
@@ -1086,18 +1086,30 @@ impl Execution {
 
     pub fn validate(self) -> Result<Self, String> {
         let params = &self.params;
-        if self.trace.len() > params.trace_len {
-            return Err(format!(
-                "`trace` contains more than `trace_len` states: {} > {}",
-                self.trace.len(), params.trace_len,
-            ));
-        }
-
         if !self.features.contains(&Feature::PublicPc) {
             if self.segments.len() != 0 {
                 return Err(format!(
                     "expected no segment definitions in non-public-pc trace, but got {}",
                     self.segments.len(),
+                ));
+            }
+
+            if self.trace.len() != 1 {
+                return Err(format!(
+                    "expected exactly one trace chunk in non-public-pc trace, but got {}",
+                    self.trace.len(),
+                ));
+            }
+
+            if self.params.trace_len.is_none() {
+                return Err(format!("non-public-pc trace must have `params.trace_len` set"));
+            }
+
+            let expect_trace_len = self.params.trace_len.unwrap();
+            if self.trace[0].states.len() != expect_trace_len {
+                return Err(format!(
+                    "wrong number of states in trace: expected {}, but got {}",
+                    expect_trace_len, self.trace[0].states.len(),
                 ));
             }
         }
@@ -1148,13 +1160,14 @@ impl Execution {
             }
         }
 
+        let trace_len = self.trace.iter().map(|c| c.states.len()).sum();
         for &i in self.advice.keys() {
             let i = usize::try_from(i)
                 .map_err(|e| format!("advice key {} out of range: {}", i, e))?;
-            if i >= self.params.trace_len {
+            if i > trace_len { // account for the advice converted into post-state indices (so > instead of >=)
                 return Err(format!(
-                    "`advice` key out of range: the index is {} but `trace_len` is {}",
-                    i, self.params.trace_len,
+                    "`advice` key out of range: the index is {} but `trace` has only {} states",
+                    i, trace_len,
                 ));
             }
         }
@@ -1169,6 +1182,10 @@ pub struct MemSegment {
     pub len: u64,
     pub read_only: bool,
     pub secret: bool,
+    /// Whether the segment is used to initialize the heap. Defaults to `false` if field is
+    /// missing.
+    #[serde(default="bool::default")]
+    pub heap_init: bool,
     #[serde(default)]
     pub data: Vec<u64>,
     #[serde(default)]
@@ -1178,7 +1195,8 @@ pub struct MemSegment {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Params {
     pub num_regs: usize,
-    pub trace_len: usize,
+    #[serde(default)]
+    pub trace_len: Option<usize>,
     #[serde(alias = "sparcity", default)]
     pub sparsity: Sparsity,
 }
@@ -1215,7 +1233,6 @@ impl Segment {
         for c in &self.constraints {
             match *c {
                 SegmentConstraint::Pc(pc) => return Some(pc),
-                _ => {},
             }
         }
         None
