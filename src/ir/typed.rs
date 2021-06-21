@@ -852,8 +852,8 @@ impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
 
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
         if let Some(pf) = check_mode() {
-            let s = s.unwrap(&pf);
-            let val = val.unwrap(&pf);
+            let s = s.get(&pf);
+            let val = val.get(&pf);
             Builder::set_secret_from_lit(&s, &val, force);
         }
     }

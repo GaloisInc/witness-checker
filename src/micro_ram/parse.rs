@@ -9,6 +9,7 @@ use crate::micro_ram::types::{
     Segment, SegmentConstraint,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
+use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
 
 
 thread_local! {

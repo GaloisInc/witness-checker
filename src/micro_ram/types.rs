@@ -8,7 +8,7 @@ use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
 use crate::micro_ram::feature::{Feature, Version};
-use crate::mode::if_mode::{IfMode, AnyTainted, is_mode};
+use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, is_mode};
 use crate::mode::tainted::{UNTAINTED};
 
 
@@ -247,8 +247,8 @@ impl<'a> Secret<'a> for RamState {
         for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
             Builder::set_secret_from_lit(s_reg, val_reg, force);
         }
-        if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
-            for (s_reg, val_reg) in s.tainted_regs.unwrap(&pf).iter().zip(val.tainted_regs.unwrap(&pf).iter()) {
+        if let Some(pf) = check_mode::<AnyTainted>() {
+            for (s_reg, val_reg) in s.tainted_regs.get(&pf).iter().zip(val.tainted_regs.get(&pf).iter()) {
                 Builder::set_secret_from_lit(s_reg, val_reg, force);
             }
         }

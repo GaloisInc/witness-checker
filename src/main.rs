@@ -537,7 +537,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let init_state = provided_init_state.clone().unwrap_or_else(|| {
         let mut regs = vec![0; exec.params.num_regs];
         regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
-        RamState { cycle: 0, pc: 0, regs, live: true }
+        let tainted_regs = IfMode::new(|_| vec![tainted::UNTAINTED; exec.params.num_regs]);
+        RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
     });
     if provided_init_state.is_some() {
         let init_state_wire = b.lit(init_state.clone());

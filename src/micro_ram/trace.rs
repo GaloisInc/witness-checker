@@ -9,6 +9,7 @@ use crate::micro_ram::types::{
     self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
     REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE
 };
+use crate::mode::tainted;
 
 
 
@@ -414,7 +415,7 @@ fn calc_step<'a>(
         regs.push(b.mux(is_dest, result, v_old));
     }
 
-    let (tainted_regs, tainted_im) = tainted::calc_step(b, cycle, instr, mem_port, &s1.tainted_regs, y, dest);
+    let (tainted_regs, tainted_im) = tainted::calc_step(b, idx, instr, mem_port, &s1.tainted_regs, y, dest);
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
@@ -518,7 +519,7 @@ fn check_step<'a>(
                 );
             });
         }
-        tainted::check_step_mem(cx, b, cycle, mem_port, &is_store_like, &calc_im.tainted);
+        tainted::check_step_mem(cx, b, idx, &mem_port, &is_store_like, &calc_im.tainted);
     });
 
     for w in MemOpWidth::iter() {

@@ -14,7 +14,7 @@ pub const UNTAINTED: Label = Label::MAX;
 // Builds the circuit that calculates our conservative dynamic taint tracking semantics. 
 pub fn calc_step<'a>(
     b: &Builder<'a>,
-    cycle: u32,
+    idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
     regs0: &IfMode<AnyTainted, Vec<TWire<'a,Label>>>,
@@ -23,7 +23,7 @@ pub fn calc_step<'a>(
 ) -> (IfMode<AnyTainted, Vec<TWire<'a,Label>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         let regs0 = regs0.as_ref().unwrap(&pf);
-        let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", cycle));
+        let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", idx));
 
         let mut cases = Vec::new();
         let mut add_case = |op, result| {
@@ -49,8 +49,9 @@ pub fn calc_step<'a>(
 
         {
             let result = mem_port.tainted.unwrap(&pf);
-            add_case(Opcode::Load, result);
+            add_case(Opcode::Load8, result);
         }
+        // TODO: Other loads...
 
         {
             add_case(Opcode::Taint, b.cast(concrete_y));
@@ -170,7 +171,7 @@ pub fn check_step<'a>(
 pub fn check_step_mem<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
-    cycle: u32,
+    idx: usize,
     mem_port: &TWire<'a, MemPort>, 
     is_store_like: &TWire<'a, bool>, 
     imm: &IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
@@ -185,7 +186,7 @@ pub fn check_step_mem<'a, 'b>(
         wire_assert!(
             cx, b.eq(port_tainted, expect_tainted),
             "cycle {}'s mem port (op {}) has tainted {} (expected {})",
-            cycle, cx.eval(op), cx.eval(tainted), cx.eval(expect_tainted),
+            idx, cx.eval(op), cx.eval(tainted), cx.eval(expect_tainted),
         );
     }
 }

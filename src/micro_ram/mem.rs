@@ -393,7 +393,7 @@ fn check_mem<'a>(
             cx.eval(port.value), cx.eval(prev_value),
         );
 
-        tainted::check_memports(cx, b, port1, port2);
+        tainted::check_memports(cx, b, &prev, &port);
     });
 
     cx.when(b, b.or(is_write, is_poison), |cx| {
