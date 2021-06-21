@@ -117,8 +117,6 @@ fn main() -> io::Result<()> {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
         }
-        if args.is_present("scale-out") {
-        }
         ok
     };
 
