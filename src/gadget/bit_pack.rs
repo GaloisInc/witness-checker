@@ -1,4 +1,6 @@
-use crate::ir::circuit::{Circuit, CircuitTrait, Wire, Ty, TyKind, IntSize, GadgetKind, GadgetKindRef};
+use crate::ir::circuit::{
+    Circuit, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize, GadgetKind, GadgetKindRef,
+};
 use crate::ir::typed::{Builder, TWire, Flatten};
 
 struct BundleTys<'a> {

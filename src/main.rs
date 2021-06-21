@@ -10,7 +10,7 @@ use num_traits::One;
 use cheesecloth::wire_assert;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, CircuitTrait, DynCircuit, GadgetKindRef};
+use cheesecloth::ir::circuit::{Circuit, CircuitTrait, CircuitExt, DynCircuit, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::lower::{self, AddPass};
 use cheesecloth::micro_ram::context::Context;

@@ -1,5 +1,5 @@
 use crate::gadget::bit_pack::ConcatBits;
-use crate::ir::circuit::{CircuitTrait, Wire, TyKind, GateKind};
+use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, TyKind, GateKind};
 
 /// Expand any `Bundle` arguments to `ConcatBits`, leaving only `Int` and `Uint`.
 pub fn concat_bits_flat<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {

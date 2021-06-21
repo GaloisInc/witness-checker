@@ -1,4 +1,4 @@
-use crate::ir::circuit::{Circuit, CircuitTrait, Wire, GateKind, GadgetKindRef};
+use crate::ir::circuit::{Circuit, CircuitTrait, CircuitExt, Wire, GateKind, GadgetKindRef};
 use crate::lower;
 
 /// Decompose any gadget for which `f(g)` returns `true`.

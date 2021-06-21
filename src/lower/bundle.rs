@@ -1,4 +1,4 @@
-use crate::ir::circuit::{CircuitTrait, Wire, GateKind, TyKind};
+use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, GateKind, TyKind};
 
 /// Split a `Mux` gate of `Bundle` type into several independent muxes.
 pub fn unbundle_mux<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {

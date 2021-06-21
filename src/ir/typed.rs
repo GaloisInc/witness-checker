@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
-use crate::ir::circuit::{CircuitTrait, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
+use crate::ir::circuit::{CircuitTrait, CircuitExt, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
 
 
 pub struct Builder<'a> {

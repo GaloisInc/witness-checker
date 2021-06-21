@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::iter;
 use crate::eval::{self, Evaluator, CachingEvaluator};
-use crate::ir::circuit::{self, Circuit, CircuitTrait, Wire, GateKind, Ty, TyKind};
+use crate::ir::circuit::{self, Circuit, CircuitTrait, CircuitExt, Wire, GateKind, Ty, TyKind};
 
 pub mod bit_pack;
 pub mod bool_;

@@ -12,6 +12,7 @@ use syn::parse::{self, Parse, ParseStream};
 mod kw {
     syn::custom_keyword!(lifetime);
     syn::custom_keyword!(overridable);
+    syn::custom_keyword!(extension);
 }
 
 
@@ -45,6 +46,7 @@ impl Deref for MethodDef {
 struct Args {
     lifetime: Lifetime,
     trait_name: Ident,
+    ext_trait_name: Ident,
     struct_name: Ident,
     dyn_name: Ident,
     funcs: Vec<MethodDef>,
@@ -58,6 +60,11 @@ impl Parse for Args {
 
         input.parse::<Token![trait]>()?;
         let trait_name = input.parse()?;
+        input.parse::<Token![;]>()?;
+
+        input.parse::<kw::extension>()?;
+        input.parse::<Token![trait]>()?;
+        let ext_trait_name = input.parse()?;
         input.parse::<Token![;]>()?;
 
         input.parse::<Token![struct]>()?;
@@ -76,6 +83,7 @@ impl Parse for Args {
         Ok(Args {
             lifetime,
             trait_name,
+            ext_trait_name,
             struct_name,
             dyn_name,
             funcs,
@@ -109,12 +117,34 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
     let Args {
         lifetime: lt,
         trait_name: Trait,
+        ext_trait_name: TraitExt,
         struct_name: Struct,
         dyn_name: Dyn,
-        funcs,
+        funcs: all_funcs,
     } = parse_macro_input!(input as Args);
 
 
+    // Separate overridable from non-overridable funcs.  Overridable funcs go into `Trait` and get
+    // various special handling for `Struct` and `Dyn`.  Non-overridable funcs are just pasted
+    // verbatim into `TraitExt`.
+    let mut funcs = Vec::with_capacity(all_funcs.len());
+    let mut ext_funcs = Vec::with_capacity(all_funcs.len());
+    for f in all_funcs {
+        if f.overridable {
+            funcs.push(f);
+        } else {
+            let f = f.inner;
+            ext_funcs.push(TraitItemMethod {
+                attrs: f.attrs,
+                sig: f.sig,
+                default: Some(f.block),
+                semi_token: None,
+            });
+        }
+    }
+
+
+    // Trait method declarations for `Trait`.
     let trait_funcs = funcs.iter().filter(|f| is_public(&f.vis)).map(|f| {
         let name = &f.sig.ident;
         let args = f.sig.inputs.iter().filter_map(|arg| match arg {
@@ -141,6 +171,7 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
         }
     }).collect::<Vec<_>>();
 
+    // TODO: remove support for private funcs
     let impl_funcs_private = funcs.iter().filter(|f| !is_public(&f.vis)).map(|f| {
         f.inner.clone()
     }).collect::<Vec<_>>();
@@ -155,6 +186,7 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
         }).collect::<Vec<_>>();
 
 
+    // Method declarations for `DynTrait`, a helper used to define `Dyn`.
     let dyn_trait_funcs = funcs.iter()
         .filter(|f| is_public(&f.vis) && !has_generics(&f.sig))
         .map(|f| {
@@ -166,6 +198,8 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
             }
         }).collect::<Vec<_>>();
 
+    // Methods for `impl<T> DynTrait for T where T: Trait`.  Each `DynTrait` method just dispatches
+    // to the same method on `Trait`.
     let dyn_for_trait_impl_funcs = funcs.iter()
         .filter(|f| is_public(&f.vis) && !has_generics(&f.sig))
         .map(|f| {
@@ -185,6 +219,12 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
             }
         }).collect::<Vec<_>>();
 
+    // Methods for `impl Trait for Dyn`.  Each non-generic `Trait` method dispatches to the same
+    // method on `DynTrait`; combined with `DynTrait -> Trait` dispatch above, this amounts to
+    // normal dynamic dispatch to the underlying concrete implementation.  Each generic method
+    // dispatches to an inherent method on `Dyn`, which must be defined by the user; typically,
+    // these will dispatch to an object-safe equivalent of the method, which is then handled by the
+    // non-generic case.
     let trait_for_dyn_impl_funcs = funcs.iter().filter(|f| is_public(&f.vis)).map(|f| {
         let name = &f.sig.ident;
         let args = f.sig.inputs.iter().filter_map(|arg| match arg {
@@ -233,6 +273,12 @@ pub fn define_overridable_trait(input: TokenStream) -> TokenStream {
 
             #(#impl_funcs_public)*
         }
+
+        pub trait #TraitExt<#lt>: #Trait<#lt> {
+            #(#ext_funcs)*
+        }
+
+        impl<#lt, T: #Trait<#lt>> #TraitExt<#lt> for T {}
 
 
         mod __overridable_trait_dyn {

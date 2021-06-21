@@ -113,6 +113,7 @@ impl<'a> Circuit<'a> {
 define_overridable_trait! {
     lifetime 'a;
     trait CircuitTrait;
+    extension trait CircuitExt;
     struct Circuit;
     dyn DynCircuit;
 
