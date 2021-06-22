@@ -177,13 +177,13 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
+    #[serde(default)]
+    pub tainted_regs: IfMode<AnyTainted, Vec<Label>>,
     // All states parsed from the trace are assumed to be live.
     #[serde(default = "return_true")]
     pub live: bool,
     #[serde(default)]
     pub cycle: u32,
-    #[serde(default)]
-    pub tainted_regs: IfMode<AnyTainted, Vec<Label>>,
 }
 
 fn return_true() -> bool { true }
@@ -541,8 +541,10 @@ pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
 /// Labels are used to taint registers and memory ports.
-/// Currently, labels are u16 integers.
-pub type Label = u16;
+/// Currently, labels only use the lower two bits. See the
+/// [MicroRAM](https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/blob/cec7edad98ccacb68708777a610900703b1568a9/src/Compiler/Tainted.hs#L11)
+/// implementation for lattice details.
+pub type Label = u8;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MemPort {

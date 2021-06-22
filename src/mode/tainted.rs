@@ -7,7 +7,7 @@ use crate::micro_ram::{
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
 
-pub const UNTAINTED: Label = Label::MAX;
+pub const UNTAINTED: Label = 3;
 
 // pub struct CalcIntermediate<'a> {
 
@@ -52,6 +52,8 @@ pub fn calc_step<'a>(
             add_case(Opcode::Load8, result);
         }
         // TODO: Other loads...
+
+        // Stores??
 
         {
             add_case(Opcode::Taint, b.cast(concrete_y));
@@ -148,7 +150,7 @@ pub fn check_first<'a>(
 pub fn check_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    cycle: u32,
+    idx: usize, //  TODO: Not cycle anymore?
     instr: TWire<'a, RamInstr>,
     calc_im: &CalcIntermediate<'a>,
 ) {
@@ -161,7 +163,7 @@ pub fn check_step<'a>(
         wire_bug_if!(
             cx, b.and(b.eq(instr.opcode, b.lit(Opcode::Sink as u8)), b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED)))),
             "leak of tainted data from register {:x} with label {} does not match output channel label {} on cycle {}",
-            cx.eval(instr.op1), cx.eval(xt), cx.eval(y), cycle,
+            cx.eval(instr.op1), cx.eval(xt), cx.eval(y), idx,
         );
     }
 }
