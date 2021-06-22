@@ -24,7 +24,7 @@ use num_traits::Zero;
 /// the bitwise value `0_u8`.  Since `2^N` does not evenly divide the field modulus, the
 /// highest-valued field elements are not safe to use.  The `Num` type will automatically truncate
 /// if the operation might return a value that is out of range.
-use std::collections::{HashMap, VecDeque, HashSet};
+use std::collections::HashMap;
 use std::{convert::TryFrom, iter};
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};

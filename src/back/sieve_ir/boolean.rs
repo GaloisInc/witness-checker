@@ -197,7 +197,7 @@ impl Boolean {
             (&Boolean::Constant(true), c) | (c, &Boolean::Constant(true)) => {
                 match &c {
                     Boolean::Is(ref v) => {
-                        let mut w = AllocatedBit::not(builder, v);
+                        let w = AllocatedBit::not(builder, v);
                         builder.assert_zero(w.get_wire());
                     }
                     Boolean::Not(ref v) => {
@@ -214,7 +214,7 @@ impl Boolean {
                         builder.assert_zero(v.get_wire());
                     }
                     Boolean::Not(ref v) => {
-                        let mut w = AllocatedBit::not(builder, v);
+                        let w = AllocatedBit::not(builder, v);
                         builder.assert_zero(w.wire);
                     }
                     _ => unreachable!(),
@@ -224,7 +224,7 @@ impl Boolean {
 
             (&Boolean::Is(ref v), &Boolean::Is(ref w))
             | (&Boolean::Not(ref v), &Boolean::Not(ref w)) => {
-                let mut xorwire = AllocatedBit::xor(builder, &v, &w).get_wire();
+                let xorwire = AllocatedBit::xor(builder, &v, &w).get_wire();
                 builder.assert_zero(xorwire);
 
                 Ok(())
@@ -236,8 +236,8 @@ impl Boolean {
                     wire: builder.one(),
                     value: Some(true),
                 };
-                let mut not_w = AllocatedBit::xor(builder, &w, &true_bit);
-                let mut xor_wire = AllocatedBit::xor(builder, &v, &not_w).get_wire();
+                let not_w = AllocatedBit::xor(builder, &w, &true_bit);
+                let xor_wire = AllocatedBit::xor(builder, &v, &not_w).get_wire();
                 builder.assert_zero(xor_wire);
 
                 Ok(())

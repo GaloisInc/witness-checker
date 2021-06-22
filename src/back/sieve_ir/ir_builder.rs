@@ -10,9 +10,7 @@ use zki_sieve::Sink;
 use zki_sieve::{Value};
 use BuildGate::*;
 use std::rc::{Rc, Weak};
-use std::fmt;
 use zki_sieve::producers::build_gates::NO_OUTPUT;
-use std::ops::Deref;
 
 #[derive(Clone)]
 pub struct IRWire {
