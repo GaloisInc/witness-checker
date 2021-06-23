@@ -199,6 +199,26 @@ fn eq_packed_labels_at_offset<'a>(
     acc
 }
 
+fn eq_packed_labels_except_at_offset<'a>(
+    b: &Builder<'a>,
+    offset: TWire<'a, u8>,
+    width: TWire<'a, MemOpWidth>,
+    label1: TWire<'a, PackedLabel>,
+    label2: TWire<'a, PackedLabel>,
+) -> TWire<'a, bool> {
+    // Split into labels.
+    let label1_parts = unpack_labels(b, label1);
+    let label2_parts = unpack_labels(b, label2);
+
+    let mut acc = b.lit(true);
+    for (idx, (&v1, &v2)) in label1_parts.iter().zip(label2_parts.iter()).enumerate() {
+        let idx = b.lit(idx as u8);
+        let ignored = b.not(should_ignore(b, idx, offset, width));
+        acc = b.and(acc, b.mux(ignored, b.lit(true), b.eq(v1, v2)));
+    }
+    acc
+}
+
 // Checks if the byte at index idx should be ignored.
 fn should_ignore<'a>(
     b: &Builder<'a>,
@@ -333,12 +353,29 @@ pub fn check_read_memports<'a, 'b>(
     }
 }
 
-// Circuit that checks memory when port2 is a write. Since it is a write, port2's unmodified tainted bits must be the same as port1's.
+// Circuit that checks memory when port is a write. Since it is a write, port's unmodified tainted bits must be the same as prev's.
 pub fn check_write_memports<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
-    port1: &TWire<'a, MemPort>,
-    port2: &TWire<'a, MemPort>,
+    prev: &TWire<'a, MemPort>,
+    port: &TWire<'a, MemPort>,
 ) {
-    unimplemented!{}
+    if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
+        let tainted1 = prev.tainted.unwrap(&pf);
+        let tainted2 = port.tainted.unwrap(&pf);
+
+        let addr2 = port.addr;
+        let cycle2 = port.cycle;
+
+        let offset2 = b.cast(bit_pack::extract_low::<ByteOffset>(b, addr2.repr));
+        let width2 = port.width;
+
+        wire_assert!(
+            cx, eq_packed_labels_except_at_offset(b, offset2, width2, tainted1, tainted2),
+            "tainted write from {:x} on cycle {} modified outside width {:?}: 0x{:x} != 0x{:x}",
+            cx.eval(addr2), cx.eval(cycle2),
+            cx.eval(width2),
+            cx.eval(tainted2), cx.eval(tainted1),
+        );
+    }
 }
