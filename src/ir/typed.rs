@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
-use crate::micro_ram::types::{ByteOffset, MemOpWidth};
+use crate::micro_ram::types::{ByteOffset, MemOpWidth, U2};
 use crate::mode::if_mode::{IfMode, ModePred, check_mode};
 
 
@@ -512,6 +512,12 @@ impl<'a> Cast<'a, u8> for MemOpWidth {
     fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
         // TODO: Is this correct?
         Flatten::to_wire(bld, x)
+    }
+}
+
+impl<'a> Cast<'a, u8> for U2 {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        bld.c.cast(x, bld.c.ty(TyKind::U8))
     }
 }
 

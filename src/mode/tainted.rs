@@ -3,7 +3,7 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PackedLabel, RamInstr, REG_NONE, TaintCalcIntermediate, WORD_BYTES}
+    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PackedLabel, RamInstr, REG_NONE, TaintCalcIntermediate, WORD_BYTES, U2}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
@@ -237,7 +237,12 @@ fn unpack_labels<'a>(
 ) -> [TWire<'a, Label>; WORD_BYTES] {
     // TODO: How do we split a u16 into Labels?
     // let label1_parts = bit_pack::split_bits::<[Label; WORD_BYTES]>(b, label1.repr);
-    unimplemented!{}
+    let label_parts = bit_pack::split_bits::<[U2; WORD_BYTES]>(b, labels.repr);
+    let mut labels = [b.lit(0); WORD_BYTES];
+    for (idx, &l) in label_parts.iter().enumerate() {
+        labels[idx] = b.cast(l);
+    }
+    labels
 }
 
 pub fn check_state<'a>(

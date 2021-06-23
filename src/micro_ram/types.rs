@@ -9,7 +9,7 @@ use crate::ir::typed::{
 };
 use crate::micro_ram::feature::{Feature, Version};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, is_mode};
-use crate::mode::tainted::{UNTAINTED};
+use crate::mode::tainted::{LABEL_BITS, UNTAINTED};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -547,6 +547,26 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 pub type Label = u8;
 /// Packed label representing 8 labels of the bytes of a word in memory.
 pub type PackedLabel = u16;
+
+pub struct U2(u8);
+
+impl<'a> Repr<'a> for U2 {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for U2 {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16)))
+    }
+
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MemPort {
