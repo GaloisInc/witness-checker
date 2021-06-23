@@ -5,6 +5,7 @@ use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
+use crate::micro_ram::types::{ByteOffset, MemOpWidth};
 use crate::mode::if_mode::{IfMode, ModePred, check_mode};
 
 
@@ -501,6 +502,18 @@ integer_impls!(u16, U16);
 integer_impls!(u32, U32);
 integer_impls!(u64, U64);
 
+impl<'a> Cast<'a, u8> for ByteOffset {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        bld.c.cast(x, bld.c.ty(TyKind::U8))
+    }
+}
+
+impl<'a> Cast<'a, u8> for MemOpWidth {
+    fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
+        // TODO: Is this correct?
+        Flatten::to_wire(bld, x)
+    }
+}
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {

@@ -9,7 +9,7 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Label, MemSegment, ByteOffset, WordAddr,
+    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Label, PackedLabel, MemSegment, ByteOffset, WordAddr,
     MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -58,7 +58,7 @@ impl<'a> Memory<'a> {
             }
 
             mp.tainted = {
-                let t: IfMode<_, Label> = IfMode::new(|pf| {
+                let t: IfMode<_, PackedLabel> = IfMode::new(|pf| {
                     seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(0)
                 });
                 if seg.secret {
@@ -393,7 +393,7 @@ fn check_mem<'a>(
             cx.eval(port.value), cx.eval(prev_value),
         );
 
-        tainted::check_memports(cx, b, &prev, &port);
+        tainted::check_read_memports(cx, b, &prev, &port);
     });
 
     cx.when(b, b.or(is_write, is_poison), |cx| {
@@ -420,6 +420,9 @@ fn check_mem<'a>(
             cx.eval(port.op), cx.eval(port.addr), cx.eval(port.cycle), cx.eval(port.width),
             cx.eval(port.value), cx.eval(prev_value),
         );
+
+        // TODO: tainted mem checks for writes
+        tainted::check_write_memports(cx, b, &prev, &port);
     });
 }
 

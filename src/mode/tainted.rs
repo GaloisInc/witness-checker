@@ -1,13 +1,25 @@
 
+use crate::gadget::bit_pack;
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{CalcIntermediate, Label, MemPort, Opcode, RamInstr, REG_NONE, TaintCalcIntermediate}
+    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PackedLabel, RamInstr, REG_NONE, TaintCalcIntermediate, WORD_BYTES}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
 
 pub const UNTAINTED: Label = 3;
+pub const LABEL_BITS: u8 = 2;
+
+// Computes the meet (greatest lower bound) of two labels.
+// Assumes that the label is valid.
+fn meet<'a>(
+    b: &Builder<'a>,
+    l1: TWire<'a, Label>,
+    l2: TWire<'a, Label>,
+) -> TWire<'a, Label> {
+    b.mux(b.eq(l1, l2), l1, b.lit(UNTAINTED))
+}
 
 // pub struct CalcIntermediate<'a> {
 
@@ -47,11 +59,15 @@ pub fn calc_step<'a>(
             add_case(Opcode::Cmov, ty);
         }
 
-        {
-            let result = mem_port.tainted.unwrap(&pf);
-            add_case(Opcode::Load8, result);
+        // Load1, Load2, Load4, Load8
+        for w in MemOpWidth::iter() {
+            let packed_labels = mem_port.tainted.unwrap(&pf);
+            // TODO: Pull out offset and extracted labels in TaintCalcIntermediate?
+            let offset = b.cast(bit_pack::extract_low::<ByteOffset>(b, mem_port.addr.repr));
+            let label_parts = unpack_labels(b, packed_labels);
+            let result = meet_labels_at_offset(b, label_parts, offset, w);
+            add_case(w.load_opcode(), result);
         }
-        // TODO: Other loads...
 
         // Stores??
 
@@ -106,6 +122,102 @@ pub fn calc_step<'a>(
         // JP: Better combinator for this? map_with_or?
         (IfMode::none(), IfMode::none())
     }
+}
+
+fn check_label<'a, 'b>(
+    cx: &ContextWhen<'a, 'b>,
+    b: &Builder<'a>,
+    idx: usize,
+    label: TWire<'a, Label>,
+) {
+    wire_assert!(
+        cx, b.le(label, b.lit(UNTAINTED)),
+        "Invalid tainted label {} at cycle {}",
+        cx.eval(label), idx,
+    );
+}
+
+// Packs a Label into a PackedLabel. Assumes that the Label is already valid (2 bits long).
+fn pack_label<'a>(
+    b: &Builder<'a>,
+    label: TWire<'a, Label>,
+    offset: TWire<'a, u8>,
+    width: TWire<'a, MemOpWidth>,
+) -> TWire<'a, PackedLabel> {
+    let label = b.cast::<_, PackedLabel>(label);
+    // Offset in bits is position * LABEL_BITS.
+    let offset = b.mul(offset, b.lit(LABEL_BITS));
+
+    let mut acc: TWire<'a, PackedLabel> = b.lit(0);
+    let mut packed = b.lit(0);
+    for w in MemOpWidth::iter() {
+        acc = b.or(b.shl(acc, b.lit(LABEL_BITS)), label);
+        packed = b.mux(b.eq(width, b.lit(w)), acc, packed);
+    }
+
+    b.shl(packed, offset)
+}
+
+fn meet_labels_at_offset<'a>(
+    b: &Builder<'a>,
+    labels: [TWire<'a, Label>; WORD_BYTES],
+    offset: TWire<'a, u8>, // ByteOffset>,
+    width: MemOpWidth,
+) -> TWire<'a,Label> {
+    // We know the label at offset will be in the result, so
+    // use that as the initial label (l == l `meet` l).
+    // JP: Is there a way we can do a foldr1?
+    let mut acc = b.index(&labels, offset, |b, idx| {
+        // b.lit(ByteOffset::new(idx as u8))
+        b.lit(idx as u8)
+    });
+    for (idx, &l) in labels.iter().enumerate() {
+        let ignore = should_ignore(b, b.lit(idx as u8), offset, b.lit(width));
+        acc = b.mux(ignore, acc, meet(b, l, acc));
+    }
+    acc
+}
+
+// TODO: Refactor to mux over the width first?
+fn eq_packed_labels_at_offset<'a>(
+    b: &Builder<'a>,
+    offset: TWire<'a, u8>,
+    width: TWire<'a, MemOpWidth>,
+    label1: TWire<'a, PackedLabel>,
+    label2: TWire<'a, PackedLabel>,
+) -> TWire<'a, bool> {
+    // Split into labels.
+    let label1_parts = unpack_labels(b, label1);
+    let label2_parts = unpack_labels(b, label2);
+
+    let mut acc = b.lit(true);
+    for (idx, (&v1, &v2)) in label1_parts.iter().zip(label2_parts.iter()).enumerate() {
+        let idx = b.lit(idx as u8);
+        let ignored = should_ignore(b, idx, offset, width);
+        acc = b.and(acc, b.mux(ignored, b.lit(true), b.eq(v1, v2)));
+    }
+    acc
+}
+
+// Checks if the byte at index idx should be ignored.
+fn should_ignore<'a>(
+    b: &Builder<'a>,
+    idx: TWire<'a, u8>,
+    offset: TWire<'a, u8>,
+    width: TWire<'a, MemOpWidth>,
+) -> TWire<'a, bool> {
+    let width = b.shl(b.lit(1 as u8), b.cast(width));
+    // Check if ignored: idx < offset || idx >= offset + width
+    b.or(b.lt(idx, offset), b.ge(idx, b.add(offset, width)))
+}
+
+fn unpack_labels<'a>(
+    b: &Builder<'a>,
+    labels: TWire<'a, PackedLabel>,
+) -> [TWire<'a, Label>; WORD_BYTES] {
+    // TODO: How do we split a u16 into Labels?
+    // let label1_parts = bit_pack::split_bits::<[Label; WORD_BYTES]>(b, label1.repr);
+    unimplemented!{}
 }
 
 pub fn check_state<'a>(
@@ -183,10 +295,15 @@ pub fn check_step_mem<'a, 'b>(
         let expect_tainted = b.mux(*is_store_like, *x_taint, *result_taint);
         let port_tainted = mem_port.tainted.unwrap(&pf);
 
+        // Check that the label is valid before packing.
+        check_label(&cx, b, idx, expect_tainted);
+        let offset = b.cast::<_, u8>(bit_pack::extract_low::<ByteOffset>(b, mem_port.addr.repr));
+        let expect_pack_tainted = pack_label(b, expect_tainted, offset, mem_port.width);
+
         let op = mem_port.op.repr;
         let tainted = mem_port.tainted;
         wire_assert!(
-            cx, b.eq(port_tainted, expect_tainted),
+            cx, eq_packed_labels_at_offset(b, offset, mem_port.width, port_tainted, expect_pack_tainted),
             "cycle {}'s mem port (op {}) has tainted {} (expected {})",
             idx, cx.eval(op), cx.eval(tainted), cx.eval(expect_tainted),
         );
@@ -195,7 +312,7 @@ pub fn check_step_mem<'a, 'b>(
 
 // Circuit that checks memory when port2 is a read. Since it is a read, port2's tainted must be the same as
 // port1's tainted.
-pub fn check_memports<'a, 'b>(
+pub fn check_read_memports<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
     port1: &TWire<'a, MemPort>, 
@@ -216,3 +333,12 @@ pub fn check_memports<'a, 'b>(
     }
 }
 
+// Circuit that checks memory when port2 is a write. Since it is a write, port2's unmodified tainted bits must be the same as port1's.
+pub fn check_write_memports<'a, 'b>(
+    cx: &ContextWhen<'a, 'b>,
+    b: &Builder<'a>,
+    port1: &TWire<'a, MemPort>,
+    port2: &TWire<'a, MemPort>,
+) {
+    unimplemented!{}
+}

@@ -545,6 +545,8 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 /// [MicroRAM](https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/blob/cec7edad98ccacb68708777a610900703b1568a9/src/Compiler/Tainted.hs#L11)
 /// implementation for lattice details.
 pub type Label = u8;
+/// Packed label representing 8 labels of the bytes of a word in memory.
+pub type PackedLabel = u16;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MemPort {
@@ -563,7 +565,7 @@ pub struct MemPort {
     /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
     /// `value` must exactly match the previous value of the accessed word.
     pub width: MemOpWidth,
-    pub tainted: IfMode<AnyTainted, Label>,
+    pub tainted: IfMode<AnyTainted, PackedLabel>,
 }
 
 
@@ -675,7 +677,7 @@ pub struct MemPortRepr<'a> {
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
     pub width: TWire<'a, MemOpWidth>,
-    pub tainted: TWire<'a, IfMode<AnyTainted, Label>>,
+    pub tainted: TWire<'a, IfMode<AnyTainted, PackedLabel>>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -720,6 +722,7 @@ impl<'a> Secret<'a> for MemPort {
 impl<'a, C: Repr<'a>> Mux<'a, C, MemPort> for MemPort
 where
     C::Repr: Clone,
+    u16: Mux<'a, C, u16, Output = u16>,
     u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
     Label: Mux<'a, C, Label, Output = Label>,
@@ -1191,7 +1194,7 @@ pub struct MemSegment {
     #[serde(default)]
     pub data: Vec<u64>,
     #[serde(default)]
-    pub tainted: IfMode<AnyTainted,Vec<Label>>,
+    pub tainted: IfMode<AnyTainted,Vec<PackedLabel>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1253,7 +1256,7 @@ pub enum Advice {
         value: u64,
         op: MemOpKind,
         width: MemOpWidth,
-        tainted: IfMode<AnyTainted,Label>,
+        tainted: IfMode<AnyTainted,PackedLabel>,
     },
     Stutter,
     Advise { advise: u64 },
