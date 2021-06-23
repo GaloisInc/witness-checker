@@ -116,7 +116,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             let advice = advice_secrets[i].wire().clone();
 
             let (calc_state, calc_im) =
-                calc_step(&b, i, instr, &mem_port, advice, &prev_state);
+                calc_step(&cx, &b, i, instr, &mem_port, advice, &prev_state);
             check_step(&cx, &b, idx, i,
                 prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
@@ -234,6 +234,7 @@ fn operand_value<'a>(
 }
 
 fn calc_step<'a>(
+    cx: &Context<'a>,
     b: &Builder<'a>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
@@ -415,7 +416,7 @@ fn calc_step<'a>(
         regs.push(b.mux(is_dest, result, v_old));
     }
 
-    let (tainted_regs, tainted_im) = tainted::calc_step(b, idx, instr, mem_port, &s1.tainted_regs, y, dest);
+    let (tainted_regs, tainted_im) = tainted::calc_step(cx, b, idx, instr, mem_port, &s1.tainted_regs, y, dest);
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));

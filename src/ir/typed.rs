@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
-use crate::micro_ram::types::{ByteOffset, MemOpWidth, U2};
+use crate::micro_ram::types::{ByteOffset, Label, MemOpWidth};
 use crate::mode::if_mode::{IfMode, ModePred, check_mode};
 
 
@@ -515,9 +515,34 @@ impl<'a> Cast<'a, u8> for MemOpWidth {
     }
 }
 
-impl<'a> Cast<'a, u8> for U2 {
+impl<'a> Cast<'a, Label> for u64 {
     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        bld.c.cast(x, bld.c.ty(TyKind::U8))
+        unimplemented!{}
+    }
+}
+
+// TODO: Temporary? Switch PackedLabel to slice?
+impl<'a> Cast<'a, u16> for Label {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        unimplemented!{}
+        // bld.c.cast(x, bld.c.ty(TyKind::U8))
+    }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, Label> for Label
+where
+    C::Repr: Clone,
+{
+    type Output = Label;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: Self::Repr,
+        e: Self::Repr,
+    ) -> Self::Repr {
+        // bld.c.mux(c, t, e)
+        unimplemented!{}
     }
 }
 

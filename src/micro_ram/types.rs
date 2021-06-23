@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use serde::Deserialize;
+use std::fmt;
+use serde::{de, Deserialize};
 use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
@@ -544,17 +545,39 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 /// Currently, labels only use the lower two bits. See the
 /// [MicroRAM](https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/blob/cec7edad98ccacb68708777a610900703b1568a9/src/Compiler/Tainted.hs#L11)
 /// implementation for lattice details.
-pub type Label = u8;
+#[derive(Copy, Clone, Debug, Deserialize)]
+pub struct Label (
+    #[serde(deserialize_with = "validate_label")]
+    pub u8,
+);
 /// Packed label representing 8 labels of the bytes of a word in memory.
 pub type PackedLabel = u16;
 
-pub struct U2(u8);
+fn validate_label<'de, D>(d: D) -> Result<u8, D::Error>
+    where D: de::Deserializer<'de>
+{
 
-impl<'a> Repr<'a> for U2 {
+    let value = u8::deserialize(d)?;
+
+    if value >= UNTAINTED.0 {
+        return Err(de::Error::invalid_value(de::Unexpected::Unsigned(value as u64),
+                                            &"a 2 bit label"));
+    }
+
+    Ok(value)
+}
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl<'a> Repr<'a> for Label {
     type Repr = Wire<'a>;
 }
 
-impl<'a> Flatten<'a> for U2 {
+impl<'a> Flatten<'a> for Label {
     fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
         c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16)))
     }
@@ -565,6 +588,76 @@ impl<'a> Flatten<'a> for U2 {
 
     fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
+    }
+}
+
+impl<'a> Lit<'a> for Label {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        // bld.lit(a.0)
+        // bld.lit(a.0 as u8)
+        unimplemented!{}
+    }
+}
+
+impl<'a> Secret<'a> for Label {
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        unimplemented!{}
+        // bld.c.new_secret_uninit(bld.c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16))))
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        s.kind.as_secret().set_from_lit(*val, force);
+    }
+}
+
+impl<'a> typed::Eq<'a, Label> for Label {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        unimplemented!{}
+        // bld.eq(a, b).repr
+    }
+}
+
+impl<'a> typed::Ne<'a, Label> for Label {
+    type Output = bool;
+    fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        unimplemented!{}
+        // bld.ne(a, b).repr
+    }
+}
+
+impl<'a> typed::Lt<'a, Label> for Label {
+    type Output = bool;
+    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        unimplemented!{}
+    }
+}
+
+impl<'a> typed::Le<'a, Label> for Label {
+    type Output = bool;
+    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        unimplemented!{}
+    }
+}
+
+impl<'a> typed::Gt<'a, Label> for Label {
+    type Output = bool;
+    fn gt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        unimplemented!{}
+    }
+}
+
+impl<'a> typed::Ge<'a, Label> for Label {
+    type Output = bool;
+    fn ge(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        unimplemented!{}
+    }
+}
+
+impl<'a> FromEval<'a> for Label {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        let val = FromEval::from_eval(ev, a)?;
+        Some(Label(val))
     }
 }
 

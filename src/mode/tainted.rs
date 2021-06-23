@@ -3,12 +3,12 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PackedLabel, RamInstr, REG_NONE, TaintCalcIntermediate, WORD_BYTES, U2}
+    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PackedLabel, RamInstr, REG_NONE, TaintCalcIntermediate, WORD_BYTES}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
 
-pub const UNTAINTED: Label = 3;
+pub const UNTAINTED: Label = Label(3);
 pub const LABEL_BITS: u8 = 2;
 
 // Computes the meet (greatest lower bound) of two labels.
@@ -25,6 +25,7 @@ fn meet<'a>(
 
 // Builds the circuit that calculates our conservative dynamic taint tracking semantics. 
 pub fn calc_step<'a>(
+    cx: &Context<'a>,
     b: &Builder<'a>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
@@ -72,7 +73,8 @@ pub fn calc_step<'a>(
         // Stores??
 
         {
-            add_case(Opcode::Taint, b.cast(concrete_y));
+            // Check that the label is valid before truncating it.
+            add_case(Opcode::Taint, convert_to_label(cx, b, idx, concrete_y));
         }
 
         /*
@@ -124,17 +126,19 @@ pub fn calc_step<'a>(
     }
 }
 
-fn check_label<'a, 'b>(
-    cx: &ContextWhen<'a, 'b>,
+fn convert_to_label<'a>(
+    cx: &Context<'a>,
     b: &Builder<'a>,
     idx: usize,
-    label: TWire<'a, Label>,
-) {
+    label: TWire<'a, u64>, // Label>,
+) -> TWire<'a, Label> {
     wire_assert!(
-        cx, b.le(label, b.lit(UNTAINTED)),
+        cx, b.le(label, b.lit(UNTAINTED.0 as u64)),
         "Invalid tainted label {} at cycle {}",
         cx.eval(label), idx,
     );
+
+    b.cast(label)
 }
 
 // Packs a Label into a PackedLabel. Assumes that the Label is already valid (2 bits long).
@@ -236,11 +240,11 @@ fn unpack_labels<'a>(
     labels: TWire<'a, PackedLabel>,
 ) -> [TWire<'a, Label>; WORD_BYTES] {
     // TODO: How do we split a u16 into Labels?
-    // let label1_parts = bit_pack::split_bits::<[Label; WORD_BYTES]>(b, label1.repr);
-    let label_parts = bit_pack::split_bits::<[U2; WORD_BYTES]>(b, labels.repr);
-    let mut labels = [b.lit(0); WORD_BYTES];
+    let label_parts = bit_pack::split_bits::<[Label; WORD_BYTES]>(b, labels.repr);
+    // let label_parts = bit_pack::split_bits::<[U2; WORD_BYTES]>(b, labels.repr);
+    let mut labels = [b.lit(UNTAINTED); WORD_BYTES];
     for (idx, &l) in label_parts.iter().enumerate() {
-        labels[idx] = b.cast(l);
+        labels[idx] = l;
     }
     labels
 }
@@ -292,7 +296,7 @@ pub fn check_step<'a>(
     calc_im: &CalcIntermediate<'a>,
 ) {
     if let Some(pf) = check_mode::<AnyTainted>() {
-        let y = b.cast(calc_im.y);
+        let y = convert_to_label(cx, b, idx, calc_im.y);
         let xt = calc_im.tainted.as_ref().unwrap(&pf).label_x;
 
         // A leak is detected if the label of data being output to a sink does not match the label of
@@ -320,8 +324,6 @@ pub fn check_step_mem<'a, 'b>(
         let expect_tainted = b.mux(*is_store_like, *x_taint, *result_taint);
         let port_tainted = mem_port.tainted.unwrap(&pf);
 
-        // Check that the label is valid before packing.
-        check_label(&cx, b, idx, expect_tainted);
         let offset = b.cast::<_, u8>(bit_pack::extract_low::<ByteOffset>(b, mem_port.addr.repr));
         let expect_pack_tainted = pack_label(b, expect_tainted, offset, mem_port.width);
 
