@@ -5,8 +5,9 @@ use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
-use crate::micro_ram::types::{ByteOffset, Label, MemOpWidth};
+use crate::micro_ram::types::{ByteOffset, Label, MemOpWidth, valid_label};
 use crate::mode::if_mode::{IfMode, ModePred, check_mode};
+use crate::mode::tainted::LABEL_BITS;
 
 
 pub struct Builder<'a> {
@@ -511,40 +512,68 @@ impl<'a> Cast<'a, u8> for ByteOffset {
 impl<'a> Cast<'a, u8> for MemOpWidth {
     fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
         // TODO: Is this correct?
-        Flatten::to_wire(bld, x)
+        // Flatten::to_wire(bld, x)
+        let ty = <u8 as Flatten>::wire_type(bld.c);
+        bld.c.cast(x.repr, ty)
     }
 }
 
+// Cast u64 to Label.
 impl<'a> Cast<'a, Label> for u64 {
     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        unimplemented!{}
+        let ty = <Label as Flatten>::wire_type(bld.c);
+        bld.c.cast(x, ty) // bld.c.ty(TyKind::U64))
     }
 }
 
 // TODO: Temporary? Switch PackedLabel to slice?
 impl<'a> Cast<'a, u16> for Label {
     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        unimplemented!{}
-        // bld.c.cast(x, bld.c.ty(TyKind::U8))
+        bld.c.cast(x, bld.c.ty(TyKind::U16))
     }
 }
 
-impl<'a, C: Repr<'a>> Mux<'a, C, Label> for Label
-where
-    C::Repr: Clone,
-{
+impl<'a> Lit<'a> for Label {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        assert!(valid_label(a.0));
+
+        // bld.lit(a.0).repr
+        // Lit::lit(bld, a.0)
+        let ty = <Label as Flatten>::wire_type(bld.c);
+        bld.c.lit(ty, a.0)
+    }
+}
+
+impl<'a> Mux<'a, bool, Label> for Label {
     type Output = Label;
 
     fn mux(
         bld: &Builder<'a>,
-        c: C::Repr,
-        t: Self::Repr,
-        e: Self::Repr,
-    ) -> Self::Repr {
-        // bld.c.mux(c, t, e)
-        unimplemented!{}
+        c: Wire<'a>,
+        t: Wire<'a>,
+        e: Wire<'a>,
+    ) -> Wire<'a> {
+        bld.c.mux(c, t, e)
     }
 }
+
+impl<'a> Secret<'a> for Label {
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        let ty = <Label as Flatten>::wire_type(bld.c);
+        bld.c.new_secret_uninit(ty)
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        s.kind.as_secret().set_from_lit(*val, force);
+    }
+}
+
+primitive_binary_impl!(Eq::eq(Label, Label) -> bool);
+primitive_binary_impl!(Ne::ne(Label, Label) -> bool);
+primitive_binary_impl!(Lt::lt(Label, Label) -> bool);
+primitive_binary_impl!(Le::le(Label, Label) -> bool);
+primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
+primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {

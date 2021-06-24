@@ -553,13 +553,17 @@ pub struct Label (
 /// Packed label representing 8 labels of the bytes of a word in memory.
 pub type PackedLabel = u16;
 
+pub fn valid_label(l:u8) -> bool {
+    l <= UNTAINTED.0
+}
+
 fn validate_label<'de, D>(d: D) -> Result<u8, D::Error>
     where D: de::Deserializer<'de>
 {
 
     let value = u8::deserialize(d)?;
 
-    if value >= UNTAINTED.0 {
+    if !valid_label(value) {
         return Err(de::Error::invalid_value(de::Unexpected::Unsigned(value as u64),
                                             &"a 2 bit label"));
     }
@@ -588,69 +592,6 @@ impl<'a> Flatten<'a> for Label {
 
     fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
-    }
-}
-
-impl<'a> Lit<'a> for Label {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
-        // bld.lit(a.0)
-        // bld.lit(a.0 as u8)
-        unimplemented!{}
-    }
-}
-
-impl<'a> Secret<'a> for Label {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        unimplemented!{}
-        // bld.c.new_secret_uninit(bld.c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16))))
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        s.kind.as_secret().set_from_lit(*val, force);
-    }
-}
-
-impl<'a> typed::Eq<'a, Label> for Label {
-    type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        unimplemented!{}
-        // bld.eq(a, b).repr
-    }
-}
-
-impl<'a> typed::Ne<'a, Label> for Label {
-    type Output = bool;
-    fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        unimplemented!{}
-        // bld.ne(a, b).repr
-    }
-}
-
-impl<'a> typed::Lt<'a, Label> for Label {
-    type Output = bool;
-    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        unimplemented!{}
-    }
-}
-
-impl<'a> typed::Le<'a, Label> for Label {
-    type Output = bool;
-    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        unimplemented!{}
-    }
-}
-
-impl<'a> typed::Gt<'a, Label> for Label {
-    type Output = bool;
-    fn gt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        unimplemented!{}
-    }
-}
-
-impl<'a> typed::Ge<'a, Label> for Label {
-    type Output = bool;
-    fn ge(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-        unimplemented!{}
     }
 }
 
