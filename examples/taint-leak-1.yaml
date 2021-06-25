@@ -1,3 +1,4 @@
+## FLAGS: --mode leak-tainted
 - [0,1,0,0]
 - []
 -

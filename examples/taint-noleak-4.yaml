@@ -1,3 +1,4 @@
+## FLAGS: --mode leak-tainted
 # Taint a register, store it to memory, load a different byte in the same word, and then write the other byte to a different channel.
 
 - [0,1,0,0]
