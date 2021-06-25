@@ -471,6 +471,7 @@ mod test {
     use bumpalo::Bump;
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::Circuit;
+    use crate::ir::circuit::DynCircuit;
     use crate::ir::typed::EvaluatorExt;
     use super::*;
 
@@ -562,7 +563,7 @@ mod test {
 
         let arena = Bump::new();
         let c = Circuit::new(&arena, true);
-        let b = Builder::new(&c);
+        let b = Builder::new(DynCircuit::new(&c));
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let inputs = (0 .. n).map(|i| b.lit(i as u32)).collect::<Vec<_>>();

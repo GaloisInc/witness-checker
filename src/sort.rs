@@ -1,12 +1,12 @@
 use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::Circuit;
+use crate::ir::circuit::CircuitTrait;
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 use crate::micro_ram::routing::RoutingBuilder;
 
 
 fn sorting_permutation<'a, T, F>(
-    c: &Circuit<'a>,
+    c: &impl CircuitTrait<'a>,
     xs: &mut [TWire<'a, T>],
     compare: &mut F,
 ) -> Option<Vec<usize>>
@@ -94,7 +94,7 @@ where
 mod test {
     use std::convert::TryInto;
     use bumpalo::Bump;
-    use crate::ir::circuit::Circuit;
+    use crate::ir::circuit::{Circuit, DynCircuit};
     use super::*;
 
     fn init() {
@@ -104,7 +104,7 @@ mod test {
     fn check_benes_sort(inputs: &[u32]) {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true);
-        let b = Builder::new(&c);
+        let b = Builder::new(DynCircuit::new(&c));
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();

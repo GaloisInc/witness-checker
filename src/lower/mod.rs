@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::iter;
 use crate::eval::{self, Evaluator, CachingEvaluator};
-use crate::ir::circuit::{self, Circuit, Wire, GateKind, Ty, TyKind};
+use crate::ir::circuit::{self, Circuit, CircuitTrait, CircuitExt, Wire, GateKind, Ty, TyKind};
 
 pub mod bit_pack;
 pub mod bool_;
@@ -10,16 +10,19 @@ pub mod bundle;
 pub mod gadget;
 pub mod const_fold;
 
-struct RunPass<'a, 'old, 'new, F> {
-    c: &'a Circuit<'new>,
+struct RunPass<'a, 'old, 'new, C, F> {
+    c: &'a C,
     f: F,
     m: HashMap<Wire<'old>, Wire<'new>>,
     ty_m: HashMap<Ty<'old>, Ty<'new>>,
 }
 
-impl<'a, 'old, 'new, F> RunPass<'a, 'old, 'new, F>
-where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
-    fn new(c: &'a Circuit<'new>, f: F) -> RunPass<'a, 'old, 'new, F> {
+impl<'a, 'old, 'new, C, F> RunPass<'a, 'old, 'new, C, F>
+where
+    F: FnMut(&C, Wire<'old>, GateKind<'new>) -> Wire<'new>,
+    C: CircuitTrait<'new>,
+{
+    fn new(c: &'a C, f: F) -> RunPass<'a, 'old, 'new, C, F> {
         RunPass {
             c, f,
             m: HashMap::new(),
@@ -64,7 +67,7 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
                 GateKind::Pack(ws) => self.c.pack_iter(ws.iter().map(|&w| get(w))).kind,
                 GateKind::Extract(w, i) => GateKind::Extract(get(w), i),
                 GateKind::Gadget(g, ws) => {
-                    let g = g.transfer(self.c);
+                    let g = g.transfer(self.c.as_base());
                     self.c.gadget_iter(g, ws.iter().map(|&w| get(w))).kind
                 },
             };
@@ -92,10 +95,10 @@ where F: FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new> {
     }
 }
 
-pub fn run_pass<'old, 'new>(
-    c: &Circuit<'new>,
+pub fn run_pass<'old, 'new, C: CircuitTrait<'new>>(
+    c: &C,
     wire: Vec<Wire<'old>>,
-    f: impl FnMut(&Circuit<'new>, Wire<'old>, GateKind<'new>) -> Wire<'new>,
+    f: impl FnMut(&C, Wire<'old>, GateKind<'new>) -> Wire<'new>,
 ) -> Vec<Wire<'new>> {
     let mut rp = RunPass::new(c, f);
     wire.into_iter().map(|w| rp.wire(w)).collect()
@@ -103,23 +106,23 @@ pub fn run_pass<'old, 'new>(
 
 /// Run a transformation pass, with extra checks to detect if a pass changes the behavior of the
 /// circuit.
-pub fn run_pass_debug<'new>(
-    c: &Circuit<'new>,
+pub fn run_pass_debug<'new, C: CircuitTrait<'new>>(
+    c: &C,
     wire: Vec<Wire>,
-    mut f: impl FnMut(&Circuit<'new>, Wire, GateKind<'new>) -> Wire<'new>,
+    mut f: impl FnMut(&C, Wire, GateKind<'new>) -> Wire<'new>,
 ) -> Vec<Wire<'new>> {
     let arena = bumpalo::Bump::new();
     let old_c = Circuit::new(&arena, c.is_prover());
     let wire = run_pass(&old_c, wire, |c, _, gk| c.gate(gk));
     let mut old_ev = CachingEvaluator::<eval::RevealSecrets>::new(&old_c);
-    let mut new_ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+    let mut new_ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
     run_pass(c, wire, |c, old, gk| {
         let old_val = old_ev.eval_wire(old);
         let new = f(c, old, gk);
         let new_val = new_ev.eval_wire(new);
-        if old.ty.transfer(c) == new.ty && old_val != new_val {
+        if old.ty.transfer(c.as_base()) == new.ty && old_val != new_val {
             let old_g = crate::debug::graphviz::make_graph(&old_c, vec![old].into_iter()).unwrap();
-            let new_g = crate::debug::graphviz::make_graph(&c, vec![new].into_iter()).unwrap();
+            let new_g = crate::debug::graphviz::make_graph(c.as_base(), vec![new].into_iter()).unwrap();
             std::fs::write("pass_debug_old.dot", old_g).unwrap();
             std::fs::write("pass_debug_new.dot", new_g).unwrap();
             panic!(
@@ -135,3 +138,92 @@ pub fn run_pass_debug<'new>(
         new
     })
 }
+
+/// Recursively copy a `Wire` into a new `Circuit`.
+pub fn transfer<'old, 'new, C: CircuitTrait<'new>>(
+    c: &C,
+    wire: Vec<Wire<'old>>,
+) -> Vec<Wire<'new>> {
+    run_pass(c, wire, |c, _, gk| c.gate(gk))
+}
+
+/// Recursively copy a `Wire` into a new `Circuit`.  Wires listed in `seen` will be copied instead
+/// of being recursively copied.
+pub fn transfer_partial<'new, C: CircuitTrait<'new>>(
+    c: &C,
+    seen: impl IntoIterator<Item = Wire<'new>>,
+    wire: Vec<Wire<'new>>,
+) -> Vec<Wire<'new>> {
+    let mut rp = RunPass::new(c, |c, _, gk| c.gate(gk));
+    rp.m.extend(seen.into_iter().map(|w| (w, w)));
+    wire.into_iter().map(|w| rp.wire(w)).collect()
+}
+
+
+pub fn simple_pass<'a, C: CircuitTrait<'a>, F: FnMut(&C, GateKind<'a>) -> Wire<'a>>(
+    mut f: F,
+) -> impl FnMut(&C, Wire, GateKind<'a>) -> Wire<'a> {
+    move |c, _, gk| f(c, gk)
+}
+
+
+pub struct Adapter<C, F> {
+    f: F,
+    pub c: C,
+}
+
+impl<C, F> Adapter<C, F> {
+    pub fn new(c: C, f: F) -> Adapter<C, F> {
+        Adapter { c, f }
+    }
+}
+
+impl<'a, C, F> CircuitTrait<'a> for Adapter<C, F>
+where C: CircuitTrait<'a>, F: Fn(&C, GateKind<'a>) -> Wire<'a> {
+    type Inner = C;
+    fn inner(&self) -> &C { &self.c }
+
+    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+        (self.f)(self.inner(), gk)
+    }
+}
+
+
+pub struct OptAdapter<C, F> {
+    f: F,
+    active: bool,
+    pub c: C,
+}
+
+impl<C, F> OptAdapter<C, F> {
+    pub fn new(c: C, active: bool, f: F) -> OptAdapter<C, F> {
+        OptAdapter { c, active, f }
+    }
+}
+
+impl<'a, C, F> CircuitTrait<'a> for OptAdapter<C, F>
+where C: CircuitTrait<'a>, F: Fn(&C, GateKind<'a>) -> Wire<'a> {
+    type Inner = C;
+    fn inner(&self) -> &C { &self.c }
+
+    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+        if self.active {
+            (self.f)(self.inner(), gk)
+        } else {
+            self.inner().gate(gk)
+        }
+    }
+}
+
+
+pub trait AddPass: Sized {
+    fn add_pass<F>(self, f: F) -> Adapter<Self, F> {
+        Adapter::new(self, f)
+    }
+
+    fn add_opt_pass<F>(self, active: bool, f: F) -> OptAdapter<Self, F> {
+        OptAdapter::new(self, active, f)
+    }
+}
+
+impl<'a, T: CircuitTrait<'a>> AddPass for T {}

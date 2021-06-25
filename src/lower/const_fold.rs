@@ -1,7 +1,10 @@
 use num_bigint::BigInt;
 use num_traits::{Zero, One};
-use crate::eval::{self, CachingEvaluator, Evaluator, Value};
-use crate::ir::circuit::{Circuit, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp};
+use crate::eval::{self, CachingEvaluator, LiteralEvaluator, Evaluator, Value};
+use crate::ir::circuit::{
+    Circuit, CircuitTrait, CircuitExt, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp,
+};
+use crate::lower;
 
 macro_rules! match_identities {
     (
@@ -113,17 +116,50 @@ fn uint_max(sz: IntSize) -> BigInt {
 }
 
 fn eval<'a>(
-    e: &mut CachingEvaluator<'a, '_, eval::Public>,
+    e: &mut impl Evaluator<'a>,
     w: Wire<'a>,
 ) -> Option<BigInt> {
     e.eval_wire(w).and_then(Value::unwrap_single)
 }
 
+fn const_foldable(gk: GateKind) -> bool {
+    match gk {
+        GateKind::Lit(..) => false,
+        GateKind::Secret(..) => false,
+        GateKind::Unary(_, a) => a.is_lit(),
+        GateKind::Binary(_, a, b) => a.is_lit() && b.is_lit(),
+        GateKind::Shift(_, a, b) => a.is_lit() && b.is_lit(),
+        GateKind::Compare(_, a, b) => a.is_lit() && b.is_lit(),
+        GateKind::Mux(c, t, e) => c.is_lit() && t.is_lit() && e.is_lit(),
+        GateKind::Cast(a, _) => a.is_lit(),
+        // `Pack` can't be folded to a `Lit`, since `Lit` can't have bundle type.
+        GateKind::Pack(..) => false,
+        // `Extract` can't be folded because its input can't be a `Lit`.
+        GateKind::Extract(..) => false,
+        GateKind::Gadget(_, ws) => ws.iter().all(|&w| w.is_lit()),
+    }
+}
+
+/// If `gk`'s inputs are all literals, evaluate it to produce another literal.
+fn try_const_fold<'a>(
+    c: &impl CircuitTrait<'a>,
+    gk: GateKind<'a>,
+) -> Option<Wire<'a>> {
+    if !const_foldable(gk) {
+        return None;
+    }
+
+    let val = eval::eval_gate(&mut LiteralEvaluator, gk)?;
+    let i = val.as_single()?;
+    let ty = gk.ty(c);
+    Some(c.lit(ty, i))
+}
+
 /// Like `try_const_fold`, but applies specific rules for certain cases where only some inputs are
 /// known.
 fn try_identities<'a>(
-    c: &Circuit<'a>,
-    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    c: &impl CircuitTrait<'a>,
+    ev: &mut impl Evaluator<'a>,
     gk: GateKind<'a>,
 ) -> Option<Wire<'a>> {
     let ty = gk.ty(c);
@@ -242,3 +278,33 @@ pub fn const_fold<'a, 'c>(
     }
 }
 
+
+pub struct ConstFold<C>(pub C);
+
+impl<'a, C: CircuitTrait<'a>> CircuitTrait<'a> for ConstFold<C> {
+    type Inner = C;
+    fn inner(&self) -> &C { &self.0 }
+
+    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+        if let GateKind::Gadget(k, ws) = gk {
+            if ws.iter().all(|w| w.is_lit()) {
+                // All inputs are literals, so the gadget should be constant-foldable.  It's
+                // technically possible for a gadget to include fresh secrets, but so far that
+                // hasn't been useful for anything.
+                let out_raw = k.decompose(self.as_base(), ws);
+                // Note we pass `self` instead of `self.inner()`, so the decomposed gates will be
+                // recursively constant-folded.
+                let out = lower::transfer(self, vec![out_raw])[0];
+                return out;
+            }
+        }
+
+        if let Some(w) = try_const_fold(self.inner(), gk) {
+            return w;
+        }
+        if let Some(w) = try_identities(self.inner(), &mut LiteralEvaluator, gk) {
+            return w;
+        }
+        self.inner().gate(gk)
+    }
+}
