@@ -619,7 +619,7 @@ pub struct MemPort {
     /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
     /// `value` must exactly match the previous value of the accessed word.
     pub width: MemOpWidth,
-    pub tainted: IfMode<AnyTainted, PackedLabel>,
+    pub tainted: IfMode<AnyTainted, PackedLabel>, // TODO: Set default to PACKED_UNTAINTED? Then switch back IfMode's default.
 }
 
 

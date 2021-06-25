@@ -13,7 +13,7 @@ use crate::micro_ram::types::{
     MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
-use crate::mode::{tainted};
+use crate::mode::tainted::{self, PACKED_UNTAINTED};
 use crate::sort;
 
 pub struct Memory<'a> {
@@ -43,7 +43,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: IfMode::new(|pf| 0),
+                tainted: IfMode::new(|pf| PACKED_UNTAINTED),
                 width: MemOpWidth::WORD,
             });
 
@@ -245,6 +245,7 @@ impl<'a> CyclePorts<'a> {
             // `None` means no port covers step `i`.
             None => return b.lit(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
+                tainted: IfMode::new(|pf| PACKED_UNTAINTED),
                 .. MemPort::default()
             }),
         };
@@ -260,6 +261,7 @@ impl<'a> CyclePorts<'a> {
             smp.mp,
             b.lit(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
+                tainted: IfMode::new(|pf| PACKED_UNTAINTED),
                 .. MemPort::default()
             }),
         )

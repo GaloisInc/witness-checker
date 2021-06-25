@@ -9,6 +9,7 @@ use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
 
 pub const UNTAINTED: Label = Label(3);
+pub const PACKED_UNTAINTED: PackedLabel = 0xFFFF;
 pub const LABEL_BITS: u8 = 2;
 
 // Computes the meet (greatest lower bound) of two labels.
