@@ -4,10 +4,10 @@
 - []
 -
   program:
-    - [taint, null, 0, true, 1] # taint r0 1
-    - [store8, null, 0, true, 32] # store [2] r0
-    - [load8,  1, null, true, 32] # load r1 [2]
-    - [sink,  null, 1, true, 2] # sink r1 2
+    - [taint,  null, 0, true, 1] # taint r0 1
+    - [store8, null, 0, true, 32] # store [32] r0
+    - [load8,  1, null, true, 32] # load r1 [32]
+    - [sink,   null, 1, true, 0] # sink r1 0
   
   init_mem:
     - start: 2
@@ -15,7 +15,7 @@
       read_only: false
       secret: true
       data: [10]
-      tainted: [3] # [0xFFFF]
+      tainted: [0xFFFF] # [3]
   
   params:
     num_regs: 2
@@ -23,11 +23,11 @@
   
   trace:
     - [0, [0,0], [3,3]]
-    - [1, [0,0], [1,3]]
-    - [2, [0,0], [1,3]]
-    - [3, [0,0], [1,1]]
-    - [4, [0,0], [1,1]]
+    - [1, [0,0], [2,3]]
+    - [2, [0,0], [2,3]]
+    - [3, [0,0], [2,1]]
+    - [4, [0,0], [2,1]]
   
   advice:
-    2: [[MemOp, 32, 0, write, 8, 0]]
-    3: [[MemOp, 32, 0,  read, 8, 2]]
+    2: [[MemOp, 32, 0, write, 8, 0x0000]]
+    3: [[MemOp, 32, 0,  read, 8, 0x0000]] # 0xAAAA]]

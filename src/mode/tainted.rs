@@ -74,7 +74,10 @@ pub fn calc_step<'a>(
 
         {
             // Check that the label is valid before truncating it.
-            add_case(Opcode::Taint, convert_to_label(cx, b, idx, concrete_y));
+            let label = cx.when(b, b.eq(instr.opcode, b.lit(Opcode::Taint as u8)), |cx| {
+                convert_to_label(cx, b, idx, concrete_y)
+            });
+            add_case(Opcode::Taint, label);
         }
 
         /*
@@ -126,8 +129,8 @@ pub fn calc_step<'a>(
     }
 }
 
-fn convert_to_label<'a>(
-    cx: &Context<'a>,
+fn convert_to_label<'a,'b>(
+    cx: &ContextWhen<'a,'b>,
     b: &Builder<'a>,
     idx: usize,
     label: TWire<'a, u64>, // Label>,
@@ -149,16 +152,16 @@ fn pack_label<'a>(
     width: TWire<'a, MemOpWidth>,
 ) -> TWire<'a, PackedLabel> {
     let label = b.cast::<_, PackedLabel>(label);
-    // Offset in bits is position * LABEL_BITS.
-    let offset = b.mul(offset, b.lit(LABEL_BITS));
 
-    let mut acc: TWire<'a, PackedLabel> = b.lit(0);
+    let mut acc: TWire<'a, PackedLabel> = label;
     let mut packed = b.lit(0);
     for w in MemOpWidth::iter() {
-        acc = b.or(b.shl(acc, b.lit(LABEL_BITS)), label);
         packed = b.mux(b.eq(width, b.lit(w)), acc, packed);
+        acc = b.or(b.shl(acc, b.lit(LABEL_BITS * w.bytes() as u8)), acc);
     }
 
+    // Offset in bits is position * LABEL_BITS.
+    let offset = b.mul(offset, b.lit(LABEL_BITS));
     b.shl(packed, offset)
 }
 
@@ -296,16 +299,18 @@ pub fn check_step<'a>(
     calc_im: &CalcIntermediate<'a>,
 ) {
     if let Some(pf) = check_mode::<AnyTainted>() {
-        let y = convert_to_label(cx, b, idx, calc_im.y);
-        let xt = calc_im.tainted.as_ref().unwrap(&pf).label_x;
+        cx.when(b, b.eq(instr.opcode, b.lit(Opcode::Sink as u8)), |cx| {
+            let y = convert_to_label(cx, b, idx, calc_im.y);
+            let xt = calc_im.tainted.as_ref().unwrap(&pf).label_x;
 
-        // A leak is detected if the label of data being output to a sink does not match the label of
-        // the sink.
-        wire_bug_if!(
-            cx, b.and(b.eq(instr.opcode, b.lit(Opcode::Sink as u8)), b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED)))),
-            "leak of tainted data from register {:x} with label {} does not match output channel label {} on cycle {}",
-            cx.eval(instr.op1), cx.eval(xt), cx.eval(y), idx,
-        );
+            // A leak is detected if the label of data being output to a sink does not match the label of
+            // the sink.
+            wire_bug_if!(
+                cx, b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED))),
+                "leak of tainted data from register {:x} with label {} does not match output channel label {} on cycle {}",
+                cx.eval(instr.op1), cx.eval(xt), cx.eval(y), idx,
+            );
+        });
     }
 }
 
@@ -327,12 +332,15 @@ pub fn check_step_mem<'a, 'b>(
         let offset = b.cast::<_, u8>(bit_pack::extract_low::<ByteOffset>(b, mem_port.addr.repr));
         let expect_pack_tainted = pack_label(b, expect_tainted, offset, mem_port.width);
 
-        let op = mem_port.op.repr;
-        let tainted = mem_port.tainted;
+        let op = mem_port.op;
+        let width = mem_port.width;
         wire_assert!(
             cx, eq_packed_labels_at_offset(b, offset, mem_port.width, port_tainted, expect_pack_tainted),
-            "cycle {}'s mem port (op {}) has tainted {} (expected {})",
-            idx, cx.eval(op), cx.eval(tainted), cx.eval(expect_tainted),
+            "cycle {}'s mem port (op {:?}, offset {}, width {:?}) has tainted {:#x} expected {:#x} ({})",
+            idx, cx.eval(op),
+            cx.eval(offset), cx.eval(width),
+            cx.eval(port_tainted),
+            cx.eval(expect_pack_tainted), cx.eval(expect_tainted),
         );
     }
 }
@@ -342,18 +350,18 @@ pub fn check_step_mem<'a, 'b>(
 pub fn check_read_memports<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
-    port1: &TWire<'a, MemPort>, 
+    port1label: &TWire<'a, IfMode<AnyTainted,PackedLabel>>,
     port2: &TWire<'a, MemPort>, 
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
-        let tainted1 = port1.tainted.unwrap(&pf);
+        let tainted1 = port1label.unwrap(&pf);
         let tainted2 = port2.tainted.unwrap(&pf);
 
         let addr2 = port2.addr;
         let cycle2 = port2.cycle;
         wire_assert!(
             cx, b.eq(tainted1, tainted2),
-            "tainted read from {:x} on cycle {} produced {} (expected {})",
+            "tainted read from {:#x} on cycle {} produced {:#x} (expected {:#x})",
             cx.eval(addr2), cx.eval(cycle2),
             cx.eval(tainted2), cx.eval(tainted1),
         );
@@ -364,11 +372,11 @@ pub fn check_read_memports<'a, 'b>(
 pub fn check_write_memports<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
-    prev: &TWire<'a, MemPort>,
+    prev_label: &TWire<'a, IfMode<AnyTainted,PackedLabel>>,
     port: &TWire<'a, MemPort>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
-        let tainted1 = prev.tainted.unwrap(&pf);
+        let tainted1 = prev_label.unwrap(&pf);
         let tainted2 = port.tainted.unwrap(&pf);
 
         let addr2 = port.addr;

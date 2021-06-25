@@ -4,10 +4,10 @@
 - []
 -
   program:
-    - [taint, null, 0, true, 1] # taint r0 1
-    - [store8, null, 0, true, 0x100000000] # store [0x100000000] r0
-    - [load8,  1, null, true, 0x100000000] # load r1 [0x100000000]
-    - [sink,  null, 1, true, 2] # sink r1 2
+    - [taint,  null, 0, true, 1] # taint r0 1
+    - [store1, null, 0, true, 0x100000006] # store [0x100000006] r0
+    - [load1,  1, null, true, 0x100000006] # load r1 [0x100000006]
+    - [sink,   null, 1, true, 2] # sink r1 2
   
   init_mem:
     - start: 2
@@ -29,5 +29,6 @@
     - [4, [0,0], [1,1]]
   
   advice:
-    2: [[MemOp, 0x100000000, 0, write, 8, 0x5555]]
-    3: [[MemOp, 0x100000000, 0,  read, 8, 0x5555]]
+    2: [[MemOp, 0x100000006, 0, write, 1, 0xDFFF]]
+    3: [[MemOp, 0x100000006, 0,  read, 1, 0xDFFF]]
+

@@ -383,6 +383,7 @@ fn check_mem<'a>(
     // port.value`, so all the `value` equality checks below will pass.  This means uninitialized
     // reads will succeed, but the prover can provide arbitrary data for any uninitialized bytes.
     let prev_value = b.mux(prev_valid, prev.value, port.value);
+    let prev_taint = b.mux(prev_valid, prev.tainted, port.tainted);
 
     cx.when(b, b.and(is_read, active), |cx| {
         // Reads must produce the same value as the previous operation.
@@ -393,7 +394,7 @@ fn check_mem<'a>(
             cx.eval(port.value), cx.eval(prev_value),
         );
 
-        tainted::check_read_memports(cx, b, &prev, &port);
+        tainted::check_read_memports(cx, b, &prev_taint, &port);
     });
 
     cx.when(b, b.or(is_write, is_poison), |cx| {
@@ -421,8 +422,7 @@ fn check_mem<'a>(
             cx.eval(port.value), cx.eval(prev_value),
         );
 
-        // TODO: tainted mem checks for writes
-        tainted::check_write_memports(cx, b, &prev, &port);
+        tainted::check_write_memports(cx, b, &prev_taint, &port);
     });
 }
 
