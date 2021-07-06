@@ -320,29 +320,32 @@ pub fn check_step<'a>(
 pub fn check_step_mem<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
+    seg_idx: usize,
     idx: usize,
     mem_port: &TWire<'a, MemPort>, 
     is_store_like: &TWire<'a, bool>, 
     imm: &IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
-        let TaintCalcIntermediate{label_x: x_taint, label_result: result_taint} = imm.get(&pf);
-        let expect_tainted = b.mux(*is_store_like, *x_taint, *result_taint);
-        let port_tainted = mem_port.tainted.unwrap(&pf);
+        cx.when(b, *is_store_like, |cx| {
+            let TaintCalcIntermediate{label_x: x_taint, label_result: _result_taint} = imm.get(&pf);
+            let expect_tainted = *x_taint;
+            let port_tainted = mem_port.tainted.unwrap(&pf);
 
-        let offset = b.cast::<_, u8>(bit_pack::extract_low::<ByteOffset>(b, mem_port.addr.repr));
-        let expect_pack_tainted = pack_label(b, expect_tainted, offset, mem_port.width);
+            let offset = b.cast::<_, u8>(bit_pack::extract_low::<ByteOffset>(b, mem_port.addr.repr));
+            let expect_pack_tainted = pack_label(b, expect_tainted, offset, mem_port.width);
 
-        let op = mem_port.op;
-        let width = mem_port.width;
-        wire_assert!(
-            cx, eq_packed_labels_at_offset(b, offset, mem_port.width, port_tainted, expect_pack_tainted),
-            "cycle {}'s mem port (op {:?}, offset {}, width {:?}) has tainted {:#x} expected {:#x} ({})",
-            idx, cx.eval(op),
-            cx.eval(offset), cx.eval(width),
-            cx.eval(port_tainted),
-            cx.eval(expect_pack_tainted), cx.eval(expect_tainted),
-        );
+            let op = mem_port.op;
+            let width = mem_port.width;
+            wire_assert!(
+                cx, eq_packed_labels_at_offset(b, offset, mem_port.width, port_tainted, expect_pack_tainted),
+                "segment {}: step {}'s mem port (op {:?}, offset {}, width {:?}) has tainted {:#x} expected {:#x} ({})",
+                seg_idx, idx, cx.eval(op),
+                cx.eval(offset), cx.eval(width),
+                cx.eval(port_tainted),
+                cx.eval(expect_pack_tainted), cx.eval(expect_tainted),
+            );
+        });
     }
 }
 

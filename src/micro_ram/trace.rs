@@ -520,7 +520,7 @@ fn check_step<'a>(
                 );
             });
         }
-        tainted::check_step_mem(cx, b, idx, &mem_port, &is_store_like, &calc_im.tainted);
+        tainted::check_step_mem(cx, b, seg_idx, idx, &mem_port, &is_store_like, &calc_im.tainted);
     });
 
     for w in MemOpWidth::iter() {
