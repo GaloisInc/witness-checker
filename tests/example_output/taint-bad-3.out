@@ -1,4 +1,4 @@
-invalid trace: cycle 1's mem port (op Write, offset 0, width W8) has tainted 0x0 expected 0x5555 (1)
+invalid trace: segment 0: step 1's mem port (op Write, offset 0, width W8) has tainted 0x0 expected 0x5555 (1)
 invalid trace: cycle 0 sets tainted label of reg 0 to 2 (expected 1)
 invalid trace: cycle 1 sets tainted label of reg 0 to 2 (expected 1)
 invalid trace: cycle 2 sets tainted label of reg 0 to 2 (expected 1)
