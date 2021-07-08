@@ -23,8 +23,7 @@ use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
 use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk};
-use cheesecloth::mode;
-use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, with_mode};
+use cheesecloth::mode::if_mode::{IfMode, Mode, with_mode};
 use cheesecloth::mode::tainted;
 
 

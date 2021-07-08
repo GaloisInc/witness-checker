@@ -9,10 +9,10 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, MemOpWidth, PackedMemPort, Label, PackedLabel, MemSegment, ByteOffset, WordAddr,
+    MemPort, MemOpKind, MemOpWidth, PackedMemPort, PackedLabel, MemSegment, ByteOffset, WordAddr,
     MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
-use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
+use crate::mode::if_mode::IfMode;
 use crate::mode::tainted::{self, PACKED_UNTAINTED};
 use crate::sort;
 
@@ -43,7 +43,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: IfMode::new(|pf| PACKED_UNTAINTED),
+                tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
                 width: MemOpWidth::WORD,
             });
 
@@ -130,7 +130,7 @@ impl<'a> Memory<'a> {
                 addr: (self.ports.len() + i) as u64 * MemOpWidth::WORD.bytes() as u64,
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: IfMode::new(|fp| 0),
+                tainted: IfMode::new(|_fp| 0),
                 width: MemOpWidth::WORD,
             });
             let (user, user_secret) = b.secret_default(0);
@@ -245,7 +245,7 @@ impl<'a> CyclePorts<'a> {
             // `None` means no port covers step `i`.
             None => return b.lit(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
-                tainted: IfMode::new(|pf| PACKED_UNTAINTED),
+                tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
                 .. MemPort::default()
             }),
         };
@@ -261,7 +261,7 @@ impl<'a> CyclePorts<'a> {
             smp.mp,
             b.lit(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
-                tainted: IfMode::new(|pf| PACKED_UNTAINTED),
+                tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
                 .. MemPort::default()
             }),
         )

@@ -3,7 +3,7 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PackedLabel, RamInstr, REG_NONE, TaintCalcIntermediate, WORD_BYTES}
+    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PackedLabel, RamInstr, TaintCalcIntermediate, WORD_BYTES}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};

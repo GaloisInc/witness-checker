@@ -9,7 +9,7 @@ use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
 use crate::micro_ram::feature::{Feature, Version};
-use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, is_mode};
+use crate::mode::if_mode::{IfMode, AnyTainted, check_mode};
 use crate::mode::tainted::{LABEL_BITS, UNTAINTED};
 
 

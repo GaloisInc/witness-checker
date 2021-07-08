@@ -1,10 +1,9 @@
 use crate::eval::Evaluator;
-use crate::ir::typed::{self, Builder, FromEval, EvaluatorExt, Lit, Repr, TWire};
+use crate::ir::typed::{FromEval, EvaluatorExt, Repr};
 use serde::{Deserialize, Deserializer};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::any::type_name;
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -163,7 +162,7 @@ impl<M: ModePred, T> IfMode<M, T> {
         unsafe { Self::new_unchecked(check_mode::<M>().map(f)) }
     }
 
-    pub fn some(_pf: &(impl IsModeProof<M>), x: T) -> IfMode<M, T> {
+    pub fn some(_pf: &impl IsModeProof<M>, x: T) -> IfMode<M, T> {
         unsafe { Self::new_unchecked(Some(x)) }
     }
 

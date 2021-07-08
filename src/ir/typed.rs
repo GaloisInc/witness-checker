@@ -7,7 +7,6 @@ use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
 use crate::micro_ram::types::{ByteOffset, Label, MemOpWidth, valid_label};
 use crate::mode::if_mode::{IfMode, ModePred, check_mode};
-use crate::mode::tainted::LABEL_BITS;
 
 
 pub struct Builder<'a> {
