@@ -23,7 +23,7 @@ use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
 use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk};
-use cheesecloth::mode::if_mode::{IfMode, Mode, with_mode};
+use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
 
@@ -481,6 +481,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
     let mut exec = parse_exec.into_inner().validate().unwrap();
+
+    // Check that --mode leak-tainted is provided iff the feature is present.
+    assert!(!(is_mode::<AnyTainted>() ^ exec.has_feature(Feature::LeakTainted)), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
     // Adjust non-public-pc traces to fit the public-pc format.
     // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
