@@ -1,6 +1,6 @@
 ## FLAGS: --mode leak-tainted
 - [0,1,0,0]
-- []
+- [leak-tainted]
 -
   program:
     - [taint, null, 0, true, 1] # taint r0 1

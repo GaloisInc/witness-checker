@@ -2,7 +2,7 @@
 # Taint a register, store it to memory, load a different byte in the same word, and then write the other byte to a different channel.
 
 - [0,1,0,0]
-- []
+- [leak-tainted]
 -
   program:
     - [taint,  null, 0, true, 1] # taint r0 1
