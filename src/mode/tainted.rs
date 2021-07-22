@@ -18,8 +18,6 @@ fn meet<'a>(
     b.mux(b.eq(l1, l2), l1, b.lit(UNTAINTED))
 }
 
-// pub struct CalcIntermediate<'a> {
-
 // Builds the circuit that calculates our conservative dynamic taint tracking semantics. 
 pub fn calc_step<'a>(
     cx: &Context<'a>,
@@ -67,7 +65,7 @@ pub fn calc_step<'a>(
             add_case(w.load_opcode(), result);
         }
 
-        // Stores??
+        // Stores are checked in check_step_mem.
 
         {
             // Check that the label is valid before truncating it.
@@ -239,9 +237,7 @@ fn unpack_labels<'a>(
     b: &Builder<'a>,
     labels: TWire<'a, PackedLabel>,
 ) -> [TWire<'a, Label>; WORD_BYTES] {
-    // TODO: How do we split a u16 into Labels?
     let label_parts = bit_pack::split_bits::<[Label; WORD_BYTES]>(b, labels.repr);
-    // let label_parts = bit_pack::split_bits::<[U2; WORD_BYTES]>(b, labels.repr);
     let mut labels = [b.lit(UNTAINTED); WORD_BYTES];
     for (idx, &l) in label_parts.iter().enumerate() {
         labels[idx] = l;

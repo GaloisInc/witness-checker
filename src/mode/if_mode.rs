@@ -264,17 +264,6 @@ impl<M: ModePred, T: Eq> Eq for IfMode<M, T> {}
 pub fn panic_default<M: ModePred, T>() -> IfMode<M, T> {
     IfMode::<M, T>::new(|_pf| panic!{"Invalid input. Missing corresponding field for IfMode<{}>.", type_name::<T>()})
 }
-// JP: It seems best not to have a Default impl for IfMode.
-// impl<M: ModePred, T> Default for IfMode<M, T> {
-//     fn default() -> IfMode<M, T> {
-//         Self::new(|_pf| panic!{"Invalid input. Missing corresponding field for IfMode<{}>.", type_name::<T>()})
-//     }
-// }
-// impl<M: ModePred, T: Default> Default for IfMode<M, T> {
-//     fn default() -> IfMode<M, T> {
-//         Self::new(|_pf| T::default())
-//     }
-// }
 
 impl<M: ModePred, T: fmt::Debug> fmt::Debug for IfMode<M, T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -381,22 +370,4 @@ where
         t.zip(e, |t, e| bld.mux(TWire::<C>::new(c), t, e))
     }
 }
-
-// impl<'a, M: ModePred, T: typed::Eq<'a, Output = bool>> typed::Eq<'a, IfMode<M, T>> for IfMode<M, T> {
-//     type Output = bool;
-// 
-//     fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
-//         if let Some(pf) = check_mode::<M>() {
-//             let a = a.unwrap(&pf);
-//             let b = b.unwrap(&pf);
-//             T::eq(bld, a, b)
-//         } else {
-//             // bool::lit(bld, true)
-//             // This should be unreachable, otherwise the mode is influencing the circuit when it
-//             // shouldn't.
-//             // Maybe it doesn't make sense to implement an Eq impl.
-//             unreachable!{}
-//         }
-//     }
-// }
 
