@@ -64,8 +64,6 @@ define_versions! {
     (0,1,2,0) = { PublicPc PreAdvice },
     // 0.1.3.0 adds the heap init feature.
     (0,1,3,0) = { PublicPc PreAdvice HeapInit},
-    // 0.1.4.0 adds the leak tainted feature.
-    (0,1,4,0) = { PublicPc PreAdvice HeapInit },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {
