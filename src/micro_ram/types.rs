@@ -10,7 +10,7 @@ use crate::ir::typed::{
 };
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
-use crate::mode::if_mode::{IfMode, AnyTainted, check_mode};
+use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 use crate::mode::tainted::{LABEL_BITS, UNTAINTED};
 
 
@@ -179,7 +179,7 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
-    #[serde(default)]
+    #[serde(default = "panic_default")]
     pub tainted_regs: IfMode<AnyTainted, Vec<Label>>,
     // All states parsed from the trace are assumed to be live.
     #[serde(default = "return_true")]

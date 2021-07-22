@@ -2,6 +2,7 @@ use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Ty, Wire};
 use crate::ir::typed::{Builder, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire};
 use serde::{Deserialize, Deserializer};
+use std::any::type_name;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -258,6 +259,11 @@ impl<M: ModePred, T: PartialEq> PartialEq for IfMode<M, T> {
 
 impl<M: ModePred, T: Eq> Eq for IfMode<M, T> {}
 
+/// Provides an implementation of IfMode that panics when in mode M, effectively requiring the
+/// field to be provided.
+pub fn panic_default<M: ModePred, T>() -> IfMode<M, T> {
+    IfMode::<M, T>::new(|_pf| panic!{"Invalid input. Missing corresponding field for IfMode<{}>.", type_name::<T>()})
+}
 // impl<M: ModePred, T> Default for IfMode<M, T> {
 //     fn default() -> IfMode<M, T> {
 //         Self::new(|_pf| panic!{"Invalid input. Missing corresponding field for IfMode<{}>.", type_name::<T>()})
