@@ -9,6 +9,7 @@ use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
 use crate::micro_ram::feature::{Feature, Version};
+use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode};
 use crate::mode::tainted::{LABEL_BITS, UNTAINTED};
 
@@ -602,6 +603,55 @@ impl<'a> FromEval<'a> for Label {
     }
 }
 
+// TODO: Temporary? Switch PackedLabel to slice?
+impl<'a> Cast<'a, u16> for Label {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        bld.circuit().cast(x, bld.circuit().ty(TyKind::U16))
+    }
+}
+
+impl<'a> Lit<'a> for Label {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        assert!(valid_label(a.0));
+
+        // bld.lit(a.0).repr
+        // Lit::lit(bld, a.0)
+        let ty = <Label as Flatten>::wire_type(bld.circuit());
+        bld.circuit().lit(ty, a.0)
+    }
+}
+
+impl<'a> Mux<'a, bool, Label> for Label {
+    type Output = Label;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: Wire<'a>,
+        t: Wire<'a>,
+        e: Wire<'a>,
+    ) -> Wire<'a> {
+        bld.circuit().mux(c, t, e)
+    }
+}
+
+impl<'a> Secret<'a> for Label {
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        let ty = <Label as Flatten>::wire_type(bld.circuit());
+        bld.circuit().new_secret_uninit(ty)
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        s.kind.as_secret().set_from_lit(*val, force);
+    }
+}
+
+primitive_binary_impl!(Eq::eq(Label, Label) -> bool);
+primitive_binary_impl!(Ne::ne(Label, Label) -> bool);
+primitive_binary_impl!(Lt::lt(Label, Label) -> bool);
+primitive_binary_impl!(Le::le(Label, Label) -> bool);
+primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
+primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
@@ -723,6 +773,14 @@ where
     }
 }
 
+impl<'a> Cast<'a, u8> for MemOpWidth {
+    fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
+        // TODO: Is this correct?
+        // Flatten::to_wire(bld, x)
+        let ty = <u8 as Flatten>::wire_type(bld.circuit());
+        bld.circuit().cast(x.repr, ty)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct MemPortRepr<'a> {
@@ -854,6 +912,12 @@ impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
     type Output = bool;
     fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a, b)
+    }
+}
+
+impl<'a> Cast<'a, u8> for ByteOffset {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        bld.circuit().cast(x, bld.circuit().ty(TyKind::U8))
     }
 }
 

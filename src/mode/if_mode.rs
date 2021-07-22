@@ -1,5 +1,6 @@
 use crate::eval::Evaluator;
-use crate::ir::typed::{FromEval, EvaluatorExt, Repr};
+use crate::ir::circuit::{Circuit, Ty, Wire};
+use crate::ir::typed::{Builder, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire};
 use serde::{Deserialize, Deserializer};
 use std::cell::Cell;
 use std::fmt;
@@ -307,6 +308,70 @@ impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> 
             // JP: Better combinator for this? map_with_or?
             Some(IfMode::none())
         }
+    }
+}
+
+impl<'a, M: ModePred, A: Repr<'a>> Repr<'a> for IfMode<M, A> {
+    type Repr = IfMode<M, TWire<'a, A>>;
+}
+
+impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
+    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+        if check_mode::<M>().is_some() {
+            A::wire_type(c)
+        } else {
+            <()>::wire_type(c)
+        }
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        if let Some(w) = w.repr.try_unwrap() {
+            A::to_wire(bld, w)
+        } else {
+            <()>::to_wire(bld, TWire::<()>::new(()))
+        }
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(IfMode::new(|_| A::from_wire(bld, w)))
+    }
+}
+
+impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
+    fn lit(bld: &Builder<'a>, x: IfMode<M, A>) -> IfMode<M, TWire<'a, A>> {
+        x.map(|x| bld.lit(x))
+    }
+}
+
+impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        IfMode::new(|_pf| bld.with_label("IfMode", || bld.secret_uninit()))
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        if let Some(pf) = check_mode() {
+            let s = s.get(&pf);
+            let val = val.get(&pf);
+            Builder::set_secret_from_lit(&s, &val, force);
+        }
+    }
+}
+
+impl<'a, M: ModePred, C, T, E> Mux<'a, C, IfMode<M, E>> for IfMode<M, T>
+where
+    C: Repr<'a>,
+    C::Repr: Clone,
+    T: Mux<'a, C, E>,
+    E: Repr<'a>,
+{
+    type Output = IfMode<M, <T as Mux<'a, C, E>>::Output>;
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: IfMode<M, TWire<'a, T>>,
+        e: IfMode<M, TWire<'a, E>>,
+    ) -> IfMode<M, TWire<'a, <T as Mux<'a, C, E>>::Output>> {
+        t.zip(e, |t, e| bld.mux(TWire::<C>::new(c), t, e))
     }
 }
 

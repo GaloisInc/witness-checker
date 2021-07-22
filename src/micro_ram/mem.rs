@@ -99,30 +99,7 @@ impl<'a> Memory<'a> {
         let num_ports = cp.port_starts.len() - 1;
         cp.ports.reserve(num_ports);
         for i in 0 .. num_ports {
-// <<<<<<< HEAD
-//             // Find the `MemOp` advice in this block (if any) and build the mem port.
-//             let mut mp = None;
-//             let mut found_j = None;
-//             for j in i * sparsity .. (i + 1) * sparsity {
-//                 let (advs, cycle) = get_advice(j);
-//                 for adv in advs {
-//                     if let Advice::MemOp { addr, value, op, tainted } = *adv {
-//                         if let Some(found_j) = found_j {
-//                             panic!(
-//                                 "multiple mem ports in block {}: cycle {}, cycle {}",
-//                                 i, found_j, j,
-//                             );
-//                         }
-//                         found_j = Some(j);
-//                         mp = Some(MemPort { cycle, addr, value, op, tainted });
-//                     }
-//                 }
-//             }
-// 
-//             let mp = mp.unwrap_or_else(|| MemPort {
-// =======
             let (mp, mp_secret) = b.secret_default(MemPort {
-// >>>>>>> master
                 cycle: MEM_PORT_UNUSED_CYCLE,
                 // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
                 // correspondence between `MemPort`s and steps.  We make unused ports distinct too,
@@ -309,22 +286,6 @@ impl<'a> CyclePorts<'a> {
 fn addr_misalignment<'a>(
     _cx: &Context<'a>,
     b: &Builder<'a>,
-// <<<<<<< HEAD
-//     port: &TWire<'a, MemPort>,
-// ) {
-//     let _g = b.scoped_label("check_first_mem");
-//     // If the first memory port is active, then it must not be a read, since there are no previous
-//     // writes to read from.
-//     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-//     // Skip this check if we're running in tainted mode.
-//     if !is_mode::<AnyTainted>() {
-//         wire_bug_if!(
-//             cx, b.mux(active, b.eq(port.op, b.lit(MemOpKind::Read)), b.lit(false)),
-//             "uninit read from {:x} on cycle {}",
-//             cx.eval(port.addr), cx.eval(port.cycle),
-//         );
-//     }
-// =======
     addr: TWire<'a, u64>,
     width: TWire<'a, MemOpWidth>,
 ) -> TWire<'a, ByteOffset> {

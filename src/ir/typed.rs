@@ -5,8 +5,7 @@ use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, CellResetGuard};
-use crate::micro_ram::types::{ByteOffset, Label, MemOpWidth, valid_label};
-use crate::mode::if_mode::{IfMode, ModePred, check_mode};
+use crate::micro_ram::types::{Label};
 
 
 pub struct Builder<'a> {
@@ -341,7 +340,7 @@ macro_rules! primitive_binary_impl {
         impl<'a> $Op<'a, $U> for $T {
             type Output = $R;
             fn $op(bld: &Builder<'a>, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-                bld.c.$op(a, b)
+                bld.circuit().$op(a, b)
             }
         }
     };
@@ -502,21 +501,6 @@ integer_impls!(u16, U16);
 integer_impls!(u32, U32);
 integer_impls!(u64, U64);
 
-impl<'a> Cast<'a, u8> for ByteOffset {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        bld.c.cast(x, bld.c.ty(TyKind::U8))
-    }
-}
-
-impl<'a> Cast<'a, u8> for MemOpWidth {
-    fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
-        // TODO: Is this correct?
-        // Flatten::to_wire(bld, x)
-        let ty = <u8 as Flatten>::wire_type(bld.c);
-        bld.c.cast(x.repr, ty)
-    }
-}
-
 // Cast u64 to Label.
 impl<'a> Cast<'a, Label> for u64 {
     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
@@ -524,55 +508,6 @@ impl<'a> Cast<'a, Label> for u64 {
         bld.c.cast(x, ty) // bld.c.ty(TyKind::U64))
     }
 }
-
-// TODO: Temporary? Switch PackedLabel to slice?
-impl<'a> Cast<'a, u16> for Label {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        bld.c.cast(x, bld.c.ty(TyKind::U16))
-    }
-}
-
-impl<'a> Lit<'a> for Label {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
-        assert!(valid_label(a.0));
-
-        // bld.lit(a.0).repr
-        // Lit::lit(bld, a.0)
-        let ty = <Label as Flatten>::wire_type(bld.c);
-        bld.c.lit(ty, a.0)
-    }
-}
-
-impl<'a> Mux<'a, bool, Label> for Label {
-    type Output = Label;
-
-    fn mux(
-        bld: &Builder<'a>,
-        c: Wire<'a>,
-        t: Wire<'a>,
-        e: Wire<'a>,
-    ) -> Wire<'a> {
-        bld.c.mux(c, t, e)
-    }
-}
-
-impl<'a> Secret<'a> for Label {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        let ty = <Label as Flatten>::wire_type(bld.c);
-        bld.c.new_secret_uninit(ty)
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        s.kind.as_secret().set_from_lit(*val, force);
-    }
-}
-
-primitive_binary_impl!(Eq::eq(Label, Label) -> bool);
-primitive_binary_impl!(Ne::ne(Label, Label) -> bool);
-primitive_binary_impl!(Lt::lt(Label, Label) -> bool);
-primitive_binary_impl!(Le::le(Label, Label) -> bool);
-primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
-primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {
@@ -883,73 +818,6 @@ impl<'a, A: FromEval<'a>> FromEval<'a> for Vec<A> {
         a.into_iter().map(|x| A::from_eval(ev, x.repr)).collect()
     }
 }
-
-
-impl<'a, M: ModePred, A: Repr<'a>> Repr<'a> for IfMode<M, A> {
-    type Repr = IfMode<M, TWire<'a, A>>;
-}
-
-impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
-    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
-        if check_mode::<M>().is_some() {
-            A::wire_type(c)
-        } else {
-            <()>::wire_type(c)
-        }
-    }
-
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
-        if let Some(w) = w.repr.try_unwrap() {
-            A::to_wire(bld, w)
-        } else {
-            <()>::to_wire(bld, TWire::<()>::new(()))
-        }
-    }
-
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
-        TWire::new(IfMode::new(|_| A::from_wire(bld, w)))
-    }
-}
-
-impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
-    fn lit(bld: &Builder<'a>, x: IfMode<M, A>) -> IfMode<M, TWire<'a, A>> {
-        x.map(|x| bld.lit(x))
-    }
-}
-
-impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        IfMode::new(|_pf| bld.with_label("IfMode", || bld.secret_uninit()))
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        if let Some(pf) = check_mode() {
-            let s = s.get(&pf);
-            let val = val.get(&pf);
-            Builder::set_secret_from_lit(&s, &val, force);
-        }
-    }
-}
-
-impl<'a, M: ModePred, C, T, E> Mux<'a, C, IfMode<M, E>> for IfMode<M, T>
-where
-    C: Repr<'a>,
-    C::Repr: Clone,
-    T: Mux<'a, C, E>,
-    E: Repr<'a>,
-{
-    type Output = IfMode<M, <T as Mux<'a, C, E>>::Output>;
-    fn mux(
-        bld: &Builder<'a>,
-        c: C::Repr,
-        t: IfMode<M, TWire<'a, T>>,
-        e: IfMode<M, TWire<'a, E>>,
-    ) -> IfMode<M, TWire<'a, <T as Mux<'a, C, E>>::Output>> {
-        t.zip(e, |t, e| bld.mux(TWire::<C>::new(c), t, e))
-    }
-}
-
-
 
 // No `impl Secret for Vec<A>`, since we can't determine how many wires to create in the case where
 // the value is unknown.
