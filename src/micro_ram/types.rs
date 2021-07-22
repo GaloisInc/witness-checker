@@ -11,7 +11,6 @@ use crate::ir::typed::{
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
-use crate::mode::tainted::{LABEL_BITS, PACKED_UNTAINTED, UNTAINTED};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -551,6 +550,10 @@ pub struct Label (
     #[serde(deserialize_with = "validate_label")]
     pub u8,
 );
+pub const UNTAINTED: Label = Label(3);
+pub const PACKED_UNTAINTED: PackedLabel = 0xFFFF;
+pub const LABEL_BITS: u8 = 2;
+
 /// Packed label representing 8 labels of the bytes of a word in memory.
 pub type PackedLabel = u16;
 
