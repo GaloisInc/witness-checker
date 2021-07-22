@@ -402,8 +402,10 @@ fn calc_step<'a>(
         add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
     }
 
-    // Opcode::Sink is a no-op so we let if fall through.
-    // Opcode::Taint is a no-op so we set it to itself and we need to set its dest.
+    // Opcode::Sink is a no-op in the standard interpreter, so we let if fall through to the default below.
+    // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
+    // later taint handling step. We set the value back to itself so that taint operations are treated
+    // like `mov rX rX`.
     {
         add_case(Opcode::Taint, x, instr.op1);
     }
