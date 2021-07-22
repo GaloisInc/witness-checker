@@ -9,7 +9,7 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
-    MemPort, MemOpKind, MemOpWidth, PackedMemPort, PackedLabel, MemSegment, ByteOffset, WordAddr,
+    MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
     MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 use crate::mode::if_mode::IfMode;
@@ -35,7 +35,7 @@ impl<'a> Memory<'a> {
             let waddr = seg.start + i;
 
 
-            // Most of the MemPort is public.  Only the value and taint are secret, if `seg.secret` is set.
+            // Most of the MemPort is public.  Only the value is secret, if `seg.secret` is set.
             let mut mp = b.lit(MemPort {
                 cycle: MEM_PORT_PRELOAD_CYCLE,
                 addr: waddr * MemOpWidth::WORD.bytes() as u64,
@@ -43,7 +43,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
+                tainted: IfMode::new(|pf| seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(0)),
                 width: MemOpWidth::WORD,
             });
 
@@ -56,17 +56,6 @@ impl<'a> Memory<'a> {
             } else {
                 mp.value = b.lit(value);
             }
-
-            mp.tainted = {
-                let t: IfMode<_, PackedLabel> = IfMode::new(|pf| {
-                    seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(0)
-                });
-                if seg.secret {
-                    b.secret_init(|| t)
-                } else {
-                    b.lit(t)
-                }
-            };
 
             self.ports.push(mp);
         }
