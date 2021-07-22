@@ -11,7 +11,7 @@ use crate::ir::typed::{
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
-use crate::mode::tainted::{LABEL_BITS, UNTAINTED};
+use crate::mode::tainted::{LABEL_BITS, PACKED_UNTAINTED, UNTAINTED};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -652,7 +652,7 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -669,9 +669,21 @@ pub struct MemPort {
     /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
     /// `value` must exactly match the previous value of the accessed word.
     pub width: MemOpWidth,
-    pub tainted: IfMode<AnyTainted, PackedLabel>, // TODO: Set default to PACKED_UNTAINTED? Then switch back IfMode's default.
+    pub tainted: IfMode<AnyTainted, PackedLabel>,
 }
 
+impl Default for MemPort {
+    fn default() -> Self {
+        MemPort {
+            cycle:   MEM_PORT_UNUSED_CYCLE,
+            addr:    u64::default(),
+            value:   u64::default(),
+            op:      MemOpKind::default(),
+            width:   MemOpWidth::default(),
+            tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
+        }
+    }
+}
 
 mk_named_enum! {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1311,7 +1323,7 @@ pub struct MemSegment {
     pub heap_init: bool,
     #[serde(default)]
     pub data: Vec<u64>,
-    #[serde(default)]
+    #[serde(default = "panic_default")]
     pub tainted: IfMode<AnyTainted,Vec<PackedLabel>>,
 }
 

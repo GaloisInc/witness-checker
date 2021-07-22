@@ -13,7 +13,7 @@ use crate::micro_ram::types::{
     MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
 };
 use crate::mode::if_mode::IfMode;
-use crate::mode::tainted::{self, PACKED_UNTAINTED};
+use crate::mode::tainted;
 use crate::sort;
 
 pub struct Memory<'a> {
@@ -209,11 +209,7 @@ impl<'a> CyclePorts<'a> {
         let (idx, user) = match self.index_to_port(u32::try_from(i).unwrap()) {
             Some(x) => x,
             // `None` means no port covers step `i`.
-            None => return b.lit(MemPort {
-                cycle: MEM_PORT_UNUSED_CYCLE,
-                tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
-                .. MemPort::default()
-            }),
+            None => return b.lit(MemPort::default()),
         };
 
         if self.port_len(idx) == 1 {
@@ -225,11 +221,7 @@ impl<'a> CyclePorts<'a> {
         b.mux(
             b.eq(smp.user, b.lit(user as u8)),
             smp.mp,
-            b.lit(MemPort {
-                cycle: MEM_PORT_UNUSED_CYCLE,
-                tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
-                .. MemPort::default()
-            }),
+            b.lit(MemPort::default()),
         )
     }
 
