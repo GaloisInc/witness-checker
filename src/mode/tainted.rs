@@ -238,11 +238,7 @@ fn unpack_labels<'a>(
     labels: TWire<'a, PackedLabel>,
 ) -> [TWire<'a, Label>; WORD_BYTES] {
     let label_parts = bit_pack::split_bits::<[Label; WORD_BYTES]>(b, labels.repr);
-    let mut labels = [b.lit(UNTAINTED); WORD_BYTES];
-    for (idx, &l) in label_parts.iter().enumerate() {
-        labels[idx] = l;
-    }
-    labels
+    label_parts.repr
 }
 
 pub fn check_state<'a>(
