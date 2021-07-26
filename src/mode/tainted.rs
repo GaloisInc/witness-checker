@@ -75,35 +75,6 @@ pub fn calc_step<'a>(
             add_case(Opcode::Taint, label);
         }
 
-        /*
-        // Don't taint REG_PC. Handles the cases where instruction destinations are REG_PC. 
-        // JP: Is this necessary?
-
-        {
-            add_case(Opcode::Jmp, b.lit(UNTAINTED), b.lit(REG_NONE));
-        }
-
-        {
-            add_case(Opcode::Cjmp, b.lit(UNTAINTED), b.lit(REG_NONE));
-        }
-
-        {
-            add_case(Opcode::Cnjmp, b.lit(UNTAINTED), b.lit(REG_NONE));
-        }
-
-        {
-            add_case(Opcode::Sink, b.lit(UNTAINTED), b.lit(REG_NONE));
-        }
-
-        {
-            add_case(Opcode::Answer, b.lit(UNTAINTED), b.lit(REG_NONE));
-        }
-
-        {
-            add_case(Opcode::Stutter, b.lit(UNTAINTED), b.lit(REG_NONE));
-        }
-        */
-
         // Fall through to mark destination as untainted.
         let result = b.mux_multi(&cases, b.lit(UNTAINTED));
 
@@ -130,16 +101,22 @@ fn convert_to_label<'a,'b>(
     idx: usize,
     label: TWire<'a, u64>, // Label>,
 ) -> TWire<'a, Label> {
+    let l = b.cast(label);
+
+    // Check that the label is valid by ensuring the casted label is unchanged.
     wire_assert!(
-        cx, b.le(label, b.lit(UNTAINTED.0 as u64)),
+        cx, b.eq(label, b.cast(l)),
         "Invalid tainted label {} at cycle {}",
         cx.eval(label), idx,
     );
 
-    b.cast(label)
+    l
 }
 
-// Packs a Label into a PackedLabel. Assumes that the Label is already valid (2 bits long).
+// Packs a Label into a PackedLabel.
+// That is entries in the range `offset .. offset + width` are set
+// to `label` while the rest are zero.
+// Assumes that the Label is already valid (2 bits long).
 fn pack_label<'a>(
     b: &Builder<'a>,
     label: TWire<'a, Label>,
@@ -283,7 +260,8 @@ pub fn check_first<'a>(
 pub fn check_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    idx: usize, //  TODO: Not cycle anymore?
+    seg_idx: usize,
+    idx: usize,
     instr: TWire<'a, RamInstr>,
     calc_im: &CalcIntermediate<'a>,
 ) {
@@ -296,8 +274,8 @@ pub fn check_step<'a>(
             // the sink.
             wire_bug_if!(
                 cx, b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED))),
-                "leak of tainted data from register {:x} with label {} does not match output channel label {} on cycle {}",
-                cx.eval(instr.op1), cx.eval(xt), cx.eval(y), idx,
+                "leak of tainted data from register {:x} with label {} does not match output channel label {} on cycle {},{}",
+                cx.eval(instr.op1), cx.eval(xt), cx.eval(y), seg_idx, idx,
             );
         });
     }

@@ -1,4 +1,4 @@
-## FLAGS: --mode leak-tainted
+## FLAGS: --mode leak-tainted --validate-only
 - [0,1,0,0]
 - [leak-tainted]
 -

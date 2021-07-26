@@ -1,4 +1,4 @@
-## FLAGS: --mode leak-tainted
+## FLAGS: --mode leak-tainted --validate-only
 # Taint a register, store it to memory, overwrite it, load it, and then write it to a different channel.
 
 - [0,1,0,0]

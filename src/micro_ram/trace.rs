@@ -560,5 +560,5 @@ fn check_step<'a>(
         seg_idx, idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
 
-    tainted::check_step(cx, b, idx, instr, calc_im);
+    tainted::check_step(cx, b, seg_idx, idx, instr, calc_im);
 }

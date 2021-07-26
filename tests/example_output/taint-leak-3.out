@@ -1,2 +1,2 @@
-found bug: leak of tainted data from register 1 with label 1 does not match output channel label 2 on cycle 3
+found bug: leak of tainted data from register 1 with label 1 does not match output channel label 2 on cycle 0,3
 internal evaluator: 154 asserts passed, 0 failed; found 1 bugs; overall status: GOOD

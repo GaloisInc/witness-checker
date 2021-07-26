@@ -10,7 +10,7 @@ use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
-    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
+    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, PACKED_UNTAINTED, WORD_BYTES,
 };
 use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
@@ -43,7 +43,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: IfMode::new(|pf| seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(0)),
+                tainted: IfMode::new(|pf| seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(PACKED_UNTAINTED)),
                 width: MemOpWidth::WORD,
             });
 

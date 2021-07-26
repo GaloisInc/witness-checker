@@ -613,6 +613,12 @@ impl<'a> Cast<'a, u16> for Label {
     }
 }
 
+impl<'a> Cast<'a, u64> for Label {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        bld.circuit().cast(x, bld.circuit().ty(TyKind::U64))
+    }
+}
+
 impl<'a> Lit<'a> for Label {
     fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
         assert!(valid_label(a.0));
