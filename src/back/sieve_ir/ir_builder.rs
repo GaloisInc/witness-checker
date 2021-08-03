@@ -74,32 +74,32 @@ pub trait IRBuilderT {
         self.create_gate(Witness(value))
     }
 
-    fn assert_zero(&mut self, wire: IRWire) {
+    fn assert_zero(&mut self, wire: &IRWire) {
         self.create_gate(AssertZero(wire.wire()));
     }
 
-    fn add(&mut self, left: IRWire, right: IRWire) -> IRWire {
+    fn add(&mut self, left: &IRWire, right: &IRWire) -> IRWire {
         self.create_gate(Add(left.wire(), right.wire()))
     }
 
-    fn addc(&mut self, left: IRWire, value: Value) -> IRWire {
+    fn addc(&mut self, left: &IRWire, value: Value) -> IRWire {
         self.create_gate(AddConstant(left.wire(), value))
     }
 
-    fn sub(&mut self, left: IRWire, right: IRWire) -> IRWire {
+    fn sub(&mut self, left: &IRWire, right: &IRWire) -> IRWire {
         let neg_right = self.neg(right);
         self.create_gate(Add(left.wire(), neg_right.wire()))
     }
 
-    fn neg(&mut self, wire: IRWire) -> IRWire {
+    fn neg(&mut self, wire: &IRWire) -> IRWire {
         self.create_gate(MulConstant(wire.wire(), self.neg_one()))
     }
 
-    fn mul(&mut self, left: IRWire, right: IRWire) -> IRWire {
+    fn mul(&mut self, left: &IRWire, right: &IRWire) -> IRWire {
         self.create_gate(Mul(left.wire(), right.wire()))
     }
 
-    fn mulc(&mut self, left: IRWire, value: Value) -> IRWire {
+    fn mulc(&mut self, left: &IRWire, value: Value) -> IRWire {
         self.create_gate(MulConstant(left.wire(), value))
     }
 

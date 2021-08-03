@@ -17,8 +17,8 @@ impl AllocatedBit {
         self.value
     }
 
-    pub fn get_wire(&self) -> IRWire {
-        self.wire.clone()
+    pub fn get_wire(&self) -> &IRWire {
+        &self.wire
     }
 
     pub fn alloc(b: &mut impl IRBuilderT, value: Option<bool>) -> Self {
@@ -30,9 +30,9 @@ impl AllocatedBit {
         let wire = b.new_witness(field_value);
 
         // (x - 1) * x == 0
-        let wire_1 = b.addc(wire.clone(), b.neg_one());
-        let prod = b.mul(wire.clone(), wire_1);
-        b.assert_zero(prod);
+        let wire_1 = b.addc(&wire, b.neg_one());
+        let prod = b.mul(&wire, &wire_1);
+        b.assert_zero(&prod);
 
         AllocatedBit { wire, value }
     }
@@ -50,7 +50,7 @@ impl AllocatedBit {
         // ---|-------|
         //  0 | 1     |
         //  1 | 0     |
-        let wire = b.sub(b.one(), a.get_wire());
+        let wire = b.sub(&b.one(), a.get_wire());
 
         AllocatedBit { wire, value }
     }
@@ -73,7 +73,7 @@ impl AllocatedBit {
         //  1 | 1 |  0  |     0
 
         let tmp_wire = builder.sub(a.get_wire(), b.get_wire());
-        let wire = builder.mul(tmp_wire.clone(), tmp_wire);
+        let wire = builder.mul(&tmp_wire, &tmp_wire);
 
         AllocatedBit { wire, value }
     }
@@ -114,8 +114,8 @@ impl AllocatedBit {
         //  0 | 1 |  0   |  0
         //  1 | 0 |  1   |  1
         //  1 | 1 |  0   |  0
-        let right_wire = builder.sub(builder.one(), b.get_wire());
-        let wire = builder.mul(a.get_wire(), right_wire);
+        let right_wire = builder.sub(&builder.one(), b.get_wire());
+        let wire = builder.mul(a.get_wire(), &right_wire);
 
         AllocatedBit { wire, value }
     }
@@ -135,9 +135,9 @@ impl AllocatedBit {
         //  0 | 1 |    0    |     0
         //  1 | 0 |    0    |     0
         //  1 | 1 |    0    |     0
-        let left_wire = builder.sub(builder.one(), a.get_wire());
-        let right_wire = builder.sub(builder.one(), b.get_wire());
-        let wire = builder.mul(left_wire, right_wire);
+        let left_wire = builder.sub(&builder.one(), a.get_wire());
+        let right_wire = builder.sub(&builder.one(), b.get_wire());
+        let wire = builder.mul(&left_wire, &right_wire);
 
         AllocatedBit { wire, value }
     }
@@ -163,7 +163,7 @@ impl Boolean {
     pub fn wire(&self, b: &mut impl IRBuilderT) -> IRWire {
         match self {
             Boolean::Is(bit) => bit.wire.clone(),
-            Boolean::Not(bit) => AllocatedBit::not(b, bit).get_wire(),
+            Boolean::Not(bit) => AllocatedBit::not(b, bit).get_wire().clone(),
             Boolean::Constant(false) => b.zero(),
             Boolean::Constant(true) => b.one(),
         }
@@ -215,7 +215,7 @@ impl Boolean {
                     }
                     Boolean::Not(ref v) => {
                         let w = AllocatedBit::not(builder, v);
-                        builder.assert_zero(w.wire);
+                        builder.assert_zero(w.get_wire());
                     }
                     _ => unreachable!(),
                 }
@@ -224,8 +224,8 @@ impl Boolean {
 
             (&Boolean::Is(ref v), &Boolean::Is(ref w))
             | (&Boolean::Not(ref v), &Boolean::Not(ref w)) => {
-                let xorwire = AllocatedBit::xor(builder, &v, &w).get_wire();
-                builder.assert_zero(xorwire);
+                let xorwire = AllocatedBit::xor(builder, &v, &w).get_wire().clone();
+                builder.assert_zero(&xorwire);
 
                 Ok(())
             }
@@ -237,8 +237,8 @@ impl Boolean {
                     value: Some(true),
                 };
                 let not_w = AllocatedBit::xor(builder, &w, &true_bit);
-                let xor_wire = AllocatedBit::xor(builder, &v, &not_w).get_wire();
-                builder.assert_zero(xor_wire);
+                let xor_wire = AllocatedBit::xor(builder, &v, &not_w).get_wire().clone();
+                builder.assert_zero(&xor_wire);
 
                 Ok(())
             }

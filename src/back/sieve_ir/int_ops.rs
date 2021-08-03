@@ -71,10 +71,10 @@ pub fn div<Scalar: PrimeField>(
     // Ensure that: numerator == quotient * denominator + rest.
     // we first compute 'quotient * denominator', then 'numerator - rest', finally compute the
     // difference of the two and ensure that it's null.
-    let quo_times_denom = builder.mul(quot_num.zki_wire.clone(), denom_num.zki_wire.clone());
-    let num_minus_rest = builder.sub(numer_num.zki_wire.clone(), rest_num.zki_wire.clone());
-    let diff_all = builder.sub(quo_times_denom, num_minus_rest);
-    builder.assert_zero(diff_all);
+    let quo_times_denom = builder.mul(&quot_num.zki_wire, &denom_num.zki_wire);
+    let num_minus_rest = builder.sub(&numer_num.zki_wire, &rest_num.zki_wire);
+    let diff_all = builder.sub(&quo_times_denom, &num_minus_rest);
+    builder.assert_zero(&diff_all);
 
     // Verify that rest < denom || denom == 0.
     let width = denom_int.width();

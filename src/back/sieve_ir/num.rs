@@ -68,8 +68,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
             .fold(bits[0].wire(b), |sum, (exponent, bit)| {
                 let coeff = b.power_of_two(exponent);
                 let bit_wire = bit.wire(b);
-                let term = b.mulc(bit_wire, coeff);
-                let res = b.add(sum, term);
+                let term = b.mulc(&bit_wire, coeff);
+                let res = b.add(&sum, &term);
                 res
             })
     }
@@ -95,8 +95,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         // Enforce that the bit representation is equivalent to this Num.
         let recomposed_wire = Self::compose_bits(b, &bits);
-        let difference = b.sub(self.zki_wire.clone(), recomposed_wire);
-        b.assert_zero(difference);
+        let difference = b.sub(&self.zki_wire, &recomposed_wire);
+        b.assert_zero(&difference);
 
         b.deannotate();
         bits
@@ -115,7 +115,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
             _ => {}
         }
 
-        self.zki_wire = builder.add(self.zki_wire, other.zki_wire.clone());
+        self.zki_wire = builder.add(&self.zki_wire, &other.zki_wire);
 
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
@@ -154,8 +154,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // Compute max_value + other * -1 + self
         // TODO: cache max_wire.
         let max_wire = b.new_constant(encode_scalar(&max_value));
-        let other_shifted = b.sub(max_wire, other.zki_wire.clone());
-        self.zki_wire = b.add(self.zki_wire, other_shifted);
+        let other_shifted = b.sub(&max_wire, &other.zki_wire);
+        self.zki_wire = b.add(&self.zki_wire, &other_shifted);
 
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
@@ -178,7 +178,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
             _ => {}
         }
 
-        self.zki_wire = b.mul(self.zki_wire, other.zki_wire.clone());
+        self.zki_wire = b.mul(&self.zki_wire, &other.zki_wire);
 
         fn mul_bits(b1: u16, b2: u16) -> u16 {
             // If `bits == 0`, then the value must be zero, so the product is also zero.
@@ -232,7 +232,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // Compute max_value + self * -1
         // TODO: cache max_wire.
         let max_wire = b.new_constant(encode_scalar(&max_value));
-        self.zki_wire = b.sub(max_wire, self.zki_wire);
+        self.zki_wire = b.sub(&max_wire, &self.zki_wire);
 
         let new_real_bits = self.real_bits + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
@@ -277,9 +277,9 @@ impl<Scalar: PrimeField> Num<Scalar> {
         };
 
         // result = cond * (self - else) + else
-        let self_else = b.sub(self.zki_wire, else_.zki_wire.clone());
-        let cond_self_else = b.mul(self_else, cond.zki_wire.clone());
-        self.zki_wire = b.add(cond_self_else, else_.zki_wire.clone());
+        let self_else = b.sub(&self.zki_wire, &else_.zki_wire);
+        let cond_self_else = b.mul(&self_else, &cond.zki_wire);
+        self.zki_wire = b.add(&cond_self_else, &else_.zki_wire);
 
         // We know from the check above that `self` has `real_bits == 1`, meaning its value is
         // either 0 or 1.  This means the result is either exactly `then_` or exactly `else_`, and
@@ -316,14 +316,14 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // TODO: the boolean constraint of AllocatedBit should not be necessary
         // because the constraints below already enforce booleanness.
 
-        let num = self.zki_wire.clone();
+        // let num = self.zki_wire.clone();
         let is_zero = is_zero_bool.wire(b);
 
         // Enforce that (is_zero * num == 0), then we have:
         //     (num != 0) implies (is_zero == 0)
         // (is_zero != 0) implies (num == 0)
-        let product = b.mul(is_zero.clone(), num.clone());
-        b.assert_zero(product);
+        let product = b.mul(&is_zero, &self.zki_wire);
+        b.assert_zero(&product);
 
         // Compute the inverse of num.
         // We don't prove that it is necessarily the inverse, but we need it to
@@ -338,10 +338,10 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // Enforce that (num * inverse + is_zero - 1 == 0), then we have:
         //     (num == 0) implies (is_zero == 1)
         // (is_zero != 1) implies (num != 0)
-        let num_inverse = b.mul(num.clone(), inverse);
-        let n_i_iz = b.add(num_inverse, is_zero.clone());
-        let n_i_iz_1 = b.addc(n_i_iz, b.neg_one());
-        b.assert_zero(n_i_iz_1);
+        let num_inverse = b.mul(&self.zki_wire, &inverse);
+        let n_i_iz = b.add(&num_inverse, &is_zero);
+        let n_i_iz_1 = b.addc(&n_i_iz, b.neg_one());
+        b.assert_zero(&n_i_iz_1);
 
         is_zero_bool
     }
