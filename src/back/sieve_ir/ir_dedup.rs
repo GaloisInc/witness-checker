@@ -30,7 +30,7 @@ impl IRDedup {
     ///
     /// This should take maybe 100-200MB of memory per million of gates.
     /// Default: 1M gates.
-    pub const MAX_SIZE: usize = 10 * 1000 * 1000;
+    pub const MAX_SIZE: usize = 2 * 1000 * 1000;
 
     pub fn create_gate(&mut self, builder: Rc<dyn GateBuilderT>, gate: BuildGate) -> IRWire {
         // Don't cache allocations.
