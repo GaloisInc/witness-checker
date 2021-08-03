@@ -30,7 +30,7 @@ impl AllocatedBit {
         let wire = b.new_witness(field_value);
 
         // (x - 1) * x == 0
-        let wire_1 = b.add(wire.clone(), b.neg_one());
+        let wire_1 = b.addc(wire.clone(), b.neg_one());
         let prod = b.mul(wire.clone(), wire_1);
         b.assert_zero(prod);
 

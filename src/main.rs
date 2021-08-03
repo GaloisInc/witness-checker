@@ -468,12 +468,14 @@ fn main() -> io::Result<()> {
         cli(&Options {
             tool: "simulate".to_string(),
             paths: vec![workspace.to_path_buf()],
+            field_order: Default::default()
         }).unwrap();
 
         // Print statistics.
         cli(&Options {
             tool: "stats".to_string(),
             paths: vec![workspace.to_path_buf()],
+            field_order: Default::default()
         }).unwrap();
     }
 

@@ -68,7 +68,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
             .fold(bits[0].wire(b), |sum, (exponent, bit)| {
                 let coeff = b.power_of_two(exponent);
                 let bit_wire = bit.wire(b);
-                let term = b.mul(bit_wire, coeff);
+                let term = b.mulc(bit_wire, coeff);
                 let res = b.add(sum, term);
                 res
             })
@@ -340,7 +340,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // (is_zero != 1) implies (num != 0)
         let num_inverse = b.mul(num.clone(), inverse);
         let n_i_iz = b.add(num_inverse, is_zero.clone());
-        let n_i_iz_1 = b.add(n_i_iz, b.neg_one());
+        let n_i_iz_1 = b.addc(n_i_iz, b.neg_one());
         b.assert_zero(n_i_iz_1);
 
         is_zero_bool

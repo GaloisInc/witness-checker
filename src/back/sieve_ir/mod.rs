@@ -1,5 +1,4 @@
 pub mod backend;
-mod bit_width;
 mod boolean;
 mod field;
 mod int;

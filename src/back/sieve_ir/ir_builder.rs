@@ -61,7 +61,8 @@ impl IRWire {
 pub trait IRBuilderT {
     fn zero(&self) -> IRWire;
     fn one(&self) -> IRWire;
-    fn neg_one(&self) -> IRWire;
+
+    fn neg_one(&self) -> Value;
 
     fn create_gate(&mut self, gate: BuildGate) -> IRWire;
 
@@ -81,20 +82,28 @@ pub trait IRBuilderT {
         self.create_gate(Add(left.wire(), right.wire()))
     }
 
+    fn addc(&mut self, left: IRWire, value: Value) -> IRWire {
+        self.create_gate(AddConstant(left.wire(), value))
+    }
+
     fn sub(&mut self, left: IRWire, right: IRWire) -> IRWire {
         let neg_right = self.neg(right);
         self.create_gate(Add(left.wire(), neg_right.wire()))
     }
 
     fn neg(&mut self, wire: IRWire) -> IRWire {
-        self.create_gate(Mul(wire.wire(), self.neg_one().wire()))
+        self.create_gate(MulConstant(wire.wire(), self.neg_one()))
     }
 
     fn mul(&mut self, left: IRWire, right: IRWire) -> IRWire {
         self.create_gate(Mul(left.wire(), right.wire()))
     }
 
-    fn power_of_two(&mut self, n: usize) -> IRWire;
+    fn mulc(&mut self, left: IRWire, value: Value) -> IRWire {
+        self.create_gate(MulConstant(left.wire(), value))
+    }
+
+    fn power_of_two(&mut self, n: usize) -> Value;
 
     /// Give a name to the current context for diagnostics. Multiple calls create a hierarchy of annotations.
     fn annotate(&mut self, _note: &str) {}
@@ -116,8 +125,8 @@ pub struct IRBuilder<S: Sink> {
 
     zero: Option<IRWire>,
     one: Option<IRWire>,
-    neg_one: Option<IRWire>,
-    powers_of_two: Vec<IRWire>,
+    neg_one: Value,
+    powers_of_two: Vec<Value>,
 }
 
 impl<S: 'static + Sink> IRBuilderT for IRBuilder<S> {
@@ -129,8 +138,8 @@ impl<S: 'static + Sink> IRBuilderT for IRBuilder<S> {
         self.one.as_ref().unwrap().clone()
     }
 
-    fn neg_one(&self) -> IRWire {
-        self.neg_one.as_ref().unwrap().clone()
+    fn neg_one(&self) -> Value {
+        self.neg_one.clone()
     }
 
     fn create_gate(&mut self, gate: BuildGate) -> IRWire {
@@ -152,12 +161,11 @@ impl<S: 'static + Sink> IRBuilderT for IRBuilder<S> {
 
     /// Return a wire representing constant 2^n.
     /// Cache the constant gates from 0 to n.
-    fn power_of_two(&mut self, n: usize) -> IRWire {
+    fn power_of_two(&mut self, n: usize) -> Value {
         while self.powers_of_two.len() <= n {
             let exponent = self.powers_of_two.len() as u32;
             let value = BigUint::from(2 as u32).pow(exponent);
-            let wire = self.create_gate(Constant(value.to_bytes_le()));
-            self.powers_of_two.push(wire);
+            self.powers_of_two.push(value.to_bytes_le());
         }
 
         return self.powers_of_two[n].clone();
@@ -188,7 +196,7 @@ impl<S: 'static + Sink> IRBuilder<S> {
             prof: None, // Some(IRProfiler::default()),
             zero: None,
             one: None,
-            neg_one: None,
+            neg_one: vec![],
             powers_of_two: vec![],
         };
 
@@ -196,9 +204,9 @@ impl<S: 'static + Sink> IRBuilder<S> {
         // assert_eq!(irb.zero, irb.zero());
         irb.one = Some(irb.create_gate(Constant(vec![1])));
         // assert_eq!(irb.one, irb.one());
-        irb.neg_one = Some(irb.create_gate(Constant(encode_scalar(&Scalar::one().neg()))));
+        irb.neg_one = encode_scalar(&Scalar::one().neg());
         // assert_eq!(irb.neg_one, irb.neg_one());
-        irb.powers_of_two.push(irb.one());
+        irb.powers_of_two.push(encode_scalar(&Scalar::one()));
 
         irb
     }
