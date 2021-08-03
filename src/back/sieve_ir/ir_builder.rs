@@ -193,7 +193,9 @@ impl<S: 'static + Sink> IRBuilderT for IRBuilder<S> {
     }
 
     fn free_unused(&mut self) {
-        Self::free_unused_inner(&self.freed, &self.gate_builder);
+        if self.freed.borrow().len() >= 10 * 1000 {
+            Self::free_unused_inner(&self.freed, &self.gate_builder);
+        }
     }
 
     /// Return a wire representing constant 2^n.
@@ -251,9 +253,38 @@ impl<S: 'static + Sink> IRBuilder<S> {
 
     fn free_unused_inner(freed: &Freed, gate_builder: &GateBuilder<S>) {
         let mut freed = freed.borrow_mut();
-        for &wire_id in freed.iter() {
-            gate_builder.create_gate(Free(wire_id, None));
+        if freed.len() == 0 {
+            return;
         }
+
+        let mut wires = Vec::with_capacity(freed.len());
+        let (a, b) = freed.as_slices();
+        wires.extend(a);
+        wires.extend(b);
+        wires.sort();
+
+        let mut start = wires[0];
+        let mut end = wires[0];
+        for wire in wires.into_iter().skip(1) {
+            if wire == end + 1 {
+                end = wire;
+            } else {
+                if start == end {
+                    gate_builder.create_gate(Free(start, None));
+                } else {
+                    gate_builder.create_gate(Free(start, Some(end)));
+                }
+                start = wire;
+                end = wire;
+            }
+        }
+
+        if start == end {
+            gate_builder.create_gate(Free(start, None));
+        } else {
+            gate_builder.create_gate(Free(start, Some(end)));
+        }
+
         freed.clear();
     }
 
