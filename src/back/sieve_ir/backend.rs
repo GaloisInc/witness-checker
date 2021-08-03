@@ -129,6 +129,8 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
             self.wire_to_repr.insert(wire, wid);
 
             self.builder.deannotate();
+
+            self.builder.free_unused();
         }
 
         self.wire_to_repr.get(&wire).cloned().unwrap()

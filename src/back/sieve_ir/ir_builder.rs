@@ -9,31 +9,70 @@ use zki_sieve::{Header, WireId};
 use zki_sieve::Sink;
 use zki_sieve::{Value};
 use BuildGate::*;
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 use zki_sieve::producers::build_gates::NO_OUTPUT;
 
-#[derive(Clone)]
+struct IRWireInner {
+    wire: WireId,
+    ref_count: usize,
+}
+
+pub type Freed = Rc<RefCell<VecDeque<WireId>>>;
+
 pub struct IRWire {
-    wire: Rc<WireId>,
-    builder: Weak<dyn GateBuilderT>,
+    inner: NonNull<IRWireInner>,
+    freed: Freed,
+}
+
+impl IRWire {
+    pub fn new(wire: WireId, freed: Freed) -> IRWire {
+        unsafe {
+            let ptr = Box::into_raw(Box::new(IRWireInner {
+                wire,
+                ref_count: 1,
+            }));
+            IRWire {
+                inner: NonNull::new_unchecked(ptr),
+                freed,
+            }
+        }
+    }
+
+    pub fn wire(&self) -> WireId {
+        unsafe { (*self.inner.as_ptr()).wire }
+    }
 }
 
 impl Drop for IRWire {
-
-    /// Destructor for IRWire. Once there is no more reference to this
-    /// wire, it's automatically freed, and the corresponding 'Free' gate
-    /// is appended to the IR circuit.
+    /// Destructor for IRWire. Once there is no more reference to this wire, it's automatically
+    /// appended to the list of wires to be freed, and the corresponding 'Free' gate will be
+    /// appended to the IR circuit at some point.
     fn drop(&mut self) {
-        // If this is the last living reference to this wire, then automatically
-        // append a Free gate to the circuit.
-        if Rc::strong_count(&self.wire) == 1 {
-            match self.builder.upgrade() {
-                Some(b) => {
-                    if *self.wire != NO_OUTPUT {
-                        b.create_gate(BuildGate::Free(*self.wire, None));
-                    }
+        unsafe {
+            let inner = self.inner.as_ptr();
+            (*inner).ref_count -= 1;
+            if (*inner).ref_count == 0 {
+                if (*inner).wire != NO_OUTPUT {
+                    self.freed.borrow_mut().push_back((*inner).wire);
                 }
-                None => {},
+                drop(Box::from_raw(inner));
+            }
+        };
+    }
+}
+
+impl Clone for IRWire {
+    fn clone(&self) -> IRWire {
+        let freed = self.freed.clone();
+        unsafe {
+            // The interior of this block contains no panics.
+            (*self.inner.as_ptr()).ref_count += 1;
+            IRWire {
+                inner: self.inner,
+                freed,
             }
         }
     }
@@ -41,22 +80,11 @@ impl Drop for IRWire {
 
 impl PartialEq<IRWire> for IRWire {
     fn eq(&self, other: &IRWire) -> bool {
-        *self.wire == *other.wire
+        self.wire() == other.wire()
     }
 }
 
-impl IRWire {
-    pub fn new(wire: WireId, builder: Weak<dyn GateBuilderT>) -> Self {
-        IRWire {
-            wire: Rc::new(wire),
-            builder,
-        }
-    }
-
-    pub fn wire(&self) -> WireId {
-        *self.wire
-    }
-}
+impl Eq for IRWire {}
 
 pub trait IRBuilderT {
     fn zero(&self) -> IRWire;
@@ -65,6 +93,9 @@ pub trait IRBuilderT {
     fn neg_one(&self) -> Value;
 
     fn create_gate(&mut self, gate: BuildGate) -> IRWire;
+
+    /// Free `IRWire`s that are no longer used.
+    fn free_unused(&mut self);
 
     fn new_constant(&mut self, value: Value) -> IRWire {
         self.create_gate(Constant(value))
@@ -123,6 +154,8 @@ pub struct IRBuilder<S: Sink> {
     /// If profiler is enabled, it will track duplicate gates. Default: disabled.
     pub prof: Option<IRProfiler>,
 
+    freed: Freed,
+
     zero: Option<IRWire>,
     one: Option<IRWire>,
     neg_one: Value,
@@ -150,13 +183,17 @@ impl<S: 'static + Sink> IRBuilderT for IRBuilder<S> {
 
         let b = Rc::downgrade(&self.gate_builder);
         if let Some(dedup) = &mut self.dedup {
-            dedup.create_gate(self.gate_builder.clone(), gate)
+            dedup.create_gate(&*self.gate_builder, gate, self.freed.clone())
         } else {
             IRWire:: new (
                 self.gate_builder.create_gate(gate),
-                b
+                self.freed.clone()
             )
         }
+    }
+
+    fn free_unused(&mut self) {
+        Self::free_unused_inner(&self.freed, &self.gate_builder);
     }
 
     /// Return a wire representing constant 2^n.
@@ -194,6 +231,7 @@ impl<S: 'static + Sink> IRBuilder<S> {
             gate_builder: Rc::new(GateBuilder::new(sink, header)),
             dedup: Some(IRDedup::default()),
             prof: None, // Some(IRProfiler::default()),
+            freed: Freed::default(),
             zero: None,
             one: None,
             neg_one: vec![],
@@ -211,6 +249,14 @@ impl<S: 'static + Sink> IRBuilder<S> {
         irb
     }
 
+    fn free_unused_inner(freed: &Freed, gate_builder: &GateBuilder<S>) {
+        let mut freed = freed.borrow_mut();
+        for &wire_id in freed.iter() {
+            gate_builder.create_gate(Free(wire_id, None));
+        }
+        freed.clear();
+    }
+
     pub fn finish(self) -> S {
         if let Some(dedup) = self.dedup {
             // clean-up the potential IRWire kept in the memory of the deduplicator.
@@ -219,6 +265,7 @@ impl<S: 'static + Sink> IRBuilder<S> {
         drop(self.zero);
         drop(self.one);
         drop(self.powers_of_two);
+        Self::free_unused_inner(&self.freed, &self.gate_builder);
 
         // We can use Rc::try_unwrap() here since we ensures that self.gate_builder is never cloned,
         // so no other Rc<GateBuilder> will exist. And this will never enter the panic!()
