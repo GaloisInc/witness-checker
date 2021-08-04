@@ -3,8 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use zki_sieve::producers::builder::{BuildGate, GateBuilderT};
 use BuildGate::*;
-use std::rc::Rc;
-use crate::back::sieve_ir::ir_builder::IRWire;
+use crate::back::sieve_ir::ir_builder::{IRWire, Freed};
 
 /// IRDedup deduplicates gates. When the caller attempts to create a gate,
 ///   - either create a new gate and return a fresh WireId,
@@ -32,10 +31,10 @@ impl IRDedup {
     /// Default: 1M gates.
     pub const MAX_SIZE: usize = 2 * 1000 * 1000;
 
-    pub fn create_gate(&mut self, builder: Rc<dyn GateBuilderT>, gate: BuildGate) -> IRWire {
+    pub fn create_gate(&mut self, builder: &impl GateBuilderT, gate: BuildGate, freed: Freed) -> IRWire {
         // Don't cache allocations.
         match gate {
-            Instance(_) | Witness(_) => return IRWire::new(builder.create_gate(gate), Rc::downgrade(&builder)),
+            Instance(_) | Witness(_) => return IRWire::new(builder.create_gate(gate), freed),
             _ => {}
         };
 
@@ -50,7 +49,7 @@ impl IRDedup {
             Vacant(entry) => {
                 // Build the new gate.
                 let gate = entry.key();
-                let out_id = IRWire::new(builder.create_gate(gate.clone()), Rc::downgrade(&builder));
+                let out_id = IRWire::new(builder.create_gate(gate.clone()), freed);
 
                 // Insert the new gate in the cache.
                 queue.push_back(gate.clone());
