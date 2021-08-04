@@ -24,7 +24,7 @@ use num_traits::Zero;
 /// the bitwise value `0_u8`.  Since `2^N` does not evenly divide the field modulus, the
 /// highest-valued field elements are not safe to use.  The `Num` type will automatically truncate
 /// if the operation might return a value that is out of range.
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::{convert::TryFrom, iter};
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
@@ -52,9 +52,9 @@ pub type Num = num::Num<Scalar>;
 /// - Allocate and retrieve representations of wires.
 /// - Write files.
 pub struct Backend<'w, 'irb, IRB: IRBuilderT> {
-    wire_to_repr: HashMap<Wire<'w>, ReprId>,
+    wire_to_repr: BTreeMap<Wire<'w>, ReprId>,
     representer: Representer,
-    usage: HashMap<Wire<'w>, u64>, // tells the number of times a given wire is used as an input.
+    usage: BTreeMap<Wire<'w>, u64>, // tells the number of times a given wire is used as an input.
     optim: bool,
     builder: &'irb mut IRB,
 }
@@ -63,9 +63,9 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
     /// Must call finish() to finalize the files in the workspace.
     pub fn new(ir_builder: &'irb mut IRB) -> Self {
         Backend {
-            wire_to_repr: HashMap::new(),
+            wire_to_repr: BTreeMap::new(),
             representer: Representer::new(),
-            usage: HashMap::new(),
+            usage: BTreeMap::new(),
             optim: true,
             builder: ir_builder,
         }
