@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use num_bigint::{BigInt, BigUint, Sign};
 use std::any;
 use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
@@ -874,6 +875,18 @@ macro_rules! declare_interned_pointer {
         }
 
         impl Eq for $Ptr<'_> {}
+
+        impl<$lt> PartialOrd for $Ptr<$lt> {
+            fn partial_cmp(&self, other: &$Ptr<$lt>) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl<$lt> Ord for $Ptr<$lt> {
+            fn cmp(&self, other: &$Ptr<$lt>) -> Ordering {
+                self.as_ptr().cmp(&other.as_ptr())
+            }
+        }
 
         impl<$lt> Hash for $Ptr<$lt> {
             fn hash<H: Hasher>(&self, state: &mut H) {
