@@ -12,7 +12,7 @@ use BuildGate::*;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ptr::NonNull;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use zki_sieve::producers::build_gates::NO_OUTPUT;
 
 struct IRWireInner {
@@ -181,7 +181,6 @@ impl<S: 'static + Sink> IRBuilderT for IRBuilder<S> {
             prof.notify_gate(&gate);
         }
 
-        let b = Rc::downgrade(&self.gate_builder);
         if let Some(dedup) = &mut self.dedup {
             dedup.create_gate(&*self.gate_builder, gate, self.freed.clone())
         } else {
