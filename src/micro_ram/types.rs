@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use serde::Deserialize;
 use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize};
+use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
 use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
@@ -382,7 +382,7 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> Flatten<'a> for $Name {
-            fn wire_type(c: &Circuit<'a>) -> Ty<'a> { c.ty(TyKind::U8) }
+            fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> { c.ty(TyKind::U8) }
             fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
             fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::U8);
@@ -715,7 +715,7 @@ impl<'a> Repr<'a> for ByteOffset {
 }
 
 impl<'a> Flatten<'a> for ByteOffset {
-    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
         c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
     }
 
@@ -757,7 +757,7 @@ impl<'a> Repr<'a> for WordAddr {
 }
 
 impl<'a> Flatten<'a> for WordAddr {
-    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
         c.ty(TyKind::Uint(IntSize(
             MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
     }

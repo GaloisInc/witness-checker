@@ -2,20 +2,22 @@
 
 use bumpalo::Bump;
 use cheesecloth::eval::{self, CachingEvaluator, Evaluator};
-use cheesecloth::ir::circuit::{Circuit, TyKind, Wire};
-use cheesecloth::lower::{self, run_pass};
+use cheesecloth::ir::circuit::{Circuit, CircuitTrait, CircuitExt, TyKind, Wire};
+use cheesecloth::lower::{self, AddPass};
 use num_bigint::BigInt;
 use zki_sieve::FilesSink;
 
-fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
+fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
+    let c = Circuit::new(arena, true);
+    let c = c.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+    c
+}
+
+fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
     use cheesecloth::back::sieve_ir::{
         backend::{Backend, Scalar},
         ir_builder::IRBuilder,
     };
-
-    let ws = vec![w];
-    let ws = run_pass(&c, ws, lower::int::compare_to_greater_or_equal_to_zero);
-    let w = ws[0];
 
     // Make sure the circuit is valid.
     let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
@@ -45,7 +47,7 @@ fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
 #[test]
 fn mux_true() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena, true);
+    let c = make_circuit(&arena);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 
@@ -60,7 +62,7 @@ fn mux_true() {
 #[test]
 fn mux_false() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena, true);
+    let c = make_circuit(&arena);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 

@@ -6,6 +6,7 @@ use std::convert::TryFrom;
 use std::iter;
 use log::*;
 use crate::gadget::bit_pack;
+use crate::ir::circuit::CircuitExt;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
