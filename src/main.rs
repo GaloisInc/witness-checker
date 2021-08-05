@@ -28,59 +28,41 @@ use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk};
 fn parse_args() -> ArgMatches<'static> {
     App::new("witness-checker")
         .about("generate a witness checker circuit for a given MicroRAM execution trace")
-        .arg(
-            Arg::with_name("trace")
-                .takes_value(true)
-                .value_name("TRACE.CBOR")
-                .help("MicroRAM execution trace")
-                .required(true),
-        )
-        .arg(
-            Arg::with_name("zkif-out")
-                .long("zkif-out")
-                .takes_value(true)
-                .value_name("DIR/")
-                .help("output zkinterface circuit representation in this directory"),
-        )
-        .arg(
-            Arg::with_name("sieve-ir-out")
-                .long("sieve-ir-out")
-                .takes_value(true)
-                .value_name("DIR/")
-                .help("output SIEVE IR circuit representation in this directory"),
-        )
-        .arg(
-            Arg::with_name("validate-only")
-                .long("validate-only")
-                .help("check only that the trace is valid; don't require it to demonstrate a bug"),
-        )
-        .arg(
-            Arg::with_name("expect-zero")
-                .long("expect-zero")
-                .help("check that r0 == 0 in the final state"),
-        )
-        .arg(
-            Arg::with_name("stats")
-                .long("stats")
-                .help("print info about the size of the circuit"),
-        )
-        .arg(
-            Arg::with_name("check-steps")
-                .long("check-steps")
-                .takes_value(true)
-                .value_name("1")
-                .help("check state against the trace every D steps"),
-        )
-        .arg(
-            Arg::with_name("verifier-mode")
-                .long("verifier-mode")
-                .help("run in verifier mode, constructing the circuit but not the secret witness"),
-        )
-        .arg(
-            Arg::with_name("sieve-ir-dedup")
-                .long("sieve-ir-dedup")
-                .help("in SIEVE IR mode, deduplicate gates produced by the backend"),
-        )
+        .arg(Arg::with_name("trace")
+             .takes_value(true)
+             .value_name("TRACE.CBOR")
+             .help("MicroRAM execution trace")
+             .required(true))
+        .arg(Arg::with_name("zkif-out")
+             .long("zkif-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output zkinterface circuit representation in this directory"))
+        .arg(Arg::with_name("sieve-ir-out")
+             .long("sieve-ir-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output SIEVE IR circuit representation in this directory"))
+        .arg(Arg::with_name("validate-only")
+             .long("validate-only")
+             .help("check only that the trace is valid; don't require it to demonstrate a bug"))
+        .arg(Arg::with_name("expect-zero")
+             .long("expect-zero")
+             .help("check that r0 == 0 in the final state"))
+        .arg(Arg::with_name("stats")
+             .long("stats")
+             .help("print info about the size of the circuit"))
+        .arg(Arg::with_name("check-steps")
+             .long("check-steps")
+             .takes_value(true)
+             .value_name("1")
+             .help("check state against the trace every D steps"))
+        .arg(Arg::with_name("verifier-mode")
+             .long("verifier-mode")
+             .help("run in verifier mode, constructing the circuit but not the secret witness"))
+        .arg(Arg::with_name("sieve-ir-dedup")
+             .long("sieve-ir-dedup")
+             .help("in SIEVE IR mode, deduplicate gates produced by the backend"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -405,7 +387,8 @@ fn main() -> io::Result<()> {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
         }
-        if args.is_present("scale-out") {}
+        if args.is_present("scale-out") {
+        }
         ok
     };
 
@@ -473,14 +456,14 @@ fn main() -> io::Result<()> {
         cli(&Options {
             tool: "simulate".to_string(),
             paths: vec![workspace.to_path_buf()],
-            field_order: Default::default()
+            field_order: Default::default(),
         }).unwrap();
 
         // Print statistics.
         cli(&Options {
             tool: "stats".to_string(),
             paths: vec![workspace.to_path_buf()],
-            field_order: Default::default()
+            field_order: Default::default(),
         }).unwrap();
     }
 
