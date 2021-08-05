@@ -36,6 +36,11 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output zkinterface circuit representation in this directory"))
+        .arg(Arg::with_name("sieve-ir-out")
+             .long("sieve-ir-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output SIEVE IR circuit representation in this directory"))
         .arg(Arg::with_name("validate-only")
              .long("validate-only")
              .help("check only that the trace is valid; don't require it to demonstrate a bug"))
@@ -53,6 +58,9 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("verifier-mode")
              .long("verifier-mode")
              .help("run in verifier mode, constructing the circuit but not the secret witness"))
+        .arg(Arg::with_name("sieve-ir-dedup")
+             .long("sieve-ir-dedup")
+             .help("in SIEVE IR mode, deduplicate gates produced by the backend"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -106,6 +114,12 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    #[cfg(not(feature = "sieve_ir"))]
+    if args.is_present("sieve-ir-out") {
+        eprintln!("error: sieve_ir output is not supported - build with `--features sieve_ir`");
+        std::process::exit(1);
+    }
+
     let is_prover = !args.is_present("verifier-mode");
 
     let arena = Bump::new();
@@ -113,7 +127,7 @@ fn main() -> io::Result<()> {
     let gadget_supported = |g: GadgetKindRef| {
         use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
         let mut ok = false;
-        if args.is_present("zkif-out") {
+        if args.is_present("zkif-out") || args.is_present("sieve-out") {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
         }
@@ -125,8 +139,7 @@ fn main() -> io::Result<()> {
     let c = c.add_pass(lower::bool_::not_to_xor);
     let c = c.add_pass(lower::bool_::compare_to_logic);
     let c = c.add_pass(lower::bool_::mux);
-    #[cfg(feature = "bellman")]
-    let c = c.add_opt_pass(args.is_present("zkif-out"),
+    let c = c.add_opt_pass(args.is_present("zkif-out") || args.is_present("sieve-ir-out"),
         lower::int::compare_to_greater_or_equal_to_zero);
     let c = c.add_pass(lower::int::non_constant_shift);
     let c = lower::const_fold::ConstFold(c);
@@ -360,13 +373,56 @@ fn main() -> io::Result<()> {
         cli(&Options {
             tool: "simulate".to_string(),
             paths: vec![workspace.to_path_buf()],
+            field_order: Default::default(),
         }).unwrap();
 
         // Print statistics.
         cli(&Options {
             tool: "stats".to_string(),
             paths: vec![workspace.to_path_buf()],
+            field_order: Default::default(),
         }).unwrap();
+    }
+
+    #[cfg(feature = "sieve_ir")]
+    if let Some(workspace) = args.value_of("sieve-ir-out") {
+        use cheesecloth::back::sieve_ir::{
+            backend::{Backend, Scalar},
+            ir_builder::IRBuilder,
+        };
+        use zki_sieve::{
+            cli::{cli, Options, StructOpt},
+            FilesSink,
+        };
+
+        { // restrict ir_builder to its own scope
+            // Generate the circuit and witness.
+            let sink = FilesSink::new_clean(&workspace).unwrap();
+            sink.print_filenames();
+            let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+            // ir_builder.enable_profiler();
+            if !args.is_present("sieve-ir-dedup") {
+                ir_builder.disable_dedup();
+            }
+
+            { // restrict backend to its own scope to save memory
+                let mut backend = Backend::new(&mut ir_builder);
+
+                let accepted = flags[0];
+                backend.enforce_true(accepted);
+                backend.finish();
+            }
+            eprintln!();
+            ir_builder.prof.as_ref().map(|p| p.print_report());
+            ir_builder.dedup.as_ref().map(|p| p.print_report());
+            ir_builder.finish();
+        }
+
+        // Validate the circuit and witness.
+        eprintln!("\nValidating SIEVE IR files...");
+        cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
+        cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
+        cli(&Options::from_iter(&["zki_sieve", "metrics", workspace])).unwrap();
     }
 
     // Unused in some configurations.

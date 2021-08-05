@@ -1,0 +1,3 @@
+[submodule "deps/zkinterface-sieve"]
+	path = deps/zkinterface-sieve
+	url = ../zkinterface-sieve.git

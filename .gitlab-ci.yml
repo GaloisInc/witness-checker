@@ -3,6 +3,9 @@ image: rust:1.50
 default:
   tags: [docker]
 
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
 stages:
   - build
 
