@@ -76,6 +76,11 @@ fn parse_args() -> ArgMatches<'static> {
                 .long("verifier-mode")
                 .help("run in verifier mode, constructing the circuit but not the secret witness"),
         )
+        .arg(
+            Arg::with_name("sieve-ir-dedup")
+                .long("sieve-ir-dedup")
+                .help("in SIEVE IR mode, deduplicate gates produced by the backend"),
+        )
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -496,7 +501,9 @@ fn main() -> io::Result<()> {
             sink.print_filenames();
             let mut ir_builder = IRBuilder::new::<Scalar>(sink);
             // ir_builder.enable_profiler();
-            ir_builder.disable_dedup(); // If using too much memory.
+            if !args.is_present("sieve-ir-dedup") {
+                ir_builder.disable_dedup();
+            }
 
             { // restrict backend to its own scope to save memory
                 let mut backend = Backend::new(&mut ir_builder);
