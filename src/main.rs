@@ -496,7 +496,7 @@ fn main() -> io::Result<()> {
             sink.print_filenames();
             let mut ir_builder = IRBuilder::new::<Scalar>(sink);
             // ir_builder.enable_profiler();
-            // ir_builder.disable_dedup(); // If using too much memory.
+            ir_builder.disable_dedup(); // If using too much memory.
 
             { // restrict backend to its own scope to save memory
                 let mut backend = Backend::new(&mut ir_builder);
