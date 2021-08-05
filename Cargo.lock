@@ -976,7 +976,6 @@ dependencies = [
 [[package]]
 name = "zki_sieve"
 version = "1.0.0"
-source = "git+https://gitlab-ext.galois.com/fromager/cheesecloth/zkinterface-sieve.git#ed147f3facaecc1c8f9ce7f858b064d000e2dc2d"
 dependencies = [
  "colored",
  "flatbuffers 0.6.1",
