@@ -61,6 +61,9 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("sieve-ir-dedup")
              .long("sieve-ir-dedup")
              .help("in SIEVE IR mode, deduplicate gates produced by the backend"))
+        .arg(Arg::with_name("skip-backend-validation")
+             .long("skip-backend-validation")
+             .help("don't validate the circuit constructed by the backend"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -369,12 +372,14 @@ fn main() -> io::Result<()> {
 
         eprintln!("validating zkif...");
 
-        // Validate the circuit and witness.
-        cli(&Options {
-            tool: "simulate".to_string(),
-            paths: vec![workspace.to_path_buf()],
-            field_order: Default::default(),
-        }).unwrap();
+        if !args.is_present("skip-backend-validation") {
+            // Validate the circuit and witness.
+            cli(&Options {
+                tool: "simulate".to_string(),
+                paths: vec![workspace.to_path_buf()],
+                field_order: Default::default(),
+            }).unwrap();
+        }
 
         // Print statistics.
         cli(&Options {
@@ -420,8 +425,10 @@ fn main() -> io::Result<()> {
 
         // Validate the circuit and witness.
         eprintln!("\nValidating SIEVE IR files...");
-        cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
-        cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
+        if !args.is_present("skip-backend-validation") {
+            cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
+            cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
+        }
         cli(&Options::from_iter(&["zki_sieve", "metrics", workspace])).unwrap();
     }
 
