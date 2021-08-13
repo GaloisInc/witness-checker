@@ -96,7 +96,7 @@ impl<'a> Memory<'a> {
                 addr: (self.ports.len() + i) as u64 * MemOpWidth::WORD.bytes() as u64,
                 value: 0,
                 op: MemOpKind::Write,
-                tainted: IfMode::new(|_fp| 0),
+                tainted: IfMode::new(|_fp| PACKED_UNTAINTED),
                 width: MemOpWidth::WORD,
             });
             let (user, user_secret) = b.secret_default(0);
@@ -345,12 +345,13 @@ fn check_mem<'a>(
         // Writes (and poison) may only modify the bytes identified by the `addr` offset and the
         // `width`.
         let mut mostly_eq_acc = b.lit(false);
+        let offset = bit_pack::extract_low::<ByteOffset>(b, port.addr.repr);
         for w in MemOpWidth::iter() {
             let mostly_eq = compare_except_bytes_at_offset(
                 b,
                 port.value,
                 prev_value,
-                port.addr,
+                offset,
                 w,
             );
             mostly_eq_acc = b.mux(
@@ -366,7 +367,7 @@ fn check_mem<'a>(
             cx.eval(port.value), cx.eval(prev_value),
         );
 
-        tainted::check_write_memports(cx, b, &prev_taint, &port);
+        tainted::check_write_memports(cx, b, &prev_taint, &port, &offset);
     });
 }
 
@@ -431,7 +432,7 @@ pub fn compare_except_bytes_at_offset<'a>(
     b: &Builder<'a>,
     value1: TWire<'a, u64>,
     value2: TWire<'a, u64>,
-    addr: TWire<'a, u64>,
+    offset: TWire<'a, ByteOffset>,
     width: MemOpWidth,
 ) -> TWire<'a, bool> {
     // Hard to write this as a function without const generics
@@ -439,7 +440,6 @@ pub fn compare_except_bytes_at_offset<'a>(
         ($T:ty, $divisor:expr) => {{
             let value1_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value1.repr);
             let value2_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value2.repr);
-            let offset = bit_pack::extract_low::<ByteOffset>(b, addr.repr);
             let mut acc = b.lit(true);
             for (idx, (&v1, &v2)) in value1_parts.iter().zip(value2_parts.iter()).enumerate() {
                 let ignored = b.eq(offset, b.lit(ByteOffset::new(idx as u8 * $divisor)));

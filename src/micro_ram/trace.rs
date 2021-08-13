@@ -406,8 +406,8 @@ fn calc_step<'a>(
     // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
     // later taint handling step. We set the value back to itself so that taint operations are treated
     // like `mov rX rX`.
-    {
-        add_case(Opcode::Taint, x, instr.op1);
+    for w in MemOpWidth::iter() {
+        add_case(w.taint_opcode(), x, instr.op1);
     }
 
     let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));

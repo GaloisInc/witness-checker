@@ -179,7 +179,7 @@ pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
     #[serde(default = "panic_default")]
-    pub tainted_regs: IfMode<AnyTainted, Vec<Label>>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<PackedLabel>>,
     // All states parsed from the trace are assumed to be live.
     #[serde(default = "return_true")]
     pub live: bool,
@@ -190,7 +190,7 @@ pub struct RamState {
 fn return_true() -> bool { true }
 
 impl RamState {
-    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool, tainted_regs: IfMode<AnyTainted, Vec<Label>>) -> RamState {
+    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool, tainted_regs: IfMode<AnyTainted, Vec<PackedLabel>>) -> RamState {
         RamState {
             cycle,
             pc: pc as u64,
@@ -206,7 +206,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; num_regs],
             live: false,
-            tainted_regs: IfMode::new(|_| vec![UNTAINTED; num_regs]),
+            tainted_regs: IfMode::new(|_| vec![PACKED_UNTAINTED; num_regs]),
         }
     }
 }
@@ -217,7 +217,7 @@ pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
     pub live: TWire<'a, bool>,
-    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, Label>>>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, PackedLabel>>>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -300,7 +300,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; len],
             live: false,
-            tainted_regs: IfMode::new(|_| vec![UNTAINTED; len]),
+            tainted_regs: IfMode::new(|_| vec![PACKED_UNTAINTED; len]),
         });
         (wire.clone(), TSecretHandle::new(wire, default))
     }
@@ -313,8 +313,8 @@ where
     <u32 as Repr<'a>>::Repr: Copy,
     u64: Mux<'a, C, u64, Output = u64>,
     <u64 as Repr<'a>>::Repr: Copy,
-    Label: Mux<'a, C, Label, Output = Label>,
-    <Label as Repr<'a>>::Repr: Copy,
+    PackedLabel: Mux<'a, C, PackedLabel, Output = PackedLabel>,
+    <PackedLabel as Repr<'a>>::Repr: Copy,
     bool: Mux<'a, C, bool, Output = bool>,
     <bool as Repr<'a>>::Repr: Copy,
 {
@@ -511,13 +511,19 @@ mk_named_enum! {
 
         Advise = 34,
 
-        /// Instruction used for taint analysis that signifies a value is written to a sink.
+        /// Instructions used for taint analysis that signifies a value is written to a sink.
         /// The destination is unused, first argument is the value being output, and the second is the label of the output
         /// channel.
-        Sink = 35,
-        /// Instruction used for taint analysis that taints a value is with a given label.
+        Sink1 = 35,
+        Sink2 = 36,
+        Sink4 = 37,
+        Sink8 = 38,
+        /// Instructions used for taint analysis that taints a value is with a given label.
         /// The destination is unused, the first argument is the register being tainted, and the second is the label.
-        Taint = 36,
+        Taint1 = 39,
+        Taint2 = 40,
+        Taint4 = 41,
+        Taint8 = 42,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
@@ -551,11 +557,11 @@ pub struct Label (
     pub u8,
 );
 pub const UNTAINTED: Label = Label(3);
-pub const PACKED_UNTAINTED: PackedLabel = 0xFFFF;
+pub const PACKED_UNTAINTED: PackedLabel = [UNTAINTED;WORD_BYTES];
 pub const LABEL_BITS: u8 = 2;
 
-/// Packed label representing 8 labels of the bytes of a word in memory.
-pub type PackedLabel = u16;
+/// Packed label representing 8 labels of the bytes of a word.
+pub type PackedLabel = [Label; WORD_BYTES]; // TODO: Rename to WordLabel
 
 pub fn valid_label(l:u8) -> bool {
     l <= UNTAINTED.0
@@ -661,6 +667,17 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
+impl<'a> typed::Eq<'a, PackedLabel> for PackedLabel {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        let mut acc = bld.eq(a[0], b[0]);
+        for (&a,&b) in a.iter().zip(b.iter()).skip(1) {
+            acc = bld.and(acc, bld.eq(a,b));
+        }
+        *acc
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
@@ -765,6 +782,24 @@ impl MemOpWidth {
             MemOpWidth::W2 => Opcode::Store2,
             MemOpWidth::W4 => Opcode::Store4,
             MemOpWidth::W8 => Opcode::Store8,
+        }
+    }
+
+    pub const fn taint_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Taint1,
+            MemOpWidth::W2 => Opcode::Taint2,
+            MemOpWidth::W4 => Opcode::Taint4,
+            MemOpWidth::W8 => Opcode::Taint8,
+        }
+    }
+
+    pub const fn sink_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Sink1,
+            MemOpWidth::W2 => Opcode::Sink2,
+            MemOpWidth::W4 => Opcode::Sink4,
+            MemOpWidth::W8 => Opcode::Sink8,
         }
     }
 }
@@ -883,6 +918,7 @@ where
 }
 
 
+#[derive(Debug)]
 pub struct ByteOffset(u8);
 
 impl ByteOffset {
@@ -939,6 +975,13 @@ impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
 impl<'a> Cast<'a, u8> for ByteOffset {
     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         bld.circuit().cast(x, bld.circuit().ty(TyKind::U8))
+    }
+}
+
+impl<'a> FromEval<'a> for ByteOffset {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        let val = FromEval::from_eval(ev, a)?;
+        Some(ByteOffset(val))
     }
 }
 
@@ -1426,8 +1469,9 @@ pub struct TraceChunkDebug {
 }
 
 pub struct TaintCalcIntermediate<'a> {
-    pub label_x: TWire<'a,Label>,      // Tainted label for x.
-    pub label_result: TWire<'a,Label>, // Tainted label for result.
+    pub label_x: TWire<'a,PackedLabel>,      // Tainted label for x.
+    pub label_result: TWire<'a,PackedLabel>, // Tainted label for result.
+    pub addr_offset: TWire<'a,ByteOffset>,   // Offset of memory address.
 }
 
 pub struct CalcIntermediate<'a> {

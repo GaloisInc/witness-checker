@@ -22,7 +22,7 @@ use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk, UNTAINTED};
+use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk, PACKED_UNTAINTED};
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -256,7 +256,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let init_state = provided_init_state.clone().unwrap_or_else(|| {
         let mut regs = vec![0; exec.params.num_regs];
         regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
-        let tainted_regs = IfMode::new(|_| vec![UNTAINTED; exec.params.num_regs]);
+        let tainted_regs = IfMode::new(|_| vec![PACKED_UNTAINTED; exec.params.num_regs]);
         RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
     });
     if provided_init_state.is_some() {
