@@ -9,6 +9,7 @@ use crate::micro_ram::types::{
     self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
     REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE
 };
+use crate::mode::if_mode::{AnyTainted, is_mode};
 use crate::mode::tainted;
 
 
@@ -402,12 +403,14 @@ fn calc_step<'a>(
         add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
     }
 
-    // Opcode::Sink is a no-op in the standard interpreter, so we let if fall through to the default below.
-    // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
-    // later taint handling step. We set the value back to itself so that taint operations are treated
-    // like `mov rX rX`.
-    for w in MemOpWidth::iter() {
-        add_case(w.taint_opcode(), x, instr.op1);
+    if is_mode::<AnyTainted>() {
+        // Opcode::Sink is a no-op in the standard interpreter, so we let if fall through to the default below.
+        // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
+        // later taint handling step. We set the value back to itself so that taint operations are treated
+        // like `mov rX rX`.
+        for w in MemOpWidth::iter() {
+            add_case(w.taint_opcode(), x, instr.op1);
+        }
     }
 
     let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));

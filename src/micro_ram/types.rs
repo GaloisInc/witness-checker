@@ -612,13 +612,6 @@ impl<'a> FromEval<'a> for Label {
     }
 }
 
-// TODO: Temporary? Switch PackedLabel to slice?
-impl<'a> Cast<'a, u16> for Label {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        bld.circuit().cast(x, bld.circuit().ty(TyKind::U16))
-    }
-}
-
 impl<'a> Cast<'a, u64> for Label {
     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         bld.circuit().cast(x, bld.circuit().ty(TyKind::U64))
@@ -831,8 +824,6 @@ where
 
 impl<'a> Cast<'a, u8> for MemOpWidth {
     fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
-        // TODO: Is this correct?
-        // Flatten::to_wire(bld, x)
         let ty = <u8 as Flatten>::wire_type(bld.circuit());
         bld.circuit().cast(x.repr, ty)
     }

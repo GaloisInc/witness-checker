@@ -262,7 +262,7 @@ impl<M: ModePred, T: Eq> Eq for IfMode<M, T> {}
 /// Provides an implementation of IfMode that panics when in mode M, effectively requiring the
 /// field to be provided.
 pub fn panic_default<M: ModePred, T>() -> IfMode<M, T> {
-    IfMode::<M, T>::new(|_pf| panic!{"Invalid input. Missing corresponding field for IfMode<{}>.", type_name::<T>()})
+    IfMode::<M, T>::new(|_pf| panic!("Invalid input. Missing corresponding field for {}.", type_name::<IfMode<M, T>>()))
 }
 
 impl<M: ModePred, T: fmt::Debug> fmt::Debug for IfMode<M, T> {

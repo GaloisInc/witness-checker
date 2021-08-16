@@ -50,8 +50,6 @@ pub fn calc_step<'a>(
         // Load1, Load2, Load4, Load8
         for w in MemOpWidth::iter() {
             let packed_labels = mem_port.tainted.unwrap(&pf);
-            // let label_parts = unpack_labels(b, packed_labels);
-            // let result = meet_labels_at_offset(b, label_parts, offset, w);
             let result = take_width_at_offset(b, packed_labels, offset, w, UNTAINTED);
             add_case(w.load_opcode(), result);
         }
@@ -168,6 +166,8 @@ fn shift_labels<'a>(
     offset: TWire<'a, ByteOffset>,
     default: Label,
 ) -> TWire<'a, PackedLabel> {
+    // TODO: Could optimize this.
+    // https://gitlab-ext.galois.com/fromager/cheesecloth/witness-checker/-/merge_requests/19#note_91033
     let default = b.lit(default);
     let offset = b.cast(offset);
     let mut res = [default; WORD_BYTES];
@@ -191,7 +191,7 @@ fn eq_word_labels_with_width<'a>(
     let mut acc = b.lit(true);
     for (idx, (&v1, &v2)) in label1.repr.iter().zip(label2.repr.iter()).enumerate() {
         let idx = b.lit(idx as u8);
-        let ignored = should_ignore(b, idx, offset, width);
+        let ignored = in_range(b, idx, offset, width);
         acc = b.and(acc, b.mux(ignored, b.lit(true), b.eq(v1, v2)));
     }
     acc
@@ -199,7 +199,7 @@ fn eq_word_labels_with_width<'a>(
 
 fn eq_packed_labels_except_at_offset<'a>(
     b: &Builder<'a>,
-    offset: TWire<'a, ByteOffset>, // u8>,
+    offset: TWire<'a, ByteOffset>,
     width: TWire<'a, MemOpWidth>,
     label1: TWire<'a, PackedLabel>,
     label2: TWire<'a, PackedLabel>,
@@ -207,14 +207,14 @@ fn eq_packed_labels_except_at_offset<'a>(
     let mut acc = b.lit(true);
     for (idx, (&v1, &v2)) in label1.repr.iter().zip(label2.repr.iter()).enumerate() {
         let idx = b.lit(idx as u8);
-        let ignored = b.not(should_ignore(b, idx, offset, width));
-        acc = b.and(acc, b.mux(ignored, b.lit(true), b.eq(v1, v2)));
+        let check = b.not(in_range(b, idx, offset, width));
+        acc = b.and(acc, b.mux(check, b.lit(true), b.eq(v1, v2)));
     }
     acc
 }
 
-// Checks if the byte at index idx should be ignored.
-fn should_ignore<'a>(
+// Checks if the byte at index idx is in range.
+fn in_range<'a>(
     b: &Builder<'a>,
     idx: TWire<'a, u8>,
     offset: TWire<'a, ByteOffset>,
