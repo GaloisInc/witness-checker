@@ -3,16 +3,16 @@
 - [leak-tainted]
 -
   program:
-    - [taint, null, 0, true,   1] # taint r0 1
+    - [taint8, null, 0, true,   1] # taint r0 1
     - [mov,   0, null, true, 100] # mov r0 100
-    - [sink,  null, 0, true,   2] # sink r0 2
+    - [sink8,  null, 0, true,   2] # sink r0 2
   
   params:
     num_regs: 1
     trace_len: 4
   
   trace:
-    - [0, [0],   [3]]
-    - [1, [0],   [1]]
-    - [2, [100], [3]]
-    - [3, [100], [3]]
+    - [0, [0],   [[3,3,3,3,3,3,3,3]]]
+    - [1, [0],   [[1,1,1,1,1,1,1,1]]]
+    - [2, [100], [[3,3,3,3,3,3,3,3]]]
+    - [3, [100], [[3,3,3,3,3,3,3,3]]]

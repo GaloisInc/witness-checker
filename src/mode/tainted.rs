@@ -60,7 +60,7 @@ pub fn calc_step<'a>(
 
         {
             // Check that the label is valid before truncating it.
-            let label = cx.when(b, b.lit(true), |cx| { // TODO: Remove this when
+            let label = cx.when(b, is_taint(b, instr.opcode), |cx| {
                 convert_to_label(cx, b, idx, concrete_y)
             });
             // Taint1, Taint2, Taint4, Taint8
@@ -89,6 +89,17 @@ pub fn calc_step<'a>(
         // JP: Better combinator for this? map_with_or?
         (IfMode::none(), IfMode::none())
     }
+}
+
+fn is_taint<'a>(
+    b: &Builder<'a>,
+    opcode: TWire<'a,u8>,
+) -> TWire<'a, bool> {
+    b.or(b.or(b.eq(opcode, b.lit(Opcode::Taint1 as u8)),
+              b.eq(opcode, b.lit(Opcode::Taint2 as u8))),
+         b.or(b.eq(opcode, b.lit(Opcode::Taint4 as u8)),
+              b.eq(opcode, b.lit(Opcode::Taint8 as u8))),
+        )
 }
 
 fn convert_to_label<'a,'b>(
@@ -270,17 +281,17 @@ pub fn check_step<'a>(
                 let xts = calc_im.tainted.as_ref().unwrap(&pf).label_x;
 
                 // Iterate over labels of xts.
-                for (idx, &xt) in xts.repr.iter().enumerate() {
+                for (i, &xt) in xts.repr.iter().enumerate() {
 
                     // When the position is relevant, check for sink.
-                    if idx < w.bytes() {
+                    if i < w.bytes() {
 
                         // A leak is detected if the label of data being output to a sink does not match the label of
                         // the sink.
                         wire_bug_if!(
                             cx, b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED))),
-                            "leak of tainted data from register {:x} with label {} does not match output channel label {} on cycle {},{}",
-                            cx.eval(instr.op1), cx.eval(xt), cx.eval(y), seg_idx, idx,
+                            "leak of tainted data from register {:x} (byte {}) with label {} does not match output channel label {} on cycle {},{}",
+                            cx.eval(instr.op1), i, cx.eval(xt), cx.eval(y), seg_idx, idx,
                         );
                     }
                 }
@@ -319,7 +330,7 @@ pub fn check_step_mem<'a, 'b>(
                 seg_idx, idx, cx.eval(op),
                 cx.eval(offset), cx.eval(width),
                 cx.eval(port_tainted),
-                cx.eval(expect_tainted), cx.eval(expect_tainted),
+                cx.eval(expect_tainted), cx.eval(port_shifted),
             );
         });
     }

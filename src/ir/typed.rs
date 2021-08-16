@@ -871,7 +871,7 @@ impl<'a> Builder<'a> {
         &self,
         arr: &[TWire<'a, T>],
         idx: TWire<'a, I>,
-        mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
+        mut mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
     ) -> TWire<'a, T>
     where
         I: Eq<'a, I>,
@@ -879,8 +879,12 @@ impl<'a> Builder<'a> {
         T: Mux<'a, <I as Eq<'a, I>>::Output, T, Output = T>,
         T::Repr: Clone,
     {
-        let default = arr.first().expect("can't index in an empty array").clone();
-        self.index_with_default(arr, idx, default, mk_idx)
+        let mut val = arr.first().expect("can't index in an empty array").clone();
+        for (i, x) in arr.iter().enumerate().skip(1) {
+            let eq = self.eq(idx.clone(), mk_idx(self, i));
+            val = self.mux(eq, x.clone(), val);
+        }
+        val
     }
 
     pub fn index_with_default<I, T>(
@@ -897,7 +901,7 @@ impl<'a> Builder<'a> {
         T::Repr: Clone,
     {
         let mut val = default;
-        for (i, x) in arr.iter().enumerate().skip(1) {
+        for (i, x) in arr.iter().enumerate() {
             let eq = self.eq(idx.clone(), mk_idx(self, i));
             val = self.mux(eq, x.clone(), val);
         }
