@@ -3,7 +3,7 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, PACKED_UNTAINTED, PackedLabel, RamInstr, TaintCalcIntermediate, UNTAINTED, WORD_BYTES}
+    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, WORD_UNTAINTED, WordLabel, RamInstr, TaintCalcIntermediate, UNTAINTED, WORD_BYTES}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
@@ -15,10 +15,10 @@ pub fn calc_step<'a>(
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
-    regs0: &IfMode<AnyTainted, Vec<TWire<'a,PackedLabel>>>,
+    regs0: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
     concrete_y: TWire<'a, u64>,
     concrete_dest: TWire<'a, u8>,
-) -> (IfMode<AnyTainted, Vec<TWire<'a,PackedLabel>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
+) -> (IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         let regs0 = regs0.as_ref().unwrap(&pf);
         let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", idx));
@@ -32,9 +32,9 @@ pub fn calc_step<'a>(
 
         // Extract the tainted label of x, y.
         let tx = b.index(&regs0, instr.op1, |b, i| b.lit(i as u8));
-        // If y is an immediate, set ty to PACKED_UNTAINTED.
+        // If y is an immediate, set ty to WORD_UNTAINTED.
         let reg_val = b.index(&regs0, instr.op2, |b, i| b.lit(i as u64));
-        let ty = b.mux(instr.imm, b.lit(PACKED_UNTAINTED), reg_val);
+        let ty = b.mux(instr.imm, b.lit(WORD_UNTAINTED), reg_val);
 
         {
             add_case(Opcode::Mov, ty);
@@ -69,7 +69,7 @@ pub fn calc_step<'a>(
         }
 
         // Fall through to mark destination as untainted.
-        let result = b.mux_multi(&cases, b.lit(PACKED_UNTAINTED));
+        let result = b.mux_multi(&cases, b.lit(WORD_UNTAINTED));
 
         let mut regs = Vec::with_capacity(regs0.len());
         for (i, &v_old) in regs0.iter().enumerate() {
@@ -124,7 +124,7 @@ fn duplicate<'a>(
     label: TWire<'a, Label>,
     width: MemOpWidth,
     default: Label,
-) -> TWire<'a, PackedLabel> {
+) -> TWire<'a, WordLabel> {
     let default = b.lit(default);
     let mut res = [default; WORD_BYTES];
     for (idx, res) in res.iter_mut().enumerate() {
@@ -139,11 +139,11 @@ fn duplicate<'a>(
 // Take `width` elements starting at the given offset. Fills the remaining elements with `default`.
 fn take_width_at_offset<'a>(
     b: &Builder<'a>,
-    labels: TWire<'a, PackedLabel>,
+    labels: TWire<'a, WordLabel>,
     offset: TWire<'a, ByteOffset>,
     width: MemOpWidth,
     default: Label,
-) -> TWire<'a, PackedLabel> {
+) -> TWire<'a, WordLabel> {
     // Move labels over by offset.
     let mut res = shift_labels(b, labels, offset, default);
 
@@ -162,10 +162,10 @@ fn take_width_at_offset<'a>(
 // Shift right by `offset`, filling with `default`.
 fn shift_labels<'a>(
     b: &Builder<'a>,
-    labels: TWire<'a, PackedLabel>,
+    labels: TWire<'a, WordLabel>,
     offset: TWire<'a, ByteOffset>,
     default: Label,
-) -> TWire<'a, PackedLabel> {
+) -> TWire<'a, WordLabel> {
     // TODO: Could optimize this.
     // https://gitlab-ext.galois.com/fromager/cheesecloth/witness-checker/-/merge_requests/19#note_91033
     let default = b.lit(default);
@@ -183,8 +183,8 @@ fn shift_labels<'a>(
 fn eq_word_labels_with_width<'a>(
     b: &Builder<'a>,
     width: TWire<'a, MemOpWidth>,
-    label1: TWire<'a, PackedLabel>,
-    label2: TWire<'a, PackedLabel>,
+    label1: TWire<'a, WordLabel>,
+    label2: TWire<'a, WordLabel>,
 ) -> TWire<'a, bool> {
     let offset = b.lit(ByteOffset::new(0));
 
@@ -201,8 +201,8 @@ fn eq_packed_labels_except_at_offset<'a>(
     b: &Builder<'a>,
     offset: TWire<'a, ByteOffset>,
     width: TWire<'a, MemOpWidth>,
-    label1: TWire<'a, PackedLabel>,
-    label2: TWire<'a, PackedLabel>,
+    label1: TWire<'a, WordLabel>,
+    label2: TWire<'a, WordLabel>,
 ) -> TWire<'a, bool> {
     let mut acc = b.lit(true);
     for (idx, (&v1, &v2)) in label1.repr.iter().zip(label2.repr.iter()).enumerate() {
@@ -230,8 +230,8 @@ pub fn check_state<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
     cycle: u32,
-    calc_regs: &IfMode<AnyTainted, Vec<TWire<'a,PackedLabel>>>,
-    trace_regs: &IfMode<AnyTainted, Vec<TWire<'a,PackedLabel>>>,
+    calc_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    trace_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
         let _g = b.scoped_label(format_args!("tainted::check_state/cycle {}", cycle));
@@ -252,14 +252,14 @@ pub fn check_state<'a>(
 pub fn check_first<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    init_regs: &IfMode<AnyTainted, Vec<TWire<'a,PackedLabel>>>,
+    init_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
 ) {
     if let Some(init_regs) = init_regs.try_get() {
         for (i, &r) in init_regs.iter().enumerate() {
             wire_assert!(
-                cx, b.eq(r, b.lit(PACKED_UNTAINTED)),
+                cx, b.eq(r, b.lit(WORD_UNTAINTED)),
                 "initial tainted r{} has value {:?} (expected {:?})",
-                i, cx.eval(r), PACKED_UNTAINTED,
+                i, cx.eval(r), WORD_UNTAINTED,
             );
         }
     }
@@ -341,7 +341,7 @@ pub fn check_step_mem<'a, 'b>(
 pub fn check_read_memports<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
-    port1label: &TWire<'a, IfMode<AnyTainted,PackedLabel>>,
+    port1label: &TWire<'a, IfMode<AnyTainted,WordLabel>>,
     port2: &TWire<'a, MemPort>, 
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
@@ -363,7 +363,7 @@ pub fn check_read_memports<'a, 'b>(
 pub fn check_write_memports<'a, 'b>(
     cx: &ContextWhen<'a, 'b>,
     b: &Builder<'a>,
-    prev_label: &TWire<'a, IfMode<AnyTainted,PackedLabel>>,
+    prev_label: &TWire<'a, IfMode<AnyTainted,WordLabel>>,
     port2: &TWire<'a, MemPort>,
     offset2: &TWire<'a, ByteOffset>,
 ) {

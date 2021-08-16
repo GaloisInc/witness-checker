@@ -179,7 +179,7 @@ pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
     #[serde(default = "panic_default")]
-    pub tainted_regs: IfMode<AnyTainted, Vec<PackedLabel>>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<WordLabel>>,
     // All states parsed from the trace are assumed to be live.
     #[serde(default = "return_true")]
     pub live: bool,
@@ -190,7 +190,7 @@ pub struct RamState {
 fn return_true() -> bool { true }
 
 impl RamState {
-    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool, tainted_regs: IfMode<AnyTainted, Vec<PackedLabel>>) -> RamState {
+    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool, tainted_regs: IfMode<AnyTainted, Vec<WordLabel>>) -> RamState {
         RamState {
             cycle,
             pc: pc as u64,
@@ -206,7 +206,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; num_regs],
             live: false,
-            tainted_regs: IfMode::new(|_| vec![PACKED_UNTAINTED; num_regs]),
+            tainted_regs: IfMode::new(|_| vec![WORD_UNTAINTED; num_regs]),
         }
     }
 }
@@ -217,7 +217,7 @@ pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
     pub live: TWire<'a, bool>,
-    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, PackedLabel>>>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, WordLabel>>>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -300,7 +300,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; len],
             live: false,
-            tainted_regs: IfMode::new(|_| vec![PACKED_UNTAINTED; len]),
+            tainted_regs: IfMode::new(|_| vec![WORD_UNTAINTED; len]),
         });
         (wire.clone(), TSecretHandle::new(wire, default))
     }
@@ -313,8 +313,8 @@ where
     <u32 as Repr<'a>>::Repr: Copy,
     u64: Mux<'a, C, u64, Output = u64>,
     <u64 as Repr<'a>>::Repr: Copy,
-    PackedLabel: Mux<'a, C, PackedLabel, Output = PackedLabel>,
-    <PackedLabel as Repr<'a>>::Repr: Copy,
+    WordLabel: Mux<'a, C, WordLabel, Output = WordLabel>,
+    <WordLabel as Repr<'a>>::Repr: Copy,
     bool: Mux<'a, C, bool, Output = bool>,
     <bool as Repr<'a>>::Repr: Copy,
 {
@@ -557,11 +557,11 @@ pub struct Label (
     pub u8,
 );
 pub const UNTAINTED: Label = Label(3);
-pub const PACKED_UNTAINTED: PackedLabel = [UNTAINTED;WORD_BYTES];
+pub const WORD_UNTAINTED: WordLabel = [UNTAINTED;WORD_BYTES];
 pub const LABEL_BITS: u8 = 2;
 
 /// Packed label representing 8 labels of the bytes of a word.
-pub type PackedLabel = [Label; WORD_BYTES]; // TODO: Rename to WordLabel
+pub type WordLabel = [Label; WORD_BYTES];
 
 pub fn valid_label(l:u8) -> bool {
     l <= UNTAINTED.0
@@ -660,7 +660,7 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
-impl<'a> typed::Eq<'a, PackedLabel> for PackedLabel {
+impl<'a> typed::Eq<'a, WordLabel> for WordLabel {
     type Output = bool;
     fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         let mut acc = bld.eq(a[0], b[0]);
@@ -688,7 +688,7 @@ pub struct MemPort {
     /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
     /// `value` must exactly match the previous value of the accessed word.
     pub width: MemOpWidth,
-    pub tainted: IfMode<AnyTainted, PackedLabel>,
+    pub tainted: IfMode<AnyTainted, WordLabel>,
 }
 
 impl Default for MemPort {
@@ -699,7 +699,7 @@ impl Default for MemPort {
             value:   u64::default(),
             op:      MemOpKind::default(),
             width:   MemOpWidth::default(),
-            tainted: IfMode::new(|_pf| PACKED_UNTAINTED),
+            tainted: IfMode::new(|_pf| WORD_UNTAINTED),
         }
     }
 }
@@ -836,7 +836,7 @@ pub struct MemPortRepr<'a> {
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
     pub width: TWire<'a, MemOpWidth>,
-    pub tainted: TWire<'a, IfMode<AnyTainted, PackedLabel>>,
+    pub tainted: TWire<'a, IfMode<AnyTainted, WordLabel>>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -1367,7 +1367,7 @@ pub struct MemSegment {
     #[serde(default)]
     pub data: Vec<u64>,
     #[serde(default = "panic_default")]
-    pub tainted: IfMode<AnyTainted,Vec<PackedLabel>>,
+    pub tainted: IfMode<AnyTainted,Vec<WordLabel>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1429,7 +1429,7 @@ pub enum Advice {
         value: u64,
         op: MemOpKind,
         width: MemOpWidth,
-        tainted: IfMode<AnyTainted,PackedLabel>,
+        tainted: IfMode<AnyTainted,WordLabel>,
     },
     Stutter,
     Advise { advise: u64 },
@@ -1460,8 +1460,8 @@ pub struct TraceChunkDebug {
 }
 
 pub struct TaintCalcIntermediate<'a> {
-    pub label_x: TWire<'a,PackedLabel>,      // Tainted label for x.
-    pub label_result: TWire<'a,PackedLabel>, // Tainted label for result.
+    pub label_x: TWire<'a,WordLabel>,      // Tainted label for x.
+    pub label_result: TWire<'a,WordLabel>, // Tainted label for result.
     pub addr_offset: TWire<'a,ByteOffset>,   // Offset of memory address.
 }
 
