@@ -7,4 +7,5 @@ pub mod eval;
 pub mod gadget;
 pub mod lower;
 pub mod micro_ram;
+pub mod mode;
 pub mod sort;

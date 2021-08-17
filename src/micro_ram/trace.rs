@@ -6,9 +6,11 @@ use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
 use crate::micro_ram::mem::{self, Memory, extract_bytes_at_offset, extract_low_bytes};
 use crate::micro_ram::types::{
-    self, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
+    self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
     REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE
 };
+use crate::mode::if_mode::{AnyTainted, is_mode};
+use crate::mode::tainted;
 
 
 
@@ -115,7 +117,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             let advice = advice_secrets[i].wire().clone();
 
             let (calc_state, calc_im) =
-                calc_step(&b, i, instr, &mem_port, advice, &prev_state);
+                calc_step(&cx, &b, i, instr, &mem_port, advice, &prev_state);
             check_step(&cx, &b, idx, i,
                 prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
@@ -168,8 +170,8 @@ impl<'a> Segment<'a> {
             let adv_list = advice.get(&k).map_or(&[] as &[_], |v| v as &[_]);
             for adv in adv_list {
                 match *adv {
-                    Advice::MemOp { addr, value, op, width } => {
-                        self.mem_ports.set_port(b, i, MemPort { cycle, addr, value, op, width });
+                    Advice::MemOp { addr, value, op, width, tainted } => {
+                        self.mem_ports.set_port(b, i, MemPort { cycle, addr, value, op, width, tainted });
                     },
                     Advice::Stutter => {
                         self.stutter_secrets[i].set(b, true);
@@ -232,13 +234,8 @@ fn operand_value<'a>(
     b.mux(imm, op, reg_val)
 }
 
-pub struct CalcIntermediate<'a> {
-    pub x: TWire<'a,u64>,
-    pub y: TWire<'a,u64>,
-    pub result: TWire<'a,u64>,
-}
-
 fn calc_step<'a>(
+    cx: &Context<'a>,
     b: &Builder<'a>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
@@ -406,6 +403,16 @@ fn calc_step<'a>(
         add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
     }
 
+    if is_mode::<AnyTainted>() {
+        // Opcode::Sink is a no-op in the standard interpreter, so we let if fall through to the default below.
+        // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
+        // later taint handling step. We set the value back to itself so that taint operations are treated
+        // like `mov rX rX`.
+        for w in MemOpWidth::iter() {
+            add_case(w.taint_opcode(), x, instr.op1);
+        }
+    }
+
     let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));
 
     let mut regs = Vec::with_capacity(s1.regs.len());
@@ -414,14 +421,16 @@ fn calc_step<'a>(
         regs.push(b.mux(is_dest, result, v_old));
     }
 
+    let (tainted_regs, tainted_im) = tainted::calc_step(cx, b, idx, instr, mem_port, &s1.tainted_regs, y, dest);
+
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
     let cycle = b.add(s1.cycle, b.lit(1));
     let live = s1.live;
 
-    let s2 = RamStateRepr { cycle, pc, regs, live };
-    let im = CalcIntermediate { x, y, result };
+    let s2 = RamStateRepr { cycle, pc, regs, live, tainted_regs };
+    let im = CalcIntermediate { x, y, result, tainted: tainted_im };
     (TWire::new(s2),im)
 }
 
@@ -460,6 +469,7 @@ fn check_state<'a>(
         seg_idx, cycle, cx.eval(trace_cycle), cx.eval(calc_cycle),
     );
 
+    tainted::check_state(cx, b, cycle, &calc_s.tainted_regs, &trace_s.tainted_regs);
 }
 
 fn check_step<'a>(
@@ -515,6 +525,7 @@ fn check_step<'a>(
                 );
             });
         }
+        tainted::check_step_mem(cx, b, seg_idx, idx, &mem_port, &is_store_like, &calc_im.tainted);
     });
 
     for w in MemOpWidth::iter() {
@@ -551,4 +562,6 @@ fn check_step<'a>(
         "segment {}: step {} mem port cycle number is {} (expected {}; mem op? {})",
         seg_idx, idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
+
+    tainted::check_step(cx, b, seg_idx, idx, instr, calc_im);
 }

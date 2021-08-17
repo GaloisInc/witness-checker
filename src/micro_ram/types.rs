@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use serde::Deserialize;
+use std::fmt;
+use serde::{de, Deserialize};
 use crate::eval::Evaluator;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
@@ -8,6 +9,8 @@ use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
 use crate::micro_ram::feature::{Feature, Version};
+use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
+use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
@@ -175,6 +178,8 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
+    #[serde(default = "panic_default")]
+    pub tainted_regs: IfMode<AnyTainted, Vec<WordLabel>>,
     // All states parsed from the trace are assumed to be live.
     #[serde(default = "return_true")]
     pub live: bool,
@@ -185,12 +190,13 @@ pub struct RamState {
 fn return_true() -> bool { true }
 
 impl RamState {
-    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool) -> RamState {
+    pub fn new(cycle: u32, pc: u32, regs: Vec<u32>, live: bool, tainted_regs: IfMode<AnyTainted, Vec<WordLabel>>) -> RamState {
         RamState {
             cycle,
             pc: pc as u64,
             regs: regs.into_iter().map(|x| x as u64).collect(),
             live,
+            tainted_regs,
         }
     }
 
@@ -200,6 +206,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; num_regs],
             live: false,
+            tainted_regs: IfMode::new(|_| vec![WORD_UNTAINTED; num_regs]),
         }
     }
 }
@@ -210,6 +217,7 @@ pub struct RamStateRepr<'a> {
     pub pc: TWire<'a, u64>,
     pub regs: Vec<TWire<'a, u64>>,
     pub live: TWire<'a, bool>,
+    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, WordLabel>>>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -223,6 +231,7 @@ impl<'a> Lit<'a> for RamState {
             pc: bld.lit(a.pc),
             regs: bld.lit(a.regs).repr,
             live: bld.lit(a.live),
+            tainted_regs: a.tainted_regs.map(|regs| bld.lit(regs).repr),
         }
     }
 }
@@ -239,6 +248,11 @@ impl<'a> Secret<'a> for RamState {
         for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
             Builder::set_secret_from_lit(s_reg, val_reg, force);
         }
+        if let Some(pf) = check_mode::<AnyTainted>() {
+            for (s_reg, val_reg) in s.tainted_regs.get(&pf).iter().zip(val.tainted_regs.get(&pf).iter()) {
+                Builder::set_secret_from_lit(s_reg, val_reg, force);
+            }
+        }
         Builder::set_secret_from_lit(&s.live, &val.live, force);
     }
 }
@@ -254,6 +268,11 @@ impl RamState {
                 }).collect()
             }),
             live: bld.with_label("live", || bld.secret_init(|| a.live)),
+            tainted_regs: bld.with_label("tainted_regs", || {
+                a.tainted_regs.map(|v| v.iter().enumerate().map(|(i, &t)| {
+                    bld.with_label(i, || bld.secret_init(|| t))
+                }).collect())
+            }),
         })
     }
 
@@ -265,6 +284,9 @@ impl RamState {
                 bld.with_label(i, || bld.secret_uninit())
             }).collect()),
             live: bld.with_label("live", || bld.secret_uninit()),
+            tainted_regs: IfMode::new(|_| bld.with_label("tainted_regs", || (0 .. len).map(|i| {
+                bld.with_label(i, || bld.secret_uninit())
+            }).collect())),
         })
     }
 
@@ -278,6 +300,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; len],
             live: false,
+            tainted_regs: IfMode::new(|_| vec![WORD_UNTAINTED; len]),
         });
         (wire.clone(), TSecretHandle::new(wire, default))
     }
@@ -290,6 +313,8 @@ where
     <u32 as Repr<'a>>::Repr: Copy,
     u64: Mux<'a, C, u64, Output = u64>,
     <u64 as Repr<'a>>::Repr: Copy,
+    WordLabel: Mux<'a, C, WordLabel, Output = WordLabel>,
+    <WordLabel as Repr<'a>>::Repr: Copy,
     bool: Mux<'a, C, bool, Output = bool>,
     <bool as Repr<'a>>::Repr: Copy,
 {
@@ -310,6 +335,11 @@ where
                 .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
                 .collect(),
             live: bld.mux(c.clone(), t.live, e.live),
+            tainted_regs: IfMode::new(|pf| {
+                t.tainted_regs.unwrap(&pf).iter().zip(e.tainted_regs.unwrap(&pf).iter())
+                    .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
+                    .collect()
+            }),
         }
     }
 }
@@ -481,6 +511,20 @@ mk_named_enum! {
 
         Advise = 34,
 
+        /// Instructions used for taint analysis that signifies a value is written to a sink.
+        /// The destination is unused, first argument is the value being output, and the second is the label of the output
+        /// channel.
+        Sink1 = 35,
+        Sink2 = 36,
+        Sink4 = 37,
+        Sink8 = 38,
+        /// Instructions used for taint analysis that taints a value is with a given label.
+        /// The destination is unused, the first argument is the register being tainted, and the second is the label.
+        Taint1 = 39,
+        Taint2 = 40,
+        Taint4 = 41,
+        Taint8 = 42,
+
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
         Stutter = 255,
@@ -503,7 +547,131 @@ impl Opcode {
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
-#[derive(Clone, Copy, Debug, Default)]
+/// Labels are used to taint registers and memory ports.
+/// Currently, labels only use the lower two bits. See the
+/// [MicroRAM](https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/blob/cec7edad98ccacb68708777a610900703b1568a9/src/Compiler/Tainted.hs#L11)
+/// implementation for lattice details.
+#[derive(Copy, Clone, Debug, Deserialize)]
+pub struct Label (
+    #[serde(deserialize_with = "validate_label")]
+    pub u8,
+);
+pub const UNTAINTED: Label = Label(3);
+pub const WORD_UNTAINTED: WordLabel = [UNTAINTED;WORD_BYTES];
+pub const LABEL_BITS: u8 = 2;
+
+/// Packed label representing 8 labels of the bytes of a word.
+pub type WordLabel = [Label; WORD_BYTES];
+
+pub fn valid_label(l:u8) -> bool {
+    l <= UNTAINTED.0
+}
+
+fn validate_label<'de, D>(d: D) -> Result<u8, D::Error>
+    where D: de::Deserializer<'de>
+{
+
+    let value = u8::deserialize(d)?;
+
+    if !valid_label(value) {
+        return Err(de::Error::invalid_value(de::Unexpected::Unsigned(value as u64),
+                                            &"a 2 bit label"));
+    }
+
+    Ok(value)
+}
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl<'a> Repr<'a> for Label {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Flatten<'a> for Label {
+    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
+        c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16)))
+    }
+
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        w.repr
+    }
+
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(w)
+    }
+}
+
+impl<'a> FromEval<'a> for Label {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        let val = FromEval::from_eval(ev, a)?;
+        Some(Label(val))
+    }
+}
+
+impl<'a> Cast<'a, u64> for Label {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        bld.circuit().cast(x, bld.circuit().ty(TyKind::U64))
+    }
+}
+
+impl<'a> Lit<'a> for Label {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        assert!(valid_label(a.0));
+
+        // bld.lit(a.0).repr
+        // Lit::lit(bld, a.0)
+        let ty = <Label as Flatten>::wire_type(bld.circuit());
+        bld.circuit().lit(ty, a.0)
+    }
+}
+
+impl<'a> Mux<'a, bool, Label> for Label {
+    type Output = Label;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: Wire<'a>,
+        t: Wire<'a>,
+        e: Wire<'a>,
+    ) -> Wire<'a> {
+        bld.circuit().mux(c, t, e)
+    }
+}
+
+impl<'a> Secret<'a> for Label {
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        let ty = <Label as Flatten>::wire_type(bld.circuit());
+        bld.circuit().new_secret_uninit(ty)
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        s.kind.as_secret().set_from_lit(*val, force);
+    }
+}
+
+primitive_binary_impl!(Eq::eq(Label, Label) -> bool);
+primitive_binary_impl!(Ne::ne(Label, Label) -> bool);
+primitive_binary_impl!(Lt::lt(Label, Label) -> bool);
+primitive_binary_impl!(Le::le(Label, Label) -> bool);
+primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
+primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
+
+impl<'a> typed::Eq<'a, WordLabel> for WordLabel {
+    type Output = bool;
+    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+        let mut acc = bld.eq(a[0], b[0]);
+        for (&a,&b) in a.iter().zip(b.iter()).skip(1) {
+            acc = bld.and(acc, bld.eq(a,b));
+        }
+        *acc
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -520,8 +688,21 @@ pub struct MemPort {
     /// word.  For `Read` operations, `width` is only used to check the alignment of `addr`, as
     /// `value` must exactly match the previous value of the accessed word.
     pub width: MemOpWidth,
+    pub tainted: IfMode<AnyTainted, WordLabel>,
 }
 
+impl Default for MemPort {
+    fn default() -> Self {
+        MemPort {
+            cycle:   MEM_PORT_UNUSED_CYCLE,
+            addr:    u64::default(),
+            value:   u64::default(),
+            op:      MemOpKind::default(),
+            width:   MemOpWidth::default(),
+            tainted: IfMode::new(|_pf| WORD_UNTAINTED),
+        }
+    }
+}
 
 mk_named_enum! {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -596,6 +777,24 @@ impl MemOpWidth {
             MemOpWidth::W8 => Opcode::Store8,
         }
     }
+
+    pub const fn taint_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Taint1,
+            MemOpWidth::W2 => Opcode::Taint2,
+            MemOpWidth::W4 => Opcode::Taint4,
+            MemOpWidth::W8 => Opcode::Taint8,
+        }
+    }
+
+    pub const fn sink_opcode(self) -> Opcode {
+        match self {
+            MemOpWidth::W1 => Opcode::Sink1,
+            MemOpWidth::W2 => Opcode::Sink2,
+            MemOpWidth::W4 => Opcode::Sink4,
+            MemOpWidth::W8 => Opcode::Sink8,
+        }
+    }
 }
 
 pub const WORD_BYTES: usize = MemOpWidth::WORD.bytes();
@@ -623,6 +822,12 @@ where
     }
 }
 
+impl<'a> Cast<'a, u8> for MemOpWidth {
+    fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
+        let ty = <u8 as Flatten>::wire_type(bld.circuit());
+        bld.circuit().cast(x.repr, ty)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct MemPortRepr<'a> {
@@ -631,6 +836,7 @@ pub struct MemPortRepr<'a> {
     pub value: TWire<'a, u64>,
     pub op: TWire<'a, MemOpKind>,
     pub width: TWire<'a, MemOpWidth>,
+    pub tainted: TWire<'a, IfMode<AnyTainted, WordLabel>>,
 }
 
 impl<'a> Repr<'a> for MemPort {
@@ -645,6 +851,7 @@ impl<'a> Lit<'a> for MemPort {
             value: bld.lit(a.value),
             op: bld.lit(a.op),
             width: bld.lit(a.width),
+            tainted: bld.lit(a.tainted),
         }
     }
 }
@@ -657,6 +864,7 @@ impl<'a> Secret<'a> for MemPort {
             value: bld.with_label("value", || bld.secret_uninit()),
             op: bld.with_label("op", || bld.secret_uninit()),
             width: bld.with_label("width", || bld.secret_uninit()),
+            tainted: bld.with_label("tainted", || bld.secret_uninit()),
         }
     }
 
@@ -666,14 +874,17 @@ impl<'a> Secret<'a> for MemPort {
         Builder::set_secret_from_lit(&s.value, &val.value, force);
         Builder::set_secret_from_lit(&s.op, &val.op, force);
         Builder::set_secret_from_lit(&s.width, &val.width, force);
+        Builder::set_secret_from_lit(&s.tainted, &val.tainted, force);
     }
 }
 
 impl<'a, C: Repr<'a>> Mux<'a, C, MemPort> for MemPort
 where
     C::Repr: Clone,
+    u16: Mux<'a, C, u16, Output = u16>,
     u32: Mux<'a, C, u32, Output = u32>,
     u64: Mux<'a, C, u64, Output = u64>,
+    Label: Mux<'a, C, Label, Output = Label>,
     MemOpKind: Mux<'a, C, MemOpKind, Output = MemOpKind>,
     MemOpWidth: Mux<'a, C, MemOpWidth, Output = MemOpWidth>,
 {
@@ -692,11 +903,13 @@ where
             value: bld.mux(c.clone(), t.value, e.value),
             op: bld.mux(c.clone(), t.op, e.op),
             width: bld.mux(c.clone(), t.width, e.width),
+            tainted: bld.mux(c.clone(), t.tainted, e.tainted),
         }
     }
 }
 
 
+#[derive(Debug)]
 pub struct ByteOffset(u8);
 
 impl ByteOffset {
@@ -750,6 +963,19 @@ impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
     }
 }
 
+impl<'a> Cast<'a, u8> for ByteOffset {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        bld.circuit().cast(x, bld.circuit().ty(TyKind::U8))
+    }
+}
+
+impl<'a> FromEval<'a> for ByteOffset {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        let val = FromEval::from_eval(ev, a)?;
+        Some(ByteOffset(val))
+    }
+}
+
 pub struct WordAddr;
 
 impl<'a> Repr<'a> for WordAddr {
@@ -800,8 +1026,8 @@ impl PackedMemPort {
         // ConcatBits is little-endian.  To sort by `addr` first and then by `cycle`, we have to
         // put `addr` last in the list.
         let key = bit_pack::concat_bits(bld, TWire::<(_, _)>::new((cycle_adj, waddr)));
-        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _, _)>::new((
-            mp.value, mp.op, mp.width, offset)));
+        let data = bit_pack::concat_bits(bld, TWire::<(_, _, _, _, _)>::new((
+            mp.value, mp.op, mp.width, mp.tainted, offset)));
         TWire::new(PackedMemPortRepr { key, data })
     }
 }
@@ -810,10 +1036,10 @@ impl<'a> PackedMemPortRepr<'a> {
     pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
         let (cycle_adj, waddr) = *bit_pack::split_bits::<(u32, WordAddr)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
-        let (value, op, width, offset) =
-            *bit_pack::split_bits::<(_, _, _, ByteOffset)>(bld, self.data);
+        let (value, op, width, tainted, offset) =
+            *bit_pack::split_bits::<(_, _, _, _, ByteOffset)>(bld, self.data);
         let addr = TWire::new(bit_pack::concat_bits(bld, TWire::<(_, _)>::new((offset, waddr))));
-        TWire::new(MemPortRepr { cycle, addr, value, op, width })
+        TWire::new(MemPortRepr { cycle, addr, value, op, width, tainted })
     }
 }
 
@@ -1140,6 +1366,8 @@ pub struct MemSegment {
     pub heap_init: bool,
     #[serde(default)]
     pub data: Vec<u64>,
+    #[serde(default = "panic_default")]
+    pub tainted: IfMode<AnyTainted,Vec<WordLabel>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1201,6 +1429,7 @@ pub enum Advice {
         value: u64,
         op: MemOpKind,
         width: MemOpWidth,
+        tainted: IfMode<AnyTainted,WordLabel>,
     },
     Stutter,
     Advise { advise: u64 },
@@ -1229,3 +1458,17 @@ pub struct TraceChunkDebug {
     #[serde(default)]
     pub prev_segment: Option<usize>,
 }
+
+pub struct TaintCalcIntermediate<'a> {
+    pub label_x: TWire<'a,WordLabel>,      // Tainted label for x.
+    pub label_result: TWire<'a,WordLabel>, // Tainted label for result.
+    pub addr_offset: TWire<'a,ByteOffset>,   // Offset of memory address.
+}
+
+pub struct CalcIntermediate<'a> {
+    pub x: TWire<'a,u64>,
+    pub y: TWire<'a,u64>,
+    pub result: TWire<'a,u64>,
+    pub tainted: IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
+}
+

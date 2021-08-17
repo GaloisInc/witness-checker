@@ -5,6 +5,7 @@ use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
+use crate::micro_ram::types::{Label};
 
 
 pub struct Builder<'a> {
@@ -339,7 +340,7 @@ macro_rules! primitive_binary_impl {
         impl<'a> $Op<'a, $U> for $T {
             type Output = $R;
             fn $op(bld: &Builder<'a>, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
-                bld.c.$op(a, b)
+                bld.circuit().$op(a, b)
             }
         }
     };
@@ -500,6 +501,13 @@ integer_impls!(u16, U16);
 integer_impls!(u32, U32);
 integer_impls!(u64, U64);
 
+// Cast u64 to Label.
+impl<'a> Cast<'a, Label> for u64 {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        let ty = <Label as Flatten>::wire_type(bld.circuit());
+        bld.c.cast(x, ty)
+    }
+}
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {
@@ -873,6 +881,27 @@ impl<'a> Builder<'a> {
     {
         let mut val = arr.first().expect("can't index in an empty array").clone();
         for (i, x) in arr.iter().enumerate().skip(1) {
+            let eq = self.eq(idx.clone(), mk_idx(self, i));
+            val = self.mux(eq, x.clone(), val);
+        }
+        val
+    }
+
+    pub fn index_with_default<I, T>(
+        &self,
+        arr: &[TWire<'a, T>],
+        idx: TWire<'a, I>,
+        default: TWire<'a, T>,
+        mut mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
+    ) -> TWire<'a, T>
+    where
+        I: Eq<'a, I>,
+        I::Repr: Clone,
+        T: Mux<'a, <I as Eq<'a, I>>::Output, T, Output = T>,
+        T::Repr: Clone,
+    {
+        let mut val = default;
+        for (i, x) in arr.iter().enumerate() {
             let eq = self.eq(idx.clone(), mk_idx(self, i));
             val = self.mux(eq, x.clone(), val);
         }

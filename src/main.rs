@@ -20,7 +20,9 @@ use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk};
+use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk, WORD_UNTAINTED};
+use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
+use cheesecloth::mode::tainted;
 
 
 fn parse_args() -> ArgMatches<'static> {
@@ -50,6 +52,10 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("stats")
              .long("stats")
              .help("print info about the size of the circuit"))
+        .arg(Arg::with_name("mode")
+             .long("mode")
+             .takes_value(true)
+             .help("Mode to run the checker in. Valid options include:\n    leak-uninitialized - Detect an information leak when uninitialized memory is output.\n    leak-tainted - Detect an information leak when a tainted value is output."))
         .arg(Arg::with_name("check-steps")
              .long("check-steps")
              .takes_value(true)
@@ -88,6 +94,8 @@ fn check_first<'a>(
             i, cx.eval(r), 0,
         );
     }
+
+    tainted::check_first(cx, b, &s.tainted_regs);
 }
 
 fn check_last<'a>(
@@ -108,9 +116,7 @@ fn check_last<'a>(
 }
 
 
-fn main() -> io::Result<()> {
-    let args = parse_args();
-
+fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     #[cfg(not(feature = "bellman"))]
     if args.is_present("zkif-out") {
         eprintln!("error: zkinterface output is not supported - build with `--features bellman`");
@@ -164,6 +170,9 @@ fn main() -> io::Result<()> {
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
     let mut exec = parse_exec.into_inner().validate().unwrap();
+
+    // Check that --mode leak-tainted is provided iff the feature is present.
+    assert!(is_mode::<AnyTainted>() == exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
     // Adjust non-public-pc traces to fit the public-pc format.
     // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
@@ -219,7 +228,8 @@ fn main() -> io::Result<()> {
     let init_state = provided_init_state.clone().unwrap_or_else(|| {
         let mut regs = vec![0; exec.params.num_regs];
         regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
-        RamState { cycle: 0, pc: 0, regs, live: true }
+        let tainted_regs = IfMode::new(|_| vec![WORD_UNTAINTED; exec.params.num_regs]);
+        RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
     });
     if provided_init_state.is_some() {
         let init_state_wire = b.lit(init_state.clone());
@@ -437,3 +447,20 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
+
+fn main() -> io::Result<()> {
+    let args = parse_args();
+
+    let mode = match args.value_of("mode") {
+        Some("leak-uninitialized") => Mode::LeakUninit1,
+        Some("leak-tainted") => Mode::LeakTainted,
+        None => Mode::MemorySafety,
+        Some(m) => {
+            eprintln!("error: unknown mode `{}`", m);
+            std::process::exit(1);
+        },
+    };
+
+    unsafe { with_mode(mode, || real_main(args)) }
+}
+

@@ -32,6 +32,7 @@ define_features! {
     PreAdvice = "pre-advice",
     /// Initialized heap.
     HeapInit = "heap_init",
+    LeakTainted = "leak-tainted",
 }
 
 

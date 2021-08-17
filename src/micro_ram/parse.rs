@@ -9,6 +9,7 @@ use crate::micro_ram::types::{
     Segment, SegmentConstraint,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
+use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
 
 
 thread_local! {
@@ -377,11 +378,16 @@ impl<'de> Visitor<'de> for AdviceVisitor {
         let x = match &seq.next_element::<String>()? as &str {
             "MemOp" => {
                 seq.expect += 4;
+                let tainted = is_mode::<AnyTainted>();
+                if tainted {
+                    seq.expect += 1;
+                }
                 Advice::MemOp {
                     addr: seq.next_element()?,
                     value: seq.next_element()?,
                     op: seq.next_element()?,
                     width: seq.next_element()?,
+                    tainted: if tainted {seq.next_element()?} else {IfMode::none()},
                 }
             },
             "Stutter" => {

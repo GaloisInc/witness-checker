@@ -11,8 +11,10 @@ use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
-    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BYTES,
+    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_UNTAINTED, WORD_BYTES,
 };
+use crate::mode::if_mode::IfMode;
+use crate::mode::tainted;
 use crate::sort;
 
 pub struct Memory<'a> {
@@ -33,6 +35,7 @@ impl<'a> Memory<'a> {
             // Initial memory values are given in terms of words, not bytes.
             let waddr = seg.start + i;
 
+
             // Most of the MemPort is public.  Only the value is secret, if `seg.secret` is set.
             let mut mp = b.lit(MemPort {
                 cycle: MEM_PORT_PRELOAD_CYCLE,
@@ -41,6 +44,7 @@ impl<'a> Memory<'a> {
                 // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
+                tainted: IfMode::new(|pf| seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(WORD_UNTAINTED)),
                 width: MemOpWidth::WORD,
             });
 
@@ -93,6 +97,7 @@ impl<'a> Memory<'a> {
                 addr: (self.ports.len() + i) as u64 * MemOpWidth::WORD.bytes() as u64,
                 value: 0,
                 op: MemOpKind::Write,
+                tainted: IfMode::new(|_fp| WORD_UNTAINTED),
                 width: MemOpWidth::WORD,
             });
             let (user, user_secret) = b.secret_default(0);
@@ -205,10 +210,7 @@ impl<'a> CyclePorts<'a> {
         let (idx, user) = match self.index_to_port(u32::try_from(i).unwrap()) {
             Some(x) => x,
             // `None` means no port covers step `i`.
-            None => return b.lit(MemPort {
-                cycle: MEM_PORT_UNUSED_CYCLE,
-                .. MemPort::default()
-            }),
+            None => return b.lit(MemPort::default()),
         };
 
         if self.port_len(idx) == 1 {
@@ -220,10 +222,7 @@ impl<'a> CyclePorts<'a> {
         b.mux(
             b.eq(smp.user, b.lit(user as u8)),
             smp.mp,
-            b.lit(MemPort {
-                cycle: MEM_PORT_UNUSED_CYCLE,
-                .. MemPort::default()
-            }),
+            b.lit(MemPort::default()),
         )
     }
 
@@ -329,6 +328,7 @@ fn check_mem<'a>(
     // port.value`, so all the `value` equality checks below will pass.  This means uninitialized
     // reads will succeed, but the prover can provide arbitrary data for any uninitialized bytes.
     let prev_value = b.mux(prev_valid, prev.value, port.value);
+    let prev_taint = b.mux(prev_valid, prev.tainted, port.tainted);
 
     cx.when(b, b.and(is_read, active), |cx| {
         // Reads must produce the same value as the previous operation.
@@ -338,18 +338,21 @@ fn check_mem<'a>(
             cx.eval(port.addr), cx.eval(port.cycle),
             cx.eval(port.value), cx.eval(prev_value),
         );
+
+        tainted::check_read_memports(cx, b, &prev_taint, &port);
     });
 
     cx.when(b, b.or(is_write, is_poison), |cx| {
         // Writes (and poison) may only modify the bytes identified by the `addr` offset and the
         // `width`.
         let mut mostly_eq_acc = b.lit(false);
+        let offset = bit_pack::extract_low::<ByteOffset>(b, port.addr.repr);
         for w in MemOpWidth::iter() {
             let mostly_eq = compare_except_bytes_at_offset(
                 b,
                 port.value,
                 prev_value,
-                port.addr,
+                offset,
                 w,
             );
             mostly_eq_acc = b.mux(
@@ -364,6 +367,8 @@ fn check_mem<'a>(
             cx.eval(port.op), cx.eval(port.addr), cx.eval(port.cycle), cx.eval(port.width),
             cx.eval(port.value), cx.eval(prev_value),
         );
+
+        tainted::check_write_memports(cx, b, &prev_taint, &port, &offset);
     });
 }
 
@@ -428,7 +433,7 @@ pub fn compare_except_bytes_at_offset<'a>(
     b: &Builder<'a>,
     value1: TWire<'a, u64>,
     value2: TWire<'a, u64>,
-    addr: TWire<'a, u64>,
+    offset: TWire<'a, ByteOffset>,
     width: MemOpWidth,
 ) -> TWire<'a, bool> {
     // Hard to write this as a function without const generics
@@ -436,7 +441,6 @@ pub fn compare_except_bytes_at_offset<'a>(
         ($T:ty, $divisor:expr) => {{
             let value1_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value1.repr);
             let value2_parts = bit_pack::split_bits::<[$T; WORD_BYTES / $divisor]>(b, value2.repr);
-            let offset = bit_pack::extract_low::<ByteOffset>(b, addr.repr);
             let mut acc = b.lit(true);
             for (idx, (&v1, &v2)) in value1_parts.iter().zip(value2_parts.iter()).enumerate() {
                 let ignored = b.eq(offset, b.lit(ByteOffset::new(idx as u8 * $divisor)));

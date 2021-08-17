@@ -1,0 +1,34 @@
+## FLAGS: --mode leak-tainted
+# Taint a register, store/load it from memory with a bad label, and then write it to a different channel.
+
+- [0,1,0,0]
+- [leak-tainted]
+-
+  program:
+    - [taint8,  null, 0, true, 1] # taint r0 1
+    - [store8, null, 0, true, 32] # store [32] r0
+    - [load8,  1, null, true, 32] # load r1 [32]
+    - [sink8,   null, 1, true, 0] # sink r1 0
+  
+  init_mem:
+    - start: 2
+      len: 1
+      read_only: false
+      secret: true
+      data: [10]
+      tainted: [[3,3,3,3,3,3,3,3]]
+  
+  params:
+    num_regs: 2
+    trace_len: 5
+  
+  trace:
+    - [0, [0,0], [[3,3,3,3,3,3,3,3],[3,3,3,3,3,3,3,3]]]
+    - [1, [0,0], [[2,2,2,2,2,2,2,2],[3,3,3,3,3,3,3,3]]]
+    - [2, [0,0], [[2,2,2,2,2,2,2,2],[3,3,3,3,3,3,3,3]]]
+    - [3, [0,0], [[2,2,2,2,2,2,2,2],[1,1,1,1,1,1,1,1]]]
+    - [4, [0,0], [[2,2,2,2,2,2,2,2],[1,1,1,1,1,1,1,1]]]
+  
+  advice:
+    2: [[MemOp, 32, 0, write, 8, [0,0,0,0,0,0,0,0]]]
+    3: [[MemOp, 32, 0,  read, 8, [0,0,0,0,0,0,0,0]]] # 0xAAAA]]
