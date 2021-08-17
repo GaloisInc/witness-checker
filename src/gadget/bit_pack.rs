@@ -1,4 +1,6 @@
-use crate::ir::circuit::{Circuit, Wire, Ty, TyKind, IntSize, GadgetKind, GadgetKindRef};
+use crate::ir::circuit::{
+    Circuit, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize, GadgetKind, GadgetKindRef,
+};
 use crate::ir::typed::{Builder, TWire, Flatten};
 
 struct BundleTys<'a> {
@@ -174,7 +176,7 @@ impl<'a> GadgetKind<'a> for ExtractBits {
     }
 }
 
-pub fn extract_bits<'a>(c: &Circuit<'a>, w: Wire<'a>, start: u16, end: u16) -> Wire<'a> {
+pub fn extract_bits<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>, start: u16, end: u16) -> Wire<'a> {
     let gk = c.intern_gadget_kind(ExtractBits { start, end });
     c.gadget(gk, &[w])
 }

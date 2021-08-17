@@ -1,5 +1,5 @@
 use crate::eval::Evaluator;
-use crate::ir::circuit::{Circuit, Ty, Wire};
+use crate::ir::circuit::{CircuitTrait, Ty, Wire};
 use crate::ir::typed::{Builder, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire};
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
@@ -312,7 +312,7 @@ impl<'a, M: ModePred, A: Repr<'a>> Repr<'a> for IfMode<M, A> {
 }
 
 impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
-    fn wire_type(c: &Circuit<'a>) -> Ty<'a> {
+    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
         if check_mode::<M>().is_some() {
             A::wire_type(c)
         } else {

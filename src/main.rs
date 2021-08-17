@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter;
-use std::mem::{self, MaybeUninit};
 use std::path::Path;
-use std::ptr;
 use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
 use num_traits::One;
@@ -12,9 +10,9 @@ use num_traits::One;
 use cheesecloth::wire_assert;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, Wire, GateKind, GadgetKindRef};
+use cheesecloth::ir::circuit::{Circuit, CircuitTrait, CircuitExt, DynCircuit, GadgetKindRef};
 use cheesecloth::ir::typed::{Builder, TWire};
-use cheesecloth::lower::{self, run_pass, run_pass_debug};
+use cheesecloth::lower::{self, AddPass};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
@@ -40,6 +38,11 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output zkinterface circuit representation in this directory"))
+        .arg(Arg::with_name("sieve-ir-out")
+             .long("sieve-ir-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output SIEVE IR circuit representation in this directory"))
         .arg(Arg::with_name("validate-only")
              .long("validate-only")
              .help("check only that the trace is valid; don't require it to demonstrate a bug"))
@@ -61,6 +64,12 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("verifier-mode")
              .long("verifier-mode")
              .help("run in verifier mode, constructing the circuit but not the secret witness"))
+        .arg(Arg::with_name("sieve-ir-dedup")
+             .long("sieve-ir-dedup")
+             .help("in SIEVE IR mode, deduplicate gates produced by the backend"))
+        .arg(Arg::with_name("skip-backend-validation")
+             .long("skip-backend-validation")
+             .help("don't validate the circuit constructed by the backend"))
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -107,73 +116,6 @@ fn check_last<'a>(
 }
 
 
-struct PassRunner<'a> {
-    // Wrap everything in `MaybeUninit` to prevent the compiler from realizing that we have
-    // overlapping `&` and `&mut` references.
-    cur: MaybeUninit<&'a mut Bump>,
-    next: MaybeUninit<&'a mut Bump>,
-    /// Invariant: the underlying `Gate` of every wire in `wires` is allocated from the `cur`
-    /// arena.
-    wires: MaybeUninit<Vec<Wire<'a>>>,
-    is_prover: bool,
-}
-
-const DEBUG_PASSES: bool = false;
-
-impl<'a> PassRunner<'a> {
-    pub fn new(
-        a: &'a mut Bump,
-        b: &'a mut Bump,
-        wires: Vec<Wire>,
-        is_prover: bool,
-    ) -> PassRunner<'a> {
-        a.reset();
-        b.reset();
-        let cur = MaybeUninit::new(a);
-        let next = MaybeUninit::new(b);
-        let wires = unsafe {
-            // Transfer all wires into the `cur` arena.
-            let arena: &Bump = &**cur.as_ptr();
-            let c = Circuit::new(arena, is_prover);
-            let wires = run_pass(&c, wires, |c, _old, gk| c.gate(gk));
-            MaybeUninit::new(wires)
-        };
-
-        PassRunner { cur, next, wires, is_prover }
-    }
-
-    // FIXME: using `'a` instead of a fresh lifetime (`for <'b>`) potentially allows the closure to
-    // stash a `GateKind` or `Wire` somewhere and use it after the arena has been `reset`.
-    // However, this also makes it hard to apply stateful transformation passes (`const_fold`).
-    pub fn run(&mut self, f: impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a>) {
-        unsafe {
-            {
-                let arena: &Bump = &**self.next.as_ptr();
-                let c = Circuit::new(arena, self.is_prover);
-                let wires = mem::replace(&mut *self.wires.as_mut_ptr(), Vec::new());
-                let wires = if DEBUG_PASSES {
-                    run_pass_debug(&c, wires, f)
-                } else {
-                    run_pass(&c, wires, f)
-                };
-                *self.wires.as_mut_ptr() = wires;
-            }
-            // All `wires` are now allocated from `self.next`, leaving `self.cur` unused.
-            (*self.cur.as_mut_ptr()).reset();
-            ptr::swap(self.cur.as_mut_ptr(), self.next.as_mut_ptr());
-        }
-    }
-
-    pub fn finish(self) -> (Circuit<'a>, Vec<Wire<'a>>) {
-        unsafe {
-            let arena: &Bump = &**self.cur.as_ptr();
-            let c = Circuit::new(arena, self.is_prover);
-            let wires = ptr::read(self.wires.as_ptr());
-            (c, wires)
-        }
-    }
-}
-
 fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     #[cfg(not(feature = "bellman"))]
     if args.is_present("zkif-out") {
@@ -181,12 +123,42 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         std::process::exit(1);
     }
 
+    #[cfg(not(feature = "sieve_ir"))]
+    if args.is_present("sieve-ir-out") {
+        eprintln!("error: sieve_ir output is not supported - build with `--features sieve_ir`");
+        std::process::exit(1);
+    }
+
     let is_prover = !args.is_present("verifier-mode");
 
     let arena = Bump::new();
+
+    let gadget_supported = |g: GadgetKindRef| {
+        use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
+        let mut ok = false;
+        if args.is_present("zkif-out") || args.is_present("sieve-out") {
+            ok = ok || g.cast::<ConcatBits>().is_some();
+            ok = ok || g.cast::<ExtractBits>().is_some();
+        }
+        ok
+    };
+
     let c = Circuit::new(&arena, is_prover);
-    let b = Builder::new(&c);
-    let cx = Context::new(&c);
+    //let c = lower::const_fold::ConstFold(c);
+    let c = c.add_pass(lower::bool_::not_to_xor);
+    let c = c.add_pass(lower::bool_::compare_to_logic);
+    let c = c.add_pass(lower::bool_::mux);
+    let c = c.add_opt_pass(args.is_present("zkif-out") || args.is_present("sieve-ir-out"),
+        lower::int::compare_to_greater_or_equal_to_zero);
+    let c = c.add_pass(lower::int::non_constant_shift);
+    let c = lower::const_fold::ConstFold(c);
+    let c = c.add_pass(lower::bundle::simplify);
+    let c = c.add_pass(lower::bundle::unbundle_mux);
+    let c = lower::gadget::DecomposeGadgets(c, |g| !gadget_supported(g));
+    let c = c.add_pass(lower::bit_pack::concat_bits_flat);
+
+    let b = Builder::new(DynCircuit::new(&c));
+    let cx = Context::new(c.as_base());
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
@@ -367,45 +339,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             .collect::<Vec<_>>();
 
     if args.is_present("stats") {
-        eprintln!(" ===== stats: before lowering =====");
-        debug::count_gates::count_gates(&flags);
-        eprintln!(" ===== end stats (before lowering) =====");
-    }
-
-    let mut arena1 = Bump::new();
-    let mut arena2 = Bump::new();
-    let mut passes = PassRunner::new(&mut arena1, &mut arena2, flags, is_prover);
-
-    let gadget_supported = |g: GadgetKindRef| {
-        use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
-        let mut ok = false;
-        if args.is_present("zkif-out") {
-            ok = ok || g.cast::<ConcatBits>().is_some();
-            ok = ok || g.cast::<ExtractBits>().is_some();
-        }
-        if args.is_present("scale-out") {
-        }
-        ok
-    };
-
-    passes.run(lower::bit_pack::concat_bits_flat);
-    // TODO: need a better way to handle passes that must be run to fixpoint
-    passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
-    passes.run(lower::gadget::decompose_gadgets(|g| !gadget_supported(g)));
-    passes.run(lower::bundle::unbundle_mux);
-    passes.run(lower::bundle::simplify);
-    passes.run(lower::const_fold::const_fold(&c));
-    passes.run(lower::int::non_constant_shift);
-    #[cfg(feature = "bellman")]
-    if args.is_present("zkif-out") {
-        passes.run(lower::int::compare_to_greater_or_equal_to_zero);
-    }
-    passes.run(lower::bool_::mux);
-    passes.run(lower::bool_::compare_to_logic);
-    passes.run(lower::bool_::not_to_xor);
-    let (c, flags) = passes.finish();
-
-    if args.is_present("stats") {
         eprintln!(" ===== stats: after lowering =====");
         debug::count_gates::count_gates(&flags);
         eprintln!(" ===== end stats (after lowering) =====");
@@ -449,17 +382,64 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
         eprintln!("validating zkif...");
 
-        // Validate the circuit and witness.
-        cli(&Options {
-            tool: "simulate".to_string(),
-            paths: vec![workspace.to_path_buf()],
-        }).unwrap();
+        if !args.is_present("skip-backend-validation") {
+            // Validate the circuit and witness.
+            cli(&Options {
+                tool: "simulate".to_string(),
+                paths: vec![workspace.to_path_buf()],
+                field_order: Default::default(),
+            }).unwrap();
+        }
 
         // Print statistics.
         cli(&Options {
             tool: "stats".to_string(),
             paths: vec![workspace.to_path_buf()],
+            field_order: Default::default(),
         }).unwrap();
+    }
+
+    #[cfg(feature = "sieve_ir")]
+    if let Some(workspace) = args.value_of("sieve-ir-out") {
+        use cheesecloth::back::sieve_ir::{
+            backend::{Backend, Scalar},
+            ir_builder::IRBuilder,
+        };
+        use zki_sieve::{
+            cli::{cli, Options, StructOpt},
+            FilesSink,
+        };
+
+        { // restrict ir_builder to its own scope
+            // Generate the circuit and witness.
+            let sink = FilesSink::new_clean(&workspace).unwrap();
+            sink.print_filenames();
+            let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+            // ir_builder.enable_profiler();
+            if !args.is_present("sieve-ir-dedup") {
+                ir_builder.disable_dedup();
+            }
+
+            { // restrict backend to its own scope to save memory
+                let mut backend = Backend::new(&mut ir_builder);
+
+                let accepted = flags[0];
+                backend.enforce_true(accepted);
+                backend.finish();
+            }
+            eprintln!();
+            ir_builder.prof.as_ref().map(|p| p.print_report());
+            ir_builder.dedup.as_ref().map(|p| p.print_report());
+            ir_builder.finish();
+        }
+
+        // Validate the circuit and witness.
+        eprintln!("\nValidating SIEVE IR files...");
+        if !args.is_present("skip-backend-validation") {
+            cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
+            cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
+        }
+        cli(&Options::from_iter(&["zki_sieve", "metrics", workspace])).unwrap();
     }
 
     // Unused in some configurations.
