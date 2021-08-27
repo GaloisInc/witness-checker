@@ -266,6 +266,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
         let mut seg_graph_builder = SegGraphBuilder::new(
             &b, &exec.segments, &exec.params, init_state.clone());
+        std::fs::write("out.dot", seg_graph_builder.dump()).unwrap();
 
         for item in seg_graph_builder.get_order() {
             let idx = match item {

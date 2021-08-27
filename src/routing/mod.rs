@@ -11,6 +11,18 @@ pub struct InputId(usize);
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct OutputId(usize);
 
+impl InputId {
+    pub fn into_raw(self) -> usize {
+        self.0
+    }
+}
+
+impl OutputId {
+    pub fn into_raw(self) -> usize {
+        self.0
+    }
+}
+
 /// A builder for constructing a routing network.  `T` is the type of values to route.  The caller
 /// must provide `TWire`s for all inputs; `TWire`s for all outputs become available only after
 /// calling `finish`.

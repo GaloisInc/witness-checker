@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::iter;
 use std::mem;
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
@@ -174,6 +175,53 @@ impl<'a> SegGraphBuilder<'a> {
         sg.break_cycles(b, params);
 
         sg
+    }
+
+    pub fn dump(&self) -> String {
+        let mut s = String::new();
+
+        macro_rules! source_node {
+            ($src:expr) => {
+                match $src {
+                    StateSource::CpuInit => "init".to_string(),
+                    StateSource::Segment(j) => format!("seg{}", j),
+                    StateSource::Network(out_id) => {
+                        writeln!(s, r#"net_out{} [ label = "*" ];"#, out_id.into_raw()).unwrap();
+                        format!("net_out{}", out_id.into_raw())
+                    },
+                    StateSource::CycleBreak(j) => format!("cb{}", j),
+                }
+            };
+        }
+
+        writeln!(s, "digraph {{").unwrap();
+        writeln!(s, "init;").unwrap();
+
+        for (i, seg) in self.segments.iter().enumerate() {
+            writeln!(s, r#"seg{} [ label="seg{}" ];"#, i, i).unwrap();
+            for pred in &seg.preds {
+                let pred_node = source_node!(pred.src);
+                writeln!(s, "{} -> seg{};", pred_node, i).unwrap();
+            }
+        }
+
+        for (i, cb) in self.cycle_breaks.iter().enumerate() {
+            writeln!(s, r#"cb{} [ label="cb{}" ];"#, i, i).unwrap();
+            for pred in &cb.preds {
+                let pred_node = source_node!(pred.src);
+                writeln!(s, "{} -> cb{};", pred_node, i).unwrap();
+            }
+        }
+
+        for (i, net) in self.network_inputs.iter().enumerate() {
+            writeln!(s, r#"net_in{} [ label="*" ];"#, i).unwrap();
+            let pred_node = source_node!(net.pred.src);
+            writeln!(s, "{} -> net_in{};", pred_node, i).unwrap();
+        }
+
+        writeln!(s, "}}").unwrap();
+
+        s
     }
 
     /// Break cycles in the graph by inserting `CycleBreakNodes`.
