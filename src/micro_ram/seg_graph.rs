@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::iter;
 use std::mem;
@@ -226,20 +226,77 @@ impl<'a> SegGraphBuilder<'a> {
 
     /// Break cycles in the graph by inserting `CycleBreakNodes`.
     fn break_cycles(&mut self, b: &Builder<'a>, params: &Params) {
-        // For now, just insert a cycle-breaker before each segment.  This is very inefficient, but
-        // is definitely correct.
-        for (i, seg) in self.segments.iter_mut().enumerate() {
-            let _g = b.scoped_label(format_args!("cycle break {}", i));
-            let preds = mem::take(&mut seg.preds);
-            let j = self.cycle_breaks.len();
-            self.cycle_breaks.push(CycleBreakNode {
-                preds,
-                secret: RamState::secret(b, params.num_regs).1,
-            });
-            seg.preds.push(Predecessor {
-                src: StateSource::CycleBreak(j),
-                live: Liveness::Always,
-            });
+        // If a segment's `good` flag is set, then there are no cycles involving that node or any
+        // of its (transitive) predecessors.
+        let mut good = vec![false; self.segments.len()];
+
+        enum Step {
+            Enter(usize),
+            Exit(usize),
+        }
+
+        let mut visited = HashSet::new();
+        let mut stack = Vec::new();
+
+        for i in 0 .. self.segments.len() {
+            if good[i] {
+                continue;
+            }
+
+            stack.push(Step::Enter(i));
+
+            while let Some(step) = stack.pop() {
+                let i = match step {
+                    Step::Enter(i) => i,
+                    Step::Exit(i) => {
+                        visited.remove(&i);
+                        good[i] = true;
+                        continue;
+                    },
+                };
+                if good[i] {
+                    continue;
+                }
+
+                debug_assert!(!visited.contains(&i));
+                visited.insert(i);
+                // Push `Exit(i)` first so that it happens last, after all outgoing edges have been
+                // processed.
+                stack.push(Step::Exit(i));
+
+                let seg = &mut self.segments[i];
+                for pred in &mut seg.preds {
+                    match pred.src {
+                        StateSource::Segment(j) => {
+                            if good[j] {
+                                continue;
+                            }
+                            if !visited.contains(&j) {
+                                stack.push(Step::Enter(j));
+                                continue;
+                            }
+                            // Otherwise, the edge from `i` to `j` is a back edge, so insert a
+                            // cycle break for it.
+                        },
+                        // Always insert a cycle break on edges from network.
+                        StateSource::Network(_) => {},
+                        _ => continue,
+                    }
+
+                    let cb_idx = self.cycle_breaks.len();
+                    self.cycle_breaks.push(CycleBreakNode {
+                        preds: vec![*pred],
+                        secret: RamState::secret(b, params.num_regs).1,
+                    });
+                    *pred = Predecessor {
+                        src: StateSource::CycleBreak(cb_idx),
+                        live: Liveness::Always,
+                    };
+                }
+            }
+
+            debug_assert!(stack.len() == 0);
+            debug_assert!(visited.len() == 0);
         }
     }
 
@@ -248,7 +305,51 @@ impl<'a> SegGraphBuilder<'a> {
     /// `k` of the ordering is guaranteed to succeed if `set_final` has been called on all elements
     /// prior to `k`.
     pub fn get_order(&self) -> impl Iterator<Item = SegGraphItem> {
-        (0 .. self.segments.len()).map(SegGraphItem::Segment)
+        // Compute a postorder traversal of the graph.  This way each node is processed only after
+        // all its predecessors have been processed.
+
+        // If a segment's `done` flag is set, then it has already been inserted into `order`, and
+        // doesn't need to be traversed again.
+        let mut done = vec![false; self.segments.len()];
+
+        enum Step {
+            Enter(usize),
+            Exit(usize),
+        }
+
+        let mut stack = Vec::new();
+        let mut order = Vec::with_capacity(self.segments.len());
+        for i in 0 .. self.segments.len() {
+            if done[i] {
+                continue;
+            }
+            stack.push(Step::Enter(i));
+            while let Some(step) = stack.pop() {
+                match step {
+                    Step::Enter(i) => {
+                        stack.push(Step::Exit(i));
+                        for pred in &self.segments[i].preds {
+                            match pred.src {
+                                StateSource::Segment(j) => {
+                                    if !done[j] {
+                                        stack.push(Step::Enter(j));
+                                    }
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    Step::Exit(i) => {
+                        order.push(i);
+                        done[i] = true;
+                    },
+                }
+            }
+            debug_assert!(stack.len() == 0);
+        }
+        debug_assert!(order.len() == self.segments.len());
+
+        order.into_iter().map(SegGraphItem::Segment)
             .chain(iter::once(SegGraphItem::Network))
     }
 

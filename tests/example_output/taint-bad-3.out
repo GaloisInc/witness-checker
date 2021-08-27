@@ -5,4 +5,4 @@ invalid trace: cycle 2 sets tainted label of reg 0 to [Label(2), Label(2), Label
 invalid trace: cycle 2 sets tainted label of reg 1 to [Label(1), Label(1), Label(1), Label(1), Label(1), Label(1), Label(1), Label(1)] (expected [Label(0), Label(0), Label(0), Label(0), Label(0), Label(0), Label(0), Label(0)])
 invalid trace: cycle 3 sets tainted label of reg 0 to [Label(2), Label(2), Label(2), Label(2), Label(2), Label(2), Label(2), Label(2)] (expected [Label(1), Label(1), Label(1), Label(1), Label(1), Label(1), Label(1), Label(1)])
 invalid trace: cycle 3 sets tainted label of reg 1 to [Label(1), Label(1), Label(1), Label(1), Label(1), Label(1), Label(1), Label(1)] (expected [Label(0), Label(0), Label(0), Label(0), Label(0), Label(0), Label(0), Label(0)])
-internal evaluator: 159 asserts passed, 7 failed; found 0 bugs; overall status: BAD
+internal evaluator: 157 asserts passed, 7 failed; found 0 bugs; overall status: BAD
