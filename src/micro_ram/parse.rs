@@ -184,6 +184,9 @@ impl<'de> Visitor<'de> for ExecutionVisitor {
                             .map(|(k, v)| (k + 1, v)).collect();
                     }
                 },
+                "labels" => {
+                    let _: HashMap<String, usize> = map.next_value()?;
+                },
                 _ => return Err(serde::de::Error::custom(format_args!(
                     "unknown key {:?}", k,
                 ))),
