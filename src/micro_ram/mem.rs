@@ -2,9 +2,9 @@
 //!
 //! This includes setting up initial memory, adding `MemPort`s for each cycle, sorting, and
 //! checking the sorted list.
+use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::iter;
 use log::*;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::CircuitExt;
@@ -102,7 +102,11 @@ impl<'a> Memory<'a> {
         len: usize,
         sparsity: usize,
     ) -> CyclePorts<'a> {
-        self.add_cycles_irregular(cx, b, len, (0 .. len).step_by(sparsity))
+        let len = u32::try_from(len).unwrap();
+        let sparsity_u8 = u8::try_from(sparsity).unwrap();
+        self.add_cycles_common(cx, b, len, (0..len).step_by(sparsity).map(|start| {
+            (start, (cmp::min(len, start + sparsity_u8 as u32) - start) as u8)
+        }))
     }
 
     pub fn add_cycles_irregular<'b>(
@@ -112,16 +116,34 @@ impl<'a> Memory<'a> {
         len: usize,
         idxs: impl IntoIterator<Item = usize>,
     ) -> CyclePorts<'a> {
+        let len = u32::try_from(len).unwrap();
+        self.add_cycles_common(cx, b, len, idxs.into_iter().map(|idx| {
+            (u32::try_from(idx).unwrap(), 1)
+        }))
+    }
+
+    fn add_cycles_common<'b>(
+        &mut self,
+        cx: &Context<'a>,
+        b: &Builder<'a>,
+        cycles_len: u32,
+        ranges: impl IntoIterator<Item = (u32, u8)>,
+    ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
-            port_starts: idxs.into_iter().chain(iter::once(len))
-                .map(|i| u32::try_from(i).unwrap()).collect(),
+            port_starts: Vec::new(),
             ports: Vec::new(),
         };
-        assert!((1 .. cp.port_starts.len()).all(|i| cp.port_starts[i - 1] < cp.port_starts[i]));
 
-        let num_ports = cp.port_starts.len() - 1;
-        cp.ports.reserve(num_ports);
-        for i in 0 .. num_ports {
+        let ranges = ranges.into_iter();
+        cp.port_starts.reserve(ranges.size_hint().0 + 1);
+        cp.ports.reserve(ranges.size_hint().0);
+
+        for (i, (start, port_len)) in ranges.enumerate() {
+            // For correctness, no SparseMemPort should have a valid range that extends beyond
+            // `0..cycles_len`.
+            assert!(start.checked_add(port_len as u32).unwrap() <= cycles_len);
+            cp.port_starts.push(start);
+
             let (mp, mp_secret) = b.secret_default(MemPort {
                 cycle: MEM_PORT_UNUSED_CYCLE,
                 // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
@@ -137,9 +159,14 @@ impl<'a> Memory<'a> {
             cp.ports.push(SparseMemPort {
                 mp, mp_secret,
                 user, user_secret,
+                max_candidate_users: port_len,
+                public_non_users: 0,
                 is_set: false,
             });
         }
+        cp.port_starts.push(cycles_len);
+
+        assert!((1 .. cp.port_starts.len()).all(|i| cp.port_starts[i - 1] < cp.port_starts[i]));
 
         cp.assert_valid(cx, b);
         self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
@@ -205,7 +232,39 @@ pub struct SparseMemPort<'a> {
     user: TWire<'a, u8>,
     mp_secret: TSecretHandle<'a, MemPort>,
     user_secret: TSecretHandle<'a, u8>,
+
+    /// Number of cycles that can use this port.  For secret segments, this is equal to the
+    /// sparsity (or slightly less for the last port, if the sparsity doesn't evenly divide the
+    /// segment length.)
+    ///
+    /// If `user` is less than `max_candidate_users`, then this memory port is in use.
+    max_candidate_users: u8,
+    /// Bitmask of cycles that are covered by `max_candidate_users` but are publicly known not to
+    /// use this memory port.  If bit `i` is set, then `user` is publicly known not to equal `i`.
+    public_non_users: u64,
+
     is_set: bool,
+}
+
+impl<'a> SparseMemPort<'a> {
+    /// Check whether `user` could possibly be the user of this port.  If this method returns
+    /// `false`, then `self.user` is guaranteed not to equal `user`.
+    fn is_candidate_user(&self, user: u8) -> bool {
+        if user >= self.max_candidate_users {
+            return false;
+        }
+        if let Some(mask) = 1_u64.checked_shl(user as u32) {
+            if self.public_non_users & mask != 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Count how many values `self.user` can possibly take on.
+    fn num_candidate_users(&self) -> u8 {
+        self.max_candidate_users - self.public_non_users.count_ones() as u8
+    }
 }
 
 pub struct CyclePorts<'a> {
@@ -217,6 +276,8 @@ pub struct CyclePorts<'a> {
 }
 
 impl<'a> CyclePorts<'a> {
+    /// Returns the port index and the user number within that port for cycle `i`.  If there is no
+    /// port that covers cycle `i`, this returns `None`.
     fn index_to_port(&self, i: u32) -> Option<(usize, u8)> {
         // Find the greatest element with `start <= i`.
         let idx = match self.port_starts.binary_search(&i) {
@@ -227,18 +288,25 @@ impl<'a> CyclePorts<'a> {
             Err(0) => return None,
             Err(x) => x - 1,
         };
-        let user = u8::try_from(i - self.port_starts[idx]).ok()?;
-        Some((idx, user))
-    }
-
-    fn port_len(&self, idx: usize) -> u8 {
-        let len = self.port_starts[idx + 1] - self.port_starts[idx];
-        u8::try_from(len)
-            .unwrap_or_else(|_| panic!("port index {} out of range for CyclePorts", idx))
+        let smp = &self.ports[idx];
+        let user = i - self.port_starts[idx];
+        if user >= smp.max_candidate_users as u32 {
+            return None;
+        }
+        let user = user as u8;
+        if !smp.is_candidate_user(user) {
+            return None;
+        }
+        Some((idx, user as u8))
     }
 
     /// Get the `MemPort` used by step `i`.  Returns `MemPort::default()` if step `i` does not have
     /// a `MemPort` assigned to it.
+    ///
+    /// For correctness, it's important that calling `get(i)` for every `0 <= i < len` (where `len`
+    /// is the length passed to `add_cycles_irregular`) will produce every in-use `MemPort`.  This
+    /// method achieves that by returning every port in `ports` aside from those that are publicly
+    /// known to be unused (`num_candidate_users() == 0`).
     pub fn get(&self, b: &Builder<'a>, i: usize) -> TWire<'a, MemPort> {
         let (idx, user) = match self.index_to_port(u32::try_from(i).unwrap()) {
             Some(x) => x,
@@ -246,7 +314,7 @@ impl<'a> CyclePorts<'a> {
             None => return b.lit(MemPort::default()),
         };
 
-        if self.port_len(idx) == 1 {
+        if self.ports[idx].num_candidate_users() == 1 {
             // Avoid an extra mux when sparsity is disabled.
             return self.ports[idx].mp;
         }
@@ -279,18 +347,45 @@ impl<'a> CyclePorts<'a> {
     /// Perform validity checks, as described in `docs/memory_sparsity.md`.
     fn assert_valid(&self, cx: &Context<'a>, b: &Builder<'a>) {
         for (i, smp) in self.ports.iter().enumerate() {
-            let block_size = self.port_len(i);
-            let user = smp.user;
-            let ok = if block_size == 1 {
-                b.eq(user, b.lit(0))
-            } else {
-                b.lt(user, b.lit(block_size))
-            };
-            wire_assert!(
-                cx, ok,
-                "block {} user index {} is out of range (expected < {})",
-                i, cx.eval(user), block_size,
-            );
+            if smp.num_candidate_users() == 0 {
+                // This needs no assertion.  The port is publicly known to be unused, so we ensure
+                // `smp.mp` is omitted from the memory checker.
+
+                // FIXME: temporary assertion until the above is implemented
+                wire_assert!(
+                    cx, b.eq(smp.mp.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
+                    "block {} must be unused, as it has no candidate users",
+                    i,
+                );
+
+                continue;
+            }
+
+            if smp.num_candidate_users() == 1 {
+                // This needs no assertion.  `get` returns this port without consulting `user`, so
+                // the value of `user` doesn't matter.
+                continue;
+            }
+
+            // The number of candidate users is usually very small (<5), so a bunch of `or`s is
+            // probably faster than converting to bits for an `lt`.
+            let mut acc = b.lit(false);
+            for user in 0..smp.max_candidate_users {
+                if smp.is_candidate_user(user) {
+                    acc = b.or(acc, b.eq(smp.user, b.lit(user)));
+                }
+            }
+
+            {
+                let user = smp.user;
+                let max = smp.max_candidate_users;
+                let mask = smp.public_non_users;
+                wire_assert!(
+                    cx, acc,
+                    "block {} user index {} is invalid (max {}, excluded mask {:b})",
+                    i, cx.eval(user), max, mask,
+                );
+            }
         }
     }
 }
