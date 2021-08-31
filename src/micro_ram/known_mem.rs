@@ -3,7 +3,7 @@ use arrayvec::ArrayVec;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Wire, GateKind, TyKind, CircuitTrait, CircuitExt};
 use crate::ir::typed::{TWire, Builder};
-use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset};
+use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset, MemSegment};
 
 /// The known contents of memory at some point in the execution.  This is used to resolve some
 /// memory loads to a wire containing the value without using an actual memory port.
@@ -22,6 +22,18 @@ impl<'a> KnownMem<'a> {
         KnownMem {
             default: Some(default),
             .. KnownMem::default()
+        }
+    }
+
+    pub fn init_segment(
+        &mut self,
+        seg: &MemSegment,
+        values: &[TWire<'a, u64>],
+    ) {
+        for i in 0 .. seg.len {
+            let waddr = seg.start + i;
+            let value = values[i as usize];
+            self.mem.insert(waddr, (MemOpWidth::WORD, value));
         }
     }
 

@@ -34,14 +34,19 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn init_segment(&mut self
-                        , b: &Builder<'a>
-                        , seg: &MemSegment
-                        , equivs: &mut HashMap<String, usize>
-                        , equiv_segments: &mut Vec<Option<Vec<TWire<'a,u64>>>> ) {
+    /// Add `MemPort`s for initializing `seg`.  Returns wires carrying the value of each word in
+    /// the segment.
+    pub fn init_segment(
+        &mut self,
+        b: &Builder<'a>,
+        seg: &MemSegment,
+        equivs: &mut HashMap<String, usize>,
+        equiv_segments: &mut Vec<Option<Vec<TWire<'a,u64>>>>,
+    ) -> Vec<TWire<'a, u64>> {
         let mut unused = self.unused.borrow_mut();
         self.ports.reserve(seg.len as usize);
         unused.reserve(seg.len as usize);
+        let mut value_wires = Vec::with_capacity(seg.len as usize);
 
         
         // Get the values of the word.  `data` is implicitly zero-padded out to
@@ -85,7 +90,6 @@ impl<'a> Memory<'a> {
             // Initial memory values are given in terms of words, not bytes.
             let waddr = seg.start + (i as u64);
 
-
             // Most of the MemPort is public.  Only the value is secret, if `seg.secret` is set.
             let mut mp = b.lit(MemPort {
                 cycle: MEM_PORT_PRELOAD_CYCLE,
@@ -97,10 +101,13 @@ impl<'a> Memory<'a> {
             });
 
             mp.value = *mem_wire;
+
+            value_wires.push(mp.value);
             self.ports.push(mp);
             unused.push(false);
         }
 
+        value_wires
     }
 
     pub fn add_cycles<'b>(

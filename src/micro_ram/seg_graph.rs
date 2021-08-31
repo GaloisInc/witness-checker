@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::iter;
 use std::mem;
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
+use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params};
 use crate::routing::{Routing, RoutingBuilder, InputId, OutputId};
 
@@ -52,6 +54,10 @@ struct SegmentNode<'a> {
 
     from_net: Option<OutputId>,
     to_net: Option<InputId>,
+
+    /// Tracks whether `take_initial_mem` has been called on this segment.
+    took_initial_mem: bool,
+    final_mem: Counted<KnownMem<'a>>,
 }
 
 /// A `CycleBreakNode` logically computes an initial state from its predecessors and returns it
@@ -95,6 +101,7 @@ pub struct SegGraphBuilder<'a> {
     default_state: RamState,
     cpu_init_state: RamState,
     cpu_init_state_wire: TWire<'a, RamState>,
+    cpu_init_mem: Counted<KnownMem<'a>>,
 }
 
 impl<'a> SegGraphBuilder<'a> {
@@ -119,6 +126,7 @@ impl<'a> SegGraphBuilder<'a> {
             default_state: RamState::default_with_regs(params.num_regs),
             cpu_init_state: cpu_init_state.clone(),
             cpu_init_state_wire: b.lit(cpu_init_state),
+            cpu_init_mem: Counted::new(),
         };
 
         let network = match sg.network {
@@ -173,6 +181,7 @@ impl<'a> SegGraphBuilder<'a> {
         }
 
         sg.break_cycles(b, params);
+        sg.count_final_mem_users();
 
         sg
     }
@@ -392,6 +401,62 @@ impl<'a> SegGraphBuilder<'a> {
             StateSource::CycleBreak(idx) =>
                 self.cycle_breaks[idx].secret.wire(),
         }
+    }
+
+    fn count_final_mem_users(&mut self) {
+        let mut pred_idxs = Vec::new();
+        for i in 0..self.segments.len() {
+            if !self.segments[i].has_initial_mem() {
+                continue;
+            }
+
+            for pred in &self.segments[i].preds {
+                match pred.src {
+                    StateSource::CpuInit => { self.cpu_init_mem.add_user(); },
+                    StateSource::Segment(j) => pred_idxs.push(j),
+                    _ => {},
+                }
+            }
+            for &j in &pred_idxs {
+                self.segments[j].final_mem.add_user();
+            }
+            pred_idxs.clear();
+        }
+    }
+
+    /// Obtain the initial memory state for segment `idx`.
+    ///
+    /// To avoid expensive clones, this method returns ownership of the memory state.  As a result,
+    /// this method will panic if it's called multiple times with the same `idx`.
+    pub fn take_initial_mem(&mut self, idx: usize) -> KnownMem<'a> {
+        assert!(!self.segments[idx].took_initial_mem,
+            "duplicate call to take_initial_mem({})", idx);
+        if !self.segments[idx].has_initial_mem() {
+            return KnownMem::new();
+        }
+
+        let mut mem = None;
+        for j in 0 .. self.segments[idx].preds.len() {
+            let pred = &self.segments[idx].preds[j];
+            let pred_mem = match pred.src {
+                StateSource::CpuInit => self.cpu_init_mem.take(),
+                StateSource::Segment(j) => self.segments[j].final_mem.take(),
+                _ => continue,
+            };
+            assert!(mem.is_none());
+            mem = Some(pred_mem.into_owned());
+            // TODO: when adding merging, will need an iterator to get simultaneous mutable access
+            // to all predecessors of segment `idx`
+        }
+        mem.unwrap()
+    }
+
+    pub fn set_final_mem(&mut self, idx: usize, mem: KnownMem<'a>) {
+        self.segments[idx].final_mem.set(mem);
+    }
+
+    pub fn set_cpu_init_mem(&mut self, mem: KnownMem<'a>) {
+        self.cpu_init_mem.set(mem);
     }
 
     fn liveness_flag(&self, b: &Builder<'a>, l: Liveness) -> TWire<'a, bool> {
@@ -659,6 +724,33 @@ impl<'a> SegGraphBuilder<'a> {
     }
 }
 
+impl<'a> SegmentNode<'a> {
+    fn has_initial_mem(&self) -> bool {
+        let mut num_cpu_init = 0;
+        let mut num_segment = 0;
+        for pred in &self.preds {
+            match pred.src {
+                StateSource::CpuInit => { num_cpu_init += 1; },
+                StateSource::Segment(_) => { num_segment += 1; },
+                // `Network`/`CycleBreak` always has unknown initial memory state, and merging
+                // unknown with anything produces unknown.  Thus there's no point in computing an
+                // initial memory for segments with these predecessors.
+                StateSource::Network(_) |
+                StateSource::CycleBreak(_) => return false,
+            }
+        }
+
+        // We don't yet support merging, so we require that there be only one predecessor.
+        if self.preds.len() != 1 {
+            return false;
+        }
+        let _ = num_cpu_init;
+        let _ = num_segment;
+
+        true
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SegGraphItem {
     Segment(usize),
@@ -716,5 +808,48 @@ impl<'a> SegGraph<'a> {
 
     pub fn finish(self, b: &Builder<'a>) {
         self.network.finish(b);
+    }
+}
+
+
+/// A value of type `T`, along with a user count, which limits how many times `take()` can be
+/// called.  The last user gets ownership of the `T`; all other users get a reference instead.
+#[derive(Default)]
+struct Counted<T> {
+    /// The wrapped value, if it has been set.
+    ///
+    /// **Invariant**:  If `user_count` is zero, then `value` is `None`.
+    value: Option<T>,
+    user_count: usize,
+}
+
+impl<T: Clone> Counted<T> {
+    pub fn new() -> Counted<T> {
+        Counted {
+            value: None,
+            user_count: 0,
+        }
+    }
+
+    pub fn add_user(&mut self) {
+        self.user_count += 1;
+    }
+
+    pub fn set(&mut self, value: T) {
+        assert!(self.value.is_none(), "multiple calls to set_value");
+        if self.user_count > 0 {
+            self.value = Some(value);
+        }
+    }
+
+    pub fn take(&mut self) -> Cow<T> {
+        assert!(self.user_count > 0, "called take() too many times");
+        assert!(self.value.is_some(), "called take() before set");
+        self.user_count -= 1;
+        if self.user_count == 0 {
+            Cow::Owned(self.value.take().unwrap())
+        } else {
+            Cow::Borrowed(self.value.as_ref().unwrap())
+        }
     }
 }

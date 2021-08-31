@@ -16,6 +16,7 @@ use cheesecloth::lower::{self, AddPass};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
+use cheesecloth::micro_ram::known_mem::KnownMem;
 use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
@@ -231,8 +232,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     for (name,exec) in multi_exec.inner.execs.iter(){
         // Set up memory ports and check consistency.
         let mut mem = Memory::new();
+        let mut kmem = KnownMem::with_default(b.lit(0));
         for seg in &exec.init_mem {
-            mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
+            let values = mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
+            kmem.init_segment(seg, &values);
         }
 
         // Set up instruction-fetch ports and check consistency.
@@ -267,6 +270,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         let mut seg_graph_builder = SegGraphBuilder::new(
             &b, &exec.segments, &exec.params, init_state.clone());
         std::fs::write("out.dot", seg_graph_builder.dump()).unwrap();
+        seg_graph_builder.set_cpu_init_mem(kmem);
 
         for item in seg_graph_builder.get_order() {
             let idx = match item {
@@ -279,8 +283,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             
             let seg_def = &exec.segments[idx];
             let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
+            let _prev_kmem = seg_graph_builder.take_initial_mem(idx);
             let seg = segment_builder.run(idx, seg_def, prev_state);
             seg_graph_builder.set_final(idx, seg.final_state().clone());
+            seg_graph_builder.set_final_mem(idx, KnownMem::new());
             assert!(!segments_map.contains_key(&idx));
             segments_map.insert(idx, seg);
         }
