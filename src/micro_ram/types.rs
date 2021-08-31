@@ -736,7 +736,7 @@ where
 
 
 mk_named_enum! {
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
     pub enum MemOpWidth {
         W1 = 0,
         W2 = 1,

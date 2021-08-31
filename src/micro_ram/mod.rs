@@ -3,6 +3,7 @@ pub mod context;
 
 pub mod feature;
 pub mod fetch;
+pub mod known_mem;
 pub mod mem;
 pub mod parse;
 pub mod seg_graph;

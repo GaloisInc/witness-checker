@@ -89,6 +89,11 @@ pub fn concat_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, x: TWire<'a, T>) -> Wi
     bld.circuit().gadget(gk, &[w])
 }
 
+pub fn concat_bits_raw<'a>(c: &impl CircuitTrait<'a>, ws: &[Wire<'a>]) -> Wire<'a> {
+    let gk = c.intern_gadget_kind(ConcatBits);
+    c.gadget(gk, ws)
+}
+
 
 /// The reverse of `ConcatBits`: split a large `Uint` into pieces, producing something of the
 /// indicated type (usually a `Bundle`).
