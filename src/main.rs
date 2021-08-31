@@ -218,6 +218,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let mut segment_builder = SegmentBuilder {
         cx: &cx,
         b: &b,
+        ev: CachingEvaluator::new(b.circuit()),
         mem: &mut mem,
         fetch: &mut fetch,
         params: &exec.params,
