@@ -277,6 +277,7 @@ fn calc_step<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
+
     case!(Opcode::And, b.and(x, y));
     case!(Opcode::Or, b.or(x, y));
     case!(Opcode::Xor, b.xor(x, y));
