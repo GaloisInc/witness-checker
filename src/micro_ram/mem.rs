@@ -2,9 +2,12 @@
 //!
 //! This includes setting up initial memory, adding `MemPort`s for each cycle, sorting, and
 //! checking the sorted list.
+use std::cell::RefCell;
 use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::iter;
+use std::rc::Rc;
 use log::*;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::CircuitExt;
@@ -20,12 +23,14 @@ use crate::routing::sort;
 
 pub struct Memory<'a> {
     ports: Vec<TWire<'a, MemPort>>,
+    unused: Rc<RefCell<Vec<bool>>>,
 }
 
 impl<'a> Memory<'a> {
     pub fn new() -> Memory<'a> {
         Memory {
             ports: Vec::new(),
+            unused: Rc::default(),
         }
     }
 
@@ -34,7 +39,9 @@ impl<'a> Memory<'a> {
                         , seg: &MemSegment
                         , equivs: &mut HashMap<String, usize>
                         , equiv_segments: &mut Vec<Option<Vec<TWire<'a,u64>>>> ) {
+        let mut unused = self.unused.borrow_mut();
         self.ports.reserve(seg.len as usize);
+        unused.reserve(seg.len as usize);
 
         
         // Get the values of the word.  `data` is implicitly zero-padded out to
@@ -91,6 +98,7 @@ impl<'a> Memory<'a> {
 
             mp.value = *mem_wire;
             self.ports.push(mp);
+            unused.push(false);
         }
 
     }
@@ -132,6 +140,8 @@ impl<'a> Memory<'a> {
         let mut cp = CyclePorts {
             port_starts: Vec::new(),
             ports: Vec::new(),
+            unused: self.unused.clone(),
+            unused_offset: self.unused.borrow().len(),
         };
 
         let ranges = ranges.into_iter();
@@ -170,6 +180,7 @@ impl<'a> Memory<'a> {
 
         cp.assert_valid(cx, b);
         self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
+        self.unused.borrow_mut().extend(iter::repeat(false).take(cp.ports.len()));
         cp
     }
 
@@ -177,11 +188,20 @@ impl<'a> Memory<'a> {
     ///
     /// This takes `self` by value to prevent adding more `MemPort`s after the consistency check.
     pub fn assert_consistent(self, cx: &Context<'a>, b: &Builder<'a>) {
+        let unused = self.unused.borrow();
+        let ports = &self.ports;
+        assert!(ports.len() == unused.len());
+        let iter_ports = || {
+            ports.iter().zip(unused.iter()).filter_map(|(p, &unused)| {
+                if unused { None } else { Some(p) }
+            })
+        };
+
         // Sort the memory ports by addres and then by cycle.  Most of the ordering logic is
         // handled by the `typed::Lt` impl for `PackedMemPort`.
         let sorted_ports = {
             let _g = b.scoped_label("sort mem");
-            let mut packed_ports = self.ports.iter().map(|&mp| {
+            let mut packed_ports = iter_ports().map(|&mp| {
                 PackedMemPort::from_unpacked(&b, mp)
             }).collect::<Vec<_>>();
             // Using `lt` instead of `le` for the comparison here means the sortedness check will
@@ -193,7 +213,7 @@ impl<'a> Memory<'a> {
 
         // Debug logging, showing the state before and after sorting.
         trace!("mem ops:");
-        for (i, port) in self.ports.iter().enumerate() {
+        for (i, port) in iter_ports().enumerate() {
             trace!(
                 "mem op {:3}: op{}, {:x}, value {}, cycle {}",
                 i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value),
@@ -265,6 +285,13 @@ impl<'a> SparseMemPort<'a> {
     fn num_candidate_users(&self) -> u8 {
         self.max_candidate_users - self.public_non_users.count_ones() as u8
     }
+
+    fn set_unused_by(&mut self, user: u8) {
+        debug_assert!(user < self.max_candidate_users);
+        if let Some(mask) = 1_u64.checked_shl(user as u32) {
+            self.public_non_users |= mask;
+        }
+    }
 }
 
 pub struct CyclePorts<'a> {
@@ -273,6 +300,9 @@ pub struct CyclePorts<'a> {
     /// to indicate the length (number of cycles covered) of the last port.
     port_starts: Vec<u32>,
     ports: Vec<SparseMemPort<'a>>,
+
+    unused: Rc<RefCell<Vec<bool>>>,
+    unused_offset: usize,
 }
 
 impl<'a> CyclePorts<'a> {
@@ -340,6 +370,23 @@ impl<'a> CyclePorts<'a> {
         smp.is_set = true;
     }
 
+    /// Record that cycle `i` is publicly known not to use its `MemPort`.
+    pub fn set_unused(&mut self, i: usize) {
+        if let Some((idx, user)) = self.index_to_port(u32::try_from(i).unwrap()) {
+            let smp = &mut self.ports[idx];
+            debug_assert!(smp.is_candidate_user(user));
+            // Rather than handle interactions between `set_port` and `set_unused` on the same
+            // port, we just require all `set_unused` calls to happen first.
+            assert!(!smp.is_set,
+                "marked cycle {} unused, but its sparse mem port {} is already used", i, idx);
+            smp.set_unused_by(user);
+            if smp.num_candidate_users() == 0 {
+                smp.is_set = true;
+                self.unused.borrow_mut()[self.unused_offset + idx] = true;
+            }
+        }
+    }
+
     pub fn iter<'b>(&'b self) -> impl Iterator<Item = SparseMemPort<'a>> + 'b {
         self.ports.iter().cloned()
     }
@@ -369,7 +416,7 @@ impl<'a> CyclePorts<'a> {
 
             // The number of candidate users is usually very small (<5), so a bunch of `or`s is
             // probably faster than converting to bits for an `lt`.
-            let mut acc = b.lit(false);
+            let mut acc = b.eq(smp.mp.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
             for user in 0..smp.max_candidate_users {
                 if smp.is_candidate_user(user) {
                     acc = b.or(acc, b.eq(smp.user, b.lit(user)));
