@@ -9,8 +9,14 @@ use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset
 /// memory loads to a wire containing the value without using an actual memory port.
 #[derive(Clone, Debug, Default)]
 pub struct KnownMem<'a> {
-    mem: BTreeMap<u64, (MemOpWidth, TWire<'a, u64>)>,
+    mem: BTreeMap<u64, MemEntry<'a>>,
     default: Option<TWire<'a, u64>>,
+}
+
+#[derive(Clone, Debug)]
+struct MemEntry<'a> {
+    width: MemOpWidth,
+    value: TWire<'a, u64>,
 }
 
 impl<'a> KnownMem<'a> {
@@ -33,7 +39,7 @@ impl<'a> KnownMem<'a> {
         for i in 0 .. seg.len {
             let waddr = (seg.start + i) * WORD_BYTES as u64;
             let value = values[i as usize];
-            self.mem.insert(waddr, (MemOpWidth::WORD, value));
+            self.mem.insert(waddr, MemEntry { width: MemOpWidth::WORD, value });
         }
     }
 
@@ -67,18 +73,18 @@ impl<'a> KnownMem<'a> {
         let mut parts_end = addr;
 
         debug_assert!(end - waddr <= WORD_BYTES as u64);
-        for (&mem_addr, &(mem_width, mem_value)) in self.mem.range(waddr .. end) {
-            let mem_end = mem_addr + mem_width.bytes() as u64;
+        for (&mem_addr, entry) in self.mem.range(waddr .. end) {
+            let mem_end = mem_addr + entry.width.bytes() as u64;
             if mem_end <= addr {
                 continue;
             }
             // Otherwise, this `mem` entry overlaps `addr .. end`.
 
-            if mem_width >= width {
+            if entry.width >= width {
                 // This entry covers the entire load.
                 debug_assert!(parts.len() == 0);
                 debug_assert!(mem_end >= end);
-                return Some(extract_byte_range_extended(b, mem_value, mem_addr, addr, end));
+                return Some(extract_byte_range_extended(b, entry.value, mem_addr, addr, end));
             } else {
                 // This entry covers a strict subset of the load.
 
@@ -90,7 +96,7 @@ impl<'a> KnownMem<'a> {
                     parts_end = mem_addr;
                 }
 
-                let part = extract_byte_range(b, mem_value, mem_addr, parts_end, mem_end);
+                let part = extract_byte_range(b, entry.value, mem_addr, parts_end, mem_end);
                 parts.push(part);
                 parts_end = mem_end;
             }
@@ -141,9 +147,9 @@ impl<'a> KnownMem<'a> {
 
         // Remove any entries that would be entirely overlapped by this one.
         let mut to_remove = ArrayVec::<[_; 8]>::new();
-        for (&mem_addr, &(mem_width, _)) in self.mem.range(addr .. end) {
+        for (&mem_addr, entry) in self.mem.range(addr .. end) {
             if mem_addr == addr {
-                if mem_width < width {
+                if entry.width < width {
                     to_remove.push(mem_addr);
                 }
             } else {
@@ -156,16 +162,16 @@ impl<'a> KnownMem<'a> {
 
         // Check if some existing entry entirely overlaps the new one.
         debug_assert!(end - waddr <= WORD_BYTES as u64);
-        for (&mem_addr, &mut (mem_width, ref mut mem_value)) in self.mem.range_mut(waddr .. end) {
-            let mem_end = mem_addr + mem_width.bytes() as u64;
+        for (&mem_addr, entry) in self.mem.range_mut(waddr .. end) {
+            let mem_end = mem_addr + entry.width.bytes() as u64;
             if mem_end <= addr {
                 continue;
             }
             // Otherwise, this `mem` entry overlaps `addr .. end`.
 
-            *mem_value = replace_byte_range(
+            entry.value = replace_byte_range(
                 b,
-                mem_addr, mem_end, *mem_value,
+                mem_addr, mem_end, entry.value,
                 addr, end, value,
             );
             return;
@@ -178,7 +184,7 @@ impl<'a> KnownMem<'a> {
         } else {
             value
         };
-        self.mem.insert(addr, (width, value));
+        self.mem.insert(addr, MemEntry { width, value });
     }
 
     pub fn clear(&mut self) {
