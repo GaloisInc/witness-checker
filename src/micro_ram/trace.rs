@@ -375,7 +375,7 @@ fn calc_step<'a>(
         dest = b.lit(REG_NONE);
         if opcode == Some(Opcode::Poison8) {
             let (addr, value) = (y, x);
-            kmem.store(b, addr, value, MemOpWidth::W8);
+            kmem.poison(b, addr, value, MemOpWidth::W8);
         }
         b.lit(0)
     });

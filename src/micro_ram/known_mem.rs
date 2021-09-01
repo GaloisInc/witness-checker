@@ -17,6 +17,10 @@ pub struct KnownMem<'a> {
 struct MemEntry<'a> {
     width: MemOpWidth,
     value: TWire<'a, u64>,
+    /// This flag is `true` if any byte covered by this entry might be poisoned.  We conservatively
+    /// refuse to resolve loads of possibly-poisoned bytes, so that the caller will instead use a
+    /// normal `MemPort`, which can detect the poison if present.
+    poisoned: bool,
 }
 
 impl<'a> KnownMem<'a> {
@@ -39,7 +43,7 @@ impl<'a> KnownMem<'a> {
         for i in 0 .. seg.len {
             let waddr = (seg.start + i) * WORD_BYTES as u64;
             let value = values[i as usize];
-            self.mem.insert(waddr, MemEntry { width: MemOpWidth::WORD, value });
+            self.mem.insert(waddr, MemEntry { width: MemOpWidth::WORD, value, poisoned: false });
         }
     }
 
@@ -79,6 +83,11 @@ impl<'a> KnownMem<'a> {
                 continue;
             }
             // Otherwise, this `mem` entry overlaps `addr .. end`.
+
+            if entry.poisoned {
+                // Don't resolve loads that touch possibly-poisoned bytes.
+                return None;
+            }
 
             if entry.width >= width {
                 // This entry covers the entire load.
@@ -120,13 +129,34 @@ impl<'a> KnownMem<'a> {
         value: TWire<'a, u64>,
         width: MemOpWidth,
     ) {
+        self.store_common(b, addr, value, width, false)
+    }
+
+    pub fn poison(
+        &mut self,
+        b: &Builder<'a>,
+        addr: TWire<'a, u64>,
+        value: TWire<'a, u64>,
+        width: MemOpWidth,
+    ) {
+        self.store_common(b, addr, value, width, true)
+    }
+
+    fn store_common(
+        &mut self,
+        b: &Builder<'a>,
+        addr: TWire<'a, u64>,
+        value: TWire<'a, u64>,
+        width: MemOpWidth,
+        poisoned: bool,
+    ) {
         let public_addr = match addr.repr.kind {
             GateKind::Lit(bits, _) => bits.as_u64(),
             _ => None,
         };
 
         if let Some(public_addr) = public_addr {
-            self.store_public(b, public_addr, value, width);
+            self.store_public(b, public_addr, value, width, poisoned);
         } else {
             // The write modifies an unknown address.  Afterward, we can no longer be sure about
             // the value of any address.
@@ -140,6 +170,7 @@ impl<'a> KnownMem<'a> {
         addr: u64,
         value: TWire<'a, u64>,
         width: MemOpWidth,
+        poisoned: bool,
     ) {
         assert!(addr % width.bytes() as u64 == 0);
         let end = addr + width.bytes() as u64;
@@ -174,6 +205,7 @@ impl<'a> KnownMem<'a> {
                 mem_addr, mem_end, entry.value,
                 addr, end, value,
             );
+            entry.poisoned |= poisoned;
             return;
         }
 
@@ -184,7 +216,7 @@ impl<'a> KnownMem<'a> {
         } else {
             value
         };
-        self.mem.insert(addr, MemEntry { width, value });
+        self.mem.insert(addr, MemEntry { width, value, poisoned });
     }
 
     pub fn clear(&mut self) {
@@ -277,7 +309,7 @@ mod test {
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1);
+            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
         for i in 0..8 {
@@ -296,7 +328,7 @@ mod test {
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1);
+            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
@@ -312,7 +344,7 @@ mod test {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
-        m.store_public(&b, 0, b.lit(0x0807060504030201), MemOpWidth::W8);
+        m.store_public(&b, 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
 
         for i in 0..8 {
             let w = m.load_public(&b, i, MemOpWidth::W1).unwrap();
@@ -332,7 +364,7 @@ mod test {
 
         let mut m = KnownMem::with_default(b.lit(0x8877665544332211));
         for &i in &[1,2,3,5,6] {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1);
+            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
@@ -351,7 +383,7 @@ mod test {
 
         let mut m = KnownMem::new();
         for i in 0..8 {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1);
+            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
@@ -369,7 +401,7 @@ mod test {
 
         let mut m = KnownMem::new();
         for &i in &[1,2,3,5,6] {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1);
+            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
         assert!(m.load_public(&b, 0, MemOpWidth::W8).is_none());
@@ -385,11 +417,11 @@ mod test {
 
         let mut m = KnownMem::with_default(b.lit(0));
         for &i in &[1,2,3,5,6] {
-            m.store_public(&b, i, b.lit(i + 3), MemOpWidth::W1);
+            m.store_public(&b, i, b.lit(i + 3), MemOpWidth::W1, false);
         }
-        m.store_public(&b, 0, b.lit(0x0201), MemOpWidth::W2);
-        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2);
-        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4);
+        m.store_public(&b, 0, b.lit(0x0201), MemOpWidth::W2, false);
+        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2, false);
+        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
         // All the one-byte writes should have been removed.
         assert!(m.mem.len() == 3);
 
@@ -407,9 +439,9 @@ mod test {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
-        m.store_public(&b, 0, b.lit(0x0000000000000201), MemOpWidth::W8);
-        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2);
-        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4);
+        m.store_public(&b, 0, b.lit(0x0000000000000201), MemOpWidth::W8, false);
+        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2, false);
+        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
         assert!(m.mem.len() == 1);
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
@@ -426,12 +458,12 @@ mod test {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
-        m.store_public(&b, 0, b.lit(0), MemOpWidth::W2);
-        m.store_public(&b, 2, b.lit(0), MemOpWidth::W2);
-        m.store_public(&b, 4, b.lit(0), MemOpWidth::W4);
-        m.store_public(&b, 0, b.lit(0x0201), MemOpWidth::W2);
-        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2);
-        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4);
+        m.store_public(&b, 0, b.lit(0), MemOpWidth::W2, false);
+        m.store_public(&b, 2, b.lit(0), MemOpWidth::W2, false);
+        m.store_public(&b, 4, b.lit(0), MemOpWidth::W4, false);
+        m.store_public(&b, 0, b.lit(0x0201), MemOpWidth::W2, false);
+        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2, false);
+        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(w).unwrap();
