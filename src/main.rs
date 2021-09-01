@@ -283,10 +283,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             
             let seg_def = &exec.segments[idx];
             let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
-            let _prev_kmem = seg_graph_builder.take_initial_mem(idx);
-            let seg = segment_builder.run(idx, seg_def, prev_state);
+            let prev_kmem = seg_graph_builder.take_initial_mem(idx);
+            let (seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem);
             seg_graph_builder.set_final(idx, seg.final_state().clone());
-            seg_graph_builder.set_final_mem(idx, KnownMem::new());
+            seg_graph_builder.set_final_mem(idx, kmem);
             assert!(!segments_map.contains_key(&idx));
             segments_map.insert(idx, seg);
         }

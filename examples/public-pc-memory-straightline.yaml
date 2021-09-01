@@ -1,5 +1,5 @@
 ## FLAGS: --validate-only --expect-zero
-# An example with memory ops inside public PC segments.
+# An example with memory ops inside public PC segments, and no merging.
 
 - [0,1,0,0]
 - [public-pc]
@@ -34,17 +34,12 @@
   segments:
     - constraints: [[pc, 0]]
       len: 2
-      successors: [1, 2]
+      successors: [1]
       enter_from_network: false
       exit_to_network: false
     - constraints: [[pc, 2]]
       len: 2
-      successors: [3]
-      enter_from_network: false
-      exit_to_network: false
-    - constraints: [[pc, 4]]
-      len: 1
-      successors: [3]
+      successors: [2]
       enter_from_network: false
       exit_to_network: false
     - constraints: [[pc, 5]]
@@ -62,7 +57,7 @@
       states:
         - [3, [7, 0]]
         - [5, [7, 0]]
-    - segment: 3
+    - segment: 2
       states:
         - [6, [7, 0]]
         - [7, [7, 7]]

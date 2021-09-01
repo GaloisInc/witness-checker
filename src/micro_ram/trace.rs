@@ -5,6 +5,7 @@ use crate::eval::{self, CachingEvaluator};
 use crate::ir::typed::{TWire, TSecretHandle, Builder, EvaluatorExt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
+use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{self, Memory, extract_bytes_at_offset, extract_low_bytes};
 use crate::micro_ram::types::{
     self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
@@ -45,12 +46,13 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
         idx: usize,
         s: &types::Segment,
         init_state: TWire<'a, RamState>,
-    ) -> Segment<'a> {
+        mut kmem: KnownMem<'a>,
+    ) -> (Segment<'a>, KnownMem<'a>) {
         let cx = self.cx;
         let b = self.b;
         let ev = &mut self.ev;
 
-        let mem_ports: mem::CyclePorts;
+        let mut mem_ports: mem::CyclePorts;
         let fetch_ports: Option<fetch::CyclePorts>;
         if let Some(init_pc) = s.init_pc() {
             let prog = self.prog;
@@ -120,7 +122,10 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             let advice = advice_secrets[i].wire().clone();
 
             let (calc_state, calc_im) =
-                calc_step(cx, b, ev, i, instr, &mem_port, advice, &prev_state);
+                calc_step(cx, b, ev, i, instr, &mem_port, advice, &prev_state, &mut kmem);
+            if calc_im.mem_port_unused {
+                mem_ports.set_unused(i);
+            }
             check_step(cx, b, idx, i,
                 prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
@@ -129,7 +134,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             prev_state = calc_state;
         }
 
-        Segment {
+        let seg = Segment {
             idx,
             len: s.len,
             states,
@@ -138,7 +143,8 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             mem_ports,
             advice_secrets,
             stutter_secrets,
-        }
+        };
+        (seg, kmem)
     }
 }
 
@@ -174,7 +180,11 @@ impl<'a> Segment<'a> {
             for adv in adv_list {
                 match *adv {
                     Advice::MemOp { addr, value, op, width, tainted } => {
-                        self.mem_ports.set_port(b, i, MemPort { cycle, addr, value, op, width, tainted });
+                        if self.mem_ports.has_port(i) {
+                            self.mem_ports.set_port(b, i, MemPort {
+                                cycle, addr, value, op, width, tainted,
+                            });
+                        }
                     },
                     Advice::Stutter => {
                         self.stutter_secrets[i].set(b, true);
@@ -246,6 +256,7 @@ fn calc_step<'a>(
     mem_port: &TWire<'a, MemPort>,
     advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
+    kmem: &mut KnownMem<'a>,
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let _g = b.scoped_label(format_args!("calc_step/cycle {}", idx));
 
@@ -276,6 +287,10 @@ fn calc_step<'a>(
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
+
+    // This flag is set if the `MemPort` is publicly known to be unused.  `Load*` ops may set this
+    // if `opcode` is known; otherwise, all non-memory ops set this below.
+    let mut mem_port_unused = false;
 
 
     case!(Opcode::And, b.and(x, y));
@@ -331,18 +346,37 @@ fn calc_step<'a>(
     // Load1, Load2, Load4, Load8
     for w in MemOpWidth::iter() {
         case!(w.load_opcode(), {
-            extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w)
+            let addr = y;
+            let known_value = if opcode == Some(w.load_opcode()) {
+                kmem.load(b, addr, w)
+            } else {
+                None
+            };
+            if let Some(known_value) = known_value {
+                mem_port_unused = true;
+                known_value
+            } else {
+                extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w)
+            }
         });
     }
     // Store1, Store2, Store4, Store8
     for w in MemOpWidth::iter() {
         case!(w.store_opcode(), {
             dest = b.lit(REG_NONE);
+            if opcode == Some(w.store_opcode()) {
+                let (addr, value) = (y, x);
+                kmem.store(b, addr, value, w);
+            }
             b.lit(0)
         });
     }
     case!(Opcode::Poison8, {
         dest = b.lit(REG_NONE);
+        if opcode == Some(Opcode::Poison8) {
+            let (addr, value) = (y, x);
+            kmem.store(b, addr, value, MemOpWidth::W8);
+        }
         b.lit(0)
     });
 
@@ -363,7 +397,13 @@ fn calc_step<'a>(
 
 
     if is_mode::<AnyTainted>() {
-        // Opcode::Sink is a no-op in the standard interpreter, so we let if fall through to the default below.
+        // Opcode::Sink is a no-op in the standard interpreter.
+        for w in MemOpWidth::iter() {
+            case!(w.sink_opcode(), {
+                dest = b.lit(REG_NONE);
+                b.lit(0)
+            });
+        }
         // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
         // later taint handling step. We set the value back to itself so that taint operations are treated
         // like `mov rX rX`.
@@ -396,10 +436,20 @@ fn calc_step<'a>(
     let cycle = b.add(s1.cycle, b.lit(1));
     let live = s1.live;
 
+    if let Some(opcode) = opcode {
+        if !opcode.is_mem() {
+            mem_port_unused = true;
+        }
+    } else {
+        // The opcode is unknown, so it could be performing any store at any address.
+        kmem.clear();
+    }
+
     let s2 = RamStateRepr { cycle, pc, regs, live, tainted_regs };
     let im = CalcIntermediate {
         x, y, result,
         tainted: tainted_im,
+        mem_port_unused,
     };
     (TWire::new(s2), im)
 }
@@ -458,80 +508,84 @@ fn check_step<'a>(
     let x = calc_im.x;
     let y = calc_im.y;
 
-    // If the instruction is a store, load, or poison, we need additional checks to make sure the
-    // fields of `mem_port` match the instruction operands.
-    let is_load = MemOpWidth::iter().map(|w| w.load_opcode())
-        .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
-    let is_store = MemOpWidth::iter().map(|w| w.store_opcode())
-        .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
-    let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison8 as u8));
-    let is_store_like = b.or(is_store, is_poison);
-    let is_mem = b.or(is_load, is_store_like);
+    if !calc_im.mem_port_unused {
+        // If the instruction is a store, load, or poison, we need additional checks to make sure
+        // the fields of `mem_port` match the instruction operands.
+        let is_load = MemOpWidth::iter().map(|w| w.load_opcode())
+            .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
+        let is_store = MemOpWidth::iter().map(|w| w.store_opcode())
+            .fold(b.lit(false), |acc, op| b.or(acc, b.eq(instr.opcode, b.lit(op as u8))));
+        let is_poison = b.eq(instr.opcode, b.lit(Opcode::Poison8 as u8));
+        let is_store_like = b.or(is_store, is_poison);
+        let is_mem = b.or(is_load, is_store_like);
 
-    let addr = y;
+        let addr = y;
 
-    // TODO: we could avoid most of the `live` checks if public-pc segments set appropriate
-    // defaults when constructing their MemPorts (so the checks automatically pass on non-live
-    // segments).  for secret segments we can continue to rely on non-live segments running nothing
-    // but `Opcode::Stutter`.
+        // TODO: we could avoid most of the `live` checks if public-pc segments set appropriate
+        // defaults when constructing their MemPorts (so the checks automatically pass on non-live
+        // segments).  for secret segments we can continue to rely on non-live segments running
+        // nothing but `Opcode::Stutter`.
 
-    cx.when(b, b.and(is_mem, live), |cx| {
-        wire_assert!(
-            cx, b.eq(mem_port.addr, addr),
-            "segment {}: step {}'s mem port has address {} (expected {})",
-            seg_idx, idx, cx.eval(mem_port.addr), cx.eval(addr),
-        );
-        let flag_ops = [
-            (is_load, MemOpKind::Read),
-            (is_store, MemOpKind::Write),
-            (is_poison, MemOpKind::Poison),
-        ];
-        for &(flag, op) in flag_ops.iter() {
-            cx.when(b, flag, |cx| {
+        cx.when(b, b.and(is_mem, live), |cx| {
+            wire_assert!(
+                cx, b.eq(mem_port.addr, addr),
+                "segment {}: step {}'s mem port has address {} (expected {})",
+                seg_idx, idx, cx.eval(mem_port.addr), cx.eval(addr),
+            );
+            let flag_ops = [
+                (is_load, MemOpKind::Read),
+                (is_store, MemOpKind::Write),
+                (is_poison, MemOpKind::Poison),
+            ];
+            for &(flag, op) in flag_ops.iter() {
+                cx.when(b, flag, |cx| {
+                    wire_assert!(
+                        cx, b.eq(mem_port.op, b.lit(op)),
+                        "segment {}: step {}'s mem port has op kind {} (expected {}, {:?})",
+                        seg_idx, idx, cx.eval(mem_port.op.repr), op as u8, op,
+                    );
+                });
+            }
+            tainted::check_step_mem(
+                cx, b, seg_idx, idx, &mem_port, &is_store_like, &calc_im.tainted);
+        });
+
+        for w in MemOpWidth::iter() {
+            cx.when(b, b.and(b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), live), |cx| {
                 wire_assert!(
-                    cx, b.eq(mem_port.op, b.lit(op)),
-                    "segment {}: step {}'s mem port has op kind {} (expected {}, {:?})",
-                    seg_idx, idx, cx.eval(mem_port.op.repr), op as u8, op,
+                    cx, b.eq(mem_port.width, b.lit(w)),
+                    "segment {}: step {}'s mem port has width {:?} (expected {:?})",
+                    seg_idx, idx, cx.eval(mem_port.width), w,
+                );
+
+                let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
+                let x_low = extract_low_bytes(b, x, w);
+                wire_assert!(
+                    cx, b.eq(stored_value, x_low),
+                    "segment {}: step {}'s mem port stores value {} at {:x} (expected value {})",
+                    seg_idx, idx, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
                 );
             });
         }
-        tainted::check_step_mem(cx, b, seg_idx, idx, &mem_port, &is_store_like, &calc_im.tainted);
-    });
 
-    for w in MemOpWidth::iter() {
-        cx.when(b, b.and(b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), live), |cx| {
+        cx.when(b, b.and(is_poison, live), |cx| {
             wire_assert!(
-                cx, b.eq(mem_port.width, b.lit(w)),
+                cx, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
                 "segment {}: step {}'s mem port has width {:?} (expected {:?})",
-                seg_idx, idx, cx.eval(mem_port.width), w,
-            );
-
-            let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
-            let x_low = extract_low_bytes(b, x, w);
-            wire_assert!(
-                cx, b.eq(stored_value, x_low),
-                "segment {}: step {}'s mem port stores value {} at {:x} (expected value {})",
-                seg_idx, idx, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
+                seg_idx, idx, cx.eval(mem_port.width), MemOpWidth::W8,
             );
         });
-    }
 
-    cx.when(b, b.and(is_poison, live), |cx| {
+        // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
+        // MEM_PORT_UNUSED_CYCLE` and this is not a mem op.  Other `mem_port.cycle` values are
+        // invalid.
+        let expect_cycle = b.mux(b.and(is_mem, live), cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
         wire_assert!(
-            cx, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
-            "segment {}: step {}'s mem port has width {:?} (expected {:?})",
-            seg_idx, idx, cx.eval(mem_port.width), MemOpWidth::W8,
+            cx, b.eq(mem_port.cycle, expect_cycle),
+            "segment {}: step {} mem port cycle number is {} (expected {}; mem op? {})",
+            seg_idx, idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
         );
-    });
-
-    // Either `mem_port.cycle == cycle` and this step is a mem op, or `mem_port.cycle ==
-    // MEM_PORT_UNUSED_CYCLE` and this is not a mem op.  Other `mem_port.cycle` values are invalid.
-    let expect_cycle = b.mux(b.and(is_mem, live), cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
-    wire_assert!(
-        cx, b.eq(mem_port.cycle, expect_cycle),
-        "segment {}: step {} mem port cycle number is {} (expected {}; mem op? {})",
-        seg_idx, idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
-    );
+    }
 
     tainted::check_step(cx, b, seg_idx, idx, instr, calc_im);
 }

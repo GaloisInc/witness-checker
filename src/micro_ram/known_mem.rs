@@ -31,7 +31,7 @@ impl<'a> KnownMem<'a> {
         values: &[TWire<'a, u64>],
     ) {
         for i in 0 .. seg.len {
-            let waddr = seg.start + i;
+            let waddr = (seg.start + i) * WORD_BYTES as u64;
             let value = values[i as usize];
             self.mem.insert(waddr, (MemOpWidth::WORD, value));
         }

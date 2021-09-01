@@ -394,6 +394,10 @@ impl<'a> CyclePorts<'a> {
         }
     }
 
+    pub fn has_port(&self, i: usize) -> bool {
+        self.index_to_port(u32::try_from(i).unwrap()).is_some()
+    }
+
     pub fn iter<'b>(&'b self) -> impl Iterator<Item = SparseMemPort<'a>> + 'b {
         self.ports.iter().cloned()
     }
