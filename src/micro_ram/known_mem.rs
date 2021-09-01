@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 use arrayvec::ArrayVec;
+use crate::eval::{self, CachingEvaluator};
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Wire, GateKind, TyKind, CircuitTrait, CircuitExt};
-use crate::ir::typed::{TWire, Builder};
+use crate::ir::circuit::{Wire, TyKind, CircuitTrait, CircuitExt};
+use crate::ir::typed::{TWire, Builder, EvaluatorExt};
 use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset, MemSegment};
 
 /// The known contents of memory at some point in the execution.  This is used to resolve some
@@ -50,15 +51,13 @@ impl<'a> KnownMem<'a> {
     pub fn load(
         &mut self,
         b: &Builder<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
         addr: TWire<'a, u64>,
         width: MemOpWidth,
     ) -> Option<TWire<'a, u64>> {
         // Get the address being loaded as a `u64`.  If the address isn't a constant, then we can't
         // determine anything about the value.
-        let public_addr = match addr.repr.kind {
-            GateKind::Lit(bits, _) => bits.as_u64()?,
-            _ => return None,
-        };
+        let public_addr = ev.eval_typed(addr)?;
         self.load_public(b, public_addr, width)
     }
 
@@ -125,35 +124,35 @@ impl<'a> KnownMem<'a> {
     pub fn store(
         &mut self,
         b: &Builder<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
     ) {
-        self.store_common(b, addr, value, width, false)
+        self.store_common(b, ev, addr, value, width, false)
     }
 
     pub fn poison(
         &mut self,
         b: &Builder<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
     ) {
-        self.store_common(b, addr, value, width, true)
+        self.store_common(b, ev, addr, value, width, true)
     }
 
     fn store_common(
         &mut self,
         b: &Builder<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
         poisoned: bool,
     ) {
-        let public_addr = match addr.repr.kind {
-            GateKind::Lit(bits, _) => bits.as_u64(),
-            _ => None,
-        };
+        let public_addr = ev.eval_typed(addr);
 
         if let Some(public_addr) = public_addr {
             self.store_public(b, public_addr, value, width, poisoned);

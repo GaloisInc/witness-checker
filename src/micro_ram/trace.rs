@@ -348,7 +348,7 @@ fn calc_step<'a>(
         case!(w.load_opcode(), {
             let addr = y;
             let known_value = if opcode == Some(w.load_opcode()) {
-                kmem.load(b, addr, w)
+                kmem.load(b, ev, addr, w)
             } else {
                 None
             };
@@ -366,7 +366,7 @@ fn calc_step<'a>(
             dest = b.lit(REG_NONE);
             if opcode == Some(w.store_opcode()) {
                 let (addr, value) = (y, x);
-                kmem.store(b, addr, value, w);
+                kmem.store(b, ev, addr, value, w);
             }
             b.lit(0)
         });
@@ -375,7 +375,7 @@ fn calc_step<'a>(
         dest = b.lit(REG_NONE);
         if opcode == Some(Opcode::Poison8) {
             let (addr, value) = (y, x);
-            kmem.poison(b, addr, value, MemOpWidth::W8);
+            kmem.poison(b, ev, addr, value, MemOpWidth::W8);
         }
         b.lit(0)
     });
