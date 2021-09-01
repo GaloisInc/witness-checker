@@ -38,6 +38,9 @@ define_features! {
     /// Initialized heap.
     HeapInit = "heap_init",
     LeakTainted = "leak-tainted",
+    /// `advise` instruction takes an upper bound, and the circuit includes an assertion that the
+    /// advice value is in bounds.
+    AdviseMaxBound = "advise-max-bound",
 }
 
 
@@ -78,6 +81,8 @@ define_versions! {
     // 0.1.4.0 adds the `labels` map, which we ignore.
     (0,1,4,0) = { PublicPc PreAdvice HeapInit Buggy },
     (0,1,4,1) = { PublicPc PreAdvice HeapInit },
+    // 0.1.5.0 adds an upper-bound operand to the `advise` instruction.
+    (0,1,5,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {

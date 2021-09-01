@@ -1,2 +1,2 @@
 found bug: access of poisoned address 20 on cycle 12
-internal evaluator: 840 asserts passed, 0 failed; found 1 bugs; overall status: GOOD
+internal evaluator: 868 asserts passed, 0 failed; found 1 bugs; overall status: GOOD

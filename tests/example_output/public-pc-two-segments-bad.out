@@ -1,4 +1,4 @@
 invalid trace: segment 1: cycle 3 sets reg 1 to 7 (expected 6)
 invalid trace: segment 1: cycle 4 sets reg 1 to 7 (expected 6)
 invalid trace: segment 1: cycle 5 sets reg 1 to 7 (expected 6)
-internal evaluator: 179 asserts passed, 3 failed; found 0 bugs; overall status: BAD
+internal evaluator: 185 asserts passed, 3 failed; found 0 bugs; overall status: BAD

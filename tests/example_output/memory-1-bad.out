@@ -28,4 +28,4 @@ invalid trace: segment 0: cycle 27 sets reg 2 to 100 (expected 101)
 invalid trace: read from 18 on cycle 7 produced 21 (expected 20)
 invalid trace: read from 28 on cycle 12 produced 30 (expected 40)
 invalid trace: read from 28 on cycle 17 produced 40 (expected 30)
-internal evaluator: 810 asserts passed, 30 failed; found 0 bugs; overall status: BAD
+internal evaluator: 838 asserts passed, 30 failed; found 0 bugs; overall status: BAD

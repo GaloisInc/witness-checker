@@ -1470,5 +1470,7 @@ pub struct CalcIntermediate<'a> {
     pub y: TWire<'a,u64>,
     pub result: TWire<'a,u64>,
     pub tainted: IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
+    /// If set, then this step is publicly known not to use its advice value.
+    pub advice_unused: bool,
 }
 
