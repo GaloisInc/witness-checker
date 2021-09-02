@@ -1,8 +1,10 @@
-use std::collections::BTreeMap;
+use std::cmp;
+use std::collections::{BTreeMap, HashMap};
+use std::num::Wrapping;
 use arrayvec::ArrayVec;
 use crate::eval::{self, CachingEvaluator};
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Wire, TyKind, CircuitTrait, CircuitExt};
+use crate::ir::circuit::{Wire, TyKind, CircuitTrait, CircuitExt, GateKind, UnOp, BinOp};
 use crate::ir::typed::{TWire, Builder, EvaluatorExt};
 use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset, MemSegment};
 
@@ -12,6 +14,11 @@ use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset
 pub struct KnownMem<'a> {
     mem: BTreeMap<u64, MemEntry<'a>>,
     default: Option<TWire<'a, u64>>,
+    /// Address ranges where the `default` has been overwritten with unknown values.
+    default_erased: RangeSet,
+
+    /// Records the upper bound on the range of certain wires.
+    wire_range: HashMap<TWire<'a, u64>, u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +58,11 @@ impl<'a> KnownMem<'a> {
             let value = values[i as usize];
             self.mem.insert(waddr, MemEntry { width: MemOpWidth::WORD, value, poisoned: false });
         }
+    }
+
+    /// Indicate that the value of `wire` is publicly known to be in the range `0 ..= max`.
+    pub fn set_wire_range(&mut self, wire: TWire<'a, u64>, max: u64) {
+        self.wire_range.insert(wire, max);
     }
 
     pub fn load(
@@ -106,6 +118,10 @@ impl<'a> KnownMem<'a> {
                 if parts_bytes < mem_addr - addr {
                     // Add part of the default value.
                     let default = self.default?;
+                    // No underflow: we know `mem_addr > 0` because `mem_addr - addr > 0`.
+                    if self.default_erased(addr + parts_bytes, mem_addr - 1) {
+                        return None;
+                    }
                     let lo = addr + parts_bytes - waddr;
                     let hi = mem_addr - waddr;
                     let padding = extract_byte_range(b, default, lo, hi);
@@ -123,6 +139,9 @@ impl<'a> KnownMem<'a> {
 
         if parts_bytes < width.bytes() as u64 {
             let default = self.default?;
+            if self.default_erased(addr + parts_bytes, end) {
+                return None;
+            }
             let lo = addr + parts_bytes - waddr;
             let hi = end - waddr + 1;
             let padding = extract_byte_range(b, default, lo, hi);
@@ -132,6 +151,12 @@ impl<'a> KnownMem<'a> {
         let w = bit_pack::concat_bits_raw(b.circuit(), &parts);
         let w = b.circuit().cast(w, b.circuit().ty(TyKind::U64));
         Some(TWire::new(w))
+    }
+
+    /// Check whether the default value has been erased for any byte within the exclusive range
+    /// `start ..= end`.
+    fn default_erased(&self, start: u64, end: u64) -> bool {
+        self.default_erased.overlaps(start, end)
     }
 
     pub fn store(
@@ -170,9 +195,19 @@ impl<'a> KnownMem<'a> {
         if let Some(public_addr) = public_addr {
             self.store_public(b, public_addr, value, width, poisoned);
         } else {
-            // The write modifies an unknown address.  Afterward, we can no longer be sure about
-            // the value of any address.
-            self.clear();
+            let addr_expr = wire_arith_expr(ev, addr);
+            let addr_range = arith_expr_range(addr_expr, &self.wire_range);
+            let byte_range = addr_range.and_then(|(start, end)| {
+                let end = end.checked_add(width.bytes() as u64 - 1)?;
+                Some((start, end))
+            });
+            if let Some((start, end)) = byte_range {
+                self.clear_range(start, end);
+            } else {
+                // The write address is entirely unknown.  Afterward, we can no longer be sure
+                // about the value of any address.
+                self.clear();
+            }
         }
     }
 
@@ -234,6 +269,36 @@ impl<'a> KnownMem<'a> {
     pub fn clear(&mut self) {
         self.mem.clear();
         self.default = None;
+        self.default_erased = RangeSet::new();
+    }
+
+    pub fn clear_range(&mut self, start: u64, end: u64) {
+        let mut remove_keys = Vec::new();
+        let mut check_range = |start, end| {
+            for (&mem_addr, entry) in self.mem.range(start ..= end) {
+                let mem_end = end_addr(mem_addr, entry.width);
+                if mem_end >= start {
+                    // `mem_addr .. mem_end` overlaps `start .. end`.  We could reduce `entry` to
+                    // only the nonoverlapping portion, but that would be tricky, since `start` and
+                    // `end` are not required to be aligned.
+                    remove_keys.push(mem_addr);
+                }
+            }
+        };
+        if start <= end {
+            check_range(start, end);
+        } else {
+            check_range(start, u64::MAX);
+            check_range(0, end);
+        }
+
+        for mem_addr in remove_keys {
+            self.mem.remove(&mem_addr);
+        }
+
+        if self.default.is_some() {
+            self.default_erased.insert(start, end);
+        }
     }
 }
 
@@ -312,6 +377,198 @@ fn replace_byte_range<'a>(
     let w = bit_pack::concat_bits_raw(b.circuit(), &parts);
     let w = b.circuit().cast(w, b.circuit().ty(TyKind::U64));
     TWire::new(w)
+}
+
+
+/// Represents the expression `base * scale + offset`.
+#[derive(Clone, Copy, Debug)]
+struct ArithExpr<'a> {
+    base: Option<TWire<'a, u64>>,
+    scale: Wrapping<u64>,
+    offset: Wrapping<u64>,
+}
+
+impl<'a> ArithExpr<'a> {
+    pub fn new(base: Option<TWire<'a, u64>>, scale: u64, offset: u64) -> ArithExpr<'a> {
+        ArithExpr::make(base, Wrapping(scale), Wrapping(offset))
+    }
+
+    pub fn new_wire(base: TWire<'a, u64>) -> ArithExpr<'a> {
+        ArithExpr::new(Some(base), 1, 0)
+    }
+
+    pub fn new_constant(value: u64) -> ArithExpr<'a> {
+        ArithExpr::new(None, 0, value)
+    }
+
+    fn make(
+        base: Option<TWire<'a, u64>>,
+        scale: Wrapping<u64>,
+        offset: Wrapping<u64>,
+    ) -> ArithExpr<'a> {
+        let (base, scale) = if base.is_none() || scale == Wrapping(0) {
+            (None, Wrapping(0))
+        } else {
+            (base, scale)
+        };
+        ArithExpr { base, scale, offset }
+    }
+
+    pub fn neg(self) -> ArithExpr<'a> {
+        ArithExpr::make(self.base, -self.scale, -self.offset)
+    }
+
+    pub fn add(self, other: ArithExpr<'a>) -> Option<ArithExpr<'a>> {
+        let (base, scale) = match (self.base, other.base) {
+            (None, None) => (None, Wrapping(0)),
+            (Some(x), None) => (Some(x), self.scale),
+            (None, Some(y)) => (Some(y), other.scale),
+            (Some(x), Some(y)) => {
+                if x != y {
+                    // Can't express a combination of two secret wires as a single ArithExpr.
+                    return None;
+                }
+                (Some(x), self.scale + other.scale)
+            },
+        };
+        Some(ArithExpr::make(base, scale, self.offset + other.offset))
+    }
+
+    pub fn sub(self, other: ArithExpr<'a>) -> Option<ArithExpr<'a>> {
+        let (base, scale) = match (self.base, other.base) {
+            (None, None) => (None, Wrapping(0)),
+            (Some(x), None) => (Some(x), self.scale),
+            (None, Some(y)) => (Some(y), other.scale),
+            (Some(x), Some(y)) => {
+                if x != y {
+                    // Can't express a combination of two secret wires as a single ArithExpr.
+                    return None;
+                }
+                (Some(x), self.scale - other.scale)
+            },
+        };
+        Some(ArithExpr::make(base, scale, self.offset - other.offset))
+    }
+
+    pub fn mul(self, other: ArithExpr<'a>) -> Option<ArithExpr<'a>> {
+        let (base, scale) = match (self.base, other.base) {
+            (None, None) => (None, Wrapping(0)),
+            (Some(x), None) => (Some(x), self.scale * other.offset),
+            (None, Some(y)) => (Some(y), other.scale * self.offset),
+            (Some(_), Some(_)) => return None,
+        };
+        Some(ArithExpr::make(base, scale, self.offset * other.offset))
+    }
+}
+
+fn wire_arith_expr<'a>(
+    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    w: TWire<'a, u64>,
+) -> ArithExpr<'a> {
+    if let Some(value) = ev.eval_typed(w) {
+        return ArithExpr::new_constant(value);
+    }
+
+    let result = match w.repr.kind {
+        GateKind::Unary(UnOp::Neg, a) =>
+            Some(wire_arith_expr(ev, TWire::new(a)).neg()),
+        GateKind::Binary(BinOp::Add, a, b) => {
+            wire_arith_expr(ev, TWire::new(a))
+                .add(wire_arith_expr(ev, TWire::new(b)))
+        },
+        GateKind::Binary(BinOp::Sub, a, b) => {
+            wire_arith_expr(ev, TWire::new(a))
+                .sub(wire_arith_expr(ev, TWire::new(b)))
+        },
+        GateKind::Binary(BinOp::Mul, a, b) => {
+            wire_arith_expr(ev, TWire::new(a))
+                .mul(wire_arith_expr(ev, TWire::new(b)))
+        },
+        _ => None,
+    };
+    result.unwrap_or_else(|| ArithExpr::new_wire(w))
+}
+
+/// Try to compute the range of values that `expr` might have.  Returns `Some((start, end))` to
+/// indicate that the value is publicly known to be in the range `start ..= end`, or `None` if the
+/// value can't be constrained to any range (aside from `0 ..= u64::MAX`).  If `end < start`, then
+/// the range wraps around: `expr` could have any value in the range `start ..= u64::MAX` or any
+/// value in the range `0 ..= end`.
+fn arith_expr_range<'a>(
+    expr: ArithExpr<'a>,
+    wire_range: &HashMap<TWire<'a, u64>, u64>,
+) -> Option<(u64, u64)> {
+    let base = match expr.base {
+        Some(x) => x,
+        None => return Some((expr.offset.0, expr.offset.0)),
+    };
+
+    let max = wire_range.get(&base).cloned()?;
+
+    let (start, end) = if let Some(scaled_max) = max.checked_mul(expr.scale.0) {
+        (0, scaled_max)
+    } else if let Some(neg_scaled_max) = max.checked_mul((-expr.scale).0) {
+        // This case handles negative `scale` values.  These need separate handling since the
+        // previous case will always overflow on a `scale` value like -1 (since it uses unsigned
+        // arithmetic).  But if `-scale` is small enough, we can still compute an in-bounds range
+        // covering `max * scale ..= 0`.
+        (neg_scaled_max.wrapping_neg(), 0)
+    } else {
+        // If the arithmetic overflows, then the covered range wraps around the entire 64-bit
+        // space.  We return `None` to indicate we can't determine any particular bounds on the
+        // value.
+        return None;
+    };
+
+    let start = start.wrapping_add(expr.offset.0);
+    let end = end.wrapping_add(expr.offset.0);
+    Some((start, end))
+}
+
+
+#[derive(Clone, Default, Debug)]
+struct RangeSet {
+    /// The ranges in the set.  For each inclusive range `start ..= end`, this map contains an
+    /// entry with `end` as the key and `start` as the value.
+    ranges: BTreeMap<u64, u64>,
+}
+
+impl RangeSet {
+    pub fn new() -> RangeSet {
+        RangeSet::default()
+    }
+
+    pub fn insert(&mut self, start: u64, end: u64) {
+        let (mut start, mut end) = (start, end);
+        loop {
+            if let Some((&entry_end, entry_start)) = self.ranges.range_mut(start..).next() {
+                if *entry_start <= end {
+                    start = cmp::min(*entry_start, start);
+                    end = cmp::max(entry_end, end);
+                    self.ranges.remove(&entry_end);
+                    // Try again, this time inserting the union of the two ranges.
+                    continue;
+                }
+            }
+            // There is no overlapping entry, so insert `start ..= end` on its own.
+            self.ranges.insert(end, start);
+            break;
+        }
+    }
+
+    pub fn overlaps(&self, start: u64, end: u64) -> bool {
+        if let Some((&_erase_end, &erase_start)) = self.ranges.range(start..).next() {
+            // We're checking for overlap between the inclusive ranges `start ..= end` and
+            // `erase_start ..= erase_end`.  Normally, this check would consist of `erase_start <=
+            // end && erase_end >= start`.  But we already know that `erase_end >= start` due to
+            // the argument to `BTreeMap::range`, so we only need to explicitly check that
+            // `erase_start <= end`.
+            if erase_start <= end {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 
@@ -493,6 +750,7 @@ mod test {
         assert_eq!(v, 0x0807060504030201);
     }
 
+
     /// Check behavior of loads near the end of the address space.
     #[test]
     fn load_end() {
@@ -598,5 +856,48 @@ mod test {
         let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(w).unwrap();
         assert_eq!(v, 0x0807060504030201);
+    }
+
+
+    #[test]
+    fn range_set_overlaps() {
+        let mut rs = RangeSet::new();
+        rs.insert(1, 1);
+        rs.insert(3, 5);
+        rs.insert(10, 20);
+        assert_eq!(rs.overlaps(0, 0), false);
+        assert_eq!(rs.overlaps(0, 1), true);
+        assert_eq!(rs.overlaps(1, 1), true);
+        assert_eq!(rs.overlaps(1, 2), true);
+        assert_eq!(rs.overlaps(2, 2), false);
+        assert_eq!(rs.overlaps(0, 2), true);
+        assert_eq!(rs.overlaps(6, 9), false);
+        assert_eq!(rs.overlaps(20, 30), true);
+        assert_eq!(rs.overlaps(21, 30), false);
+        assert_eq!(rs.overlaps(0, 6), true);
+    }
+
+    #[test]
+    fn range_set_insert() {
+        let mut rs = RangeSet::new();
+        rs.insert(1, 1);
+        rs.insert(1, 2);
+        assert_eq!(rs.ranges.clone().into_iter().collect::<Vec<_>>(),
+            vec![(2, 1)]);
+        rs.insert(3, 4);
+        assert_eq!(rs.ranges.clone().into_iter().collect::<Vec<_>>(),
+            vec![(2, 1), (4, 3)]);
+        rs.insert(2, 3);
+        assert_eq!(rs.ranges.clone().into_iter().collect::<Vec<_>>(),
+            vec![(4, 1)]);
+
+        rs.insert(10, 11);
+        rs.insert(13, 14);
+        rs.insert(16, 17);
+        assert_eq!(rs.ranges.clone().into_iter().collect::<Vec<_>>(),
+            vec![(4, 1), (11, 10), (14, 13), (17, 16)]);
+        rs.insert(11, 20);
+        assert_eq!(rs.ranges.clone().into_iter().collect::<Vec<_>>(),
+            vec![(4, 1), (20, 10)]);
     }
 }
