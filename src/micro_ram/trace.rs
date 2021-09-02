@@ -51,6 +51,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
         let cx = self.cx;
         let b = self.b;
         let ev = &mut self.ev;
+        let _g = b.scoped_label(format_args!("seg {}", idx));
 
         let mut mem_ports: mem::CyclePorts;
         let fetch_ports: Option<fetch::CyclePorts>;
@@ -96,7 +97,8 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             let mut instr;
             if let Some(init_pc) = s.init_pc() {
                 let pc = init_pc + i as u64;
-                instr = b.lit(self.prog[pc as usize]);
+                let instr_val = self.prog[pc as usize];
+                instr = b.with_label(format_args!("instr {}", pc), || b.lit(instr_val));
             } else {
                 let fp = fetch_ports.as_ref().unwrap().get(i);
                 {
@@ -386,7 +388,19 @@ fn calc_step<'a>(
         s1.pc
     });
 
-    case!(Opcode::Advise, advice);
+    case!(Opcode::Advise, {
+        if opcode == Some(Opcode::Advise) {
+            if let Some(max) = ev.eval_typed(y) {
+                wire_assert!(
+                    cx, b.le(advice, b.lit(max)),
+                    "step {}: advice value {} is out of range (expected <= {})",
+                    idx, cx.eval(advice), max,
+                );
+                kmem.set_wire_range(advice, max);
+            }
+        }
+        advice
+    });
 
     // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
     // current `pc`.
