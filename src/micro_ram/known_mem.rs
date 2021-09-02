@@ -25,6 +25,11 @@ struct MemEntry<'a> {
 }
 
 impl<'a> KnownMem<'a> {
+    // Note that most code in these functions works with *inclusive* ranges, not exclusive ones.
+    // This helps avoid overflow for operations near the end of the address space: the inclusive
+    // upper bound `0xfff...` (2^64 - 1) can be computed without overflow, but the exclusive bound
+    // `0x1000...` (2^64) can't be represented in a 64-bit integer.
+
     pub fn new() -> KnownMem<'a> {
         KnownMem::default()
     }
@@ -68,20 +73,20 @@ impl<'a> KnownMem<'a> {
         width: MemOpWidth,
     ) -> Option<TWire<'a, u64>> {
         assert!(addr % width.bytes() as u64 == 0);
-        let end = addr + width.bytes() as u64;
+        let end = end_addr(addr, width);
         let (waddr, _offset) = split_mem_addr(addr);
 
         let mut parts = ArrayVec::<[_; WORD_BYTES]>::new();
-        // The contents of `parts` covers the range `addr .. parts_end`.
-        let mut parts_end = addr;
+        // Total number of bytes among all the values in `parts`.
+        let mut parts_bytes = 0;
 
         debug_assert!(end - waddr <= WORD_BYTES as u64);
-        for (&mem_addr, entry) in self.mem.range(waddr .. end) {
-            let mem_end = mem_addr + entry.width.bytes() as u64;
-            if mem_end <= addr {
+        for (&mem_addr, entry) in self.mem.range(waddr ..= end) {
+            let mem_end = end_addr(mem_addr, entry.width);
+            if mem_end < addr {
                 continue;
             }
-            // Otherwise, this `mem` entry overlaps `addr .. end`.
+            // Otherwise, this `mem` entry overlaps `addr ..= end`.
 
             if entry.poisoned {
                 // Don't resolve loads that touch possibly-poisoned bytes.
@@ -92,27 +97,35 @@ impl<'a> KnownMem<'a> {
                 // This entry covers the entire load.
                 debug_assert!(parts.len() == 0);
                 debug_assert!(mem_end >= end);
-                return Some(extract_byte_range_extended(b, entry.value, mem_addr, addr, end));
+                let lo = addr - mem_addr;
+                let hi = end - mem_addr + 1;
+                return Some(extract_byte_range_extended(b, entry.value, lo, hi));
             } else {
                 // This entry covers a strict subset of the load.
 
-                if parts_end < mem_addr {
+                if parts_bytes < mem_addr - addr {
                     // Add part of the default value.
                     let default = self.default?;
-                    let padding = extract_byte_range(b, default, waddr, parts_end, mem_addr);
+                    let lo = addr + parts_bytes - waddr;
+                    let hi = mem_addr - waddr;
+                    let padding = extract_byte_range(b, default, lo, hi);
                     parts.push(padding);
-                    parts_end = mem_addr;
+                    parts_bytes += hi - lo;
                 }
 
-                let part = extract_byte_range(b, entry.value, mem_addr, parts_end, mem_end);
+                let lo = addr + parts_bytes - mem_addr;
+                let hi = mem_end - mem_addr + 1;
+                let part = extract_byte_range(b, entry.value, lo, hi);
                 parts.push(part);
-                parts_end = mem_end;
+                parts_bytes += hi - lo;
             }
         }
 
-        if parts_end < end {
+        if parts_bytes < width.bytes() as u64 {
             let default = self.default?;
-            let padding = extract_byte_range(b, default, waddr, parts_end, end);
+            let lo = addr + parts_bytes - waddr;
+            let hi = end - waddr + 1;
+            let padding = extract_byte_range(b, default, lo, hi);
             parts.push(padding);
         }
 
@@ -172,12 +185,12 @@ impl<'a> KnownMem<'a> {
         poisoned: bool,
     ) {
         assert!(addr % width.bytes() as u64 == 0);
-        let end = addr + width.bytes() as u64;
+        let end = end_addr(addr, width);
         let (waddr, _offset) = split_mem_addr(addr);
 
         // Remove any entries that would be entirely overlapped by this one.
         let mut to_remove = ArrayVec::<[_; 8]>::new();
-        for (&mem_addr, entry) in self.mem.range(addr .. end) {
+        for (&mem_addr, entry) in self.mem.range(addr ..= end) {
             if mem_addr == addr {
                 if entry.width < width {
                     to_remove.push(mem_addr);
@@ -191,18 +204,18 @@ impl<'a> KnownMem<'a> {
         }
 
         // Check if some existing entry entirely overlaps the new one.
-        debug_assert!(end - waddr <= WORD_BYTES as u64);
-        for (&mem_addr, entry) in self.mem.range_mut(waddr .. end) {
-            let mem_end = mem_addr + entry.width.bytes() as u64;
-            if mem_end <= addr {
+        debug_assert!(end - waddr + 1 <= WORD_BYTES as u64);
+        for (&mem_addr, entry) in self.mem.range_mut(waddr ..= end) {
+            let mem_end = end_addr(mem_addr, entry.width);
+            if mem_end < addr {
                 continue;
             }
-            // Otherwise, this `mem` entry overlaps `addr .. end`.
+            // Otherwise, this `mem` entry overlaps `addr ..= end`.
 
             entry.value = replace_byte_range(
                 b,
-                mem_addr, mem_end, entry.value,
-                addr, end, value,
+                entry.width.bytes() as u64, entry.value,
+                addr - mem_addr, end - mem_addr + 1, value,
             );
             entry.poisoned |= poisoned;
             return;
@@ -211,7 +224,7 @@ impl<'a> KnownMem<'a> {
         // No entry overlaps this one.
         let value = if width < MemOpWidth::WORD {
             // Make sure the value doesn't have any extra high bits set.
-            extract_byte_range_extended(b, value, 0, 0, width.bytes() as u64)
+            extract_byte_range_extended(b, value, 0, width.bytes() as u64)
         } else {
             value
         };
@@ -224,6 +237,12 @@ impl<'a> KnownMem<'a> {
     }
 }
 
+/// Get the address of the final byte (inclusive) modified by an access at `addr` of the given
+/// `width`.
+fn end_addr(addr: u64, width: MemOpWidth) -> u64 {
+    addr + (width.bytes() as u64 - 1)
+}
+
 fn split_mem_addr(addr: u64) -> (u64, ByteOffset) {
     let offset_mask = (1_u64 << WORD_LOG_BYTES) - 1;
     debug_assert!(offset_mask <= u8::MAX as u64);
@@ -232,58 +251,63 @@ fn split_mem_addr(addr: u64) -> (u64, ByteOffset) {
     (word_addr, offset)
 }
 
+/// Extract bytes `lo .. hi` from `value`.  Returns a `Wire` with a width of `(hi - lo) * 8` bits.
+///
+/// Note that this function uses exclusive ranges (`lo .. hi`) rather than inclusive ones.
 fn extract_byte_range<'a>(
     b: &Builder<'a>,
     value: TWire<'a, u64>,
-    value_start: u64,
     lo: u64,
     hi: u64,
 ) -> Wire<'a> {
-    debug_assert!(value_start <= lo);
     debug_assert!(lo <= hi);
-    debug_assert!(hi - value_start <= WORD_BYTES as u64);
+    debug_assert!(hi <= WORD_BYTES as u64);
     bit_pack::extract_bits(
         b.circuit(),
         value.repr,
-        ((lo - value_start) * 8) as u16,
-        ((hi - value_start) * 8) as u16,
+        (lo * 8) as u16,
+        (hi * 8) as u16,
     )
 }
 
+/// Extract bytes `lo .. hi` from `value`, then return the result zero-extended to 64 bits.
+///
+/// Note that this function uses exclusive ranges (`lo .. hi`) rather than inclusive ones.
 fn extract_byte_range_extended<'a>(
     b: &Builder<'a>,
     value: TWire<'a, u64>,
-    value_start: u64,
     lo: u64,
     hi: u64,
 ) -> TWire<'a, u64> {
-    let w = extract_byte_range(b, value, value_start, lo, hi);
+    let w = extract_byte_range(b, value, lo, hi);
     let w = b.circuit().cast(w, b.circuit().ty(TyKind::U64));
     TWire::new(w)
 }
 
+/// Replace the subset of bytes at the range `new_lo .. new_hi` within `orig` with `new_value`.
+/// `orig_size` is the width in bytes of the meaningful part of the value `orig`.
+///
+/// Note that this function uses exclusive ranges (`new_lo .. new_hi`) rather than inclusive ones.
 fn replace_byte_range<'a>(
     b: &Builder<'a>,
-    orig_start: u64,
-    orig_end: u64,
+    orig_size: u64,
     orig: TWire<'a, u64>,
-    new_start: u64,
-    new_end: u64,
+    new_lo: u64,
+    new_hi: u64,
     new_value: TWire<'a, u64>,
 ) -> TWire<'a, u64> {
-    debug_assert!(orig_start <= new_start);
-    debug_assert!(new_start <= new_end);
-    debug_assert!(new_end <= orig_end);
-    debug_assert!(orig_end - orig_start <= WORD_BYTES as u64);
+    debug_assert!(new_lo <= new_hi);
+    debug_assert!(new_hi <= orig_size);
+    debug_assert!(orig_size <= WORD_BYTES as u64);
     let mut parts = ArrayVec::<[_; 3]>::new();
-    if orig_start < new_start {
-        parts.push(extract_byte_range(b, orig, orig_start, orig_start, new_start));
+    if 0 < new_lo {
+        parts.push(extract_byte_range(b, orig, 0, new_lo));
     }
-    if new_start < new_end {
-        parts.push(extract_byte_range(b, new_value, new_start, new_start, new_end));
+    if new_lo < new_hi {
+        parts.push(extract_byte_range(b, new_value, 0, new_hi - new_lo));
     }
-    if new_end < orig_end {
-        parts.push(extract_byte_range(b, orig, orig_start, new_end, orig_end));
+    if new_hi < orig_size {
+        parts.push(extract_byte_range(b, orig, new_hi, orig_size));
     }
     let w = bit_pack::concat_bits_raw(b.circuit(), &parts);
     let w = b.circuit().cast(w, b.circuit().ty(TyKind::U64));
@@ -465,6 +489,113 @@ mod test {
         m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x0807060504030201);
+    }
+
+    /// Check behavior of loads near the end of the address space.
+    #[test]
+    fn load_end() {
+        let arena = Bump::new();
+        let c = Circuit::new(&arena, true);
+        let b = Builder::new(DynCircuit::new(&c));
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+
+        let waddr = u64::MAX - 7;
+        let mut m = KnownMem::with_default(b.lit(0));
+        // We store to all of the last word except its final byte, since touching the last byte
+        // could cause problems on the `store`.
+        m.store_public(&b, waddr + 0, b.lit(0x04030201), MemOpWidth::W4, false);
+        m.store_public(&b, waddr + 4, b.lit(0x0605), MemOpWidth::W2, false);
+        m.store_public(&b, waddr + 6, b.lit(0x07), MemOpWidth::W1, false);
+
+        // These three exercise the cases where `entry.width < width`.
+        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x0007060504030201);
+
+        let w = m.load_public(&b, waddr + 4, MemOpWidth::W4).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x00070605);
+
+        let w = m.load_public(&b, waddr + 6, MemOpWidth::W2).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x0007);
+
+        // This one exercises the case where there are no overlapping entries.
+        let w = m.load_public(&b, waddr + 7, MemOpWidth::W1).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x00);
+    }
+
+    /// Check behavior of loads near the end of the address space.
+    #[test]
+    fn load_end_word() {
+        let arena = Bump::new();
+        let c = Circuit::new(&arena, true);
+        let b = Builder::new(DynCircuit::new(&c));
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+
+        let waddr = u64::MAX - 7;
+        let mut m = KnownMem::with_default(b.lit(0));
+        m.store_public(&b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
+
+        // These four exercise the case where `entry.width >= width`.
+        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x0807060504030201);
+
+        let w = m.load_public(&b, waddr + 4, MemOpWidth::W4).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x08070605);
+
+        let w = m.load_public(&b, waddr + 6, MemOpWidth::W2).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x0807);
+
+        let w = m.load_public(&b, waddr + 7, MemOpWidth::W1).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x08);
+    }
+
+    /// Check behavior of stores near the end of the address space.
+    #[test]
+    fn store_end_overwrite() {
+        let arena = Bump::new();
+        let c = Circuit::new(&arena, true);
+        let b = Builder::new(DynCircuit::new(&c));
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+
+        let waddr = u64::MAX - 7;
+        let mut m = KnownMem::with_default(b.lit(0));
+        // These four exercise the case of overwriting parts of a larger entry.
+        m.store_public(&b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
+        m.store_public(&b, waddr + 4, b.lit(0x18171615), MemOpWidth::W4, false);
+        m.store_public(&b, waddr + 6, b.lit(0x2827), MemOpWidth::W2, false);
+        m.store_public(&b, waddr + 7, b.lit(0x38), MemOpWidth::W1, false);
+
+        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
+        let v = ev.eval_typed(w).unwrap();
+        assert_eq!(v, 0x3827161504030201);
+    }
+
+    /// Check behavior of stores near the end of the address space.
+    #[test]
+    fn store_end_replace() {
+        let arena = Bump::new();
+        let c = Circuit::new(&arena, true);
+        let b = Builder::new(DynCircuit::new(&c));
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+
+        let waddr = u64::MAX - 7;
+        let mut m = KnownMem::with_default(b.lit(0));
+        // These four exercise the case of replacing smaller overlapping entries.
+        m.store_public(&b, waddr + 7, b.lit(0x38), MemOpWidth::W1, false);
+        m.store_public(&b, waddr + 6, b.lit(0x2827), MemOpWidth::W2, false);
+        m.store_public(&b, waddr + 4, b.lit(0x18171615), MemOpWidth::W4, false);
+        m.store_public(&b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
+
+        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
