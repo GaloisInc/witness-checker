@@ -261,6 +261,108 @@ fn try_identities<'a>(
     })
 }
 
+/// Try to apply more specialized identities that don't fit into the `match_identities!` framework.
+fn try_identities2<'a>(
+    c: &impl CircuitTrait<'a>,
+    ev: &mut impl Evaluator<'a>,
+    gk: GateKind<'a>,
+) -> Option<Wire<'a>> {
+    macro_rules! call {
+        ($func:ident) => {
+            if let Some(w) = $func(c, ev, gk) {
+                return Some(w);
+            }
+        };
+    }
+    call!(try_identity_compare_mux);
+    None
+}
+
+macro_rules! match_gate_kind {
+    ($gk:expr, $Variant:ident($($arg:ident),*)) => {
+        match $gk {
+            GateKind::$Variant($($arg,)*) => Some(($($arg),*)),
+            _ => None,
+        }
+    };
+}
+
+macro_rules! guard {
+    ($cond:expr) => {
+        if !$cond {
+            return None;
+        }
+    };
+}
+
+/// Examine a comparison between two mux trees, where each leaf of the tree is a constant.
+/// Replaces the comparison with a constant if every left constant compared with every right
+/// constant produces the same outcome.  For example, `{1, 2} < {3, 4, 5}` would be replaced with
+/// true.
+fn try_identity_compare_mux<'a>(
+    c: &impl CircuitTrait<'a>,
+    ev: &mut impl Evaluator<'a>,
+    gk: GateKind<'a>,
+) -> Option<Wire<'a>> {
+    let (op, a, b) = match_gate_kind!(gk, Compare(op, a, b))?;
+    guard!(matches!(a.kind, GateKind::Lit(..) | GateKind::Mux(..)));
+    guard!(matches!(b.kind, GateKind::Lit(..) | GateKind::Mux(..)));
+
+    fn gather_mux_leaves<'a>(
+        ev: &mut impl Evaluator<'a>,
+        w: Wire<'a>,
+        out: &mut Vec<BigInt>,
+    ) -> bool {
+        match w.kind {
+            GateKind::Mux(_, t, e) => {
+                gather_mux_leaves(ev, t, out) && gather_mux_leaves(ev, e, out)
+            },
+            _ => match eval(ev, w) {
+                Some(x) => {
+                    out.push(x);
+                    true
+                },
+                None => {
+                    false
+                },
+            },
+        }
+    }
+    let mut a_vals = Vec::new();
+    let mut b_vals = Vec::new();
+    guard!(gather_mux_leaves(ev, a, &mut a_vals));
+    guard!(gather_mux_leaves(ev, b, &mut b_vals));
+
+    let mut all_true = true;
+    let mut all_false = true;
+    for av in &a_vals {
+        for bv in &b_vals {
+            let result = match op {
+                CmpOp::Eq => av == bv,
+                CmpOp::Ne => av != bv,
+                CmpOp::Lt => av < bv,
+                CmpOp::Le => av <= bv,
+                CmpOp::Gt => av > bv,
+                CmpOp::Ge => av >= bv,
+            };
+            if result {
+                all_false = false;
+            } else {
+                all_true = false;
+            }
+            if !all_true && !all_false {
+                return None;
+            }
+        }
+    }
+
+    let const_val =
+        if all_true { 1 }
+        else if all_false { 0 }
+        else { unreachable!() };
+    Some(c.lit(c.ty(TyKind::BOOL), const_val))
+}
+
 pub fn const_fold<'a, 'c>(
     c: &'c Circuit<'a>,
 ) -> impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a> + 'c {
@@ -271,6 +373,10 @@ pub fn const_fold<'a, 'c>(
             _ => {},
         }
         match try_identities(c, &mut e, gk) {
+            Some(w) => return w,
+            None => {},
+        }
+        match try_identities2(c, &mut e, gk) {
             Some(w) => return w,
             None => {},
         }
@@ -303,6 +409,9 @@ impl<'a, C: CircuitTrait<'a>> CircuitTrait<'a> for ConstFold<C> {
             return w;
         }
         if let Some(w) = try_identities(self.inner(), &mut LiteralEvaluator, gk) {
+            return w;
+        }
+        if let Some(w) = try_identities2(self.inner(), &mut LiteralEvaluator, gk) {
             return w;
         }
         self.inner().gate(gk)
