@@ -155,6 +155,19 @@ fn try_const_fold<'a>(
     Some(c.lit(ty, i))
 }
 
+fn wire_eq<'a>(a: Wire<'a>, b: Wire<'a>) -> bool {
+    if a == b {
+        return true;
+    }
+
+    match (a.kind, b.kind) {
+        (GateKind::Lit(a_bits, a_ty), GateKind::Lit(b_bits, b_ty)) => {
+            a_bits == b_bits && a_ty == b_ty
+        },
+        _ => false,
+    }
+}
+
 /// Like `try_const_fold`, but applies specific rules for certain cases where only some inputs are
 /// known.
 fn try_identities<'a>(
@@ -174,7 +187,7 @@ fn try_identities<'a>(
             // x - 0 = x
             BinOp::Sub, (_, is_zero) => a,
             // x - x = 0
-            BinOp::Sub, (_, _) if a == b => c.lit(ty, 0),
+            BinOp::Sub, (_, _) if wire_eq(a, b) => c.lit(ty, 0),
             // 0 * x = x * 0 = 0
             BinOp::Mul, (is_zero, _) => c.lit(ty, 0),
             BinOp::Mul, (_, is_zero) => c.lit(ty, 0),
@@ -186,13 +199,13 @@ fn try_identities<'a>(
             // x / 1 = x
             BinOp::Div, (_, is_one) => a,
             // x / x = 1  (x must be nonzero, since we define 0 / 0 = 0)
-            BinOp::Div, (_, is_non_zero) if a == b => c.lit(ty, 1),
+            BinOp::Div, (_, is_non_zero) if wire_eq(a, b) => c.lit(ty, 1),
             // 0 % x = 0
             BinOp::Mod, (is_zero, _) => c.lit(ty, 0),
             // x % 1 = 0
             BinOp::Mod, (_, is_one) => c.lit(ty, 0),
             // x % x = 0  (applies even when x is zero, since we define 0 % 0 = 0)
-            BinOp::Mod, (_, is_non_zero) if a == b => c.lit(ty, 0),
+            BinOp::Mod, (_, is_non_zero) if wire_eq(a, b) => c.lit(ty, 0),
 
             // 0 & x = x & 0 = 0
             BinOp::And, (is_zero, _) => c.lit(ty, 0),
@@ -201,7 +214,7 @@ fn try_identities<'a>(
             BinOp::And, (is_all_ones(ty), _) => b,
             BinOp::And, (_, is_all_ones(ty)) => a,
             // x & x = x
-            BinOp::And, (_, _) if a == b => a,
+            BinOp::And, (_, _) if wire_eq(a, b) => a,
 
             // 0 | x = x | 0 = x
             BinOp::Or, (is_zero, _) => b,
@@ -210,7 +223,7 @@ fn try_identities<'a>(
             BinOp::Or, (is_all_ones(ty), _) => c.lit(ty, all_ones_value(ty)),
             BinOp::Or, (_, is_all_ones(ty)) => c.lit(ty, all_ones_value(ty)),
             // x | x = x
-            BinOp::Or, (_, _) if a == b => a,
+            BinOp::Or, (_, _) if wire_eq(a, b) => a,
 
             // 0 ^ x = x ^ 0 = x
             BinOp::Xor, (is_zero, _) => b,
@@ -219,7 +232,7 @@ fn try_identities<'a>(
             BinOp::Xor, (is_all_ones(ty), _) => c.not(b),
             BinOp::Xor, (_, is_all_ones(ty)) => c.not(a),
             // x ^ x = 0
-            BinOp::Xor, (_, _) if a == b => c.lit(ty, 0),
+            BinOp::Xor, (_, _) if wire_eq(a, b) => c.lit(ty, 0),
         },
         GateKind::Shift(op, a, b) => match_identities! {
             op, (a, b);
@@ -234,13 +247,13 @@ fn try_identities<'a>(
             vars (ac, bc);
             eval |w| eval(ev, w);
             // x == x, x <= x, x >= x: true
-            CmpOp::Eq, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
-            CmpOp::Le, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
-            CmpOp::Ge, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Eq, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Le, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 1),
+            CmpOp::Ge, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 1),
             // x != x, x < x, x > x: false
-            CmpOp::Ne, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
-            CmpOp::Gt, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
-            CmpOp::Lt, (_, _) if a == b => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Ne, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Gt, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 0),
+            CmpOp::Lt, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 0),
 
             // (unsigned) x >= 0, 0 <= x: true
             CmpOp::Ge, (_, is_zero) if a.ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 1),
@@ -255,8 +268,9 @@ fn try_identities<'a>(
             eval |w| eval(ev, w);
             (), (is_zero) => e,
             (), (is_one) => t,
-            (), (_) if t == e => t,
+            (), (_) if wire_eq(t, e) => t,
         },
+
         _ => return None,
     })
 }
