@@ -1,5 +1,7 @@
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use std::collections::hash_map::{HashMap, Entry};
+use std::mem;
 use std::num::Wrapping;
 use arrayvec::ArrayVec;
 use crate::eval::{self, CachingEvaluator};
@@ -21,7 +23,7 @@ pub struct KnownMem<'a> {
     wire_range: HashMap<TWire<'a, u64>, u64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 struct MemEntry<'a> {
     width: MemOpWidth,
     value: TWire<'a, u64>,
@@ -46,6 +48,10 @@ impl<'a> KnownMem<'a> {
             default: Some(default),
             .. KnownMem::default()
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.mem.len() == 0 && self.default.is_none()
     }
 
     pub fn init_segment(
@@ -201,6 +207,7 @@ impl<'a> KnownMem<'a> {
                 let end = end.checked_add(width.bytes() as u64 - 1)?;
                 Some((start, end))
             });
+
             if let Some((start, end)) = byte_range {
                 self.clear_range(start, end);
             } else {
@@ -298,6 +305,69 @@ impl<'a> KnownMem<'a> {
 
         if self.default.is_some() {
             self.default_erased.insert(start, end);
+        }
+    }
+
+    pub fn merge(&mut self, other: &KnownMem<'a>) {
+        if other.default != self.default {
+            self.default = None;
+            self.default_erased = RangeSet::new();
+        } else {
+            self.default_erased.merge(&other.default_erased);
+        }
+
+        if (self.mem.len() == 0 || other.mem.len() == 0) && self.default.is_none() {
+            // Fast path for the common case, where at least one of the inputs is fully unknown.
+            self.mem.clear();
+        } else {
+            let mut mem_entries = Vec::with_capacity(self.mem.len() + other.mem.len());
+            let mut it1 = mem::take(&mut self.mem).into_iter().peekable();
+            let mut it2 = other.mem.iter().peekable();
+            while let (Some(&(k1, _)), Some(&(&k2, _))) = (it1.peek(), it2.peek()) {
+                if k1 == k2 {
+                    let (k1, v1) = it1.next().unwrap();
+                    let (&k2, v2) = it2.next().unwrap();
+                    // If the entries are identical, then keep them.  Otherwise, mark the region
+                    // covered by the entry as unknown.
+                    if &v1 == v2 {
+                        mem_entries.push((k1, v1));
+                    } else {
+                        if self.default.is_some() {
+                            self.default_erased.insert(k1, end_addr(k1, v1.width));
+                            self.default_erased.insert(k2, end_addr(k2, v2.width));
+                        }
+                    }
+                } else if k1 < k2 {
+                    let (k1, v1) = it1.next().unwrap();
+                    if self.default.is_some() {
+                        self.default_erased.insert(k1, end_addr(k1, v1.width));
+                    }
+                } else {
+                    let (&k2, v2) = it2.next().unwrap();
+                    if self.default.is_some() {
+                        self.default_erased.insert(k2, end_addr(k2, v2.width));
+                    }
+                }
+            }
+            if self.default.is_some() {
+                for (k1, v1) in it1 {
+                    self.default_erased.insert(k1, end_addr(k1, v1.width));
+                }
+                for (&k2, v2) in it2 {
+                    self.default_erased.insert(k2, end_addr(k2, v2.width));
+                }
+            }
+            self.mem = mem_entries.into_iter().collect();
+        }
+
+
+        for (&w, &max) in &other.wire_range {
+            match self.wire_range.entry(w) {
+                Entry::Vacant(e) => { e.insert(max); },
+                Entry::Occupied(e) => {
+                    debug_assert!(*e.get() == max);
+                },
+            }
         }
     }
 }
@@ -568,6 +638,12 @@ impl RangeSet {
             }
         }
         false
+    }
+
+    pub fn merge(&mut self, other: &RangeSet) {
+        for (&end, &start) in &other.ranges {
+            self.insert(start, end);
+        }
     }
 }
 

@@ -5,15 +5,15 @@
 - [public-pc]
 -
   program:
+    - [store8, null, 0, true, 1040] # store 1040, r0
     - [cmpae, 1, 0, true, 10]   # cmpae r1, r0, 10
-    - [cjmp, null, 1, true, 4]  # cjmp r1, 4
+    - [cjmp, null, 1, true, 5]  # cjmp r1, 4
     # r0 < 10 case
     - [store8, null, 0, true, 1024] # store 1024, r0
-    - [jmp, null, null, true, 5]  # jmp 5
+    - [jmp, null, null, true, 6]  # jmp 5
     # r0 >= 10 case
     - [store8, null, 0, true, 1032] # store 1032, r0
     # join
-    - [store8, null, 0, true, 1040] # store 1040, r0
     - [load8, 1, null, true, 1024]  # load r1, 1024
     - [load8, 1, null, true, 1032]  # load r1, 1032
     - [load8, 1, null, true, 1040]  # load r1, 1040
@@ -33,22 +33,22 @@
 
   segments:
     - constraints: [[pc, 0]]
-      len: 2
+      len: 3
       successors: [1, 2]
       enter_from_network: false
       exit_to_network: false
-    - constraints: [[pc, 2]]
+    - constraints: [[pc, 3]]
       len: 2
-      successors: [3]
-      enter_from_network: false
-      exit_to_network: false
-    - constraints: [[pc, 4]]
-      len: 1
       successors: [3]
       enter_from_network: false
       exit_to_network: false
     - constraints: [[pc, 5]]
-      len: 5
+      len: 1
+      successors: [3]
+      enter_from_network: false
+      exit_to_network: false
+    - constraints: [[pc, 6]]
+      len: 4
       successors: []
       enter_from_network: false
       exit_to_network: false
@@ -58,21 +58,21 @@
       states:
         - [1, [7, 0]]
         - [2, [7, 0]]
+        - [3, [7, 0]]
     - segment: 1
       states:
-        - [3, [7, 0]]
-        - [5, [7, 0]]
+        - [4, [7, 0]]
+        - [6, [7, 0]]
     - segment: 3
       states:
-        - [6, [7, 0]]
         - [7, [7, 7]]
         - [8, [7, 0]]
         - [9, [7, 7]]
         - [10, [0, 7]]
 
   advice:
-    3: [[MemOp, 1024, 7, write, 8]]
-    5: [[MemOp, 1040, 7, write, 8]]
+    1: [[MemOp, 1040, 7, write, 8]]
+    4: [[MemOp, 1024, 7, write, 8]]
     6: [[MemOp, 1024, 7, read, 8]]
     7: [[MemOp, 1032, 0, read, 8]]
     8: [[MemOp, 1040, 7, read, 8]]

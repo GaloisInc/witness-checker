@@ -435,7 +435,7 @@ impl<'a> SegGraphBuilder<'a> {
             return KnownMem::new();
         }
 
-        let mut mem = None;
+        let mut mem: Option<KnownMem> = None;
         for j in 0 .. self.segments[idx].preds.len() {
             let pred = &self.segments[idx].preds[j];
             let pred_mem = match pred.src {
@@ -443,10 +443,11 @@ impl<'a> SegGraphBuilder<'a> {
                 StateSource::Segment(j) => self.segments[j].final_mem.take(),
                 _ => continue,
             };
-            assert!(mem.is_none());
-            mem = Some(pred_mem.into_owned());
-            // TODO: when adding merging, will need an iterator to get simultaneous mutable access
-            // to all predecessors of segment `idx`
+
+            match mem {
+                Some(ref mut mem) => mem.merge(&pred_mem),
+                None => { mem = Some(pred_mem.into_owned()); },
+            }
         }
         mem.unwrap()
     }
@@ -726,12 +727,10 @@ impl<'a> SegGraphBuilder<'a> {
 
 impl<'a> SegmentNode<'a> {
     fn has_initial_mem(&self) -> bool {
-        let mut num_cpu_init = 0;
-        let mut num_segment = 0;
         for pred in &self.preds {
             match pred.src {
-                StateSource::CpuInit => { num_cpu_init += 1; },
-                StateSource::Segment(_) => { num_segment += 1; },
+                StateSource::CpuInit => {},
+                StateSource::Segment(_) => {},
                 // `Network`/`CycleBreak` always has unknown initial memory state, and merging
                 // unknown with anything produces unknown.  Thus there's no point in computing an
                 // initial memory for segments with these predecessors.
@@ -739,13 +738,6 @@ impl<'a> SegmentNode<'a> {
                 StateSource::CycleBreak(_) => return false,
             }
         }
-
-        // We don't yet support merging, so we require that there be only one predecessor.
-        if self.preds.len() != 1 {
-            return false;
-        }
-        let _ = num_cpu_init;
-        let _ = num_segment;
 
         true
     }
