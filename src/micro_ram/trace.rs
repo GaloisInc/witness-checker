@@ -277,8 +277,6 @@ fn calc_step<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
-    let mut advice_unused = false;
-
     case!(Opcode::And, b.and(x, y));
     case!(Opcode::Or, b.or(x, y));
     case!(Opcode::Xor, b.xor(x, y));
@@ -397,17 +395,10 @@ fn calc_step<'a>(
     let cycle = b.add(s1.cycle, b.lit(1));
     let live = s1.live;
 
-    if let Some(opcode) = opcode {
-        if opcode != Opcode::Advise {
-            advice_unused = true;
-        }
-    }
-
     let s2 = RamStateRepr { cycle, pc, regs, live, tainted_regs };
     let im = CalcIntermediate {
         x, y, result,
         tainted: tainted_im,
-        advice_unused,
     };
     (TWire::new(s2), im)
 }
@@ -540,20 +531,6 @@ fn check_step<'a>(
         "segment {}: step {} mem port cycle number is {} (expected {}; mem op? {})",
         seg_idx, idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
     );
-
-    if !calc_im.advice_unused {
-        let is_advise = b.eq(instr.opcode, b.lit(Opcode::Advise as u8));
-
-        cx.when(b, is_advise, |cx| {
-            let advice = calc_im.result;
-            let max_bound = calc_im.y;
-            wire_assert!(
-                cx, b.le(advice, max_bound),
-                "segment {}: step {}'s advice value {} is out of range (expected <= {})",
-                seg_idx, idx, cx.eval(advice), cx.eval(max_bound),
-            );
-        });
-    }
 
     tainted::check_step(cx, b, seg_idx, idx, instr, calc_im);
 }
