@@ -6,11 +6,11 @@ import sys
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Merge multiple CBOR files, with shared memory segments, into a single file.')
     
-    parser.add_argument('--exec', metavar='name=file.cbor', nargs='+',
+    parser.add_argument('--exec', metavar='name=file.cbor', action='append',
                     help='named CBOR files.')
-    parser.add_argument('--equiv', metavar='a.seg==b.seg', nargs='+',
+    parser.add_argument('--equiv', metavar='a.seg==b.seg', action='append',
                     help='memory segments that must be equal')
-    parser.add_argument('--verbose', '-v', const=1, default=0, nargs='?',
+    parser.add_argument('--verbose', '-v', action='store_true',
                     help='verbose.')
     parser.add_argument('--out', '-o', default="out.cbor",
                     help='name of output file. Default "out.cbor".')
@@ -19,14 +19,14 @@ def parse_arguments():
 
 
 def split_in_two(st, separator=" ", name=""):
-    """Takes a text and splits it in two by a given separator."""
+    """Takes a text and splits it in two by a given separator.
+    Unlike 'partition' it verifies that the input has exactly two
+    texts separated by one spearator and reports an otherwise."""
     x = st.split(separator)
     if len(x) == 2:
         return (x[0],x[1])
     else:
-        print("ERROR parsing",  name,
-              "argument. It should contain exactly one", separator, ". \n \t", st)
-        return ('', '')
+        raise ValueError('ERROR parsing %r argument. It should contain exactly one %r. \n\t%r' % (name, separator,st))
 
 
 ## Proces the segments
@@ -54,7 +54,7 @@ def join_sets(sets):
                 is_disjoint_from_all = False
                 break
         if is_disjoint_from_all:
-            disj_out = disj_out + [set]
+            disj_out.append(set)
     return disj_out
 
 def process_equivalences(segeq):
@@ -80,10 +80,7 @@ def load_file(name_and_filename):
     (name,filename) = name_and_filename
     """Reads a simple CBOR file. Returns version, features and compUni"""
     allCBOR = cbor.load(open(filename, 'rb'))
-    version = allCBOR[0]
-    features = allCBOR[1]
-    compUnit =  allCBOR[2]
-    return (name, version,features,compUnit)
+    return (name, allCBOR)
 
 def join_cbors(cbor_list):
     """Accumulates the loaded CBOR into a single list, mapping names to
@@ -91,22 +88,19 @@ def join_cbors(cbor_list):
     are the same and unifies them.
 
     """
-
-    (feature,version) = ("","")
+    (_, (version, feature, _)) = cbor_list[0] # We assume the list is not empty
     execs = {}
-    for (name, feat,ver,cbor) in cbor_list:
+    for (name, (ver, feat, cbor)) in cbor_list:
         ## Check feature
-        if feature=="":
-            feature = feat
-            version = ver
-        elif not feat == feature:
-            print("ERROR: found files with differetn features\n\t", feat, "\n\n\t",feature)  
-            return
+        if not feat == feature:
+            raise ValueError('found files with different features: %r != %r' % (feat, feature))
         elif not ver == version:
-            print("ERROR: found files with differetn versions\n\t", ver, "\n\n\t",version)
-            return
-        ## Add cbor to dictionary
-        execs[name] = cbor
+            raise ValueError('found files with different versions: %r != %r' % (ver, version))
+        ## Add cbor to dictionary, but check if the it's already there
+        if name in execs:
+            raise ValueError('Two files given the same name %r' % (name))
+        else:
+            execs[name] = cbor
     return (feature, version, execs)
 
 def process_execs(execs):
@@ -124,13 +118,22 @@ def main():
     
     # Add 'multi-exec' flag, but warn if it's already there
     if "multi-exec" in feature:
-        print("WARNING: loaded file already have 'multi-exec' flag. Nested files are not supported.")
+        print("WARNING: loaded files already have 'multi-exec' flag. Nested files are not supported.")
     else:
         feature = feature + ["multi-exec"]
-    
+
+        
     list_segeqs = process_equivalences(args.equiv)
+
+    #Check all segments refer to valid files
+    valid_files = execs_cbor.keys()
+    for segeq in list_segeqs:
+        for seg in segeq:
+            if not seg[0] in valid_files:
+                raise ValueError('segment %r referes to file %r that is not a valid name' % (seg, seg[0]))
+
     multi_execs = {"execs":execs_cbor, "mem_equiv":list_segeqs}
-    multi_output = [feature, version, multi_execs]
+    multi_output = [version, feature, multi_execs]
     
     write_cbor(multi_output,args.out)
 
@@ -140,4 +143,7 @@ def write_cbor(thing, file):
     with open(file, 'wb') as f:
         cbor.dump(thing, f)
 
-main()
+try: 
+    main()
+except ValueError as err:
+    print("Merging CBOR files FAILED.\n\n{0}".format(err))
