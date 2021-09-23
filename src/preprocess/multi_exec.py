@@ -33,7 +33,7 @@ def split_in_two(st, separator=" ", name=""):
 def segeq_to_set(segeq):
     """Creates a set of (name, segment) pairs, from a string list of equalities.
     For example, the following string 'a.seg1==b.seg2==c.seg3' will result in
-    {[a,seg1],[b,seg2],[c,seg3]}"""
+    {(a,seg1),(b,seg2),(c,seg3)}"""
     ls = segeq.split("==")
     split_dot = lambda x: split_in_two(x,separator=".",name="segment")
     set_pairs = map(split_dot, ls)
@@ -45,16 +45,16 @@ def join_sets(sets):
     can think of the input as partial equ8ivalence classses and the output
     is all the disjoint equivalence classes.
     This function is slow, but is not intended to be used in large inputs."""
-    disj_out = []
+    disj_out = [] # Gathers all the final equivalence classes
     for set in sets:
-        is_disjoint_from_all = True  
-        for (i,out_set) in enumerate(disj_out):
-            if not set.isdisjoint(out_set):
-                disj_out[i] = set.union(out_set)
-                is_disjoint_from_all = False
-                break
-        if is_disjoint_from_all:
-            disj_out.append(set)
+        (join_sets, disj_sets) = ([],[])
+        for out_set in disj_out:
+            #append 'out_set' to the list it belongs depending on wether it intersects 'set'
+            (join_sets, disj_sets)[set.isdisjoint(out_set)].append(out_set)
+            
+        # Join all intersecting classes with the new set
+        new_class = set.union(*join_sets)
+        disj_out = disj_sets + [new_class]
     return disj_out
 
 def process_equivalences(segeq):
