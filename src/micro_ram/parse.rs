@@ -92,6 +92,14 @@ impl<'de> Visitor<'de> for VersionedExecutionVisitor {
             ))),
         };
         let all_features = &features | &ver_features;
+        if all_features.contains(&Feature::Buggy) {
+            let mut features_list = features.iter().cloned().collect::<Vec<_>>();
+            features_list.sort();
+            eprintln!(
+                "warning: file version {} +{:?} comes from a generator with known bugs",
+                ver, features_list,
+            );
+        }
         let exec = with_features(all_features.clone(), || {
             seq.next_element::<Execution>()
         })?;

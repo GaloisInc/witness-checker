@@ -1,11 +1,12 @@
 use std::collections::HashSet;
+use std::fmt;
 use serde::{Deserialize, Deserializer};
 
 macro_rules! define_features {
     (
         $( $(#[$attr:meta])* $Variant:ident = $str:expr, )*
     ) => {
-        #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
         pub enum Feature {
             $( $(#[$attr])* $Variant,)*
         }
@@ -25,6 +26,10 @@ macro_rules! define_features {
 }
 
 define_features! {
+    /// Pseudo-feature used to indicate MicroRAM versions that are known to produce buggy/invalid
+    /// CBOR files.
+    Buggy = "buggy",
+
     PublicPc = "public-pc",
     /// The keys of the `advice` dict are the index of the pre-state of the step that uses the
     /// advice, rather than the index of the post-state.  For example, the advice for the first
@@ -38,6 +43,12 @@ define_features! {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default)]
 pub struct Version(pub u8, pub u8, pub u8, pub u8);
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}.{}.{}.{}", self.0, self.1, self.2, self.3)
+    }
+}
 
 impl<'de> Deserialize<'de> for Version {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -65,7 +76,8 @@ define_versions! {
     // 0.1.3.0 adds the heap init feature.
     (0,1,3,0) = { PublicPc PreAdvice HeapInit },
     // 0.1.4.0 adds the `labels` map, which we ignore.
-    (0,1,4,0) = { PublicPc PreAdvice HeapInit },
+    (0,1,4,0) = { PublicPc PreAdvice HeapInit Buggy },
+    (0,1,4,1) = { PublicPc PreAdvice HeapInit },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {
