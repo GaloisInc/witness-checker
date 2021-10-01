@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::iter;
 use crate::gadget::arith::BuilderExt as _;
-use crate::ir::typed::{TWire, TSecretHandle, Builder};
+use crate::eval::{self, CachingEvaluator};
+use crate::ir::typed::{TWire, TSecretHandle, Builder, EvaluatorExt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
 use crate::micro_ram::mem::{self, Memory, extract_bytes_at_offset, extract_low_bytes};
@@ -30,6 +31,7 @@ pub struct Segment<'a> {
 pub struct SegmentBuilder<'a, 'b> {
     pub cx: &'b Context<'a>,
     pub b: &'b Builder<'a>,
+    pub ev: CachingEvaluator<'a, 'b, eval::Public>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
@@ -46,6 +48,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
     ) -> Segment<'a> {
         let cx = self.cx;
         let b = self.b;
+        let ev = &mut self.ev;
 
         let mem_ports: mem::CyclePorts;
         let fetch_ports: Option<fetch::CyclePorts>;
@@ -117,8 +120,8 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             let advice = advice_secrets[i].wire().clone();
 
             let (calc_state, calc_im) =
-                calc_step(&cx, &b, i, instr, &mem_port, advice, &prev_state);
-            check_step(&cx, &b, idx, i,
+                calc_step(cx, b, ev, i, instr, &mem_port, advice, &prev_state);
+            check_step(cx, b, idx, i,
                 prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
                 states.push(calc_state.clone());
@@ -237,6 +240,7 @@ fn operand_value<'a>(
 fn calc_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
+    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
@@ -245,163 +249,117 @@ fn calc_step<'a>(
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let _g = b.scoped_label(format_args!("calc_step/cycle {}", idx));
 
-    // TODO: Where do we get instr from? PC wire of s1? Or still advice?
+    let opcode = ev.eval_typed(instr.opcode).and_then(Opcode::from_raw);
 
     let mut cases = Vec::new();
-    let mut add_case = |op, result, dest| {
-        let op_match = b.eq(b.lit(op as u8), instr.opcode);
-        let parts = TWire::<(_, _)>::new((result, dest));
-        cases.push(TWire::<(_, _)>::new((op_match, parts)));
-    };
+    // This has to be defined outside the macro so it's visible to the body expressions passed to
+    // `case!` below.
+    let mut dest: TWire<u8>;
+    macro_rules! case {
+        ($op:expr, $body:expr) => {
+            if opcode.is_none() || opcode == Some($op) {
+                // This write is dead in some cases.
+                #[allow(unused)] {
+                    dest = instr.dest;
+                }
+                let result: TWire<u64> = $body;
+                let op_match = if opcode.is_none() {
+                    b.eq(b.lit($op as u8), instr.opcode)
+                } else {
+                    b.lit(true)
+                };
+                let parts = TWire::<(_, _)>::new((result, dest));
+                cases.push(TWire::<(_, _)>::new((op_match, parts)));
+            }
+        };
+    }
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
-    {
-        let result = b.and(x, y);
-        add_case(Opcode::And, result, instr.dest);
-    }
+    case!(Opcode::And, b.and(x, y));
+    case!(Opcode::Or, b.or(x, y));
+    case!(Opcode::Xor, b.xor(x, y));
+    case!(Opcode::Not, b.not(y));
 
-    {
-        let result = b.or(x, y);
-        add_case(Opcode::Or, result, instr.dest);
-    }
-
-    {
-        let result = b.xor(x, y);
-        add_case(Opcode::Xor, result, instr.dest);
-    }
-
-    {
-        let result = b.not(y);
-        add_case(Opcode::Not, result, instr.dest);
-    }
-
-    {
-        add_case(Opcode::Add, b.add(x, y), instr.dest);
-    }
-
-    {
-        add_case(Opcode::Sub, b.sub(x, y), instr.dest);
-    }
-
-    {
-        add_case(Opcode::Mull, b.mul(x, y), instr.dest);
-    }
-
-    {
+    case!(Opcode::Add, b.add(x, y));
+    case!(Opcode::Sub, b.sub(x, y));
+    case!(Opcode::Mull, b.mul(x, y));
+    case!(Opcode::Umulh, {
         let (_, high) = *b.wide_mul(x, y);
-        add_case(Opcode::Umulh, high, instr.dest);
-    }
-
-    {
+        high
+    });
+    case!(Opcode::Smulh, {
         let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
         // TODO: not sure this gives the right overflow value - what if high = -1?
-        add_case(Opcode::Smulh, b.cast::<_, u64>(high_s), instr.dest);
-    }
+        b.cast::<_, u64>(high_s)
+    });
+    case!(Opcode::Udiv, b.div(x, y));
+    case!(Opcode::Umod, b.mod_(x, y));
 
-    {
-        let result = b.div(x, y);
-        add_case(Opcode::Udiv, result, instr.dest);
-    }
+    case!(Opcode::Shl, b.shl(x, b.cast(y)));
+    case!(Opcode::Shr, b.shr(x, b.cast(y)));
 
-    {
-        let result = b.mod_(x, y);
-        add_case(Opcode::Umod, result, instr.dest);
-    }
+    case!(Opcode::Cmpe, b.cast(b.eq(x, y)));
+    case!(Opcode::Cmpa, b.cast(b.gt(x, y)));
+    case!(Opcode::Cmpae, b.cast(b.ge(x, y)));
+    case!(Opcode::Cmpg, b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
+    case!(Opcode::Cmpge, b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
 
-    {
-        let result = b.shl(x, b.cast::<_, u8>(y));
-        add_case(Opcode::Shl, result, instr.dest);
-    }
+    case!(Opcode::Mov, y);
+    case!(Opcode::Cmov, {
+        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
+        y
+    });
 
-    {
-        let result = b.shr(x, b.cast::<_, u8>(y));
-        add_case(Opcode::Shr, result, instr.dest);
-    }
-
-
-    {
-        let result = b.cast::<_, u64>(b.eq(x, y));
-        add_case(Opcode::Cmpe, result, instr.dest);
-    }
-
-    {
-        let result = b.cast::<_, u64>(b.gt(x, y));
-        add_case(Opcode::Cmpa, result, instr.dest);
-    }
-
-    {
-        let result = b.cast::<_, u64>(b.ge(x, y));
-        add_case(Opcode::Cmpae, result, instr.dest);
-    }
-
-    {
-        let result = b.cast::<_, u64>(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y)));
-        add_case(Opcode::Cmpg, result, instr.dest);
-    }
-
-    {
-        let result = b.cast::<_, u64>(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y)));
-        add_case(Opcode::Cmpge, result, instr.dest);
-    }
-
-
-    {
-        add_case(Opcode::Mov, y, instr.dest);
-    }
-
-    {
-        let dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
-        add_case(Opcode::Cmov, y, dest);
-    }
-
-
-    {
-        add_case(Opcode::Jmp, y, b.lit(REG_PC));
-    }
-
+    case!(Opcode::Jmp, {
+        dest = b.lit(REG_PC);
+        y
+    });
     // TODO: Double check. Is this `x`?
     // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
-    {
-        let dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
-        add_case(Opcode::Cjmp, y, dest);
-    }
-
-    {
-        let dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
-        add_case(Opcode::Cnjmp, y, dest);
-    }
+    case!(Opcode::Cjmp, {
+        dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
+        y
+    });
+    case!(Opcode::Cnjmp, {
+        dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
+        y
+    });
 
     // Load1, Load2, Load4, Load8
     for w in MemOpWidth::iter() {
-        let result = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
-        add_case(w.load_opcode(), result, instr.dest);
+        case!(w.load_opcode(), {
+            extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w)
+        });
     }
-
     // Store1, Store2, Store4, Store8
     for w in MemOpWidth::iter() {
-        add_case(w.store_opcode(), b.lit(0), b.lit(REG_NONE));
+        case!(w.store_opcode(), {
+            dest = b.lit(REG_NONE);
+            b.lit(0)
+        });
     }
+    case!(Opcode::Poison8, {
+        dest = b.lit(REG_NONE);
+        b.lit(0)
+    });
 
-    {
-        add_case(Opcode::Poison8, b.lit(0), b.lit(REG_NONE));
-    }
+    // TODO: dummy implementation of `Answer` as a no-op infinite loop
+    case!(Opcode::Answer, {
+        dest = b.lit(REG_PC);
+        s1.pc
+    });
 
-    {
-        // TODO: dummy implementation of `Answer` as a no-op infinite loop
-        add_case(Opcode::Answer, s1.pc, b.lit(REG_PC));
-    }
+    case!(Opcode::Advise, advice);
 
-    {
-        add_case(Opcode::Advise, advice, instr.dest);
-    }
+    // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
+    // current `pc`.
+    case!(Opcode::Stutter, {
+        dest = b.lit(REG_PC);
+        s1.pc
+    });
 
-    {
-        // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
-        // current `pc`.
-        add_case(Opcode::Stutter, s1.pc, b.lit(REG_PC));
-    }
 
     if is_mode::<AnyTainted>() {
         // Opcode::Sink is a no-op in the standard interpreter, so we let if fall through to the default below.
@@ -409,11 +367,19 @@ fn calc_step<'a>(
         // later taint handling step. We set the value back to itself so that taint operations are treated
         // like `mov rX rX`.
         for w in MemOpWidth::iter() {
-            add_case(w.taint_opcode(), x, instr.op1);
+            case!(w.taint_opcode(), {
+                dest = instr.op1;
+                x
+            });
         }
     }
 
-    let (result, dest) = *b.mux_multi(&cases, b.lit((0, REG_NONE)));
+    let (result, dest) = if opcode.is_some() {
+        assert!(cases.len() == 1, "expected exactly one valid case for opcode {:?}", opcode);
+        *cases[0].1
+    } else {
+        *b.mux_multi(&cases, b.lit((0, REG_NONE)))
+    };
 
     let mut regs = Vec::with_capacity(s1.regs.len());
     for (i, &v_old) in s1.regs.iter().enumerate() {
@@ -430,8 +396,11 @@ fn calc_step<'a>(
     let live = s1.live;
 
     let s2 = RamStateRepr { cycle, pc, regs, live, tainted_regs };
-    let im = CalcIntermediate { x, y, result, tainted: tainted_im };
-    (TWire::new(s2),im)
+    let im = CalcIntermediate {
+        x, y, result,
+        tainted: tainted_im,
+    };
+    (TWire::new(s2), im)
 }
 
 fn check_state<'a>(

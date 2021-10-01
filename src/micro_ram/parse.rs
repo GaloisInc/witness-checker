@@ -265,12 +265,28 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
 
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<RamInstr, A::Error> {
         let mut seq = CountedSeqAccess::new(seq, 5);
+
+        let opcode = seq.next_element::<Opcode>()? as u8;
+        let dest = seq.next_element::<Option<u8>>()?;
+        let op1 = seq.next_element::<Option<u8>>()?;
+        let mut imm = seq.next_element::<Option<bool>>()?;
+        let mut op2 = seq.next_element::<Option<u64>>()?;
+
+        if !has_feature(Feature::AdviseMaxBound) {
+            if opcode == Opcode::Advise as u8 {
+                // Set the upper bound to the maximum possible value, meaning the instruction can
+                // produce any value.
+                imm = Some(true);
+                op2 = Some(u64::MAX);
+            }
+        }
+
         let x = RamInstr {
-            opcode: seq.next_element::<Opcode>()? as u8,
-            dest: seq.next_element::<Option<u8>>()?.unwrap_or(0),
-            op1: seq.next_element::<Option<u8>>()?.unwrap_or(0),
-            imm: seq.next_element::<Option<bool>>()?.unwrap_or(false),
-            op2: seq.next_element::<Option<u64>>()?.unwrap_or(0),
+            opcode,
+            dest: dest.unwrap_or(0),
+            op1: op1.unwrap_or(0),
+            imm: imm.unwrap_or(false),
+            op2: op2.unwrap_or(0),
         };
         seq.finish()?;
         Ok(x)
