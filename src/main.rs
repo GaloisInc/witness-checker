@@ -17,10 +17,9 @@ use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::Memory;
-use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk, WORD_UNTAINTED};
+use cheesecloth::micro_ram::types::{VersionedMultiExec,RamState, Segment, TraceChunk, WORD_UNTAINTED};
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -163,43 +162,46 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
     let content = fs::read(trace_path).unwrap();
-    let parse_exec: ParseExecution = match trace_path.extension().and_then(|os| os.to_str()) {
+    let parse_exec: VersionedMultiExec = match trace_path.extension().and_then(|os| os.to_str()) {
         Some("yaml") => serde_yaml::from_slice(&content).unwrap(),
         Some("cbor") => serde_cbor::from_slice(&content).unwrap(),
         Some("json") => serde_json::from_slice(&content).unwrap(),
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
-    let mut exec = parse_exec.into_inner().validate().unwrap();
-
-    // Check that --mode leak-tainted is provided iff the feature is present.
+    parse_exec.validate().unwrap();
+    let mut exec = parse_exec;
+    println!("Correctly parsed a multi-exec with {} internal execs and {} memory equivalences", exec.inner.execs.len(), exec.inner.mem_equiv.len());
+    Check that --mode leak-tainted is provided iff the feature is present.
     assert!(is_mode::<AnyTainted>() == exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
     // Adjust non-public-pc traces to fit the public-pc format.
     // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
     let mut provided_init_state = None;
     if !exec.has_feature(Feature::PublicPc) {
-        assert!(exec.segments.len() == 0);
-        assert!(exec.trace.len() == 1);
-        let chunk = &exec.trace[0];
-
-        let new_segment = Segment {
-            constraints: vec![],
-            len: exec.params.trace_len.unwrap() - 1,
-            successors: vec![],
-            enter_from_network: false,
-            exit_to_network: false,
-        };
-
-        provided_init_state = Some(chunk.states[0].clone());
-        let new_chunk = TraceChunk {
-            segment: 0,
-            states: chunk.states[1..].to_owned(),
-            debug: None,
-        };
-
-        exec.segments = vec![new_segment];
-        exec.trace = vec![new_chunk];
-    }
+	exec.inner.execs = exec.inner.execs.into_iter().map(|_, exec| {
+	    assert!(segments.len() == 0);
+            assert!(exec.trace.len() == 1);
+            let chunk = &exec.trace[0];
+	    
+            let new_segment = Segment {
+		constraints: vec![],
+		len: exec.params.trace_len.unwrap() - 1,
+		successors: vec![],
+		enter_from_network: false,
+		exit_to_network: false,
+            };
+	    
+            provided_init_state = Some(chunk.states[0].clone());
+            let new_chunk = TraceChunk {
+		segment: 0,
+		states: chunk.states[1..].to_owned(),
+		debug: None,
+            };
+	    
+            exec.segments = vec![new_segment];
+            exec.trace = vec![new_chunk];
+	    
+	}).collect();
 
 
     // Set up memory ports and check consistency.

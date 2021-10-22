@@ -1241,7 +1241,7 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 
 
 #[derive(Clone, Debug)]
-pub struct Execution {
+pub struct VersionedMultiExec{ // Should this go in parse.rs?
     pub version: Version,
     /// The set of all enabled features.  This is built by combining `declared_features` with the
     /// baseline features implied by `version`.
@@ -1249,6 +1249,35 @@ pub struct Execution {
     /// The set of features explicitly declared in the version header.
     pub declared_features: HashSet<Feature>,
 
+    pub inner: MultiExec,
+}
+
+impl VersionedMultiExec {
+    // Checks if all internal executions have the feature.
+    // All executions should have the same features, but it is not enforced here.
+    pub fn has_feature(&self, feature: Feature) -> bool {
+        self.features.contains(&feature)
+    }
+    pub fn validate(&self) -> Result<(), String> {
+	self.inner.validate(&self.features)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MultiExec {
+    pub execs: HashMap<String, ExecBody>,
+    pub mem_equiv: Vec<MemoryEquivalence>,
+}
+
+impl MultiExec {
+    pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
+	self.execs.iter().map(|(_, exec)| exec.validate(features).unwrap()); // How to force this to execute?
+	Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecBody {
     pub program: Vec<RamInstr>,
     pub init_mem: Vec<MemSegment>,
     pub params: Params,
@@ -1257,14 +1286,11 @@ pub struct Execution {
     pub advice: HashMap<u64, Vec<Advice>>,
 }
 
-impl Execution {
-    pub fn has_feature(&self, feature: Feature) -> bool {
-        self.features.contains(&feature)
-    }
+impl ExecBody {
 
-    pub fn validate(self) -> Result<Self, String> {
+    pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
         let params = &self.params;
-        if !self.features.contains(&Feature::PublicPc) {
+        if !features.contains(&Feature::PublicPc) {
             if self.segments.len() != 0 {
                 return Err(format!(
                     "expected no segment definitions in non-public-pc trace, but got {}",
@@ -1304,7 +1330,7 @@ impl Execution {
         }
 
         for (i, chunk) in self.trace.iter().enumerate() {
-            if !self.features.contains(&Feature::PublicPc) {
+            if !features.contains(&Feature::PublicPc) {
                 if chunk.segment != 0 {
                     return Err(format!(
                         "`trace[{}]` references segment {} in non-public-pc mode",
@@ -1349,10 +1375,12 @@ impl Execution {
                 ));
             }
         }
-
-        Ok(self)
+        Ok(())
     }
 }
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MemoryEquivalence(Vec<(String, String)>);
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MemSegment {

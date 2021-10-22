@@ -41,6 +41,9 @@ define_features! {
     /// `advise` instruction takes an upper bound, and the circuit includes an assertion that the
     /// advice value is in bounds.
     AdviseMaxBound = "advise-max-bound",
+
+    /// Multiple executions are provided.
+    MultiExec = "multi-exec",
 }
 
 
