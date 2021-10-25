@@ -178,7 +178,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
     let mut provided_init_state = None;
     if !multi_exec.has_feature(Feature::PublicPc) {
-	for (name,exec) in multi_exec.inner.execs.iter_mut(){
+	for (_name,exec) in multi_exec.inner.execs.iter_mut(){
 	    assert!(exec.segments.len() == 0);
             assert!(exec.trace.len() == 1);
             let chunk = &exec.trace[0];

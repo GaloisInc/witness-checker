@@ -1271,7 +1271,9 @@ pub struct MultiExec {
 
 impl MultiExec {
     pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
-	self.execs.iter().map(|(_, exec)| exec.validate(features).unwrap()); // How to force this to execute?
+	for (_, exec) in self.execs.iter() { 
+	    exec.validate(features).unwrap();
+	}
 	Ok(())
     }
 }
