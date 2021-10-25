@@ -430,8 +430,11 @@ fn calc_step<'a>(
     }
 
     let (result, dest) = if opcode.is_some() {
-        assert!(cases.len() == 1, "expected exactly one valid case for opcode {:?}", opcode);
-        *cases[0].1
+        if cases.len() == 1 {
+            *cases[0].1
+        } else {
+            b.lit((0, REG_NONE)).repr
+        }
     } else {
         *b.mux_multi(&cases, b.lit((0, REG_NONE)))
     };
