@@ -1381,8 +1381,7 @@ impl ExecBody {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct MemoryEquivalence(Vec<(String, String)>);
+type MemoryEquivalence = Vec<(String, String)>;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MemSegment {

@@ -204,15 +204,36 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 	}
     }
 
+    // Memory Equivalence: For every memory equivalence
+    // create wires that go accross executions.
+    // We want an array with those wires, however we can't
+    // know the length of the segment until we inspect the execution, se they start as None
+    let mut equiv_segments:Vec<Option<Vec<TWire<u64>>>> = vec![None; multi_exec.inner.mem_equivs.len()];
+
+    // For every execution, create a dictionary mapping
+    // segments names to an index in equiv_segments where
+    // the wires for the segment are stored.  
+    let mut mem_equivs:std::collections::HashMap<String, HashMap<String, usize>> = {
+	let mut mem_equivs = HashMap::new();
+	for (i,mem_eq) in multi_exec.inner.mem_equivs.iter().enumerate() {
+	    for (exec_name, seg) in mem_eq.iter() {
+		let exec_equivs = mem_equivs.entry(exec_name.to_owned()).or_insert_with(|| HashMap::new());
+		// For the segment, add a pointer to the location
+		// where the segment's wires will be stored.
+		exec_equivs.insert(seg.to_owned(),i);
+	    }
+	}
+	mem_equivs
+    };
+    
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
     // for equivalent mem segments. 
-
-    for (_name,exec) in multi_exec.inner.execs.iter(){
+    for (name,exec) in multi_exec.inner.execs.iter(){
 	// Set up memory ports and check consistency.
 	let mut mem = Memory::new();
 	for seg in &exec.init_mem {
-            mem.init_segment(&b, seg);
+            mem.init_segment(&b, seg, mem_equivs.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &equiv_segments);
 	}
 
 	// Set up instruction-fetch ports and check consistency.

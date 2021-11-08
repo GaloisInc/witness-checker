@@ -2,6 +2,7 @@
 //!
 //! This includes setting up initial memory, adding `MemPort`s for each cycle, sorting, and
 //! checking the sorted list.
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
 use log::*;
@@ -28,7 +29,11 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn init_segment(&mut self, b: &Builder<'a>, seg: &MemSegment) {
+    pub fn init_segment(&mut self
+			, b: &Builder<'a>
+			, seg: &MemSegment
+			, _equivs: &mut HashMap<String, usize>
+			, _equiv_segments: &Vec<Option<Vec<TWire<u64>>>> ) {
         self.ports.reserve(seg.len as usize);
 
         for i in 0 .. seg.len {
