@@ -1266,7 +1266,7 @@ impl VersionedMultiExec {
 #[derive(Clone, Debug, Deserialize)]
 pub struct MultiExec {
     pub execs: HashMap<String, ExecBody>,
-    pub mem_equiv: Vec<MemoryEquivalence>,
+    pub mem_equivs: Vec<MemoryEquivalence>,
 }
 
 impl MultiExec {

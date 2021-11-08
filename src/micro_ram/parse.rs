@@ -95,7 +95,7 @@ impl<'de> Visitor<'de> for VersionedMultiExecVisitor {
 		execs.insert("".to_string(),body);
                 Ok(MultiExec {
 		    execs: execs,
-		    mem_equiv: Vec::new()
+		    mem_equivs: Vec::new()
 		})
             }
         })?;
