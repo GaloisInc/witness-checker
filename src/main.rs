@@ -170,7 +170,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     };
     parse_exec.validate().unwrap();
     let mut multi_exec = parse_exec;
-    println!("** DEBUG: Correctly parsed a multi-exec with {} internal execs and {} memory equivalences", multi_exec.inner.execs.len(), multi_exec.inner.mem_equivs.len());
+    println!("** DEBUG: Correctly parsed a multi-exec with {} internal execs and {} memory equivalences", multi_exec.inner.execs.len(), multi_exec.inner.mem_equiv.len());
     // Check that --mode leak-tainted is provided iff the feature is present.
     assert!(is_mode::<AnyTainted>() == multi_exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
@@ -208,22 +208,22 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // create wires that go accross executions.
     // We want an array with those wires, however we can't
     // know the length of the segment until we inspect the execution, se they start as None
-    let mut equiv_segments:Vec<Option<Vec<TWire<u64>>>> = vec![None; multi_exec.inner.mem_equivs.len()];
+    let mut equiv_segments:Vec<Option<Vec<TWire<u64>>>> = vec![None; multi_exec.inner.mem_equiv.len()];
 
     // For every execution, create a dictionary mapping
     // segments names to an index in equiv_segments where
     // the wires for the segment are stored.  
-    let mut mem_equivs:std::collections::HashMap<String, HashMap<String, usize>> = {
-	let mut mem_equivs = HashMap::new();
-	for (i,mem_eq) in multi_exec.inner.mem_equivs.iter().enumerate() {
+    let mut mem_equiv:std::collections::HashMap<String, HashMap<String, usize>> = {
+	let mut mem_equiv = HashMap::new();
+	for (i,mem_eq) in multi_exec.inner.mem_equiv.iter().enumerate() {
 	    for (exec_name, seg) in mem_eq.iter() {
-		let exec_equivs = mem_equivs.entry(exec_name.to_owned()).or_insert_with(|| HashMap::new());
+		let exec_equivs = mem_equiv.entry(exec_name.to_owned()).or_insert_with(|| HashMap::new());
 		// For the segment, add a pointer to the location
 		// where the segment's wires will be stored.
 		exec_equivs.insert(seg.to_owned(),i);
 	    }
 	}
-	mem_equivs
+	mem_equiv
     };
     
     // Build Circuit for each execution,
