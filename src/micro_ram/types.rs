@@ -1266,7 +1266,7 @@ impl VersionedMultiExec {
 #[derive(Clone, Debug, Deserialize)]
 pub struct MultiExec {
     pub execs: HashMap<String, ExecBody>,
-    pub mem_equivs: Vec<MemoryEquivalence>,
+    pub mem_equiv: Vec<MemoryEquivalence>,
 }
 
 impl MultiExec {
@@ -1397,6 +1397,8 @@ pub struct MemSegment {
     pub data: Vec<u64>,
     #[serde(default = "panic_default")]
     pub tainted: IfMode<AnyTainted,Vec<WordLabel>>,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

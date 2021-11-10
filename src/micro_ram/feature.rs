@@ -42,7 +42,7 @@ define_features! {
     /// advice value is in bounds.
     AdviseMaxBound = "advise-max-bound",
 
-    /// Multiple executions are provided.
+    /// Multiple executions are provided. Also adds names to memory segments.
     MultiExec = "multi-exec",
 }
 

@@ -233,7 +233,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 	// Set up memory ports and check consistency.
 	let mut mem = Memory::new();
 	for seg in &exec.init_mem {
-            mem.init_segment(&b, seg, mem_equivs.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &equiv_segments);
+            mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
 	}
 
 	// Set up instruction-fetch ports and check consistency.
