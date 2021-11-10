@@ -170,7 +170,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     };
     parse_exec.validate().unwrap();
     let mut multi_exec = parse_exec;
-    println!("** DEBUG: Correctly parsed a multi-exec with {} internal execs and {} memory equivalences", multi_exec.inner.execs.len(), multi_exec.inner.mem_equiv.len());
     // Check that --mode leak-tainted is provided iff the feature is present.
     assert!(is_mode::<AnyTainted>() == multi_exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
