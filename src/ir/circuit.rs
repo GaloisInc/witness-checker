@@ -47,7 +47,7 @@ pub struct CircuitBase<'a> {
 
 impl<'a> CircuitBase<'a> {
     pub fn new(arena: &'a Bump, is_prover: bool) -> CircuitBase<'a> {
-        CircuitBase {
+        let c = CircuitBase {
             arena,
             intern_gate: RefCell::new(HashSet::new()),
             intern_ty: RefCell::new(HashSet::new()),
@@ -58,6 +58,15 @@ impl<'a> CircuitBase<'a> {
             intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
             is_prover,
+        };
+        c.preload_common_types();
+        c
+    }
+
+    fn preload_common_types(&self) {
+        let mut intern = self.intern_ty.borrow_mut();
+        for &ty in COMMON_TYPES {
+            intern.insert(ty);
         }
     }
 
@@ -926,6 +935,54 @@ impl TyKind<'_> {
             TyKind::Bundle(tys) => {
                 c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
             },
+        }
+    }
+}
+
+static COMMON_TY_BOOL: TyKind = TyKind::BOOL;
+static COMMON_TY_U8: TyKind = TyKind::U8;
+static COMMON_TY_U16: TyKind = TyKind::U16;
+static COMMON_TY_U32: TyKind = TyKind::U32;
+static COMMON_TY_U64: TyKind = TyKind::U64;
+static COMMON_TY_I8: TyKind = TyKind::I8;
+static COMMON_TY_I16: TyKind = TyKind::I16;
+static COMMON_TY_I32: TyKind = TyKind::I32;
+static COMMON_TY_I64: TyKind = TyKind::I64;
+
+static COMMON_TYPES: &[&TyKind] = &[
+    &COMMON_TY_BOOL,
+    &COMMON_TY_U8,
+    &COMMON_TY_U16,
+    &COMMON_TY_U32,
+    &COMMON_TY_U64,
+    &COMMON_TY_I8,
+    &COMMON_TY_I16,
+    &COMMON_TY_I32,
+    &COMMON_TY_I64,
+];
+
+impl Ty<'_> {
+    pub fn bool<'a>() -> Ty<'a> {
+        Ty(&COMMON_TY_BOOL)
+    }
+
+    pub fn uint<'a>(width: usize) -> Ty<'a> {
+        match width {
+            8 => Ty(&COMMON_TY_U8),
+            16 => Ty(&COMMON_TY_U16),
+            32 => Ty(&COMMON_TY_U32),
+            64 => Ty(&COMMON_TY_U64),
+            _ => panic!("not a common bit width: {}", width),
+        }
+    }
+
+    pub fn int<'a>(width: usize) -> Ty<'a> {
+        match width {
+            8 => Ty(&COMMON_TY_I8),
+            16 => Ty(&COMMON_TY_I16),
+            32 => Ty(&COMMON_TY_I32),
+            64 => Ty(&COMMON_TY_I64),
+            _ => panic!("not a common bit width: {}", width),
         }
     }
 }
