@@ -15,7 +15,7 @@ use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
-    MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_UNTAINTED, WORD_BYTES,
+    MemoryEquivalence, MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_UNTAINTED, WORD_BYTES,
 };
 use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
@@ -40,14 +40,12 @@ impl<'a> Memory<'a> {
         &mut self,
         b: &Builder<'a>,
         seg: &MemSegment,
-        equivs: &mut HashMap<String, usize>,
-        equiv_segments: &mut Vec<Option<Vec<TWire<'a,u64>>>>,
+        mut exec_equivs: ExecSegments<'a, '_>,
     ) -> Vec<TWire<'a, u64>> {
         let mut unused = self.unused.borrow_mut();
         self.ports.reserve(seg.len as usize);
         unused.reserve(seg.len as usize);
         let mut value_wires = Vec::with_capacity(seg.len as usize);
-
         
         // Get the values of the word.  `data` is implicitly zero-padded out to
         // `seg.len`, to support `.bss`-style zero-initialized segments.  For secret segments
@@ -56,35 +54,27 @@ impl<'a> Memory<'a> {
 
         // Then create the wires. Depends on whether the
         // segment is part of an qeuivalence class
-        let mem_wires:Vec<TWire<u64>> = {
-            let wires:Vec<TWire<u64>>;
-            match equivs.get(&seg.name) {
-                Some(&i) => {
-                    match &equiv_segments[i] {
-                        Some (wires1) => {
-                            //TODO: check equality with supplied values.
-                            wires1.clone()},
-                        None => {
-                            // all memory equivalences must be on secret segments
-                            assert!(seg.secret);
-                            wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
-                            equiv_segments[i] = Some (wires.clone());
-                            wires
-                        }
-                    }
-                },
-                // If the segmetn is not in an equivalence class
-                // just build new wires depending on whether the
-                // segment is secret or not
-                None => if seg.secret {
-                    wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
-                    wires
-                } else {
-                    wires = values.iter().map(|&value| b.lit(value)).collect();
-                    wires
-                }
-            }
+        let mem_wires = match exec_equivs.get(&seg.name) {
+            // If the segmetn is not in an equivalence class
+            // just build new wires depending on whether the
+            // segment is secret or not
+            ExecSegment::NoEquiv => if seg.secret {
+                values.iter().map(|&value| b.secret_init(|| value)).collect()
+            } else {
+                values.iter().map(|&value| b.lit(value)).collect()
+            },
+
+            //TODO: check equality with supplied values.
+            ExecSegment::Equiv(wires) => wires.to_owned(),
+
+            ExecSegment::NeedsInit(wires) => {
+                // all memory equivalences must be on secret segments
+                assert!(seg.secret);
+                *wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
+                wires.clone()
+            },
         };
+
         // Then create the memports 
         for (i, mem_wire) in mem_wires.iter().enumerate() {
             // Initial memory values are given in terms of words, not bytes.
@@ -246,6 +236,75 @@ impl<'a> Memory<'a> {
         for (i, (prev, &port)) in it {
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
             check_mem(&cx, &b, i + 1, prev, prev_valid, port);
+        }
+    }
+}
+
+pub struct EquivSegments<'a> {
+    /// Data for each equivalence class.  The entry is `None` if no member of the class has been
+    /// processed yet, and otherwise is `Some(words)`.
+    data: Vec<Option<Vec<TWire<'a, u64>>>>,
+    /// Map from execution name to segment name to equivalence class index.  The resulting index
+    /// can be used to look up the equivalence class in `data`.
+    equivs: HashMap<String, HashMap<String, usize>>,
+}
+
+impl<'a> EquivSegments<'a> {
+    pub fn new(mem_equivs: &[MemoryEquivalence]) -> EquivSegments<'a> {
+        let mut es = EquivSegments {
+            data: vec![None; mem_equivs.len()],
+            equivs: HashMap::new(),
+        };
+
+        for (i, mem_eq) in mem_equivs.iter().enumerate() {
+            for (exec_name, seg) in mem_eq.iter() {
+                let exec_equivs = es.equivs.entry(exec_name.to_owned())
+                    .or_insert_with(|| HashMap::new());
+                exec_equivs.insert(seg.to_owned(), i);
+            }
+        }
+
+        es
+    }
+
+    pub fn exec_segments(&mut self, seg_name: &str) -> ExecSegments<'a, '_> {
+        ExecSegments {
+            data: &mut self.data,
+            seg_map: self.equivs.get(seg_name),
+        }
+    }
+}
+
+/// Helper type for looking up the equivalence classes and initializers for segments in a
+/// particular execution.
+pub struct ExecSegments<'a, 'b> {
+    data: &'b mut [Option<Vec<TWire<'a, u64>>>],
+    seg_map: Option<&'b HashMap<String, usize>>,
+}
+
+pub enum ExecSegment<'a, 'b> {
+    /// The segment is not a member of an equivalence class.
+    NoEquiv,
+    /// The segment is a member of an equivalence class, and has already been initialized.
+    Equiv(&'b [TWire<'a, u64>]),
+    /// The segment is a member of an equivalence class, and needs to be initialized because this
+    /// is the first use.
+    NeedsInit(&'b mut Vec<TWire<'a, u64>>),
+}
+
+impl<'a, 'b> ExecSegments<'a, 'b> {
+    pub fn get(&mut self, name: &str) -> ExecSegment<'a, '_> {
+        let opt_index = self.seg_map.as_ref().and_then(|m| m.get(name).cloned());
+        let index = match opt_index {
+            Some(x) => x,
+            None => return ExecSegment::NoEquiv,
+        };
+
+        if self.data[index].is_some() {
+            ExecSegment::Equiv(self.data[index].as_ref().unwrap())
+        } else {
+            self.data[index] = Some(Vec::new());
+            ExecSegment::NeedsInit(self.data[index].as_mut().unwrap())
         }
     }
 }
