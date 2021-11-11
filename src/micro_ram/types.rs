@@ -8,6 +8,7 @@ use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
 use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
+use crate::ir::migrate::{self, Migrate};
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
@@ -829,7 +830,7 @@ impl<'a> Cast<'a, u8> for MemOpWidth {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct MemPortRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,

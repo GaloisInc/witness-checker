@@ -21,16 +21,22 @@ use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
 use crate::routing::sort;
 
+use crate::ir::migrate::{self, Migrate};
+
+#[derive(Migrate)]
 pub struct Memory<'a> {
     ports: Vec<TWire<'a, MemPort>>,
-    unused: Rc<RefCell<Vec<bool>>>,
+    unused: Unused,
 }
+
+#[derive(Clone, Debug, Default)]
+struct Unused(Rc<RefCell<Vec<bool>>>);
 
 impl<'a> Memory<'a> {
     pub fn new() -> Memory<'a> {
         Memory {
             ports: Vec::new(),
-            unused: Rc::default(),
+            unused: Unused::default(),
         }
     }
 
@@ -42,7 +48,7 @@ impl<'a> Memory<'a> {
         seg: &MemSegment,
         mut exec_equivs: ExecSegments<'a, '_>,
     ) -> Vec<TWire<'a, u64>> {
-        let mut unused = self.unused.borrow_mut();
+        let mut unused = self.unused.0.borrow_mut();
         self.ports.reserve(seg.len as usize);
         unused.reserve(seg.len as usize);
         let mut value_wires = Vec::with_capacity(seg.len as usize);
@@ -138,7 +144,7 @@ impl<'a> Memory<'a> {
             port_starts: Vec::new(),
             ports: Vec::new(),
             unused: self.unused.clone(),
-            unused_offset: self.unused.borrow().len(),
+            unused_offset: self.unused.0.borrow().len(),
         };
 
         let ranges = ranges.into_iter();
@@ -177,7 +183,7 @@ impl<'a> Memory<'a> {
 
         cp.assert_valid(cx, b);
         self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
-        self.unused.borrow_mut().extend(iter::repeat(false).take(cp.ports.len()));
+        self.unused.0.borrow_mut().extend(iter::repeat(false).take(cp.ports.len()));
         cp
     }
 
@@ -185,7 +191,7 @@ impl<'a> Memory<'a> {
     ///
     /// This takes `self` by value to prevent adding more `MemPort`s after the consistency check.
     pub fn assert_consistent(self, cx: &Context<'a>, b: &Builder<'a>) {
-        let unused = self.unused.borrow();
+        let unused = self.unused.0.borrow();
         let ports = &self.ports;
         assert!(ports.len() == unused.len());
         let iter_ports = || {
@@ -237,6 +243,13 @@ impl<'a> Memory<'a> {
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
             check_mem(&cx, &b, i + 1, prev, prev_valid, port);
         }
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Unused {
+    type Output = Unused;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, _v: &mut V) -> Unused {
+        self.clone()
     }
 }
 
@@ -310,7 +323,7 @@ impl<'a, 'b> ExecSegments<'a, 'b> {
 }
 
 /// A `MemPort` that is potentially shared by several steps.
-#[derive(Clone)]
+#[derive(Clone, Migrate)]
 pub struct SparseMemPort<'a> {
     mp: TWire<'a, MemPort>,
     /// Which of the steps actually uses this `MemPort`.  If no step uses it, the value will be out
@@ -360,6 +373,7 @@ impl<'a> SparseMemPort<'a> {
     }
 }
 
+#[derive(Migrate)]
 pub struct CyclePorts<'a> {
     /// The initial cycle covered by each port in `ports`.  `ports[i]` handles cycles in the range
     /// `port_starts[i] .. port_starts[i+1]`.  We keep an extra trailing element in `port_starts`
@@ -367,7 +381,7 @@ pub struct CyclePorts<'a> {
     port_starts: Vec<u32>,
     ports: Vec<SparseMemPort<'a>>,
 
-    unused: Rc<RefCell<Vec<bool>>>,
+    unused: Unused,
     unused_offset: usize,
 }
 
@@ -448,7 +462,7 @@ impl<'a> CyclePorts<'a> {
             smp.set_unused_by(user);
             if smp.num_candidate_users() == 0 {
                 smp.is_set = true;
-                self.unused.borrow_mut()[self.unused_offset + idx] = true;
+                self.unused.0.borrow_mut()[self.unused_offset + idx] = true;
             }
         }
     }

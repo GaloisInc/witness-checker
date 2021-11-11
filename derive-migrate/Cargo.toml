@@ -1,0 +1,12 @@
+[package]
+name = "cheesecloth-derive-migrate"
+version = "0.1.0"
+authors = ["Stuart Pernsteiner <spernsteiner@galois.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "1.0.81", features = [ "full", "visit-mut" ] }
+quote = "1.0.9"
