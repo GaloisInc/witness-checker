@@ -9,8 +9,9 @@ use num_traits::One;
 use cheesecloth::wire_assert;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
+use cheesecloth::gadget;
 use cheesecloth::ir::circuit::{
-    Circuit, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
+    Circuit, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
 };
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::lower;
@@ -75,6 +76,9 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("OUT.DOT")
              .help("dump the segment graph to a file for debugging"))
+        .arg(Arg::with_name("test-gadget-eval")
+             .long("test-gadget-eval")
+             .help("test GadgetKind::eval behavior for all gadgets in the circuit"))
 
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
@@ -125,6 +129,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let gadget_supported = |g: GadgetKindRef| {
         use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
         let mut ok = false;
+        if args.is_present("test-gadget-eval") {
+            return true;
+        }
         if args.is_present("zkif-out") || args.is_present("sieve-out") {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
@@ -274,6 +281,12 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             asserts_ok, num_asserts as u32 - asserts_ok, bugs_ok,
             if flag_vals[0] { "GOOD" } else { "BAD" },
         );
+    }
+
+    if args.is_present("test-gadget-eval") {
+        let count = gadget::test_gadget_eval(c.as_base(), [accepted].iter().cloned());
+        eprintln!("all {} gadgets passed", count);
+        return Ok(());
     }
 
     #[cfg(feature = "bellman")]

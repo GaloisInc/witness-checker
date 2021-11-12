@@ -1,3 +1,5 @@
+use num_bigint::{BigInt, Sign};
+use crate::eval::Value;
 use crate::ir::circuit::{
     CircuitTrait, CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
     GadgetKindRef,
@@ -82,6 +84,23 @@ impl<'a> GadgetKind<'a> for ConcatBits {
         assert!(pos == width);
         acc
     }
+
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+        let mut acc = BigInt::from(0_u32);
+        let mut acc_width = 0;
+        for (&ty, val) in arg_tys.iter().zip(args.iter()) {
+            let sz = ty.integer_size();
+            let val = val.as_ref()?.as_single().unwrap();
+
+            let mask = (BigInt::from(1_u32) << sz.bits()) - 1;
+            let masked = mask & val;
+            acc |= masked << acc_width;
+            acc_width += sz.bits();
+        }
+        assert!(acc.sign() != Sign::Minus);
+        assert!(acc.bits() <= acc_width as u64);
+        Some(Value::Single(acc))
+    }
 }
 
 pub fn concat_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, x: TWire<'a, T>) -> Wire<'a> {
@@ -143,6 +162,21 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
         let mut pos = 0;
         walk(c, args[0], self.0, &mut pos)
     }
+
+    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+        fn walk(inp: &BigInt, pos: &mut u16, ty: Ty) -> Value {
+            if let TyKind::Bundle(tys) = *ty {
+                Value::Bundle(tys.iter().map(|&ty| walk(inp, pos, ty)).collect())
+            } else {
+                let v = Value::trunc(ty, inp >> *pos);
+                *pos += ty.integer_size().bits();
+                v
+            }
+        }
+        let inp = args[0].as_ref()?.as_single().unwrap();
+        let mut pos = 0;
+        Some(walk(&inp, &mut pos, self.0))
+    }
 }
 
 pub fn split_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, T> {
@@ -184,6 +218,12 @@ impl<'a> GadgetKind<'a> for ExtractBits {
         let out_ty = c.ty(TyKind::Uint(IntSize(self.end - self.start)));
         let shifted = c.shr(args[0], c.lit(u16_ty, self.start));
         c.cast(shifted, out_ty)
+    }
+
+    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+        let val = args[0].as_ref()?.as_single().unwrap();
+        let mask = (BigInt::from(1) << self.end) - 1;
+        Some(Value::Single((val >> self.start) & mask))
     }
 }
 

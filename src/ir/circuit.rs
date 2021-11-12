@@ -22,6 +22,7 @@ use std::slice;
 use std::str;
 use bumpalo::Bump;
 use num_bigint::{BigUint, BigInt, Sign};
+use crate::eval;
 
 
 // CircuitBase layer
@@ -1397,6 +1398,9 @@ pub trait GadgetKind<'a>: GadgetKindSupport<'a> + 'a {
         c: DynCircuitRef<'a, '_>,
         args: &[Wire<'a>],
     ) -> Wire<'a>;
+
+    /// Evaluate this gadget on the provided inputs.
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[Option<eval::Value>]) -> Option<eval::Value>;
 }
 
 declare_interned_pointer! {
