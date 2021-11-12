@@ -74,7 +74,7 @@ impl<'a> KnownMem<'a> {
     pub fn load(
         &mut self,
         b: &Builder<'a>,
-        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+        ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         width: MemOpWidth,
     ) -> Option<TWire<'a, u64>> {
@@ -168,7 +168,7 @@ impl<'a> KnownMem<'a> {
     pub fn store(
         &mut self,
         b: &Builder<'a>,
-        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+        ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
@@ -179,7 +179,7 @@ impl<'a> KnownMem<'a> {
     pub fn poison(
         &mut self,
         b: &Builder<'a>,
-        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+        ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
@@ -190,7 +190,7 @@ impl<'a> KnownMem<'a> {
     fn store_common(
         &mut self,
         b: &Builder<'a>,
-        ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+        ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
@@ -532,7 +532,7 @@ impl<'a> ArithExpr<'a> {
 }
 
 fn wire_arith_expr<'a>(
-    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    ev: &mut CachingEvaluator<'a, eval::Public>,
     w: TWire<'a, u64>,
 ) -> ArithExpr<'a> {
     if let Some(value) = ev.eval_typed(w) {
@@ -661,7 +661,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
@@ -680,7 +680,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
@@ -697,16 +697,21 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
 
+        let mut ok = true;
         for i in 0..8 {
             let w = m.load_public(&b, i, MemOpWidth::W1).unwrap();
             let v = ev.eval_typed(w).unwrap();
-            assert_eq!(v, i + 1);
+            if v != i + 1 {
+                ok = false;
+                eprintln!("error ({}): {} != {}", i, v, i + 1);
+            }
         }
+        assert!(ok);
     }
 
     /// Store bytes, then load as a word, with gaps between the bytes.  This exercises the cases of
@@ -716,7 +721,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0x8877665544332211));
         for &i in &[1,2,3,5,6] {
@@ -735,7 +740,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::new();
         for i in 0..8 {
@@ -769,7 +774,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for &i in &[1,2,3,5,6] {
@@ -792,7 +797,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0x0000000000000201), MemOpWidth::W8, false);
@@ -811,7 +816,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0), MemOpWidth::W2, false);
@@ -833,7 +838,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -868,7 +873,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -898,7 +903,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -919,7 +924,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));

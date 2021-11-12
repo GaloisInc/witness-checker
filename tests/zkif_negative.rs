@@ -14,7 +14,7 @@ fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
     c
 }
 
-fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
+fn finish<'a>(w: Wire<'a>) {
     use cheesecloth::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
@@ -22,7 +22,7 @@ fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
 
 
     // Make sure the circuit is valid.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
     let val = ev.eval_wire(w);
     assert_eq!(val, Some(eval::Value::Single(BigInt::from(1))));
 
@@ -66,7 +66,7 @@ fn add_neg_one() {
         c.lit(t_u8, 99),
     );
 
-    finish(&c, w);
+    finish(w);
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn add_neg_one_u64() {
         c.lit(t_u64, 99),
     );
 
-    finish(&c, w);
+    finish(w);
 }
 
 /// Divide a number by a large denominator.  A case like this can occur when dividing by negative
@@ -96,7 +96,7 @@ fn div_large() {
         c.lit(t_u8, 0),
     );
 
-    finish(&c, w);
+    finish(w);
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn neg_one() {
         c.lit(t_i8, -1),
     );
 
-    finish(&c, w);
+    finish(w);
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn not_zero() {
         c.lit(t_i8, -1),
     );
 
-    finish(&c, w);
+    finish(w);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn neg_one_shr() {
         c.lit(t_i8, -1),
     );
 
-    finish(&c, w);
+    finish(w);
 }
 
 #[test]
@@ -154,5 +154,5 @@ fn neg_one_shl() {
         c.lit(t_i8, -2),
     );
 
-    finish(&c, w);
+    finish(w);
 }

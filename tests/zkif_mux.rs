@@ -14,7 +14,7 @@ fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
     c
 }
 
-fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
+fn finish<'a>(w: Wire<'a>) {
     use cheesecloth::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
@@ -22,7 +22,7 @@ fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
 
 
     // Make sure the circuit is valid.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
     let val = ev.eval_wire(w);
     assert_eq!(val, Some(eval::Value::Single(BigInt::from(1))));
 
@@ -71,7 +71,7 @@ fn mux_true() {
         c.lit(t_i8, 10),
     );
 
-    finish(&c, w);
+    finish(w);
 }
 
 #[test]
@@ -90,5 +90,5 @@ fn mux_false() {
         c.lit(t_i8, 20),
     );
 
-    finish(&c, w);
+    finish(w);
 }

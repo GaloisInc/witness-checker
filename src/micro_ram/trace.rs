@@ -29,18 +29,18 @@ pub struct Segment<'a> {
 
 }
 
-pub struct SegmentBuilder<'a, 'b, 'c> {
-    pub cx: &'c Context<'a>,
-    pub b: &'c Builder<'a>,
-    pub ev: &'c mut CachingEvaluator<'a, 'b, eval::Public>,
-    pub mem: &'c mut Memory<'a>,
-    pub fetch: &'c mut Fetch<'a>,
-    pub params: &'c types::Params,
-    pub prog: &'c [RamInstr],
+pub struct SegmentBuilder<'a, 'b> {
+    pub cx: &'b Context<'a>,
+    pub b: &'b Builder<'a>,
+    pub ev: &'b mut CachingEvaluator<'a, eval::Public>,
+    pub mem: &'b mut Memory<'a>,
+    pub fetch: &'b mut Fetch<'a>,
+    pub params: &'b types::Params,
+    pub prog: &'b [RamInstr],
     pub check_steps: usize,
 }
 
-impl<'a, 'b, 'c> SegmentBuilder<'a, 'b, 'c> {
+impl<'a, 'b> SegmentBuilder<'a, 'b> {
     pub fn run(
         &mut self,
         idx: usize,
@@ -252,7 +252,7 @@ fn operand_value<'a>(
 fn calc_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    ev: &mut CachingEvaluator<'a, eval::Public>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,

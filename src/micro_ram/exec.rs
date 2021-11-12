@@ -150,7 +150,7 @@ impl<'a> ExecBuilder<'a> {
     }
 
     fn add_segment(&mut self, b: &Builder<'a>, exec: &ExecBody, item: SegGraphItem) {
-        let mut segment_builder_eval = CachingEvaluator::new(b.circuit());
+        let mut segment_builder_eval = CachingEvaluator::new();
         let mut segment_builder = SegmentBuilder {
             cx: &self.cx,
             b: b,

@@ -156,7 +156,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let c = &c as &DynCircuit;
 
     let b = Builder::new(c);
-    let mut cx = Context::new(c);
+    let mut cx = Context::new();
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
@@ -268,7 +268,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     }
 
     {
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         let flag_vals = flags.iter().map(|&w| {
             ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();

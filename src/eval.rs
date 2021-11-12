@@ -5,8 +5,7 @@ use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 
 use crate::ir::circuit::{
-    self, CircuitBase, CircuitTrait, CircuitExt, Ty, Wire, Secret, Bits, GateKind, TyKind,
-    GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
+    self, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
 };
 
 use self::Value::Single;
@@ -112,15 +111,13 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
 
 /// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
 /// sharing.
-pub struct CachingEvaluator<'a, 'c, S> {
-    c: &'c CircuitBase<'a>,
+pub struct CachingEvaluator<'a, S> {
     cache: HashMap<Wire<'a>, Option<Value>>,
     secret_eval: S,
 }
-impl<'a, 'c, S: Default> CachingEvaluator<'a, 'c, S> {
-    pub fn new<C: CircuitTrait<'a> + ?Sized>(c: &'c C) -> Self {
+impl<'a, S: Default> CachingEvaluator<'a, S> {
+    pub fn new() -> Self {
         CachingEvaluator {
-            c: c.as_base(),
             cache: HashMap::new(),
             secret_eval: S::default(),
         }
@@ -128,13 +125,13 @@ impl<'a, 'c, S: Default> CachingEvaluator<'a, 'c, S> {
 }
 
 
-impl<'a, 'c, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, 'c, S> {
+impl<'a, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, S> {
     fn eval_secret(&mut self, s: Secret<'a>) -> Option<Value> {
         self.secret_eval.eval_secret(s)
     }
 }
 
-impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, S> {
+impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
     fn eval_wire(&mut self, w: Wire<'a>) -> Option<Value> {
         if let Some(opt_val) = self.cache.get(&w) {
             return opt_val.clone();
@@ -152,8 +149,9 @@ impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, 
     }
 
     fn eval_gadget(&mut self, k: GadgetKindRef<'a>, ws: &[Wire<'a>]) -> Option<Value> {
-        let w = k.decompose(self.c.as_ref(), ws);
-        self.eval_wire(w)
+        let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
+        let vals = ws.iter().map(|&w| self.eval_wire(w)).collect::<Vec<_>>();
+        k.eval(&tys, &vals)
     }
 }
 

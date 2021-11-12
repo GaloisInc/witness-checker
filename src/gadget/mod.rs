@@ -9,7 +9,7 @@ pub mod bit_pack;
 /// the same result as evaluating the gadget directly.
 pub fn test_gadget_eval<'a, I>(c: &impl CircuitTrait<'a>, wires: I) -> usize
 where I: IntoIterator<Item = Wire<'a>> {
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
     let mut tested = 0;
     let mut failed = 0;
     for wire in circuit::walk_wires(wires) {

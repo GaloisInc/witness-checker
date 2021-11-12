@@ -239,7 +239,7 @@ mod test {
         let arena = Bump::new();
         let c = Circuit::new(&arena, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut rb = RoutingBuilder::new();
         let inputs = (0 .. n).map(|i| b.lit(i as u32)).collect::<Vec<_>>();

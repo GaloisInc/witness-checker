@@ -3,7 +3,6 @@ use std::fmt;
 use std::mem;
 
 use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::CircuitTrait;
 use crate::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
 
 #[macro_export]
@@ -105,15 +104,15 @@ impl<'a> Cond<'a> {
 pub struct Context<'a> {
     asserts: RefCell<Vec<Cond<'a>>>,
     bugs: RefCell<Vec<Cond<'a>>>,
-    eval: Option<RefCell<CachingEvaluator<'a, 'a, eval::RevealSecrets>>>,
+    eval: Option<RefCell<CachingEvaluator<'a, eval::RevealSecrets>>>,
 }
 
 impl<'a> Context<'a> {
-    pub fn new<C: CircuitTrait<'a> + ?Sized>(c: &'a C) -> Context<'a> {
+    pub fn new() -> Context<'a> {
         Context {
             asserts: RefCell::new(Vec::new()),
             bugs: RefCell::new(Vec::new()),
-            eval: Some(RefCell::new(CachingEvaluator::new(c))),
+            eval: Some(RefCell::new(CachingEvaluator::new())),
         }
     }
 
