@@ -3,6 +3,8 @@ use std::fmt;
 use std::mem;
 
 use crate::eval::{self, CachingEvaluator};
+use crate::ir::circuit::CircuitExt;
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
 
 #[macro_export]
@@ -176,6 +178,56 @@ impl<'a> Context<'a> {
 
     pub fn eval<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> SecretValue<T> {
         SecretValue(self.eval_raw(w))
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Context<'a> {
+    type Output = Context<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(mut self, v: &mut V) -> Context<'b> {
+        let asserts = mem::take(&mut self.asserts).into_inner().into_iter().map(|cond| {
+            if v.new_circuit().is_prover() {
+                match self.assert_triggered(cond.c) {
+                    Some(true) => {
+                        (cond.msg)(&mut self);
+                    },
+                    Some(false) => {},
+                    None => {
+                        eprint!("unable to determine validity (missing secret during migrate):");
+                        (cond.msg)(&mut self);
+                    },
+                }
+            }
+            Cond {
+                c: v.visit(cond.c),
+                msg: Box::new(move |_| eprintln!("invalid trace: unknown reason")),
+            }
+        }).collect();
+
+        let bugs = mem::take(&mut self.bugs).into_inner().into_iter().map(|cond| {
+            if v.new_circuit().is_prover() {
+                match self.bug_triggered(cond.c) {
+                    Some(true) => {
+                        (cond.msg)(&mut self);
+                    },
+                    Some(false) => {},
+                    None => {
+                        eprint!("unable to determine validity (missing secret during migrate):");
+                        (cond.msg)(&mut self);
+                    },
+                }
+            }
+            Cond {
+                c: v.visit(cond.c),
+                msg: Box::new(move |_| eprintln!("invalid trace: unknown reason")),
+            }
+        }).collect();
+
+        Context {
+            asserts: RefCell::new(asserts),
+            bugs: RefCell::new(bugs),
+            eval: v.visit(self.eval),
+        }
     }
 }
 

@@ -3,11 +3,13 @@
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
 use log::*;
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
 use crate::routing::sort;
 
+#[derive(Migrate)]
 pub struct Fetch<'a> {
     ports: Vec<TWire<'a, FetchPort>>,
     /// Default value for secret `instr`s in uninitialized `FetchPort`s.
@@ -100,12 +102,14 @@ impl<'a> Fetch<'a> {
     }
 }
 
+#[derive(Migrate)]
 struct CyclePort<'a> {
     fp: TWire<'a, FetchPort>,
     addr_secret: TSecretHandle<'a, u64>,
     instr_secret: TSecretHandle<'a, RamInstr>,
 }
 
+#[derive(Migrate)]
 pub struct CyclePorts<'a> {
     ports: Vec<CyclePort<'a>>,
 }

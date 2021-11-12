@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::mem::MaybeUninit;
-use crate::ir::circuit::{Wire, SecretHandle};
+use crate::ir::circuit::{DynCircuit, Wire, SecretHandle};
 use crate::ir::typed::{TWire, Repr};
 
 pub use cheesecloth_derive_migrate::{Migrate, impl_migrate_trivial};
@@ -13,12 +14,21 @@ pub trait Migrate<'a, 'b> {
 }
 
 pub trait Visitor<'a, 'b> {
+    fn new_circuit(&self) -> &DynCircuit<'a>;
+
     fn visit<T: Migrate<'a, 'b>>(&mut self, x: T) -> T::Output {
         Migrate::migrate(x, self)
     }
 
     fn visit_wire(&mut self, w: Wire<'a>) -> Wire<'b>;
     fn visit_secret_handle(&mut self, sh: SecretHandle<'a>) -> SecretHandle<'b>;
+
+    /// A "weak reference" version of `visit_wire`.  The visitor may return `None` on any call.
+    /// For example, a garbage-collecting visitor might return `None` for old wires that have no
+    /// corresponding new wire.
+    fn visit_wire_weak(&mut self, w: Wire<'a>) -> Option<Wire<'b>> {
+        Some(self.visit_wire(w))
+    }
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for Wire<'a> {
@@ -99,6 +109,23 @@ where T::Output: Eq + Hash {
     }
 }
 
+impl<'a, 'b, T: Migrate<'a, 'b>, U: Migrate<'a, 'b>> Migrate<'a, 'b> for BTreeMap<T, U>
+where T::Output: Ord {
+    type Output = BTreeMap<T::Output, U::Output>;
+
+    fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> BTreeMap<T::Output, U::Output> {
+        self.into_iter().map(|x| v.visit(x)).collect()
+    }
+}
+
+impl<'a, 'b, T: Migrate<'a, 'b>> Migrate<'a, 'b> for RefCell<T> {
+    type Output = RefCell<T::Output>;
+
+    fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> RefCell<T::Output> {
+        RefCell::new(v.visit(self.into_inner()))
+    }
+}
+
 impl_migrate_trivial!(u8);
 impl_migrate_trivial!(u16);
 impl_migrate_trivial!(u32);
@@ -118,6 +145,8 @@ impl_migrate_trivial!(f64);
 
 impl_migrate_trivial!(bool);
 impl_migrate_trivial!(char);
+
+impl_migrate_trivial!(String);
 
 macro_rules! impl_migrate_tuple {
     ($($A:ident),*) => {

@@ -1,14 +1,15 @@
 use std::ops::Index;
 use std::u32;
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Repr, Lit, Mux};
 
 mod benes;
 pub mod sort;
 
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
 pub struct InputId(usize);
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
 pub struct OutputId(usize);
 
 impl InputId {
@@ -101,6 +102,21 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
 impl<'a, T: Repr<'a>> Default for RoutingBuilder<'a, T> {
     fn default() -> RoutingBuilder<'a, T> {
         RoutingBuilder::new()
+    }
+}
+
+impl<'a, 'b, T> Migrate<'a, 'b> for RoutingBuilder<'a, T>
+where
+    T: for<'c> Repr<'c>,
+    TWire<'a, T>: Migrate<'a, 'b, Output = TWire<'b, T>>,
+{
+    type Output = RoutingBuilder<'b, T>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> RoutingBuilder<'b, T> {
+        RoutingBuilder {
+            inputs: v.visit(self.inputs),
+            num_outputs: v.visit(self.num_outputs),
+        }
     }
 }
 

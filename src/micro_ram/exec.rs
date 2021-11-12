@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use crate::eval::CachingEvaluator;
+use crate::eval::{self, CachingEvaluator};
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::Fetch;
@@ -10,12 +11,13 @@ use crate::micro_ram::trace::{SegmentBuilder, Segment};
 use crate::micro_ram::types::{ExecBody, RamState};
 
 
+#[derive(Migrate)]
 pub struct ExecBuilder<'a> {
     init_state: RamState,
     check_steps: usize,
     expect_zero: bool,
     debug_segment_graph_path: Option<String>,
-    cx: Context<'a>,
+
     equiv_segments: EquivSegments<'a>,
     mem: Memory<'a>,
     fetch: Fetch<'a>,
@@ -23,6 +25,11 @@ pub struct ExecBuilder<'a> {
     segments_map: HashMap<usize, Segment<'a>>,
     segments: Vec<Option<Segment<'a>>>,
     seg_graph_live_edges: Vec<(usize, usize, RamState)>,
+
+    // These fields come last because they contain caches keyed on `Wire`s.  On migration, only
+    // wires that were used during the migration of some previous field will be kept in the cache.
+    cx: Context<'a>,
+    ev: CachingEvaluator<'a, eval::Public>,
 }
 
 impl<'a> ExecBuilder<'a> {
@@ -67,7 +74,7 @@ impl<'a> ExecBuilder<'a> {
             check_steps,
             expect_zero,
             debug_segment_graph_path,
-            cx,
+
             equiv_segments,
             mem: Memory::new(),
             fetch: Fetch::new(b, &exec.program),
@@ -76,6 +83,9 @@ impl<'a> ExecBuilder<'a> {
             segments_map: HashMap::new(),
             segments: Vec::new(),
             seg_graph_live_edges: Vec::new(),
+
+            cx,
+            ev: CachingEvaluator::new()
         }
     }
 
@@ -150,11 +160,10 @@ impl<'a> ExecBuilder<'a> {
     }
 
     fn add_segment(&mut self, b: &Builder<'a>, exec: &ExecBody, item: SegGraphItem) {
-        let mut segment_builder_eval = CachingEvaluator::new();
         let mut segment_builder = SegmentBuilder {
             cx: &self.cx,
             b: b,
-            ev: &mut segment_builder_eval,
+            ev: &mut self.ev,
             mem: &mut self.mem,
             fetch: &mut self.fetch,
             params: &exec.params,

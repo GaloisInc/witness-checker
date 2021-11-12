@@ -7,12 +7,13 @@ use arrayvec::ArrayVec;
 use crate::eval::{self, CachingEvaluator};
 use crate::gadget::bit_pack;
 use crate::ir::circuit::{Wire, TyKind, CircuitExt, GateKind, UnOp, BinOp};
+use crate::ir::migrate::{self, Migrate, impl_migrate_trivial};
 use crate::ir::typed::{TWire, Builder, EvaluatorExt};
 use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset, MemSegment};
 
 /// The known contents of memory at some point in the execution.  This is used to resolve some
 /// memory loads to a wire containing the value without using an actual memory port.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Migrate)]
 pub struct KnownMem<'a> {
     mem: BTreeMap<u64, MemEntry<'a>>,
     default: Option<TWire<'a, u64>>,
@@ -23,7 +24,7 @@ pub struct KnownMem<'a> {
     wire_range: HashMap<TWire<'a, u64>, u64>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Migrate)]
 struct MemEntry<'a> {
     width: MemOpWidth,
     value: TWire<'a, u64>,
@@ -602,6 +603,7 @@ struct RangeSet {
     /// entry with `end` as the key and `start` as the value.
     ranges: BTreeMap<u64, u64>,
 }
+impl_migrate_trivial!(RangeSet);
 
 impl RangeSet {
     pub fn new() -> RangeSet {

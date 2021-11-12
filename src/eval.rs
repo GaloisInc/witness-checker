@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use std::iter;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
+use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
     self, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
@@ -93,14 +94,14 @@ pub trait SecretEvaluator<'a> {
 
 
 /// Public evaluation mode.  Secret values are always ignored, even when they are available.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Migrate)]
 pub struct Public;
 impl<'a> SecretEvaluator<'a> for Public {
     fn eval_secret(&mut self, _s: Secret<'a>) -> Option<Value> { None }
 }
 
 /// Secret evaluation mode.  Secret values will be used if they are available in the circuit.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Migrate)]
 pub struct RevealSecrets;
 impl<'a> SecretEvaluator<'a> for RevealSecrets {
     fn eval_secret(&mut self, s: Secret<'a>) -> Option<Value> {
@@ -115,11 +116,29 @@ pub struct CachingEvaluator<'a, S> {
     cache: HashMap<Wire<'a>, Option<Value>>,
     secret_eval: S,
 }
+
 impl<'a, S: Default> CachingEvaluator<'a, S> {
     pub fn new() -> Self {
         CachingEvaluator {
             cache: HashMap::new(),
             secret_eval: S::default(),
+        }
+    }
+}
+
+impl<'a, 'b, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, S> {
+    type Output = CachingEvaluator<'b, S::Output>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(
+        self,
+        v: &mut V,
+    ) -> CachingEvaluator<'b, S::Output> {
+        let cache = self.cache.into_iter()
+            .filter_map(|(w, val)| Some((v.visit_wire_weak(w)?, val)))
+            .collect();
+        CachingEvaluator {
+            cache,
+            secret_eval: v.visit(self.secret_eval),
         }
     }
 }

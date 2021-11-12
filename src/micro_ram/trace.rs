@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::iter;
 use crate::gadget::arith::BuilderExt as _;
 use crate::eval::{self, CachingEvaluator};
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder, EvaluatorExt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
@@ -16,6 +17,7 @@ use crate::mode::tainted;
 
 
 
+#[derive(Migrate)]
 pub struct Segment<'a> {
     pub idx: usize,
     len: usize,

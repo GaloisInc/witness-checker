@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::iter;
 use std::mem;
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
@@ -10,7 +11,7 @@ use crate::micro_ram::types::{self, RamState, Params};
 use crate::routing::{Routing, RoutingBuilder, InputId, OutputId};
 
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
 enum StateSource {
     /// The initial state of the CPU.
     CpuInit,
@@ -22,7 +23,7 @@ enum StateSource {
     CycleBreak(usize),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
 enum Liveness {
     /// Always live.
     Always,
@@ -34,7 +35,7 @@ enum Liveness {
     ToNetwork(usize),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
 struct Predecessor {
     src: StateSource,
     live: Liveness,
@@ -43,7 +44,7 @@ struct Predecessor {
 /// A `SegmentNode` computes an initial state from its predecessors, applies some unspecified
 /// computation to it, and returns the result as its final state.  The computation of the final
 /// state is handled externally.
-#[derive(Default)]
+#[derive(Default, Migrate)]
 struct SegmentNode<'a> {
     /// The predecessors of this segment.
     preds: Vec<Predecessor>,
@@ -66,16 +67,19 @@ struct SegmentNode<'a> {
 /// yet.  This method of breaking cycles lets us produce an acyclic circuit from a possibly cyclic
 /// segment graph.  (In fact, nearly all real-life segment graphs are cyclic, since the network is
 /// treated as a single node and many segments have the network as both predecessor and successor.)
+#[derive(Migrate)]
 struct CycleBreakNode<'a> {
     preds: Vec<Predecessor>,
     secret: TSecretHandle<'a, RamState>,
 }
 
+#[derive(Migrate)]
 struct NetworkInputNode {
     pred: Predecessor,
     segment_index: usize,
 }
 
+#[derive(Migrate)]
 enum NetworkState<'a> {
     /// We haven't built the network yet.  Final states for segments with `to_net` set can be fed
     /// directly to the routing network as inputs.
@@ -84,6 +88,7 @@ enum NetworkState<'a> {
     After(Routing<'a, RamState>),
 }
 
+#[derive(Migrate)]
 pub struct SegGraphBuilder<'a> {
     // Nodes in the segment graph
     segments: Vec<SegmentNode<'a>>,
@@ -937,6 +942,17 @@ impl<T: Clone> Counted<T> {
             Cow::Owned(self.value.take().unwrap())
         } else {
             Cow::Borrowed(self.value.as_ref().unwrap())
+        }
+    }
+}
+
+impl<'a, 'b, T: Migrate<'a, 'b>> Migrate<'a, 'b> for Counted<T> {
+    type Output = Counted<T::Output>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Counted<T::Output> {
+        Counted {
+            value: v.visit(self.value),
+            user_count: self.user_count,
         }
     }
 }

@@ -253,6 +253,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Unused {
     }
 }
 
+#[derive(Migrate)]
 pub struct EquivSegments<'a> {
     /// Data for each equivalence class.  The entry is `None` if no member of the class has been
     /// processed yet, and otherwise is `Some(words)`.
