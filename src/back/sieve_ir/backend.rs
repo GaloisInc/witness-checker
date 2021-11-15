@@ -470,7 +470,7 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     use super::field::_scalar_from_unsigned;
     use super::ir_builder::IRBuilder;
-    use crate::ir::circuit::{Circuit, CircuitTrait, CircuitExt};
+    use crate::ir::circuit::{CircuitBase, CircuitExt};
     use zki_sieve::consumers::evaluator::Evaluator;
     use zki_sieve::producers::sink::MemorySink;
     use zki_sieve::Source;
@@ -486,7 +486,7 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
 
     let arena = bumpalo::Bump::new();
     let is_prover = true;
-    let c = Circuit::new(&arena, is_prover);
+    let c = CircuitBase::new(&arena, is_prover);
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);

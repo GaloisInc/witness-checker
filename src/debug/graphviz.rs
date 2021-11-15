@@ -1,5 +1,5 @@
 use std::fmt::{self, Write};
-use crate::ir::circuit::{self, Circuit, Wire, GateKind, Ty, TyKind};
+use crate::ir::circuit::{self, CircuitTrait, Wire, GateKind, Ty, TyKind};
 use crate::eval::{self, Evaluator, CachingEvaluator, Value};
 
 fn write_val(s: &mut String, v: Value) -> Result<(), fmt::Error> {
@@ -34,7 +34,7 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
 }
 
 pub fn make_graph<'a>(
-    c: &Circuit<'a>,
+    c: &impl CircuitTrait<'a>,
     ws: impl Iterator<Item = Wire<'a>>,
 ) -> Result<String, fmt::Error> {
     let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);

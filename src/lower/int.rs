@@ -3,12 +3,16 @@ use num_bigint::BigUint;
 use num_traits::Zero;
 
 use crate::ir::circuit::{
-    CircuitTrait, CircuitExt, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp,
+    CircuitTrait, CircuitExt, CircuitRef, CircuitFilter, Ty, Wire, GateKind, TyKind, IntSize,
+    BinOp, ShiftOp, CmpOp,
 };
 
 // TODO: mod -> div + sub
 
-pub fn compare_to_zero<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn compare_to_zero<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
         if a.ty.is_integer() && *a.ty != TyKind::BOOL {
             let zero = c.lit(a.ty, 0);
@@ -41,7 +45,7 @@ pub fn compare_to_zero<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<
 }
 
 pub fn compare_to_greater_or_equal_to_zero<'a>(
-    c: &impl CircuitTrait<'a>,
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
     gk: GateKind<'a>,
 ) -> Wire<'a> {
     if let GateKind::Compare(op, a, b) = gk {
@@ -67,7 +71,10 @@ pub fn compare_to_greater_or_equal_to_zero<'a>(
     c.gate(gk)
 }
 
-pub fn mux<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn mux<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     if let GateKind::Mux(cond, t, e) = gk {
         if t.ty.is_integer() {
             let mask = c.neg(c.cast(cond, t.ty));
@@ -129,7 +136,10 @@ fn normalize_64<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>, ty: Ty) -> Wire<'a> 
 
 /// Extend all integers to 64 bits.  That is, all `Uint`s will be extended to `U64`, and all `Int`s
 /// will be extended to `I64`.
-pub fn extend_to_64<'a>(c: &impl CircuitTrait<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+pub fn extend_to_64<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    old: Wire, gk: GateKind<'a>,
+) -> Wire<'a> {
     if old.ty.is_integer() && old.ty.integer_size() < IntSize(64) && *old.ty != TyKind::BOOL {
         match gk {
             GateKind::Lit(x, ty) => {
@@ -157,7 +167,10 @@ pub fn extend_to_64<'a>(c: &impl CircuitTrait<'a>, old: Wire, gk: GateKind<'a>) 
 }
 
 /// Convert all `Int`s to `Uint`s.
-pub fn int_to_uint<'a>(c: &impl CircuitTrait<'a>, old: Wire, gk: GateKind<'a>) -> Wire<'a> {
+pub fn int_to_uint<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    old: Wire, gk: GateKind<'a>,
+) -> Wire<'a> {
     // Special handling for casts to and from Int types.  We look at `old` instead of `gk` here
     // because `gk`'s input wire has already been changed to an unsigned type.
     if let GateKind::Cast(old_w, old_dest_ty) = old.kind {
@@ -254,7 +267,10 @@ pub fn int_to_uint<'a>(c: &impl CircuitTrait<'a>, old: Wire, gk: GateKind<'a>) -
 
 
 /// Replace literals wider than 32 bits with combinations of multiple 32-bit literals.
-pub fn reduce_lit_32<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn reduce_lit_32<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     if let GateKind::Lit(x, ty) = gk {
         if x.width() > 32 {
             let x = x.to_biguint();
@@ -299,7 +315,10 @@ fn make_split_lit<'a>(c: &impl CircuitTrait<'a>, x: BigUint, ty: Ty<'a>) -> Wire
 
 /// Replace `Mod` gates with a circuit using `Div`, `Mul`, and `Sub`.  Useful for SCALE, which does
 /// not support `Mod`.
-pub fn mod_to_div<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn mod_to_div<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     if let GateKind::Binary(BinOp::Mod, x, y) = gk {
         // FIXME: changes behavior on division by zero (returns `x` for `x % 0`, not `0`)
         return c.sub(
@@ -313,7 +332,10 @@ pub fn mod_to_div<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
 
 /// Replace any shift by a non-constant with a series of shifts by constants.  Useful for SCALE,
 /// which supports only constant shifts.
-pub fn non_constant_shift<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn non_constant_shift<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     if let GateKind::Shift(op, x, amt) = gk {
         // Shifts by a constant are allowed.
         if let GateKind::Lit(_, _) = amt.kind {

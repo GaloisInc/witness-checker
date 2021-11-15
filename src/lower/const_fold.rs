@@ -1,10 +1,10 @@
 use num_bigint::BigInt;
 use num_traits::{Zero, One};
-use crate::eval::{self, CachingEvaluator, LiteralEvaluator, Evaluator, Value};
+use crate::eval::{self, LiteralEvaluator, Evaluator, Value};
 use crate::ir::circuit::{
-    Circuit, CircuitTrait, CircuitExt, Ty, Wire, GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp,
+    CircuitTrait, CircuitExt, CircuitBase, CircuitFilter, CircuitRef, DynCircuitRef, Ty, Wire,
+    GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp,
 };
-use crate::lower;
 
 macro_rules! match_identities {
     (
@@ -377,57 +377,35 @@ fn try_identity_compare_mux<'a>(
     Some(c.lit(c.ty(TyKind::BOOL), const_val))
 }
 
-pub fn const_fold<'a, 'c>(
-    c: &'c Circuit<'a>,
-) -> impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a> + 'c {
-    let mut e = CachingEvaluator::<eval::Public>::new(c);
-    move |c, _old, gk| {
-        match eval::eval_gate(&mut e, gk) {
-            Some(eval::Value::Single(val)) => return c.lit(gk.ty(c), val),
-            _ => {},
-        }
-        match try_identities(c, &mut e, gk) {
-            Some(w) => return w,
-            None => {},
-        }
-        match try_identities2(c, &mut e, gk) {
-            Some(w) => return w,
-            None => {},
-        }
-        c.gate(gk)
-    }
-}
+pub struct ConstFold<F>(pub F);
 
+impl<'a, F: CircuitFilter<'a> + 'a> CircuitFilter<'a> for ConstFold<F> {
+    fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
 
-pub struct ConstFold<C>(pub C);
-
-impl<'a, C: CircuitTrait<'a>> CircuitTrait<'a> for ConstFold<C> {
-    type Inner = C;
-    fn inner(&self) -> &C { &self.0 }
-
-    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+    fn gate(&self, base: &CircuitBase<'a>, gk: GateKind<'a>) -> Wire<'a> {
         if let GateKind::Gadget(k, ws) = gk {
             if ws.iter().all(|w| w.is_lit()) {
                 // All inputs are literals, so the gadget should be constant-foldable.  It's
                 // technically possible for a gadget to include fresh secrets, but so far that
                 // hasn't been useful for anything.
-                let out_raw = k.decompose(self.as_base(), ws);
-                // Note we pass `self` instead of `self.inner()`, so the decomposed gates will be
+                //
+                // Note we pass `self` instead of `self.0`, so the decomposed gates will be
                 // recursively constant-folded.
-                let out = lower::transfer(self, vec![out_raw])[0];
-                return out;
+                let c: DynCircuitRef = CircuitRef { base, filter: self };
+                return k.decompose(c, ws);
             }
         }
 
-        if let Some(w) = try_const_fold(self.inner(), gk) {
+        let c = CircuitRef { base, filter: &self.0 };
+        if let Some(w) = try_const_fold(&c, gk) {
             return w;
         }
-        if let Some(w) = try_identities(self.inner(), &mut LiteralEvaluator, gk) {
+        if let Some(w) = try_identities(&c, &mut LiteralEvaluator, gk) {
             return w;
         }
-        if let Some(w) = try_identities2(self.inner(), &mut LiteralEvaluator, gk) {
+        if let Some(w) = try_identities2(&c, &mut LiteralEvaluator, gk) {
             return w;
         }
-        self.inner().gate(gk)
+        c.gate(gk)
     }
 }

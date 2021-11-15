@@ -1,48 +1,43 @@
-use crate::ir::circuit::{Circuit, CircuitTrait, CircuitExt, Wire, GateKind, GadgetKindRef};
-use crate::lower;
+use crate::ir::circuit::{
+    CircuitExt, CircuitBase, CircuitFilter, CircuitRef, DynCircuitRef, Wire, GateKind,
+    GadgetKindRef,
+};
 
-/// Decompose any gadget for which `f(g)` returns `true`.
-pub fn decompose_gadgets<'a>(
-    mut f: impl FnMut(GadgetKindRef<'a>) -> bool,
-) -> impl FnMut(&Circuit<'a>, Wire, GateKind<'a>) -> Wire<'a> {
-    move |c, _old, gk| {
-        if let GateKind::Gadget(g, args) = gk {
-            if f(g) {
-                let _g = c.scoped_label(g.name());
-                return g.decompose(c, args);
-            }
-        }
-        c.gate(gk)
+
+pub struct DecomposeGadgets<F1, F2> {
+    filter: F1,
+    rest: F2,
+}
+
+impl<'a, F1, F2> DecomposeGadgets<F1, F2>
+where
+    F1: Fn(GadgetKindRef<'a>) -> bool,
+    F2: CircuitFilter<'a>,
+{
+    /// Extend filter `rest` with a `DecomposeGadgets` pass that decomposes any gadget on which
+    /// `filter` returns `true`.
+    pub fn new(rest: F2, filter: F1) -> DecomposeGadgets<F1, F2> {
+        DecomposeGadgets { filter, rest }
     }
 }
 
-pub fn decompose_all_gadgets<'a>(c: &Circuit<'a>, _old: Wire, gk: GateKind<'a>) -> Wire<'a> {
-    if let GateKind::Gadget(g, args) = gk {
-        let _g = c.scoped_label(g.name());
-        return g.decompose(c, args);
-    }
-    c.gate(gk)
-}
+impl<'a, F1, F2> CircuitFilter<'a> for DecomposeGadgets<F1, F2>
+where
+    F1: Fn(GadgetKindRef<'a>) -> bool + 'a,
+    F2: CircuitFilter<'a> + 'a,
+{
+    fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
 
-
-pub struct DecomposeGadgets<C, F>(pub C, pub F);
-
-impl<'a, C, F> CircuitTrait<'a> for DecomposeGadgets<C, F>
-where C: CircuitTrait<'a>, F: Fn(GadgetKindRef<'a>) -> bool {
-    type Inner = C;
-    fn inner(&self) -> &C { &self.0 }
-
-    fn gate(&self, gk: GateKind<'a>) -> Wire<'a> {
+    fn gate(&self, base: &CircuitBase<'a>, gk: GateKind<'a>) -> Wire<'a> {
         if let GateKind::Gadget(k, ws) = gk {
-            if (self.1)(k) {
-                let _g = self.scoped_label(k.name());
-                let out_raw = k.decompose(self.as_base(), ws);
-                // Transfer into `self`, not `self.inner`, so any newly produced gadgets will be
+            if (self.filter)(k) {
+                // Filter with `self`, not `self.1`, so any newly produced gadgets will be
                 // decomposed recursively.
-                let out = lower::transfer_partial(self, ws.iter().cloned(), vec![out_raw])[0];
-                return out;
+                let c: DynCircuitRef = CircuitRef { base, filter: self };
+                let _g = c.scoped_label(k.name());
+                return k.decompose(c, ws);
             }
         }
-        self.inner().gate(gk)
+        self.rest.gate(base, gk)
     }
 }

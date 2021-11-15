@@ -10,9 +10,11 @@ use num_traits::One;
 use cheesecloth::wire_assert;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, CircuitTrait, CircuitExt, DynCircuit, GadgetKindRef};
+use cheesecloth::ir::circuit::{
+    Circuit, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
+};
 use cheesecloth::ir::typed::{Builder, TWire};
-use cheesecloth::lower::{self, AddPass};
+use cheesecloth::lower;
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
@@ -151,22 +153,24 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         ok
     };
 
-    let c = Circuit::new(&arena, is_prover);
-    //let c = lower::const_fold::ConstFold(c);
-    let c = c.add_pass(lower::bool_::not_to_xor);
-    let c = c.add_pass(lower::bool_::compare_to_logic);
-    let c = c.add_pass(lower::bool_::mux);
-    let c = c.add_opt_pass(args.is_present("zkif-out") || args.is_present("sieve-ir-out"),
+    let cf = FilterNil;
+    //let cf = lower::const_fold::ConstFold(c);
+    let cf = cf.add_pass(lower::bool_::not_to_xor);
+    let cf = cf.add_pass(lower::bool_::compare_to_logic);
+    let cf = cf.add_pass(lower::bool_::mux);
+    let cf = cf.add_opt_pass(args.is_present("zkif-out") || args.is_present("sieve-ir-out"),
         lower::int::compare_to_greater_or_equal_to_zero);
-    let c = c.add_pass(lower::int::non_constant_shift);
-    let c = lower::const_fold::ConstFold(c);
-    let c = c.add_pass(lower::bundle::simplify);
-    let c = c.add_pass(lower::bundle::unbundle_mux);
-    let c = lower::gadget::DecomposeGadgets(c, |g| !gadget_supported(g));
-    let c = c.add_pass(lower::bit_pack::concat_bits_flat);
+    let cf = cf.add_pass(lower::int::non_constant_shift);
+    let cf = lower::const_fold::ConstFold(cf);
+    let cf = cf.add_pass(lower::bundle::simplify);
+    let cf = cf.add_pass(lower::bundle::unbundle_mux);
+    let cf = lower::gadget::DecomposeGadgets::new(cf, |g| !gadget_supported(g));
+    let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
+    let c = Circuit::new(&arena, is_prover, cf);
+    let c = &c as &DynCircuit;
 
-    let b = Builder::new(DynCircuit::new(&c));
-    let cx = Context::new(c.as_base());
+    let b = Builder::new(c);
+    let cx = Context::new(c);
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
@@ -398,7 +402,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     }
 
     {
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
         let flag_vals = flags.iter().map(|&w| {
             ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();

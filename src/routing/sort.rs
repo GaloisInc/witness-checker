@@ -5,12 +5,13 @@ use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 use crate::routing::RoutingBuilder;
 
 
-fn sorting_permutation<'a, T, F>(
-    c: &impl CircuitTrait<'a>,
+fn sorting_permutation<'a, C, T, F>(
+    c: &C,
     xs: &mut [TWire<'a, T>],
     compare: &mut F,
 ) -> Option<Vec<usize>>
 where
+    C: CircuitTrait<'a> + ?Sized,
     T: Repr<'a>,
     F: FnMut(&TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool>,
 {
@@ -94,7 +95,7 @@ where
 mod test {
     use std::convert::TryInto;
     use bumpalo::Bump;
-    use crate::ir::circuit::{Circuit, DynCircuit};
+    use crate::ir::circuit::{Circuit, FilterNil};
     use super::*;
 
     fn init() {
@@ -103,8 +104,8 @@ mod test {
 
     fn check_benes_sort(inputs: &[u32]) {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();

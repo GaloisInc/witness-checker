@@ -412,7 +412,7 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> Flatten<'a> for $Name {
-            fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> { c.ty(TyKind::U8) }
+            fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::U8) }
             fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
             fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::U8);
@@ -592,7 +592,7 @@ impl<'a> Repr<'a> for Label {
 }
 
 impl<'a> Flatten<'a> for Label {
-    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
         c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16)))
     }
 
@@ -928,7 +928,7 @@ impl<'a> Repr<'a> for ByteOffset {
 }
 
 impl<'a> Flatten<'a> for ByteOffset {
-    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
         c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
     }
 
@@ -983,7 +983,7 @@ impl<'a> Repr<'a> for WordAddr {
 }
 
 impl<'a> Flatten<'a> for WordAddr {
-    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
         c.ty(TyKind::Uint(IntSize(
             MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
     }

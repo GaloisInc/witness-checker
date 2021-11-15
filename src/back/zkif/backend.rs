@@ -30,9 +30,7 @@ use std::iter;
 use std::path::Path;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
-use crate::ir::circuit::{
-    self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire,
-};
+use crate::ir::circuit::{self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire};
 
 use super::{
     field::QuarkScalar,
@@ -448,13 +446,13 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 
 #[test]
 fn test_zkif() -> Result<()> {
-    use crate::ir::circuit::{Circuit, CircuitTrait, CircuitExt};
+    use crate::ir::circuit::{CircuitBase, CircuitExt};
     use super::num::_scalar_from_unsigned;
 
     let mut b = Backend::new(Path::new("local/test"), true);
 
     let arena = bumpalo::Bump::new();
-    let c = Circuit::new(&arena, true);
+    let c = CircuitBase::new(&arena, true);
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);

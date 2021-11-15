@@ -23,7 +23,7 @@ impl<'a> Builder<'a> {
         self.c.is_prover()
     }
 
-    pub fn circuit(&self) -> & &'a DynCircuit<'a> {
+    pub fn circuit(&self) -> &'a DynCircuit<'a> {
         &self.c
     }
 
@@ -158,7 +158,7 @@ pub trait Repr<'a> {
 pub trait Flatten<'a>: Repr<'a>
 where <Self as Repr<'a>>::Repr: Sized {
     /// Compute a type that can be used to represent `Self` as a single `Wire`.
-    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a>;
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a>;
 
     /// Convert a `TWire<Self>` to a single `Wire`, whose type is given by `wire_type`.
     fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a>;
@@ -379,7 +379,7 @@ impl<'a> Repr<'a> for bool {
 }
 
 impl<'a> Flatten<'a> for bool {
-    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> { c.ty(TyKind::BOOL) }
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::BOOL) }
     fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
     fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         assert!(*w.ty == TyKind::BOOL);
@@ -445,7 +445,7 @@ macro_rules! integer_impls {
         }
 
         impl<'a> Flatten<'a> for $T {
-            fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> { c.ty(TyKind::$K) }
+            fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::$K) }
             fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
             fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::$K);
@@ -544,7 +544,7 @@ macro_rules! tuple_impl {
         }
 
         impl<'a, $($A: Flatten<'a>,)*> Flatten<'a> for ($($A,)*) {
-            fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
+            fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
                 c.ty_bundle(&[$($A::wire_type(c),)*])
             }
 
@@ -661,7 +661,7 @@ macro_rules! array_impls {
             }
 
             impl<'a, A: Flatten<'a>> Flatten<'a> for [A; $n] {
-                fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
+                fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
                     c.ty_bundle(&[A::wire_type(c); $n])
                 }
 

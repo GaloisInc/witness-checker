@@ -1,6 +1,6 @@
 use num_bigint::BigUint;
 use crate::ir::circuit::{
-    Circuit, CircuitTrait, CircuitExt, Wire, Ty, TyKind, GadgetKind, GadgetKindRef,
+    CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, GadgetKind, GadgetKindRef,
 };
 use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
 
@@ -10,11 +10,11 @@ pub struct AddWithOverflow;
 impl_gadget_kind_support!(AddWithOverflow);
 
 impl<'a> GadgetKind<'a> for AddWithOverflow {
-    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
 
-    fn typecheck(&self, c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
+    fn typecheck(&self, c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
         assert!(arg_tys.len() == 2, "expected exactly 2 arguments");
         assert!(arg_tys[0] == arg_tys[1], "type mismatch: {:?} != {:?}", arg_tys[0], arg_tys[1]);
         let ty = arg_tys[0];
@@ -26,7 +26,7 @@ impl<'a> GadgetKind<'a> for AddWithOverflow {
         c.ty_bundle(&[ty, c.ty(TyKind::BOOL)])
     }
 
-    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {
+    fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
         let sum = c.add(args[0], args[1]);
         let overflow = c.lt(sum, args[0]);
         c.pack(&[sum, overflow])
@@ -39,11 +39,11 @@ pub struct SubWithOverflow;
 impl_gadget_kind_support!(SubWithOverflow);
 
 impl<'a> GadgetKind<'a> for SubWithOverflow {
-    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
 
-    fn typecheck(&self, c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
+    fn typecheck(&self, c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
         assert!(arg_tys.len() == 2, "expected exactly 2 arguments");
         assert!(arg_tys[0] == arg_tys[1], "type mismatch: {:?} != {:?}", arg_tys[0], arg_tys[1]);
         let ty = arg_tys[0];
@@ -55,7 +55,7 @@ impl<'a> GadgetKind<'a> for SubWithOverflow {
         c.ty_bundle(&[ty, c.ty(TyKind::BOOL)])
     }
 
-    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {
+    fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
         let diff = c.sub(args[0], args[1]);
         let overflow = c.gt(diff, args[0]);
         c.pack(&[diff, overflow])
@@ -68,11 +68,11 @@ pub struct WideMul;
 impl_gadget_kind_support!(WideMul);
 
 impl<'a> GadgetKind<'a> for WideMul {
-    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
 
-    fn typecheck(&self, c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
+    fn typecheck(&self, c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
         assert!(arg_tys.len() == 2, "expected exactly 2 arguments");
         assert!(arg_tys[0] == arg_tys[1], "type mismatch: {:?} != {:?}", arg_tys[0], arg_tys[1]);
         let ty = arg_tys[0];
@@ -84,7 +84,7 @@ impl<'a> GadgetKind<'a> for WideMul {
         c.ty_bundle(&[low_ty, ty])
     }
 
-    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {
+    fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
         let ty = args[0].ty;
         let (sz, signed) = match *ty {
             TyKind::Uint(sz) => (sz, false),

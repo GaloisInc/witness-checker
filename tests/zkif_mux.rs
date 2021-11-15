@@ -3,12 +3,14 @@
 use bumpalo::Bump;
 use num_bigint::BigInt;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, CircuitTrait, CircuitExt, TyKind, Wire};
-use cheesecloth::lower::{self, AddPass};
+use cheesecloth::ir::circuit::{
+    Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
+};
+use cheesecloth::lower;
 
 fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
-    let c = Circuit::new(arena, true);
-    let c = c.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+    let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+    let c = Circuit::new(arena, true, cf);
     c
 }
 
