@@ -1,16 +1,13 @@
 use super::{
-    bit_width::BitWidth,
     int::Int,
-    num::{Num, _scalar_from_unsigned, boolean_lc},
+    num::{Num, boolean_lc},
 };
 use num_traits::Zero;
 use std::cmp;
 use zkinterface_bellman::{
     bellman::gadgets::boolean::Boolean,
-    bellman::{ConstraintSystem, LinearCombination, SynthesisError},
+    bellman::ConstraintSystem,
     ff::PrimeField,
-    pairing::Engine,
-    zkif_cs::ZkifCS,
 };
 
 pub fn bitwise_xor<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(

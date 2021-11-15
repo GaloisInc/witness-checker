@@ -16,15 +16,6 @@ impl BitWidth {
     pub fn zero() -> Self {
         Max(0, false)
     }
-
-    /// Whether this bit width would fit into a bit representation.
-    pub fn fits_into(self, bit_capacity: usize) -> bool {
-        match self {
-            Unknown => false,
-            Max(w, false) => w <= bit_capacity,
-            Max(w, true) => w + 1 <= bit_capacity,
-        }
-    }
 }
 
 impl From<u64> for BitWidth {

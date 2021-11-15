@@ -1,6 +1,5 @@
 #![cfg(feature = "bellman")]
 
-use std::path::Path;
 use bumpalo::Bump;
 use num_bigint::BigInt;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};

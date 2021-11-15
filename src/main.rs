@@ -415,8 +415,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     #[cfg(feature = "bellman")]
     if let Some(dest) = args.value_of_os("zkif-out") {
-        use cheesecloth::back::zkif::backend::{Backend, Scalar};
-        use std::fs::remove_file;
+        use cheesecloth::back::zkif::backend::Backend;
         use zkinterface::{cli::{cli, Options}, clean_workspace};
 
         let accepted = flags[0];
