@@ -4,19 +4,20 @@ use std::path::Path;
 use bumpalo::Bump;
 use num_bigint::BigInt;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, TyKind, Wire};
-use cheesecloth::lower::{self, run_pass};
+use cheesecloth::ir::circuit::{Circuit, CircuitTrait, CircuitExt, TyKind, Wire};
+use cheesecloth::lower::{self, AddPass};
 
-fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
+fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
+    let c = Circuit::new(arena, true);
+    let c = c.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+    c
+}
+
+fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
     use cheesecloth::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
     use zkinterface_bellman::zkif_backend::validate;
-
-
-    let ws = vec![w];
-    let ws = run_pass(&c, ws, lower::int::compare_to_greater_or_equal_to_zero);
-    let w = ws[0];
 
 
     // Make sure the circuit is valid.
@@ -32,7 +33,7 @@ fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
     //let workspace = Path::new("out/test");
     let files = vec![
         workspace.join("header.zkif"),
-        workspace.join("constraints.zkif"),
+        workspace.join("constraints_0.zkif"),
         workspace.join("witness.zkif"),
     ];
     for f in &files {
@@ -56,7 +57,7 @@ fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
 #[test]
 fn mux_true() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 
@@ -75,7 +76,7 @@ fn mux_true() {
 #[test]
 fn mux_false() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 

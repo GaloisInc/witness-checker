@@ -453,15 +453,16 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 
 #[test]
 fn test_zkif() -> Result<()> {
+    use crate::ir::circuit::{CircuitTrait, CircuitExt};
     let mut b = Backend::new(Path::new("local/test"), true);
 
     let arena = bumpalo::Bump::new();
-    let c = Circuit::new(&arena);
+    let c = Circuit::new(&arena, true);
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let sec1 = c.new_secret_init(c.ty(TyKind::I64), Some(12));
-    let sec2 = c.new_secret_init(c.ty(TyKind::I64), Some(13));
+    let sec1 = c.new_secret_init(c.ty(TyKind::I64), || 12);
+    let sec2 = c.new_secret_init(c.ty(TyKind::I64), || 13);
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);
