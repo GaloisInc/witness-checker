@@ -12,8 +12,6 @@ bellman = ["zkinterface", "zkinterface_bellman", "ff"]
 sieve_ir = ["ff", "zki_sieve"]
 
 [dependencies]
-overridable-trait = { path = "overridable-trait" }
-
 zkinterface = { optional = true, version = "1.3.3" }
 zkinterface_bellman = { optional = true, version = "1.3.0" }
 zki_sieve = { optional = true, path = "deps/zkinterface-sieve/rust" }
