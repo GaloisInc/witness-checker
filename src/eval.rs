@@ -298,14 +298,13 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Va
 
 #[cfg(test)]
 mod test {
-    use bumpalo::Bump;
-    use crate::ir::circuit::{CircuitBase, CircuitExt};
+    use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
     use super::*;
 
     #[test]
     fn value_trunc_uint_to_int() {
-        let arena = Bump::new();
-        let c = CircuitBase::new(&arena, true);
+        let arenas = Arenas::new();
+        let c = CircuitBase::new(&arenas, true);
         let ty_i8 = c.ty(TyKind::I8);
 
         for &x in [0_u8, 1, 126, 127, 128, 129, 254, 255].iter() {

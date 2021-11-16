@@ -91,8 +91,7 @@ where
 #[cfg(test)]
 mod test {
     use std::convert::TryInto;
-    use bumpalo::Bump;
-    use crate::ir::circuit::{Circuit, FilterNil};
+    use crate::ir::circuit::{Arenas, Circuit, FilterNil};
     use super::*;
 
     fn init() {
@@ -100,8 +99,8 @@ mod test {
     }
 
     fn check_benes_sort(inputs: &[u32]) {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 

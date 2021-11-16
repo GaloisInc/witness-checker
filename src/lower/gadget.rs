@@ -2,6 +2,7 @@ use crate::ir::circuit::{
     CircuitExt, CircuitBase, CircuitFilter, CircuitRef, DynCircuitRef, Wire, GateKind,
     GadgetKindRef,
 };
+use crate::ir::migrate::{self, Migrate};
 
 
 pub struct DecomposeGadgets<F1, F2> {
@@ -23,10 +24,11 @@ where
 
 impl<'a, F1, F2> CircuitFilter<'a> for DecomposeGadgets<F1, F2>
 where
-    F1: Fn(GadgetKindRef<'a>) -> bool + 'a,
+    F1: Fn(GadgetKindRef<'a>) -> bool + 'static,
     F2: CircuitFilter<'a> + 'a,
+    F2: Migrate<'a, 'a, Output = F2>,
 {
-    fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
+    circuit_filter_common_methods!();
 
     fn gate(&self, base: &CircuitBase<'a>, gk: GateKind<'a>) -> Wire<'a> {
         if let GateKind::Gadget(k, ws) = gk {
@@ -39,5 +41,19 @@ where
             }
         }
         self.rest.gate(base, gk)
+    }
+}
+
+impl<'a, 'b, F1, F2> Migrate<'a, 'b> for DecomposeGadgets<F1, F2>
+where
+    F1: 'static,
+    F2: Migrate<'a, 'b>,
+{
+    type Output = DecomposeGadgets<F1, F2::Output>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Self::Output {
+        DecomposeGadgets {
+            filter: self.filter,
+            rest: v.visit(self.rest),
+        }
     }
 }

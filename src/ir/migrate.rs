@@ -1,8 +1,11 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::mem::MaybeUninit;
-use crate::ir::circuit::{DynCircuit, Wire, SecretHandle};
+use std::panic::{self, AssertUnwindSafe};
+use std::process;
+use std::ptr;
+use crate::ir::circuit::{CircuitBase, Wire, Secret};
 use crate::ir::typed::{TWire, Repr};
 
 pub use cheesecloth_derive_migrate::{Migrate, impl_migrate_trivial};
@@ -14,14 +17,14 @@ pub trait Migrate<'a, 'b> {
 }
 
 pub trait Visitor<'a, 'b> {
-    fn new_circuit(&self) -> &DynCircuit<'a>;
+    fn new_circuit(&self) -> &CircuitBase<'b>;
 
     fn visit<T: Migrate<'a, 'b>>(&mut self, x: T) -> T::Output {
         Migrate::migrate(x, self)
     }
 
     fn visit_wire(&mut self, w: Wire<'a>) -> Wire<'b>;
-    fn visit_secret_handle(&mut self, sh: SecretHandle<'a>) -> SecretHandle<'b>;
+    fn visit_secret(&mut self, w: Secret<'a>) -> Secret<'b>;
 
     /// A "weak reference" version of `visit_wire`.  The visitor may return `None` on any call.
     /// For example, a garbage-collecting visitor might return `None` for old wires that have no
@@ -31,21 +34,40 @@ pub trait Visitor<'a, 'b> {
     }
 }
 
-impl<'a, 'b> Migrate<'a, 'b> for Wire<'a> {
-    type Output = Wire<'b>;
 
-    fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Wire<'b> {
-        v.visit_wire(self)
+/// Migrate `x` in place, using visitor `v`.  This requires that `T` be able to migrate to itself,
+/// which is usually the case when `'a == 'b`.
+pub fn migrate_in_place<'a, 'b, T, V>(v: &mut V, x: &mut T)
+where T: Migrate<'a, 'b, Output = T>, V: Visitor<'a, 'b> {
+    // This method works by moving out of `*x` (forbidden in safe code), migrating the value, and
+    // putting the result back into `*x`.  If the migration panics, we must stop unwinding here, as
+    // running the destructor for `*x` while the value is moved out would be undefined behavior.
+    //
+    // The implementation is wrapped in this `inner` function to ensure there is no `&mut T` in
+    // scope in the error handling case, where the value `*x` is invalid.
+    unsafe fn inner<'a, 'b, T, V>(v: &mut V, x: *mut T)
+    where T: Migrate<'a, 'b, Output = T>, V: Visitor<'a, 'b> {
+        let r = panic::catch_unwind(AssertUnwindSafe(|| {
+            let value = ptr::read(x);
+            let value = v.visit(value);
+            ptr::write(x, value);
+        }));
+
+        if let Err(e) = r {
+            if let Some(msg) = e.downcast_ref::<&str>() {
+                eprintln!("panic: {}", msg);
+            } else if let Some(msg) = e.downcast_ref::<String>() {
+                eprintln!("panic: {}", msg);
+            } else {
+                eprintln!("panic: Box<Any>");
+            }
+            eprintln!("panicked during migrate_in_place - aborting");
+            process::abort();
+        }
     }
+    unsafe { inner(v, x) }
 }
 
-impl<'a, 'b> Migrate<'a, 'b> for SecretHandle<'a> {
-    type Output = SecretHandle<'b>;
-
-    fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SecretHandle<'b> {
-        v.visit_secret_handle(self)
-    }
-}
 
 impl<'a, 'b, T> Migrate<'a, 'b> for TWire<'a, T>
 where
@@ -115,6 +137,14 @@ where T::Output: Ord {
 
     fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> BTreeMap<T::Output, U::Output> {
         self.into_iter().map(|x| v.visit(x)).collect()
+    }
+}
+
+impl<'a, 'b, T: Migrate<'a, 'b>> Migrate<'a, 'b> for Cell<T> {
+    type Output = Cell<T::Output>;
+
+    fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Cell<T::Output> {
+        Cell::new(v.visit(self.into_inner()))
     }
 }
 

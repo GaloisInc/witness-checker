@@ -1,17 +1,16 @@
 #![cfg(feature = "sieve_ir")]
 
-use bumpalo::Bump;
 use cheesecloth::eval::{self, CachingEvaluator, Evaluator};
 use cheesecloth::ir::circuit::{
-    Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
+    Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };
 use cheesecloth::lower;
 use num_bigint::BigInt;
 use zki_sieve::FilesSink;
 
-fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
+fn make_circuit<'a>(arenas: &'a Arenas) -> impl CircuitTrait<'a> + 'a {
     let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-    let c = Circuit::new(arena, true, cf);
+    let c = Circuit::new(arenas, true, cf);
     c
 }
 
@@ -48,8 +47,8 @@ fn finish<'a>(w: Wire<'a>) {
 
 #[test]
 fn mux_true() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit(&arenas);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 
@@ -63,8 +62,8 @@ fn mux_true() {
 
 #[test]
 fn mux_false() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit(&arenas);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 

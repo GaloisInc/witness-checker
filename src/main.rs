@@ -2,7 +2,6 @@ use std::fs;
 use std::io;
 use std::iter;
 use std::path::Path;
-use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
 use num_traits::One;
 
@@ -11,7 +10,7 @@ use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::gadget;
 use cheesecloth::ir::circuit::{
-    Circuit, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
+    Circuit, Arenas, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
 };
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::lower;
@@ -124,15 +123,18 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     let is_prover = !args.is_present("verifier-mode");
 
-    let arena = Bump::new();
+    let arenas = Arenas::new();
 
-    let gadget_supported = |g: GadgetKindRef| {
+    let arg_test_gadget_eval = args.is_present("test-gadget-eval");
+    let arg_zkif_out = args.is_present("zkif-out");
+    let arg_sieve_out = args.is_present("sieve-out");
+    let gadget_supported = move |g: GadgetKindRef| {
         use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
         let mut ok = false;
-        if args.is_present("test-gadget-eval") {
+        if arg_test_gadget_eval {
             return true;
         }
-        if args.is_present("zkif-out") || args.is_present("sieve-out") {
+        if arg_zkif_out || arg_sieve_out {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
         }
@@ -150,9 +152,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = lower::const_fold::ConstFold(cf);
     let cf = cf.add_pass(lower::bundle::simplify);
     let cf = cf.add_pass(lower::bundle::unbundle_mux);
-    let cf = lower::gadget::DecomposeGadgets::new(cf, |g| !gadget_supported(g));
+    let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
-    let c = Circuit::new(&arena, is_prover, cf);
+    let c = Circuit::new(&arenas, is_prover, cf);
     let c = &c as &DynCircuit;
 
     let b = Builder::new(c);

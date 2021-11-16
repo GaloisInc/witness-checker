@@ -236,10 +236,9 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
 #[cfg(test)]
 mod test {
     use std::convert::TryInto;
-    use bumpalo::Bump;
     use log::*;
     use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::{Circuit, FilterNil};
+    use crate::ir::circuit::{Arenas, Circuit, FilterNil};
     use crate::ir::typed::EvaluatorExt;
     use super::*;
 
@@ -252,8 +251,8 @@ mod test {
         // to the same position.
         assert!(perm.iter().enumerate().skip(n).all(|(i, &j)| i == j));
 
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 

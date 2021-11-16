@@ -1,9 +1,9 @@
 use std::collections::HashSet;
-use proc_macro::TokenStream;
+use proc_macro::{TokenStream, Span};
 use quote::{quote, ToTokens};
 use syn::{
     parse_macro_input, parse_quote, DeriveInput, Ident, Generics, AngleBracketedGenericArguments,
-    Lifetime, LifetimeDef, GenericArgument, Type, Data, Fields, WhereClause, TypePath,
+    Lifetime, LifetimeDef, GenericArgument, Type, Data, Fields, WhereClause, TypePath, LitInt,
 };
 use syn::visit_mut::{self, VisitMut};
 
@@ -63,7 +63,9 @@ pub fn derive_migrate(input: TokenStream) -> TokenStream {
                 }
             },
             Fields::Unnamed(ref fs) => {
-                let field_nums = (0 .. fs.unnamed.len()).collect::<Vec<_>>();
+                let field_nums = (0 .. fs.unnamed.len())
+                    .map(|i| LitInt::new(&i.to_string(), Span::call_site().into()))
+                    .collect::<Vec<_>>();
                 for f in &fs.unnamed {
                     add_migrate_bound(&mut where_clause, &lt1, &lt2, &generic_params, &f.ty);
                 }

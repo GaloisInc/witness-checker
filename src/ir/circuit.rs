@@ -10,25 +10,31 @@
 //! * The `CircuitExt` trait adds higher-level helper methods, so callers can use convenient
 //!   `add`/`sub` methods instead of manually constructing a `GateKind::Add`.
 use std::any;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem;
+use std::ptr;
 use std::ops::{Deref, Range};
 use std::slice;
 use std::str;
 use bumpalo::Bump;
 use num_bigint::{BigUint, BigInt, Sign};
 use crate::eval;
+use crate::ir::migrate::{self, Migrate};
 
 
 // CircuitBase layer
 
+pub struct Arenas {
+    arena: UnsafeCell<Bump>,
+}
+
 pub struct CircuitBase<'a> {
-    arena: &'a Bump,
+    arenas: &'a Arenas,
     // TODO: clean up interning
     // Currently it's possible to get two distinct interned pointers for the same value (e.g.,
     // `ty1` and `ty2` where `ty1 != ty2` but `*ty1 == *ty2`) by creating two different `Circuit`s
@@ -47,9 +53,9 @@ pub struct CircuitBase<'a> {
 }
 
 impl<'a> CircuitBase<'a> {
-    pub fn new(arena: &'a Bump, is_prover: bool) -> CircuitBase<'a> {
+    pub fn new(arenas: &'a Arenas, is_prover: bool) -> CircuitBase<'a> {
         let c = CircuitBase {
-            arena,
+            arenas,
             intern_gate: RefCell::new(HashSet::new()),
             intern_ty: RefCell::new(HashSet::new()),
             intern_wire_list: RefCell::new(HashSet::new()),
@@ -71,12 +77,16 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
+    fn arena(&self) -> &'a Bump {
+        self.arenas.arena()
+    }
+
     fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {
         let mut intern = self.intern_gate.borrow_mut();
         match intern.get(&gate) {
             Some(x) => x,
             None => {
-                let gate = self.arena.alloc(gate);
+                let gate = self.arena().alloc(gate);
                 intern.insert(gate);
                 gate
             },
@@ -88,7 +98,7 @@ impl<'a> CircuitBase<'a> {
         match intern.get(&ty) {
             Some(x) => x,
             None => {
-                let ty = self.arena.alloc(ty);
+                let ty = self.arena().alloc(ty);
                 intern.insert(ty);
                 ty
             },
@@ -100,7 +110,7 @@ impl<'a> CircuitBase<'a> {
         match intern.get(wire_list) {
             Some(&x) => x,
             None => {
-                let wire_list = self.arena.alloc_slice_copy(wire_list);
+                let wire_list = self.arena().alloc_slice_copy(wire_list);
                 intern.insert(wire_list);
                 wire_list
             },
@@ -112,7 +122,7 @@ impl<'a> CircuitBase<'a> {
         match intern.get(ty_list) {
             Some(&x) => x,
             None => {
-                let ty_list = self.arena.alloc_slice_copy(ty_list);
+                let ty_list = self.arena().alloc_slice_copy(ty_list);
                 intern.insert(ty_list);
                 ty_list
             },
@@ -124,7 +134,7 @@ impl<'a> CircuitBase<'a> {
         match intern.get(b) {
             Some(&x) => Bits(x),
             None => {
-                let b = self.arena.alloc_slice_copy(b);
+                let b = self.arena().alloc_slice_copy(b);
                 intern.insert(b);
                 Bits(b)
             },
@@ -136,7 +146,7 @@ impl<'a> CircuitBase<'a> {
         match intern.get(s) {
             Some(&x) => x,
             None => {
-                let s_bytes = self.arena.alloc_slice_copy(s.as_bytes());
+                let s_bytes = self.arena().alloc_slice_copy(s.as_bytes());
                 let s = unsafe { str::from_utf8_unchecked(s_bytes) };
                 intern.insert(s);
                 s
@@ -154,7 +164,7 @@ impl<'a> CircuitBase<'a> {
                 GadgetKindRef(&x.0)
             },
             None => {
-                let g = self.arena.alloc(g);
+                let g = self.arena().alloc(g);
                 intern.insert(HashDynGadgetKind::new(g));
                 GadgetKindRef(g)
             },
@@ -244,7 +254,7 @@ impl<'a> CircuitBase<'a> {
     ) -> (Wire<'a>, SecretHandle<'a>) {
         let val = if self.is_prover { Some(SecretValue::default()) } else { None };
         let default = self.bits(ty, default);
-        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
         let handle = SecretHandle::new(secret, default);
         (self.secret(secret), handle)
     }
@@ -261,7 +271,7 @@ impl<'a> CircuitBase<'a> {
         } else {
             None
         };
-        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
         self.secret(secret)
     }
 
@@ -269,7 +279,7 @@ impl<'a> CircuitBase<'a> {
     /// initialized later using `SecretData::set_from_lit`.
     fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
         let val = if self.is_prover { Some(SecretValue::default()) } else { None };
-        let secret = Secret(self.arena.alloc(SecretData { ty, val }));
+        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
         self.secret(secret)
     }
 
@@ -281,6 +291,58 @@ impl<'a> CircuitBase<'a> {
 
     fn current_label(&self) -> &'a str {
         self.current_label.get()
+    }
+
+
+    /// Replace the current arenas with new ones, as preparation to migrate.  Returns the old
+    /// arenas.  This is unsafe because dropping the returned `Arenas` will invalidate any
+    /// outstanding references to values allocated there.
+    unsafe fn pre_migrate(&self) -> Arenas {
+        let CircuitBase {
+            ref arenas,
+            ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
+            ref intern_gadget_kind, ref intern_str, ref intern_bits,
+            ref current_label,
+            is_prover: _,
+        } = *self;
+
+        let old_arenas = arenas.take();
+
+        // Flush all the old interning tables, which hold references to the old arena.
+        intern_gate.borrow_mut().clear();
+        intern_ty.borrow_mut().clear();
+        intern_wire_list.borrow_mut().clear();
+        intern_ty_list.borrow_mut().clear();
+        intern_gadget_kind.borrow_mut().clear();
+        intern_str.borrow_mut().clear();
+        intern_bits.borrow_mut().clear();
+
+        self.preload_common_types();
+
+        // Migrate `current_label` to the new arena.
+        current_label.set(self.intern_str(current_label.get()));
+
+        old_arenas
+    }
+}
+
+impl Arenas {
+    pub fn new() -> Arenas {
+        Arenas {
+            arena: UnsafeCell::new(Bump::new()),
+        }
+    }
+
+    fn arena(&self) -> &Bump {
+        unsafe { &*self.arena.get() }
+    }
+
+    /// Replace `*self` with a new `Arenas`, and return `*self`.  This is unsafe because dropping
+    /// the returned `Arenas` will invalidate any outstanding references to values allocated there.
+    unsafe fn take(&self) -> Arenas {
+        Arenas {
+            arena: UnsafeCell::new(ptr::replace(self.arena.get(), Bump::new())),
+        }
     }
 }
 
@@ -302,14 +364,16 @@ impl<'a> CircuitBase<'a> {
 /// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a, F: ?Sized> {
     base: CircuitBase<'a>,
-    filter: F,
+    /// The filter is wrapped in an `UnsafeCell` so it can be mutated by the `migrate_filter`
+    /// method.
+    filter: UnsafeCell<F>,
 }
 
 impl<'a, F> Circuit<'a, F> {
-    pub fn new(arena: &'a Bump, is_prover: bool, filter: F) -> Circuit<'a, F> {
+    pub fn new(arenas: &'a Arenas, is_prover: bool, filter: F) -> Circuit<'a, F> {
         Circuit {
-            base: CircuitBase::new(arena, is_prover),
-            filter,
+            base: CircuitBase::new(arenas, is_prover),
+            filter: UnsafeCell::new(filter),
         }
     }
 }
@@ -332,6 +396,12 @@ pub trait CircuitTrait<'a> {
     fn as_base(&self) -> &CircuitBase<'a>;
     fn filter(&self) -> &dyn CircuitFilter<'a>;
     fn gate(&self, kind: GateKind<'a>) -> Wire<'a>;
+
+    /// Internal helper function for `CircuitExt::migrate`.  This migrates the filter (if any) in
+    /// place.  There must be no outstanding references to the filter.
+    ///
+    /// This will panic when called on a `CircuitRef`, which doesn't have ownership of its filter.
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>);
 }
 
 impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
@@ -341,14 +411,22 @@ impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
     fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         self.gate(kind)
     }
+
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {}
 }
 
 impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
     fn as_base(&self) -> &CircuitBase<'a> { &self.base }
-    fn filter(&self) -> &dyn CircuitFilter<'a> { self.filter.as_dyn() }
+    fn filter(&self) -> &dyn CircuitFilter<'a> {
+        unsafe { (*self.filter.get()).as_dyn() }
+    }
 
     fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
-        self.filter.gate(&self.base, kind)
+        self.filter().gate(&self.base, kind)
+    }
+
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>) {
+        (*self.filter.get()).migrate_in_place(v)
     }
 }
 
@@ -359,6 +437,10 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for CircuitRef<'a, '_, 
     fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         self.filter.gate(self.base, kind)
     }
+
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {
+        panic!("can't migrate CircuitRef");
+    }
 }
 
 
@@ -368,6 +450,8 @@ pub type DynCircuitRef<'a, 'c> = CircuitRef<'a, 'c, dyn CircuitFilter<'a> + 'c>;
 
 pub trait CircuitFilter<'a> {
     fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a);
+
+    fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>);
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a>;
 
@@ -388,10 +472,21 @@ pub trait CircuitFilter<'a> {
     }
 }
 
+macro_rules! circuit_filter_common_methods {
+    () => {
+        fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
+
+        fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a, '_>) {
+            $crate::ir::migrate::migrate_in_place(v, self);
+        }
+    };
+}
+
+#[derive(Migrate)]
 pub struct FilterNil;
 
 impl<'a> CircuitFilter<'a> for FilterNil {
-    fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
+    circuit_filter_common_methods!();
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a> {
         c.gate(kind)
@@ -405,14 +500,29 @@ pub struct FilterCons<F1, F2> {
 
 impl<'a, F1, F2> CircuitFilter<'a> for FilterCons<F1, F2>
 where
-    F1: Fn(&CircuitRef<'a, '_, F2>, GateKind<'a>) -> Wire<'a> + 'a,
+    F1: Fn(&CircuitRef<'a, '_, F2>, GateKind<'a>) -> Wire<'a> + 'static,
     F2: CircuitFilter<'a> + 'a,
+    F2: Migrate<'a, 'a, Output = F2>,
 {
-    fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
+    circuit_filter_common_methods!();
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a> {
         let c = CircuitRef { base: c, filter: &self.rest };
         (self.func)(&c, kind)
+    }
+}
+
+impl<'a, 'b, F1, F2> Migrate<'a, 'b> for FilterCons<F1, F2>
+where
+    F1: 'static,
+    F2: Migrate<'a, 'b>,
+{
+    type Output = FilterCons<F1, F2::Output>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Self::Output {
+        FilterCons {
+            func: self.func,
+            rest: v.visit(self.rest),
+        }
     }
 }
 
@@ -424,10 +534,11 @@ pub struct FilterConsOpt<F1, F2> {
 
 impl<'a, F1, F2> CircuitFilter<'a> for FilterConsOpt<F1, F2>
 where
-    F1: Fn(&CircuitRef<'a, '_, F2>, GateKind<'a>) -> Wire<'a> + 'a,
+    F1: Fn(&CircuitRef<'a, '_, F2>, GateKind<'a>) -> Wire<'a> + 'static,
     F2: CircuitFilter<'a> + 'a,
+    F2: Migrate<'a, 'a, Output = F2>,
 {
-    fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
+    circuit_filter_common_methods!();
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a> {
         if self.active {
@@ -435,6 +546,21 @@ where
             (self.func)(&c, kind)
         } else {
             self.rest.gate(c, kind)
+        }
+    }
+}
+
+impl<'a, 'b, F1, F2> Migrate<'a, 'b> for FilterConsOpt<F1, F2>
+where
+    F1: 'static,
+    F2: Migrate<'a, 'b>,
+{
+    type Output = FilterConsOpt<F1, F2::Output>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Self::Output {
+        FilterConsOpt {
+            func: self.func,
+            active: self.active,
+            rest: v.visit(self.rest),
         }
     }
 }
@@ -699,9 +825,89 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let _g = self.scoped_label(label);
         f()
     }
+
+
+    /// Migrate all wires in `self` and `x` to a fresh arena.  Essentially, this garbage-collects
+    /// all unused wires.
+    ///
+    /// This method is unsafe because it invalidates all other `Wire<'a>` values, leaving them as
+    /// dangling references.  The caller is responsible for ensuring that there are no `Wire<'a>`
+    /// values outside of `self` and `x`.  This also mutates the circuit filter (if any) in place,
+    /// so the caller must ensure there are no outstanding references to the filter.
+    ///
+    /// This method will panic when called on a `CircuitRef`.  It should only be called when the
+    /// concrete type is `CircuitBase` or `Circuit`.
+    unsafe fn migrate<T: Migrate<'a, 'a, Output = T>>(
+        &self,
+        x: T,
+    ) -> T {
+        use crate::ir::migrate::Visitor;
+
+        let old_arenas = self.as_base().pre_migrate();
+        let mut v = MigrateVisitor::new(self.as_base());
+
+        self.migrate_filter(&mut v);
+        let x = v.visit(x);
+
+        drop(v);
+        drop(old_arenas);
+
+        x
+    }
 }
 
 impl<'a, C: CircuitTrait<'a> + ?Sized> CircuitExt<'a> for C {}
+
+
+pub struct MigrateVisitor<'a, 'b, 'c> {
+    new_circuit: &'c CircuitBase<'b>,
+
+    wire_map: HashMap<Wire<'a>, Wire<'b>>,
+    secret_map: HashMap<Secret<'a>, Secret<'b>>,
+}
+
+impl<'a, 'b, 'c> MigrateVisitor<'a, 'b, 'c> {
+    fn new(
+        new_circuit: &'c CircuitBase<'b>,
+    ) -> MigrateVisitor<'a, 'b, 'c> {
+        MigrateVisitor {
+            new_circuit,
+
+            wire_map: HashMap::new(),
+            secret_map: HashMap::new(),
+        }
+    }
+}
+
+impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b, '_> {
+    fn new_circuit(&self) -> &CircuitBase<'b> {
+        self.new_circuit
+    }
+
+    fn visit_wire(&mut self, w: Wire<'a>) -> Wire<'b> {
+        if let Some(&new) = self.wire_map.get(&w) {
+            return new;
+        }
+
+        let new = Wire(self.new_circuit.intern_gate(self.visit(*w)));
+        self.wire_map.insert(w, new);
+        new
+    }
+
+    fn visit_secret(&mut self, s: Secret<'a>) -> Secret<'b> {
+        if let Some(&new) = self.secret_map.get(&s) {
+            return new;
+        }
+
+        let new = Secret(self.new_circuit.arena().alloc(self.visit((*s).clone())));
+        self.secret_map.insert(s, new);
+        new
+    }
+
+    fn visit_wire_weak(&mut self, w: Wire<'a>) -> Option<Wire<'b>> {
+        self.wire_map.get(&w).cloned()
+    }
+}
 
 
 pub struct WireDeps<'a> {
@@ -940,6 +1146,21 @@ impl TyKind<'_> {
     }
 }
 
+impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
+    type Output = TyKind<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> TyKind<'b> {
+        use self::TyKind::*;
+        match self {
+            Int(sz) => Int(sz),
+            Uint(sz) => Uint(sz),
+            Bundle(tys) => {
+                let tys = tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
+                Bundle(v.new_circuit().intern_ty_list(&tys))
+            },
+        }
+    }
+}
+
 static COMMON_TY_BOOL: TyKind = TyKind::BOOL;
 static COMMON_TY_U8: TyKind = TyKind::U8;
 static COMMON_TY_U16: TyKind = TyKind::U16;
@@ -1138,6 +1359,45 @@ pub enum CmpOp {
     Eq, Ne, Lt, Le, Gt, Ge,
 }
 
+impl<'a, 'b> Migrate<'a, 'b> for Gate<'a> {
+    type Output = Gate<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Gate<'b> {
+        Gate {
+            ty: v.visit(self.ty),
+            kind: v.visit(self.kind),
+            label: v.new_circuit().intern_str(self.label),
+        }
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
+    type Output = GateKind<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> GateKind<'b> {
+        use self::GateKind::*;
+        match self {
+            Lit(bits, ty) => Lit(v.visit(bits), v.visit(ty)),
+            Secret(s) => Secret(v.visit(s)),
+            Unary(op, a) => Unary(op, v.visit(a)),
+            Binary(op, a, b) => Binary(op, v.visit(a), v.visit(b)),
+            Shift(op, a, b) => Shift(op, v.visit(a), v.visit(b)),
+            Compare(op, a, b) => Compare(op, v.visit(a), v.visit(b)),
+            Mux(c, t, e) => Mux(v.visit(c), v.visit(t), v.visit(e)),
+            Cast(a, ty) => Cast(v.visit(a), v.visit(ty)),
+            Pack(ws) => {
+                let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+                Pack(v.new_circuit().intern_wire_list(&ws))
+            },
+            Extract(w, idx) => Extract(v.visit(w), idx),
+            Gadget(gk, ws) => {
+                let gk = gk.transfer(v.new_circuit());
+                let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+                let ws = v.new_circuit().intern_wire_list(&ws);
+                Gadget(gk, ws)
+            },
+        }
+    }
+}
+
 
 /// Declare a wrapper around an immutable reference, with `Eq` and `Hash` instances that compare by
 /// address instead of by value.
@@ -1203,6 +1463,14 @@ declare_interned_pointer! {
     pub struct Wire<'a> => Gate<'a>;
 }
 
+impl<'a, 'b> Migrate<'a, 'b> for Wire<'a> {
+    type Output = Wire<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Wire<'b> {
+        v.visit_wire(self)
+    }
+}
+
 thread_local! {
     static WIRE_DEBUG_DEPTH: Cell<usize> = Cell::new(2);
 }
@@ -1229,7 +1497,15 @@ declare_interned_pointer! {
     pub struct Secret<'a> => SecretData<'a>;
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+impl<'a, 'b> Migrate<'a, 'b> for Secret<'a> {
+    type Output = Secret<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Secret<'b> {
+        v.visit_secret(self)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Default, Migrate)]
 struct SecretValue<'a>(Cell<Option<Bits<'a>>>);
 
 impl<'a> SecretValue<'a> {
@@ -1256,7 +1532,7 @@ impl<'a> SecretValue<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Migrate)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
     val: Option<SecretValue<'a>>,
@@ -1295,7 +1571,7 @@ impl<'a> SecretData<'a> {
 
 /// A handle that can be used to set the value of a `Secret`.  Sets a default value on drop, if a
 /// default was provided when the handle was constructed.
-#[derive(Debug)]
+#[derive(Debug, Migrate)]
 pub struct SecretHandle<'a> {
     s: Secret<'a>,
     default: Bits<'a>,
@@ -1323,6 +1599,15 @@ impl<'a> Drop for SecretHandle<'a> {
 declare_interned_pointer! {
     #[derive(Debug)]
     pub struct Ty<'a> => TyKind<'a>;
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Ty<'a> {
+    type Output = Ty<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Ty<'b> {
+        let kind = v.visit(*self);
+        Ty(v.new_circuit().intern_ty(kind))
+    }
 }
 
 
@@ -1543,6 +1828,13 @@ impl<'a> Bits<'a> {
             },
             _ => panic!("expected an integer type, but got {:?}", ty),
         }
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
+    type Output = Bits<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Bits<'b> {
+        v.new_circuit().intern_bits(self.0)
     }
 }
 

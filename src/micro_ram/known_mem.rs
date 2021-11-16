@@ -652,16 +652,15 @@ impl RangeSet {
 
 #[cfg(test)]
 mod test {
-    use bumpalo::Bump;
     use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::{Circuit, FilterNil};
+    use crate::ir::circuit::{Circuit, Arenas, FilterNil};
     use crate::ir::typed::{Builder, EvaluatorExt};
     use super::*;
 
     #[test]
     fn bytes() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -679,8 +678,8 @@ mod test {
 
     #[test]
     fn bytes_to_word() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -696,8 +695,8 @@ mod test {
 
     #[test]
     fn word_to_bytes() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -720,8 +719,8 @@ mod test {
     /// `load_public` that add padding using the `default` value.
     #[test]
     fn bytes_to_word_with_gaps() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -739,8 +738,8 @@ mod test {
     /// every byte is written with a known value.
     #[test]
     fn bytes_to_word_no_default() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -758,8 +757,8 @@ mod test {
     /// This should fail, since there's no default to fill in the gaps.
     #[test]
     fn bytes_to_word_with_gaps_no_default() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
 
         let mut m = KnownMem::new();
@@ -773,8 +772,8 @@ mod test {
     /// Overwrite some smaller entries with a single large one.
     #[test]
     fn overwrite_smaller() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -796,8 +795,8 @@ mod test {
     /// Overwrite parts of a large write with smaller ones.
     #[test]
     fn overwrite_larger() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -815,8 +814,8 @@ mod test {
     /// Overwrite one entry with one of the same size.
     #[test]
     fn overwrite_same_size() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -837,8 +836,8 @@ mod test {
     /// Check behavior of loads near the end of the address space.
     #[test]
     fn load_end() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -872,8 +871,8 @@ mod test {
     /// Check behavior of loads near the end of the address space.
     #[test]
     fn load_end_word() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -902,8 +901,8 @@ mod test {
     /// Check behavior of stores near the end of the address space.
     #[test]
     fn store_end_overwrite() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -923,8 +922,8 @@ mod test {
     /// Check behavior of stores near the end of the address space.
     #[test]
     fn store_end_replace() {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
