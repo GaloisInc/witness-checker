@@ -24,7 +24,7 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use crate::eval;
+use crate::eval::{self, Evaluator, CachingEvaluator};
 use crate::ir::migrate::{self, Migrate};
 
 
@@ -407,6 +407,7 @@ pub trait CircuitTrait<'a> {
     ///
     /// This will panic when called on a `CircuitRef`, which doesn't have ownership of its filter.
     unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>);
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>);
 }
 
 impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
@@ -418,6 +419,7 @@ impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
     }
 
     unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {}
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {}
 }
 
 impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
@@ -433,6 +435,9 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
     unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>) {
         (*self.filter.get()).migrate_in_place(v)
     }
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>) {
+        (*self.filter.get()).erase_in_place(v)
+    }
 }
 
 impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for CircuitRef<'a, '_, F> {
@@ -446,6 +451,9 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for CircuitRef<'a, '_, 
     unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {
         panic!("can't migrate CircuitRef");
     }
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {
+        panic!("can't erase CircuitRef");
+    }
 }
 
 
@@ -457,6 +465,7 @@ pub trait CircuitFilter<'a> {
     fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a);
 
     fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>);
+    fn erase_in_place(&mut self, v: &mut EraseVisitor<'a, '_>);
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a>;
 
@@ -482,6 +491,10 @@ macro_rules! circuit_filter_common_methods {
         fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
 
         fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a, '_>) {
+            $crate::ir::migrate::migrate_in_place(v, self);
+        }
+
+        fn erase_in_place(&mut self, v: &mut $crate::ir::circuit::EraseVisitor<'a, '_>) {
             $crate::ir::migrate::migrate_in_place(v, self);
         }
     };
@@ -674,6 +687,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Secret(secret))
     }
 
+    fn erased(&self, erased: Erased<'a>) -> Wire<'a> {
+        self.gate(GateKind::Erased(erased))
+    }
+
     fn unary(&self, op: UnOp, arg: Wire<'a>) -> Wire<'a> {
         self.gate(GateKind::Unary(op, arg))
     }
@@ -863,6 +880,36 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
         x
     }
+
+    /// Replace all non-trivial top-level wires in `self` and `x` with `GateKind::Erased`.
+    ///
+    /// This method is unsafe because it mutates the circuit filter (if any) in place, so the
+    /// caller must ensure there are no outstanding references to the filter.
+    unsafe fn erase<T: Migrate<'a, 'a, Output = T>>(
+        &self,
+        x: T,
+    ) -> T {
+        use crate::ir::migrate::Visitor;
+
+        let mut v = EraseVisitor::new(self.as_base());
+
+        self.erase_filter(&mut v);
+        let x = v.visit(x);
+
+        drop(v);
+
+        x
+    }
+
+    /// Shorthand for `erase` followed by `migrate`.
+    unsafe fn erase_and_migrate<T: Migrate<'a, 'a, Output = T>>(
+        &self,
+        x: T,
+    ) -> T {
+        let x = self.erase(x);
+        let x = self.migrate(x);
+        x
+    }
 }
 
 impl<'a, C: CircuitTrait<'a> + ?Sized> CircuitExt<'a> for C {}
@@ -929,6 +976,66 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b, '_> {
         self.wire_map.get(&w).cloned()
     }
 }
+
+
+pub struct EraseVisitor<'a, 'c> {
+    circuit: &'c CircuitBase<'a>,
+    eval: CachingEvaluator<'a, eval::RevealSecrets>,
+    erased_map: HashMap<Wire<'a>, Erased<'a>>,
+}
+
+impl<'a, 'c> EraseVisitor<'a, 'c> {
+    fn new(
+        circuit: &'c CircuitBase<'a>,
+    ) -> EraseVisitor<'a, 'c> {
+        EraseVisitor {
+            circuit,
+            eval: CachingEvaluator::new(),
+            erased_map: HashMap::new(),
+        }
+    }
+}
+
+impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
+    fn new_circuit(&self) -> &CircuitBase<'a> {
+        self.circuit
+    }
+
+    fn visit_wire(&mut self, w: Wire<'a>) -> Wire<'a> {
+        match w.kind {
+            // Erasing these wouldn't save much memory, if any.  We particularly want to leave
+            // `Lit` intact so that constant folding can continue working.
+            GateKind::Lit(..) |
+            GateKind::Secret(..) |
+            GateKind::Erased(..) => return w,
+            _ => {},
+        }
+
+        if let Some(&e) = self.erased_map.get(&w) {
+            return self.circuit.erased(e);
+        }
+
+        let secret_value = self.eval.eval_wire(w).ok();
+        if self.circuit.is_prover && secret_value.is_none() {
+            // Losing track of the value for this wire will leave us unable to construct the
+            // witness.  We can't simply choose not to erase the wire because that would leave the
+            // `GateKind` visible to later rewrite passes, which could cause the prover and
+            // verifier circuits to diverge.
+            panic!("failed to evaluate erased wire: {:?}", w);
+        }
+
+        let e = Erased(self.circuit.arena().alloc(ErasedData {
+            ty: w.ty,
+            secret_value,
+        }));
+        self.erased_map.insert(w, e);
+        self.circuit.erased(e)
+    }
+
+    fn visit_secret(&mut self, s: Secret<'a>) -> Secret<'a> { s }
+    fn visit_erased(&mut self, e: Erased<'a>) -> Erased<'a> { e }
+}
+
 
 
 pub struct WireDeps<'a> {
