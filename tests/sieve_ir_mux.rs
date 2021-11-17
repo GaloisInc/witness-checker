@@ -22,7 +22,7 @@ fn finish<'a>(w: Wire<'a>) {
 
     // Make sure the circuit is valid.
     let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
-    let val = ev.eval_wire(w);
+    let val = ev.eval_wire(w).ok();
     assert_eq!(val, Some(eval::Value::Single(BigInt::from(1))));
 
     // Convert to zkif and validate

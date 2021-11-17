@@ -1,14 +1,15 @@
 use std::collections::HashSet;
-use proc_macro::{TokenStream, Span};
+use proc_macro;
+use proc_macro2::{TokenStream, Span};
 use quote::{quote, ToTokens};
 use syn::{
     parse_macro_input, parse_quote, DeriveInput, Ident, Generics, AngleBracketedGenericArguments,
-    Lifetime, LifetimeDef, GenericArgument, Type, Data, Fields, WhereClause, TypePath, LitInt,
+    Lifetime, LifetimeDef, GenericArgument, Type, Data, Fields, WhereClause, TypePath,
 };
 use syn::visit_mut::{self, VisitMut};
 
 #[proc_macro_derive(Migrate)]
-pub fn derive_migrate(input: TokenStream) -> TokenStream {
+pub fn derive_migrate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let name = &input.ident;
@@ -16,7 +17,7 @@ pub fn derive_migrate(input: TokenStream) -> TokenStream {
     let lt1_def = match input.generics.lifetimes().next() {
         Some(def) => def,
         None => {
-            return impl_migrate_trivial_generic(&input.ident, &input.generics);
+            return impl_migrate_trivial_generic(&input.ident, &input.generics).into();
         },
     };
     let lt1 = &lt1_def.lifetime;
@@ -48,37 +49,28 @@ pub fn derive_migrate(input: TokenStream) -> TokenStream {
     let generic_params = input.generics.type_params().map(|tp| tp.ident.clone())
         .collect::<HashSet<_>>();
     let body = match input.data {
-        Data::Struct(ref s) => match s.fields {
-            Fields::Named(ref fs) => {
-                let field_names = fs.named.iter()
-                    .map(|f| f.ident.clone().expect("named field has no name?"))
-                    .collect::<Vec<_>>();
-                for f in &fs.named {
-                    add_migrate_bound(&mut where_clause, &lt1, &lt2, &generic_params, &f.ty);
-                }
-                quote! {
-                    #name {
-                        #( #field_names: v.visit(self.#field_names), )*
-                    }
-                }
-            },
-            Fields::Unnamed(ref fs) => {
-                let field_nums = (0 .. fs.unnamed.len())
-                    .map(|i| LitInt::new(&i.to_string(), Span::call_site().into()))
-                    .collect::<Vec<_>>();
-                for f in &fs.unnamed {
-                    add_migrate_bound(&mut where_clause, &lt1, &lt2, &generic_params, &f.ty);
-                }
-                quote! {
-                    #name(#( v.visit(self.#field_nums), )*)
-                }
-            },
-            Fields::Unit => {
-                quote! { #name }
-            },
+        Data::Struct(ref s) => {
+            for f in s.fields.iter() {
+                add_migrate_bound(&mut where_clause, &lt1, &lt2, &generic_params, &f.ty);
+            }
+            let pat = match_fields(quote! { #name }, &s.fields);
+            let expr = visit_fields(quote! { #name }, &s.fields);
+            quote! {
+                let #pat = self;
+                #expr
+            }
         },
-        Data::Enum(ref _e) => {
-            quote! { todo!("#[derive(Migrate)] enum case is NYI") }
+        Data::Enum(ref e) => {
+            let cases = e.variants.iter().map(|v| {
+                for f in v.fields.iter() {
+                    add_migrate_bound(&mut where_clause, &lt1, &lt2, &generic_params, &f.ty);
+                }
+                let v_name = &v.ident;
+                let pat = match_fields(quote! { #name::#v_name }, &v.fields);
+                let expr = visit_fields(quote! { #name::#v_name }, &v.fields);
+                quote! { #pat => #expr, }
+            }).collect::<Vec<_>>();
+            quote! { match self { #(#cases)* } }
         },
         Data::Union(_) => {
             panic!("#[derive(Migrate)] is not supported on unions");
@@ -96,6 +88,54 @@ pub fn derive_migrate(input: TokenStream) -> TokenStream {
     };
     //eprintln!("result: {}", result);
     result.into()
+}
+
+fn match_fields(name: TokenStream, fields: &Fields) -> TokenStream {
+    match fields {
+        Fields::Named(ref fs) => {
+            let field_names = fs.named.iter()
+                .map(|f| f.ident.clone().expect("named field has no name?"))
+                .collect::<Vec<_>>();
+            quote! {
+                #name { #( #field_names, )* }
+            }
+        },
+        Fields::Unnamed(ref fs) => {
+            let field_names = (0 .. fs.unnamed.len())
+                .map(|i| Ident::new(&format!("x{}", i), Span::call_site()))
+                .collect::<Vec<_>>();
+            quote! {
+                #name(#( #field_names, )*)
+            }
+        },
+        Fields::Unit => {
+            quote! { #name }
+        },
+    }
+}
+
+fn visit_fields(name: TokenStream, fields: &Fields) -> TokenStream {
+    match fields {
+        Fields::Named(ref fs) => {
+            let field_names = fs.named.iter()
+                .map(|f| f.ident.clone().expect("named field has no name?"))
+                .collect::<Vec<_>>();
+            quote! {
+                #name { #( #field_names: v.visit(#field_names), )* }
+            }
+        },
+        Fields::Unnamed(ref fs) => {
+            let field_names = (0 .. fs.unnamed.len())
+                .map(|i| Ident::new(&format!("x{}", i), Span::call_site()))
+                .collect::<Vec<_>>();
+            quote! {
+                #name(#( v.visit(#field_names), )*)
+            }
+        },
+        Fields::Unit => {
+            quote! { #name }
+        },
+    }
 }
 
 fn add_migrate_bound(
@@ -159,20 +199,19 @@ fn impl_migrate_trivial_generic(name: &Ident, generics: &Generics) -> TokenStrea
     assert!(impl_generics.where_clause.is_none());
     let impl_params = impl_generics.params;
 
-    let result = quote! {
+    quote! {
         impl<'lt1, 'lt2, #impl_params> Migrate<'lt1, 'lt2> for #name #ty_generics #where_clause {
             type Output = Self;
             fn migrate<V: migrate::Visitor<'lt1, 'lt2> + ?Sized>(self, v: &mut V) -> Self::Output {
                 self
             }
         }
-    };
-    result.into()
+    }
 }
 
 
 #[proc_macro]
-pub fn impl_migrate_trivial(input: TokenStream) -> TokenStream {
+pub fn impl_migrate_trivial(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ty = parse_macro_input!(input as Type);
 
     let result = quote! {
