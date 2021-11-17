@@ -49,6 +49,7 @@ pub fn make_graph<'a>(
         match w.kind {
             GateKind::Lit(_, _) => write!(label, "Lit")?,
             GateKind::Secret(_) => write!(label, "Secret")?,
+            GateKind::Erased(e) => write!(label, "Erased {:p}", e)?,
             GateKind::Unary(op, _) => write!(label, "{:?}", op)?,
             GateKind::Binary(op, _, _) => write!(label, "{:?}", op)?,
             GateKind::Shift(op, _, _) => write!(label, "{:?}", op)?,
@@ -82,7 +83,8 @@ pub fn make_graph<'a>(
 
         match w.kind {
             GateKind::Lit(_, _) |
-            GateKind::Secret(_) => {},
+            GateKind::Secret(_) |
+            GateKind::Erased(_) => {},
             GateKind::Unary(_, a) |
             GateKind::Cast(a, _) |
             GateKind::Extract(a, _) => write_edges(&[a])?,

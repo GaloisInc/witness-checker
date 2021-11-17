@@ -137,6 +137,8 @@ impl<'a> Backend<'a> {
                 }
             }
 
+            GateKind::Erased(_erased) => unimplemented!("Erased"),
+
             GateKind::Unary(op, arg) => {
                 let aw = self.wire(arg);
 

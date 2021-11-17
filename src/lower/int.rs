@@ -206,6 +206,7 @@ pub fn int_to_uint<'a>(
             GateKind::Secret(s) => {
                 return c.new_secret_init(new_ty, || s.val().unwrap());
             }
+            GateKind::Erased(_e) => panic!("can't change type of erased gate {:?}", gk),
             GateKind::Unary(_op, _a) => {}
             GateKind::Binary(op, a, b) => match op {
                 // Note `Mul` returns only the lower half of the output, which is unaffected by

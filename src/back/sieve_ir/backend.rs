@@ -171,6 +171,8 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                 }
             }
 
+            GateKind::Erased(_erased) => unimplemented!("Erased"),
+
             GateKind::Unary(op, arg) => {
                 let aw = self.represent(arg);
 

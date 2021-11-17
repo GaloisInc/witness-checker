@@ -873,6 +873,7 @@ pub struct MigrateVisitor<'a, 'b, 'c> {
 
     wire_map: HashMap<Wire<'a>, Wire<'b>>,
     secret_map: HashMap<Secret<'a>, Secret<'b>>,
+    erased_map: HashMap<Erased<'a>, Erased<'b>>,
 }
 
 impl<'a, 'b, 'c> MigrateVisitor<'a, 'b, 'c> {
@@ -884,6 +885,7 @@ impl<'a, 'b, 'c> MigrateVisitor<'a, 'b, 'c> {
 
             wire_map: HashMap::new(),
             secret_map: HashMap::new(),
+            erased_map: HashMap::new(),
         }
     }
 }
@@ -910,6 +912,16 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b, '_> {
 
         let new = Secret(self.new_circuit.arena().alloc(self.visit((*s).clone())));
         self.secret_map.insert(s, new);
+        new
+    }
+
+    fn visit_erased(&mut self, e: Erased<'a>) -> Erased<'b> {
+        if let Some(&new) = self.erased_map.get(&e) {
+            return new;
+        }
+
+        let new = Erased(self.new_circuit.arena().alloc(self.visit((*e).clone())));
+        self.erased_map.insert(e, new);
         new
     }
 
@@ -999,7 +1011,8 @@ impl<'a> DoubleEndedIterator for WireDeps<'a> {
 pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
     match w.kind {
         GateKind::Lit(_, _) |
-        GateKind::Secret(_) => WireDeps::zero(),
+        GateKind::Secret(_) |
+        GateKind::Erased(_) => WireDeps::zero(),
         GateKind::Unary(_, a) |
         GateKind::Cast(a, _) |
         GateKind::Extract(a, _) => WireDeps::one(a),
@@ -1235,6 +1248,8 @@ pub enum GateKind<'a> {
     Lit(Bits<'a>, Ty<'a>),
     /// Retrieve a secret value from the witness.
     Secret(Secret<'a>),
+    /// A gate that has been erased from the in-memory representation of the circuit.
+    Erased(Erased<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
     Unary(UnOp, Wire<'a>),
     /// Compute a binary operation.  All `BinOp`s have type `T -> T -> T`
@@ -1267,6 +1282,7 @@ impl<'a> GateKind<'a> {
         match *self {
             GateKind::Lit(_, ty) => ty,
             GateKind::Secret(s) => s.ty,
+            GateKind::Erased(e) => e.ty,
             GateKind::Unary(_, w) => w.ty,
             GateKind::Binary(_, w, _) => w.ty,
             GateKind::Shift(_, w, _) => w.ty,
@@ -1314,6 +1330,7 @@ impl<'a> GateKind<'a> {
         match self {
             Lit(_, _) => "Lit",
             Secret(_) => "Secret",
+            Erased(_) => "Erased",
             Unary(op, _) => match op {
                 Not => "Not",
                 Neg => "Neg",
@@ -1386,6 +1403,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
         match self {
             Lit(bits, ty) => Lit(v.visit(bits), v.visit(ty)),
             Secret(s) => Secret(v.visit(s)),
+            Erased(e) => Erased(v.visit(e)),
             Unary(op, a) => Unary(op, v.visit(a)),
             Binary(op, a, b) => Binary(op, v.visit(a), v.visit(b)),
             Shift(op, a, b) => Shift(op, v.visit(a), v.visit(b)),
@@ -1630,6 +1648,31 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretHandle<'a> {
             s: v.visit(sh.s),
             default: v.visit(sh.default),
         }
+    }
+}
+
+
+
+#[derive(Clone, Debug, Migrate)]
+pub struct ErasedData<'a> {
+    pub ty: Ty<'a>,
+    /// In prover mode, this stores the value of the wire as it was computed before erasing the
+    /// gate.
+    pub value: Option<eval::Value>,
+}
+
+declare_interned_pointer! {
+    /// A pointer to data about an erased wire.  Similar to `Secret`s, each `Erased` has a distinct
+    /// identity.
+    #[derive(Debug)]
+    pub struct Erased<'a> => ErasedData<'a>;
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Erased<'a> {
+    type Output = Erased<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Erased<'b> {
+        v.visit_erased(self)
     }
 }
 

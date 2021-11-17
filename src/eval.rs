@@ -266,6 +266,8 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> EvalResul
 
         GateKind::Secret(s) => return e.eval_secret(s),
 
+        GateKind::Erased(e) => e.value.clone().ok_or(Error::Other)?,
+
         GateKind::Unary(op, a) => {
             let a_val = e.eval_single_wire(a)?;
             let ty = a.ty;

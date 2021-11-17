@@ -127,6 +127,7 @@ fn const_foldable(gk: GateKind) -> bool {
     match gk {
         GateKind::Lit(..) => false,
         GateKind::Secret(..) => false,
+        GateKind::Erased(..) => false,
         GateKind::Unary(_, a) => a.is_lit(),
         GateKind::Binary(_, a, b) => a.is_lit() && b.is_lit(),
         GateKind::Shift(_, a, b) => a.is_lit() && b.is_lit(),
