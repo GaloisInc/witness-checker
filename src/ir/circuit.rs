@@ -1657,8 +1657,8 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretHandle<'a> {
 pub struct ErasedData<'a> {
     pub ty: Ty<'a>,
     /// In prover mode, this stores the value of the wire as it was computed before erasing the
-    /// gate.
-    pub value: Option<eval::Value>,
+    /// gate.  The value is computed in `RevealSecrets` mode, so it must be treated as a secret.
+    pub secret_value: Option<eval::Value>,
 }
 
 declare_interned_pointer! {

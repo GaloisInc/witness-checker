@@ -6,7 +6,8 @@ use num_traits::{Signed, Zero};
 use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
-    self, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
+    self, Ty, Wire, Secret, Erased, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp,
+    CmpOp,
 };
 
 use self::Value::Single;
@@ -90,6 +91,7 @@ pub trait Evaluator<'a>: SecretEvaluator<'a> {
 
 pub trait SecretEvaluator<'a> {
     fn eval_secret(&mut self, s: Secret<'a>) -> EvalResult<'a>;
+    fn eval_erased(&mut self, e: Erased<'a>) -> EvalResult<'a>;
 }
 
 
@@ -98,6 +100,7 @@ pub trait SecretEvaluator<'a> {
 pub struct Public;
 impl<'a> SecretEvaluator<'a> for Public {
     fn eval_secret(&mut self, s: Secret<'a>) -> EvalResult<'a> { Err(Error::UnknownSecret(s)) }
+    fn eval_erased(&mut self, _e: Erased<'a>) -> EvalResult<'a> { Err(Error::Other) }
 }
 
 /// Secret evaluation mode.  Secret values will be used if they are available in the circuit.
@@ -110,6 +113,10 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
             None => return Err(Error::UnknownSecret(s)),
         };
         Ok(Value::from_lit(s.ty, val))
+    }
+
+    fn eval_erased(&mut self, e: Erased<'a>) -> EvalResult<'a> {
+        e.secret_value.clone().ok_or(Error::Other)
     }
 }
 
@@ -192,6 +199,10 @@ impl<'a, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, S>
     fn eval_secret(&mut self, s: Secret<'a>) -> EvalResult<'a> {
         self.secret_eval.eval_secret(s)
     }
+
+    fn eval_erased(&mut self, e: Erased<'a>) -> EvalResult<'a> {
+        self.secret_eval.eval_erased(e)
+    }
 }
 
 impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
@@ -234,6 +245,10 @@ impl<'a> SecretEvaluator<'a> for LiteralEvaluator {
     fn eval_secret(&mut self, s: Secret<'a>) -> EvalResult<'a> {
         Err(Error::UnknownSecret(s))
     }
+
+    fn eval_erased(&mut self, _e: Erased<'a>) -> EvalResult<'a> {
+        Err(Error::Other)
+    }
 }
 
 impl<'a> Evaluator<'a> for LiteralEvaluator {
@@ -266,7 +281,7 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> EvalResul
 
         GateKind::Secret(s) => return e.eval_secret(s),
 
-        GateKind::Erased(e) => e.value.clone().ok_or(Error::Other)?,
+        GateKind::Erased(erased) => return e.eval_erased(erased),
 
         GateKind::Unary(op, a) => {
             let a_val = e.eval_single_wire(a)?;
