@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::mem;
+use std::mem::{self, ManuallyDrop};
 use std::ptr;
 use std::ops::{Deref, Range};
 use std::slice;
@@ -1599,7 +1599,7 @@ impl<'a> SecretData<'a> {
 
 /// A handle that can be used to set the value of a `Secret`.  Sets a default value on drop, if a
 /// default was provided when the handle was constructed.
-#[derive(Debug, Migrate)]
+#[derive(Debug)]
 pub struct SecretHandle<'a> {
     s: Secret<'a>,
     default: Bits<'a>,
@@ -1619,6 +1619,17 @@ impl<'a> SecretHandle<'a> {
 impl<'a> Drop for SecretHandle<'a> {
     fn drop(&mut self) {
         self.s.set_default(self.default);
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for SecretHandle<'a> {
+    type Output = SecretHandle<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SecretHandle<'b> {
+        let sh = ManuallyDrop::new(self);
+        SecretHandle {
+            s: v.visit(sh.s),
+            default: v.visit(sh.default),
+        }
     }
 }
 
