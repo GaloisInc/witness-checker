@@ -159,7 +159,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let c = &c as &DynCircuit;
 
     let b = Builder::new(c);
-    let mut cx = Context::new();
+    let mut cx = Context::new(c);
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
