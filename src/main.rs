@@ -3,6 +3,7 @@ use std::io;
 use std::iter;
 use std::path::Path;
 use clap::{App, Arg, ArgMatches};
+use env_logger;
 use num_traits::One;
 
 use cheesecloth::wire_assert;
@@ -379,6 +380,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
+    env_logger::init();
     let args = parse_args();
 
     let mode = match args.value_of("mode") {

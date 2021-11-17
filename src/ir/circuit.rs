@@ -22,6 +22,7 @@ use std::ops::{Deref, Range};
 use std::slice;
 use std::str;
 use bumpalo::Bump;
+use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
 use crate::eval;
 use crate::ir::migrate::{self, Migrate};
@@ -335,6 +336,10 @@ impl Arenas {
 
     fn arena(&self) -> &Bump {
         unsafe { &*self.arena.get() }
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        self.arena().allocated_bytes()
     }
 
     /// Replace `*self` with a new `Arenas`, and return `*self`.  This is unsafe because dropping
@@ -848,6 +853,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
         self.migrate_filter(&mut v);
         let x = v.visit(x);
+
+        info!("migrated {} wires, {} secrets", v.wire_map.len(), v.secret_map.len());
+        info!("  old size: {} bytes", old_arenas.allocated_bytes());
+        info!("  new size: {} bytes", self.as_base().arena().allocated_bytes());
 
         drop(v);
         drop(old_arenas);
