@@ -67,8 +67,8 @@ pub fn make_graph<'a>(
 
         let val = ev.eval_wire(w);
         match val {
-            Some(val) => write_val(&mut label, val)?,
-            None => write!(label, "[eval failed]")?,
+            Ok(val) => write_val(&mut label, val)?,
+            _ => write!(label, "[eval failed]")?,
         }
 
         writeln!(s, "\"{:p}\" [ label = {:?} ];", w, label)?;

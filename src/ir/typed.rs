@@ -430,7 +430,7 @@ impl<'a> Secret<'a> for bool {
 
 impl<'a> FromEval<'a> for bool {
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = ev.eval_single_wire(a)?;
+        let val = ev.eval_single_wire(a).ok()?;
         Some(!val.is_zero())
     }
 }
@@ -496,7 +496,7 @@ macro_rules! integer_impls {
 
         impl<'a> FromEval<'a> for $T {
             fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-                let val = ev.eval_single_wire(a)?;
+                let val = ev.eval_single_wire(a).ok()?;
                 // Conversion should succeed, assuming `a` really carries a value of type `$T`.
                 Some(<$T as TryFrom<_>>::try_from(val).unwrap())
             }

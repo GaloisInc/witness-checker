@@ -272,7 +272,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         let flag_vals = flags.iter().map(|&w| {
-            ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
+            ev.eval_wire(w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();
 
         let asserts_ok: u32 = flag_vals[1 .. 1 + num_asserts].iter().map(|&ok| ok as u32).sum();

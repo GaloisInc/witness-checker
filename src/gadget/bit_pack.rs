@@ -1,5 +1,5 @@
 use num_bigint::{BigInt, Sign};
-use crate::eval::Value;
+use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
     CircuitTrait, CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
     GadgetKindRef,
@@ -85,7 +85,7 @@ impl<'a> GadgetKind<'a> for ConcatBits {
         acc
     }
 
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let mut acc = BigInt::from(0_u32);
         let mut acc_width = 0;
         for (&ty, val) in arg_tys.iter().zip(args.iter()) {
@@ -99,7 +99,7 @@ impl<'a> GadgetKind<'a> for ConcatBits {
         }
         assert!(acc.sign() != Sign::Minus);
         assert!(acc.bits() <= acc_width as u64);
-        Some(Value::Single(acc))
+        Ok(Value::Single(acc))
     }
 }
 
@@ -163,7 +163,7 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
         walk(c, args[0], self.0, &mut pos)
     }
 
-    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         fn walk(inp: &BigInt, pos: &mut u16, ty: Ty) -> Value {
             if let TyKind::Bundle(tys) = *ty {
                 Value::Bundle(tys.iter().map(|&ty| walk(inp, pos, ty)).collect())
@@ -175,7 +175,7 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
         }
         let inp = args[0].as_ref()?.as_single().unwrap();
         let mut pos = 0;
-        Some(walk(&inp, &mut pos, self.0))
+        Ok(walk(&inp, &mut pos, self.0))
     }
 }
 
@@ -220,10 +220,10 @@ impl<'a> GadgetKind<'a> for ExtractBits {
         c.cast(shifted, out_ty)
     }
 
-    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let val = args[0].as_ref()?.as_single().unwrap();
         let mask = (BigInt::from(1) << (self.end - self.start)) - 1;
-        Some(Value::Single((val >> self.start) & mask))
+        Ok(Value::Single((val >> self.start) & mask))
     }
 }
 

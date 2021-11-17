@@ -1,5 +1,5 @@
 use num_bigint::{BigInt, BigUint};
-use crate::eval::Value;
+use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
     CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, GadgetKind, GadgetKindRef,
 };
@@ -41,10 +41,10 @@ impl<'a> GadgetKind<'a> for AddWithOverflow {
         c.pack(&[sum, overflow])
     }
 
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let a = args[0].as_ref()?.as_single().unwrap();
         let b = args[1].as_ref()?.as_single().unwrap();
-        Some(overflow_result(arg_tys[0], a + b))
+        Ok(overflow_result(arg_tys[0], a + b))
     }
 }
 
@@ -76,10 +76,10 @@ impl<'a> GadgetKind<'a> for SubWithOverflow {
         c.pack(&[diff, overflow])
     }
 
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let a = args[0].as_ref()?.as_single().unwrap();
         let b = args[1].as_ref()?.as_single().unwrap();
-        Some(overflow_result(arg_tys[0], a - b))
+        Ok(overflow_result(arg_tys[0], a - b))
     }
 }
 
@@ -201,14 +201,14 @@ impl<'a> GadgetKind<'a> for WideMul {
         c.pack(&[c0, c1])
     }
 
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let sz = arg_tys[0].integer_size();
         let a = args[0].as_ref()?.as_single().unwrap();
         let b = args[1].as_ref()?.as_single().unwrap();
         let product = a * b;
         let low = Value::Single(&product & ((BigInt::from(1) << sz.bits()) - 1));
         let high = Value::trunc(arg_tys[0], product >> sz.bits());
-        Some(Value::Bundle(vec![low, high]))
+        Ok(Value::Bundle(vec![low, high]))
     }
 }
 

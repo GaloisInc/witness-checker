@@ -120,7 +120,7 @@ fn eval<'a>(
     e: &mut impl Evaluator<'a>,
     w: Wire<'a>,
 ) -> Option<BigInt> {
-    e.eval_wire(w).and_then(Value::unwrap_single)
+    e.eval_wire(w).ok().and_then(Value::unwrap_single)
 }
 
 fn const_foldable(gk: GateKind) -> bool {
@@ -150,7 +150,7 @@ fn try_const_fold<'a>(
         return None;
     }
 
-    let val = eval::eval_gate(&mut LiteralEvaluator, gk)?;
+    let val = eval::eval_gate(&mut LiteralEvaluator, gk).ok()?;
     let i = val.as_single()?;
     let ty = gk.ty(c);
     Some(c.lit(ty, i))

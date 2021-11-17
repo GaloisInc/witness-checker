@@ -1530,6 +1530,14 @@ impl<'a> SecretValue<'a> {
             None => panic!("tried to access uninitialized secret value"),
         }
     }
+
+    pub fn try_get(&self) -> Option<Bits<'a>> {
+        self.0.get()
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.0.get().is_some()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Migrate)]
@@ -1544,6 +1552,17 @@ impl<'a> SecretData<'a> {
     /// panic.
     pub fn val(&self) -> Option<Bits<'a>> {
         self.val.as_ref().map(|sv| sv.get())
+    }
+
+    /// Try to retrieve the value of this secret.  In verifier mode, this always returns `None`.
+    /// In prover mode, this returns `Some(bits)` if the value has been initialized and `None`
+    /// otherwise.
+    pub fn try_val(&self) -> Option<Bits<'a>> {
+        self.val.as_ref().and_then(|sv| sv.try_get())
+    }
+
+    pub fn has_val(&self) -> bool {
+        self.val.as_ref().map_or(false, |sv| sv.is_set())
     }
 
     pub fn set(&self, bits: Bits<'a>) {
@@ -1685,7 +1704,7 @@ pub trait GadgetKind<'a>: GadgetKindSupport<'a> + 'a {
     ) -> Wire<'a>;
 
     /// Evaluate this gadget on the provided inputs.
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[Option<eval::Value>]) -> Option<eval::Value>;
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a>;
 }
 
 declare_interned_pointer! {

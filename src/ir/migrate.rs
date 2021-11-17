@@ -91,6 +91,17 @@ impl<'a, 'b, T: Migrate<'a, 'b>> Migrate<'a, 'b> for Option<T> {
     }
 }
 
+impl<'a, 'b, T: Migrate<'a, 'b>, E: Migrate<'a, 'b>> Migrate<'a, 'b> for Result<T, E> {
+    type Output = Result<T::Output, E::Output>;
+
+    fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Result<T::Output, E::Output> {
+        match self {
+            Ok(x) => Ok(v.visit(x)),
+            Err(e) => Err(v.visit(e)),
+        }
+    }
+}
+
 impl<'a, 'b, T: Migrate<'a, 'b>> Migrate<'a, 'b> for Box<T> {
     type Output = Box<T::Output>;
 
