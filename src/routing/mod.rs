@@ -167,6 +167,25 @@ impl<'a, T: Repr<'a>> Routing<'a, T> {
     }
 }
 
+impl<'a, 'b, T> Migrate<'a, 'b> for Routing<'a, T>
+where
+    T: for<'c> Repr<'c>,
+    TWire<'a, T>: Migrate<'a, 'b, Output = TWire<'b, T>>,
+{
+    type Output = Routing<'b, T>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Routing<'b, T> {
+        Routing {
+            bn: self.bn,
+            outputs: v.visit(self.outputs),
+            secrets: v.visit(self.secrets),
+            connected_a: self.connected_a,
+            connected_b: self.connected_b,
+            routes: self.routes,
+        }
+    }
+}
+
 
 fn maybe_swap<'a, T>(
     b: &Builder<'a>,
