@@ -1739,11 +1739,16 @@ impl<'a> SecretHandle<'a> {
         let bits = c.bits(self.s.ty, val);
         self.s.set(bits);
     }
+
+    /// Set the secret to its default value, if it hasn't been set yet.
+    pub fn apply_default(&self) {
+        self.s.set_default(self.default);
+    }
 }
 
 impl<'a> Drop for SecretHandle<'a> {
     fn drop(&mut self) {
-        self.s.set_default(self.default);
+        self.apply_default();
     }
 }
 

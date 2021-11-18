@@ -444,7 +444,13 @@ impl<'a> SegGraphBuilder<'a> {
             }
         }
 
-        // TODO: set remaining liveness flags to their defaults
+        // Use default values (`false`) for all unused edge liveness flags.
+        let it = self.edges.values()
+            .chain(self.from_net.values())
+            .chain(self.to_net.values());
+        for s in it {
+            s.apply_default();
+        }
     }
 
     /// Get the order in which to construct the segment circuits.  This ordering is guaranteed to

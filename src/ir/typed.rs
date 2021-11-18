@@ -131,6 +131,10 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
         T::set_from_lit(&self.secret.repr, &lit.repr, true);
     }
 
+    pub fn apply_default(&self) {
+        T::set_from_lit(&self.secret.repr, &self.default.repr, false);
+    }
+
     pub fn wire(&self) -> &TWire<'a, T> {
         &self.secret
     }
@@ -138,7 +142,7 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
 
 impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> Drop for TSecretHandle<'a, T> {
     fn drop(&mut self) {
-        T::set_from_lit(&self.secret.repr, &self.default.repr, false);
+        self.apply_default();
     }
 }
 
