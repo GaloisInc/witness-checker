@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use log::info;
 use crate::eval::{self, CachingEvaluator};
+use crate::ir::circuit::CircuitExt;
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::context::Context;
@@ -115,14 +117,23 @@ impl<'a> ExecBuilder<'a> {
     }
 
     fn run(mut self, b: &Builder<'a>, exec: &ExecBody) -> Self {
+        let mut counter = 0;
         for item in self.seg_graph_builder.get_order() {
             match item {
                 SegGraphItem::Segment(idx) => self.add_segment(b, exec, idx),
                 SegGraphItem::Network => {
+                    self = unsafe { b.circuit().erase_and_migrate(self) };
+                    info!("seg_graph_builder.build_network");
                     self.seg_graph_builder.build_network(&b);
+                    self = unsafe { b.circuit().erase_and_migrate(self) };
+                    continue;
                 },
             }
-            self = self;
+
+            if counter % 100 == 0 {
+                self = unsafe { b.circuit().erase_and_migrate(self) };
+            }
+            counter += 1;
         }
 
         self
@@ -174,17 +185,33 @@ impl<'a> ExecBuilder<'a> {
 
         let x = {
             let eb = self;
-
-            eb.seg_graph_builder.finish(&eb.cx, b);
-
-            // Some consistency checks involve sorting, which requires that all the relevant
-            // secrets be initialized first.
-            eb.mem.assert_consistent(&eb.cx, b);
-            eb.fetch.assert_consistent(&eb.cx, b);
-
-            (eb.cx, eb.equiv_segments)
+            (eb.cx, eb.equiv_segments, eb.seg_graph_builder, eb.mem, eb.fetch)
         };
-        //let x = b.circuit().erase_and_migrate(x);
+        let x = unsafe { b.circuit().erase_and_migrate(x) };
+
+        let x = {
+            let (cx, equiv_segments, seg_graph_builder, mem, fetch) = x;
+            info!("seg_graph_builder.finish");
+            seg_graph_builder.finish(&cx, b);
+            (cx, equiv_segments, mem, fetch)
+        };
+        let x = unsafe { b.circuit().erase_and_migrate(x) };
+
+        let x = {
+            let (cx, equiv_segments, mem, fetch) = x;
+            info!("mem.assert_consistent");
+            mem.assert_consistent(&cx, b);
+            (cx, equiv_segments, fetch)
+        };
+        let x = unsafe { b.circuit().erase_and_migrate(x) };
+
+        let x = {
+            let (cx, equiv_segments, fetch) = x;
+            info!("fetch.assert_consistent");
+            fetch.assert_consistent(&cx, b);
+            (cx, equiv_segments)
+        };
+        let x = unsafe { b.circuit().erase_and_migrate(x) };
 
         x
     }
