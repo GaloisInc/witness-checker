@@ -162,6 +162,7 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             if seg_def.enter_from_network {
+                // Note that `enter_from_network` is ignored for segment 0.
                 let _g = b.scoped_label("from net");
                 assert!(!sg.from_net.contains_key(&i), "duplicate edge net -> {}", i);
                 sg.from_net.insert(i, b.secret().1);
@@ -287,6 +288,7 @@ impl<'a> SegGraphBuilder<'a> {
                 stack.push(Step::Exit(i));
 
                 let seg = &mut self.segments[i];
+                let num_preds = seg.preds.len();
                 for pred in &mut seg.preds {
                     match pred.src {
                         StateSource::Segment(j) => {
@@ -312,7 +314,7 @@ impl<'a> SegGraphBuilder<'a> {
                     });
                     *pred = Predecessor {
                         src: StateSource::CycleBreak(cb_idx),
-                        live: Liveness::Always,
+                        live: if num_preds == 1 { Liveness::Always } else { pred.live },
                     };
                 }
             }
@@ -414,6 +416,10 @@ impl<'a> SegGraphBuilder<'a> {
     /// Initialize secrets needed for evaluation of intermediate values.
     fn init_secrets(&mut self, b: &Builder<'a>, trace: &[TraceChunk]) {
         // Initialize edge liveness flags.
+
+        // Keep the set of live edges for use when setting CycleBreak states.
+        let mut live_edges = HashSet::new();
+        live_edges.insert(Liveness::Always);
         for (pred, succ) in trace.iter().zip(trace[1..].iter()) {
             let mut src = pred.segment;
             if let Some(ref d) = succ.debug {
@@ -429,6 +435,7 @@ impl<'a> SegGraphBuilder<'a> {
             if let Some(ref edge) = self.edges.get(&(src, dest)) {
                 // `edge` is the liveness flag for the direct edge from `src` to `dest`.
                 edge.set(b, true);
+                live_edges.insert(Liveness::Edge(src, dest));
             } else {
                 // There is no direct edge, so this connection must go through the routing network.
                 // We set the liveness flags for both sides, and record the input/output indices so
@@ -439,6 +446,8 @@ impl<'a> SegGraphBuilder<'a> {
                     .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
                 src_to_net.set(b, true);
                 dest_from_net.set(b, true);
+                live_edges.insert(Liveness::ToNetwork(src));
+                live_edges.insert(Liveness::FromNetwork(dest));
 
                 self.network_conns.push((src, dest));
             }
@@ -450,6 +459,66 @@ impl<'a> SegGraphBuilder<'a> {
             .chain(self.to_net.values());
         for s in it {
             s.apply_default();
+        }
+
+        // Set secrets for all CycleBreak nodes.  For `CycleBreak -> Segment` edges, set the secret
+        // to the segment's initial state; for `Segment -> CycleBreak`, set it to the final state.
+        // Every CycleBreak should be covered by one of these cases; if this doesn't hold, the
+        // trace will likely be marked invalid due to a CycleBreak state being defaulted to the
+        // wrong value.
+
+        let mut set_cycle_breaks = HashSet::new();
+
+        let mut prev_state = self.cpu_init_state.clone();
+        for chunk in trace {
+            let mut init_state = prev_state;
+            if let Some(ref d) = chunk.debug {
+                if let Some(ref state) = d.prev_state {
+                    init_state = state.clone();
+                }
+                if let Some(cycle) = d.cycle {
+                    init_state.cycle = cycle;
+                }
+            }
+
+            for pred in &self.segments[chunk.segment].preds {
+                if !live_edges.contains(&pred.live) {
+                    continue;
+                }
+                match pred.src {
+                    StateSource::CycleBreak(i) => {
+                        if set_cycle_breaks.insert(i) {
+                            self.cycle_breaks[i].secret.set(b, init_state.clone());
+                        }
+                    },
+                    _ => {},
+                }
+            }
+
+            prev_state = chunk.states.last().expect("empty chunk").clone();
+            prev_state.cycle = init_state.cycle + chunk.states.len() as u32;
+        }
+
+        for (i, cbn) in self.cycle_breaks.iter().enumerate() {
+            for pred in &cbn.preds {
+                if !live_edges.contains(&pred.live) {
+                    continue;
+                }
+                match pred.src {
+                    StateSource::Segment(j) => {
+                        if set_cycle_breaks.insert(i) {
+                            let state = trace[j].states.last().expect("empty chunk").clone();
+                            cbn.secret.set(b, state);
+                        }
+                    },
+                    _ => {},
+                }
+            }
+        }
+
+        // Use default values for all unused cycle-break nodes.
+        for cbn in &self.cycle_breaks {
+            cbn.secret.apply_default();
         }
     }
 
@@ -748,68 +817,6 @@ impl<'a> SegGraphBuilder<'a> {
         assert_eq!(start, edge_list.len());
 
 
-        // Find which CycleBreakNode (if any) is present on each edge.
-        let mut edge_cbns = HashMap::new();
-        let mut from_net_cbns = HashMap::new();
-        let mut to_net_cbns = HashMap::new();
-
-        // Look for {CpuInit,Segment,Network} -> CycleBreak -> Segment
-        for (j, seg) in self.segments.iter().enumerate() {
-            for seg_pred in &seg.preds {
-                let cbn = match seg_pred.src {
-                    StateSource::CycleBreak(x) => x,
-                    _ => continue,
-                };
-                for cbn_pred in &self.cycle_breaks[cbn].preds {
-                    match cbn_pred.src {
-                        StateSource::CpuInit => {},
-                        StateSource::Segment(i) => {
-                            assert!(!edge_cbns.contains_key(&(i, j)),
-                                "multiple edges from {} to {}", i, j);
-                            edge_cbns.insert((i, j), cbn);
-                        },
-                        StateSource::Network(_) => {
-                            assert!(!from_net_cbns.contains_key(&j),
-                                "multiple edges from net to {}", j);
-                            from_net_cbns.insert(j, cbn);
-                        },
-                        StateSource::CycleBreak(cbn2) => {
-                            panic!("CycleBreak {} connects directly to CycleBreak {}",
-                                cbn, cbn2);
-                        },
-                    }
-                }
-            }
-        }
-
-        // Look for Segment -> CycleBreak -> Network
-        for net in self.network_inputs.iter() {
-            let cbn = match net.pred.src {
-                StateSource::CycleBreak(x) => x,
-                _ => continue,
-            };
-            for cbn_pred in &self.cycle_breaks[cbn].preds {
-                match cbn_pred.src {
-                    StateSource::CpuInit => {
-                        panic!("CpuInit connects to Network via CycleBreak {}", cbn);
-                    },
-                    StateSource::Segment(i) => {
-                        assert!(!to_net_cbns.contains_key(&i),
-                            "multiple edges from {} to net", i);
-                        to_net_cbns.insert(i, cbn);
-                    },
-                    StateSource::Network(_) => {
-                        panic!("Network connects to Network via CycleBreak {}", cbn);
-                    },
-                    StateSource::CycleBreak(cbn2) => {
-                        panic!("CycleBreak {} connects directly to CycleBreak {}",
-                            cbn, cbn2);
-                    },
-                }
-            }
-        }
-
-
         // Special handling for CpuInit.
 
         // Sanity check: there should be exactly one incoming edge from CpuInit.
@@ -818,45 +825,15 @@ impl<'a> SegGraphBuilder<'a> {
             .filter(|p| p.src == StateSource::CpuInit).count();
         assert_eq!(cpu_init_count, 1);
 
-        // The edge from CpuInit is always live.  If that edge passes through a CycleBreakNode, we
-        // set the secret for that node.
-        for cbn in self.cycle_breaks.iter() {
-            if cbn.preds.iter().any(|p| p.src == StateSource::CpuInit) {
-                cbn.secret.set(b, self.cpu_init_state.clone());
-            }
-        }
-
 
         // Build the final SegGraph
 
-        let mut sg = SegGraph {
-            segs: Vec::with_capacity(self.segments.len()),
-            edges: self.edges.into_iter().map(|(k, _live)| {
-                let state_index = edge_cbns.remove(&k);
-                (k, EdgeSecrets { state_index })
-            }).collect(),
-            edge_states: self.cycle_breaks.into_iter().map(|cbn| cbn.secret).collect(),
+        let sg = SegGraph {
             network: match self.network {
                 NetworkState::Before(_) => panic!("must call build_network() before finish()"),
                 NetworkState::After(net) => net,
             },
         };
-
-        for (idx, sn) in self.segments.into_iter().enumerate() {
-            let mut seg = SegInfo::default();
-
-            seg.from_net = sn.from_net.map(|id| {
-                let state_index = from_net_cbns.remove(&idx);
-                (id, EdgeSecrets { state_index })
-            });
-
-            seg.to_net = sn.to_net.map(|id| {
-                let state_index = from_net_cbns.remove(&idx);
-                (id, EdgeSecrets { state_index })
-            });
-
-            sg.segs.push(seg);
-        }
 
         // `segments` was consumed above.
         // `network_inputs` is no longer needed after `build_network()`.
@@ -894,49 +871,18 @@ pub enum SegGraphItem {
 }
 
 
-struct EdgeSecrets {
-    state_index: Option<usize>,
-}
-
-#[derive(Default)]
-struct SegInfo {
-    from_net: Option<(OutputId, EdgeSecrets)>,
-    to_net: Option<(InputId, EdgeSecrets)>,
-}
-
 pub struct SegGraph<'a> {
-    segs: Vec<SegInfo>,
-    edges: HashMap<(usize, usize), EdgeSecrets>,
-    edge_states: Vec<TSecretHandle<'a, RamState>>,
     network: Routing<'a, RamState>,
 }
 
 impl<'a> SegGraph<'a> {
-    fn make_edge_live_inner(
-        edge_states: &mut [TSecretHandle<'a, RamState>],
-        edge: &EdgeSecrets,
-        b: &Builder<'a>,
-        state: &RamState,
+    pub fn make_edge_live(
+        &mut self,
+        _b: &Builder<'a>,
+        _src: usize,
+        _dest: usize,
+        _state: &RamState,
     ) {
-        if let Some(idx) = edge.state_index {
-            edge_states[idx].set(b, state.clone());
-        }
-    }
-
-    pub fn make_edge_live(&mut self, b: &Builder<'a>, src: usize, dest: usize, state: &RamState) {
-        if let Some(ref edge) = self.edges.get(&(src, dest)) {
-            // Easy case: a direct edge between `src` and `dest`.
-            Self::make_edge_live_inner(&mut self.edge_states, edge, b, state);
-            return;
-        }
-
-        // There is no direct edge, so this connection must go through the routing network.
-        let &(_inp, ref inp_edge) = self.segs[src].to_net.as_ref()
-            .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
-        let &(_out, ref out_edge) = self.segs[dest].from_net.as_ref()
-            .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
-        Self::make_edge_live_inner(&mut self.edge_states, inp_edge, b, state);
-        Self::make_edge_live_inner(&mut self.edge_states, out_edge, b, state);
     }
 
     pub fn finish(self, b: &Builder<'a>) {
