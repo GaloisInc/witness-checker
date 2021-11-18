@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::iter;
-use std::marker::PhantomData;
 use std::mem;
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
@@ -108,6 +107,8 @@ pub struct SegGraphBuilder<'a> {
     cpu_init_state: RamState,
     cpu_init_state_wire: TWire<'a, RamState>,
     cpu_init_mem: Counted<KnownMem<'a>>,
+
+    panic_on_drop: PanicOnDrop,
 }
 
 impl<'a> SegGraphBuilder<'a> {
@@ -135,6 +136,8 @@ impl<'a> SegGraphBuilder<'a> {
             cpu_init_state: cpu_init_state.clone(),
             cpu_init_state_wire: b.lit(cpu_init_state),
             cpu_init_mem: Counted::new(),
+
+            panic_on_drop: PanicOnDrop::new(),
         };
 
         let network = match sg.network {
@@ -727,7 +730,7 @@ impl<'a> SegGraphBuilder<'a> {
         self.network = NetworkState::After(outputs);
     }
 
-    pub fn finish(self, cx: &Context<'a>, b: &Builder<'a>) -> SegGraph<'a> {
+    pub fn finish(mut self, cx: &Context<'a>, b: &Builder<'a>) {
         let _g = b.scoped_label("seg_graph/finish");
         // Add equality assertions to constrain the CycleBreakNode secrets.  We do this first
         // because the later steps involve dismantling `self` to extract its `TSecretHandle`s.
@@ -828,16 +831,7 @@ impl<'a> SegGraphBuilder<'a> {
         assert_eq!(cpu_init_count, 1);
 
 
-        // Build the final SegGraph
-
-        // `segments` was consumed above.
-        // `network_inputs` is no longer needed after `build_network()`.
-        // `edges` was consumed above.
-        // `from_net` is not needed, as the secret flags there were set in `new()`.
-        // `to_net` is not needed, as the secret flags there were set in `new()`.
-        // `network` was consumed above.
-
-        SegGraph { _marker: PhantomData }
+        self.panic_on_drop.defuse();
     }
 }
 
@@ -866,21 +860,24 @@ pub enum SegGraphItem {
 }
 
 
-pub struct SegGraph<'a> {
-    _marker: PhantomData<TWire<'a, u8>>,
+#[derive(Debug, Migrate)]
+struct PanicOnDrop {
+    defused: bool,
 }
 
-impl<'a> SegGraph<'a> {
-    pub fn make_edge_live(
-        &mut self,
-        _b: &Builder<'a>,
-        _src: usize,
-        _dest: usize,
-        _state: &RamState,
-    ) {
+impl PanicOnDrop {
+    pub fn new() -> PanicOnDrop {
+        PanicOnDrop { defused: false }
     }
 
-    pub fn finish(self, _b: &Builder<'a>) {
+    pub fn defuse(&mut self) {
+        self.defused = true;
+    }
+}
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        assert!(self.defused, "must call finish() before dropping SegGraphBuilder");
     }
 }
 

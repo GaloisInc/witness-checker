@@ -24,7 +24,6 @@ pub struct ExecBuilder<'a> {
     seg_graph_builder: SegGraphBuilder<'a>,
     segments_map: HashMap<usize, Segment<'a>>,
     segments: Vec<Option<Segment<'a>>>,
-    seg_graph_live_edges: Vec<(usize, usize, RamState)>,
 
     // These fields come last because they contain caches keyed on `Wire`s.  On migration, only
     // wires that were used during the migration of some previous field will be kept in the cache.
@@ -82,7 +81,6 @@ impl<'a> ExecBuilder<'a> {
                 b, &exec.segments, &exec.params, init_state, &exec.trace),
             segments_map: HashMap::new(),
             segments: Vec::new(),
-            seg_graph_live_edges: Vec::new(),
 
             cx,
             ev: CachingEvaluator::new()
@@ -120,7 +118,6 @@ impl<'a> ExecBuilder<'a> {
 
         let mut cycle = 0;
         let mut prev_state = self.init_state.clone();
-        let mut prev_segment = None;
         for chunk in &exec.trace {
             if let Some(ref debug) = chunk.debug {
                 if let Some(c) = debug.cycle {
@@ -129,12 +126,6 @@ impl<'a> ExecBuilder<'a> {
                 if let Some(ref s) = debug.prev_state {
                     prev_state = s.clone();
                 }
-                if debug.clear_prev_segment {
-                    prev_segment = None;
-                }
-                if let Some(idx) = debug.prev_segment {
-                    prev_segment = Some(idx);
-                }
             }
 
             let seg = self.segments[chunk.segment].as_mut()
@@ -142,12 +133,6 @@ impl<'a> ExecBuilder<'a> {
             assert_eq!(seg.idx, chunk.segment);
             seg.set_states(b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
             seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
-
-            if let Some(prev_segment) = prev_segment {
-                self.seg_graph_live_edges.push(
-                    (prev_segment, chunk.segment, prev_state.clone()));
-            }
-            prev_segment = Some(chunk.segment);
 
             cycle += chunk.states.len() as u32;
             if chunk.states.len() > 0 {
@@ -204,11 +189,7 @@ impl<'a> ExecBuilder<'a> {
                 eb.expect_zero,
             );
 
-            let mut seg_graph = eb.seg_graph_builder.finish(&eb.cx, b);
-            for (src, dest, state) in eb.seg_graph_live_edges {
-                seg_graph.make_edge_live(b, src, dest, &state);
-            }
-            seg_graph.finish(b);
+            eb.seg_graph_builder.finish(&eb.cx, b);
 
             // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are
             // set before we move on.
