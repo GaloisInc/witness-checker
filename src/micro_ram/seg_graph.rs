@@ -48,8 +48,6 @@ struct Predecessor {
 struct SegmentNode<'a> {
     /// The predecessors of this segment.
     preds: Vec<Predecessor>,
-    /// A cache for storing the initial state constructed from `preds`.
-    init_state_cache: Option<TWire<'a, RamState>>,
     /// The final state, as provided via `set_final`.
     final_state: Option<TWire<'a, RamState>>,
 
@@ -464,20 +462,17 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     /// Obtain the initial state to use for a given segment.
-    pub fn get_initial(&mut self, b: &Builder<'a>, idx: usize) -> &TWire<'a, RamState> {
+    pub fn get_initial(&mut self, b: &Builder<'a>, idx: usize) -> TWire<'a, RamState> {
         let _g = b.scoped_label(format_args!("seg_graph/get_initial/{}", idx));
-        if self.segments[idx].init_state_cache.is_none() {
-            let mut it = self.segments[idx].preds.iter();
-            let first_pred = it.next()
-                .unwrap_or_else(|| panic!("segment {} has no predecessors", idx));
-            let first = self.get_predecessor(b, *first_pred);
-            let state = it.fold(first, |acc, pred| {
-                let state = self.get_predecessor(b, *pred);
-                b.mux(state.live, state, acc)
-            });
-            self.segments[idx].init_state_cache = Some(state);
-        }
-        self.segments[idx].init_state_cache.as_ref().unwrap()
+        let mut it = self.segments[idx].preds.iter();
+        let first_pred = it.next()
+            .unwrap_or_else(|| panic!("segment {} has no predecessors", idx));
+        let first = self.get_predecessor(b, *first_pred);
+        let state = it.fold(first, |acc, pred| {
+            let state = self.get_predecessor(b, *pred);
+            b.mux(state.live, state, acc)
+        });
+        state
     }
 
     /// Set the final state for a given segment, which may be needed to compute the initial state
