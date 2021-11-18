@@ -7,7 +7,7 @@ use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
-use crate::micro_ram::types::{self, RamState, Params};
+use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
 use crate::routing::{Routing, RoutingBuilder, InputId, OutputId};
 
 
@@ -98,8 +98,10 @@ pub struct SegGraphBuilder<'a> {
     from_net: HashMap<usize, TSecretHandle<'a, bool>>,
     to_net: HashMap<usize, TSecretHandle<'a, bool>>,
 
-    // The state of routing network construction.
+    /// The state of routing network construction.
     network: NetworkState<'a>,
+    /// Paths that must be connected once the routing network has been constructed.
+    network_conns: Vec<(usize, usize)>,
 
     default_state: RamState,
     cpu_init_state: RamState,
@@ -113,6 +115,7 @@ impl<'a> SegGraphBuilder<'a> {
         seg_defs: &[types::Segment],
         params: &Params,
         cpu_init_state: RamState,
+        trace: &[TraceChunk],
     ) -> SegGraphBuilder<'a> {
         let _g = b.scoped_label("seg_graph");
         let mut sg = SegGraphBuilder {
@@ -125,6 +128,7 @@ impl<'a> SegGraphBuilder<'a> {
             to_net: HashMap::new(),
 
             network: NetworkState::Before(RoutingBuilder::new()),
+            network_conns: Vec::new(),
 
             default_state: RamState::default_with_regs(params.num_regs),
             cpu_init_state: cpu_init_state.clone(),
@@ -180,12 +184,17 @@ impl<'a> SegGraphBuilder<'a> {
                     },
                     segment_index: i,
                 });
+                // Note we don't set `sg.segments[i].to_net`, since `routing.add_input` requires a
+                // wire for the input to the routing network.  Instead, the `to_net` field is set
+                // during `build_network()`.
             }
         }
 
         sg.break_cycles(b, params);
         sg.mark_unreachable();
         sg.count_final_mem_users();
+
+        sg.init_secrets(b, trace);
 
         sg
     }
@@ -402,6 +411,42 @@ impl<'a> SegGraphBuilder<'a> {
         });
     }
 
+    /// Initialize secrets needed for evaluation of intermediate values.
+    fn init_secrets(&mut self, b: &Builder<'a>, trace: &[TraceChunk]) {
+        // Initialize edge liveness flags.
+        for (pred, succ) in trace.iter().zip(trace[1..].iter()) {
+            let mut src = pred.segment;
+            if let Some(ref d) = succ.debug {
+                if d.clear_prev_segment {
+                    continue;
+                }
+                if let Some(prev_segment) = d.prev_segment {
+                    src = prev_segment;
+                }
+            }
+            let dest = succ.segment;
+
+            if let Some(ref edge) = self.edges.get(&(src, dest)) {
+                // `edge` is the liveness flag for the direct edge from `src` to `dest`.
+                edge.set(b, true);
+            } else {
+                // There is no direct edge, so this connection must go through the routing network.
+                // We set the liveness flags for both sides, and record the input/output indices so
+                // the path through the network can be enabled once the network is constructed.
+                let src_to_net = self.to_net.get(&src)
+                    .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
+                let dest_from_net = self.from_net.get(&dest)
+                    .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
+                src_to_net.set(b, true);
+                dest_from_net.set(b, true);
+
+                self.network_conns.push((src, dest));
+            }
+        }
+
+        // TODO: set remaining liveness flags to their defaults
+    }
+
     /// Get the order in which to construct the segment circuits.  This ordering is guaranteed to
     /// respect dependencies between the segments.  Specifically, calling `get_initial` on element
     /// `k` of the ordering is guaranteed to succeed if `set_final` has been called on all elements
@@ -592,7 +637,17 @@ impl<'a> SegGraphBuilder<'a> {
         }
 
         let default = self.default_state.clone();
-        self.network = NetworkState::After(routing.finish_with_default(b, default));
+        let mut routing = routing.finish_with_default(b, default);
+
+        for &(src, dest) in &self.network_conns {
+            let src_input = self.segments[src].to_net
+                .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
+            let dest_output = self.segments[dest].from_net
+                .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
+            routing.connect(src_input, dest_output);
+        }
+
+        self.network = NetworkState::After(routing);
     }
 
     pub fn finish(self, cx: &Context<'a>, b: &Builder<'a>) -> SegGraph<'a> {
@@ -770,9 +825,9 @@ impl<'a> SegGraphBuilder<'a> {
 
         let mut sg = SegGraph {
             segs: Vec::with_capacity(self.segments.len()),
-            edges: self.edges.into_iter().map(|(k, live)| {
+            edges: self.edges.into_iter().map(|(k, _live)| {
                 let state_index = edge_cbns.remove(&k);
-                (k, EdgeSecrets { live, state_index })
+                (k, EdgeSecrets { state_index })
             }).collect(),
             edge_states: self.cycle_breaks.into_iter().map(|cbn| cbn.secret).collect(),
             network: match self.network {
@@ -781,25 +836,17 @@ impl<'a> SegGraphBuilder<'a> {
             },
         };
 
-        let mut from_net_edges = self.from_net;
-        let mut to_net_edges = self.to_net;
         for (idx, sn) in self.segments.into_iter().enumerate() {
             let mut seg = SegInfo::default();
 
             seg.from_net = sn.from_net.map(|id| {
-                let live = from_net_edges.remove(&idx).unwrap_or_else(|| panic!(
-                    "impossible: missing liveness flag for segment {} from_net", idx,
-                ));
                 let state_index = from_net_cbns.remove(&idx);
-                (id, EdgeSecrets { live, state_index })
+                (id, EdgeSecrets { state_index })
             });
 
             seg.to_net = sn.to_net.map(|id| {
-                let live = to_net_edges.remove(&idx).unwrap_or_else(|| panic!(
-                    "impossible: missing liveness flag for segment {} to_net", idx,
-                ));
                 let state_index = from_net_cbns.remove(&idx);
-                (id, EdgeSecrets { live, state_index })
+                (id, EdgeSecrets { state_index })
             });
 
             sg.segs.push(seg);
@@ -808,12 +855,8 @@ impl<'a> SegGraphBuilder<'a> {
         // `segments` was consumed above.
         // `network_inputs` is no longer needed after `build_network()`.
         // `edges` was consumed above.
-        assert!(from_net_edges.len() == 0,
-            "found {} unused from_net edges: {:?}",
-            from_net_edges.len(), from_net_edges.keys().collect::<Vec<_>>());
-        assert!(to_net_edges.len() == 0,
-            "found {} unused to_net edges: {:?}",
-            to_net_edges.len(), to_net_edges.keys().collect::<Vec<_>>());
+        // `from_net` is not needed, as the secret flags there were set in `new()`.
+        // `to_net` is not needed, as the secret flags there were set in `new()`.
         // `network` was consumed above.
 
         sg
@@ -845,20 +888,19 @@ pub enum SegGraphItem {
 }
 
 
-struct EdgeSecrets<'a> {
-    live: TSecretHandle<'a, bool>,
+struct EdgeSecrets {
     state_index: Option<usize>,
 }
 
 #[derive(Default)]
-struct SegInfo<'a> {
-    from_net: Option<(OutputId, EdgeSecrets<'a>)>,
-    to_net: Option<(InputId, EdgeSecrets<'a>)>,
+struct SegInfo {
+    from_net: Option<(OutputId, EdgeSecrets)>,
+    to_net: Option<(InputId, EdgeSecrets)>,
 }
 
 pub struct SegGraph<'a> {
-    segs: Vec<SegInfo<'a>>,
-    edges: HashMap<(usize, usize), EdgeSecrets<'a>>,
+    segs: Vec<SegInfo>,
+    edges: HashMap<(usize, usize), EdgeSecrets>,
     edge_states: Vec<TSecretHandle<'a, RamState>>,
     network: Routing<'a, RamState>,
 }
@@ -866,11 +908,10 @@ pub struct SegGraph<'a> {
 impl<'a> SegGraph<'a> {
     fn make_edge_live_inner(
         edge_states: &mut [TSecretHandle<'a, RamState>],
-        edge: &EdgeSecrets<'a>,
+        edge: &EdgeSecrets,
         b: &Builder<'a>,
         state: &RamState,
     ) {
-        edge.live.set(b, true);
         if let Some(idx) = edge.state_index {
             edge_states[idx].set(b, state.clone());
         }
@@ -884,11 +925,10 @@ impl<'a> SegGraph<'a> {
         }
 
         // There is no direct edge, so this connection must go through the routing network.
-        let &(inp, ref inp_edge) = self.segs[src].to_net.as_ref()
+        let &(_inp, ref inp_edge) = self.segs[src].to_net.as_ref()
             .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
-        let &(out, ref out_edge) = self.segs[dest].from_net.as_ref()
+        let &(_out, ref out_edge) = self.segs[dest].from_net.as_ref()
             .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
-        self.network.connect(inp, out);
         Self::make_edge_live_inner(&mut self.edge_states, inp_edge, b, state);
         Self::make_edge_live_inner(&mut self.edge_states, out_edge, b, state);
     }

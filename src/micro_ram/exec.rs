@@ -79,7 +79,7 @@ impl<'a> ExecBuilder<'a> {
             mem: Memory::new(),
             fetch: Fetch::new(b, &exec.program),
             seg_graph_builder: SegGraphBuilder::new(
-                b, &exec.segments, &exec.params, init_state),
+                b, &exec.segments, &exec.params, init_state, &exec.trace),
             segments_map: HashMap::new(),
             segments: Vec::new(),
             seg_graph_live_edges: Vec::new(),
