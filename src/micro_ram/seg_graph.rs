@@ -2,13 +2,14 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::iter;
+use std::marker::PhantomData;
 use std::mem;
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
-use crate::routing::{Routing, RoutingBuilder, InputId, OutputId};
+use crate::routing::{RoutingBuilder, InputId, OutputId};
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
@@ -83,7 +84,7 @@ enum NetworkState<'a> {
     /// directly to the routing network as inputs.
     Before(RoutingBuilder<'a, RamState>),
     /// We have built the routing network.  
-    After(Routing<'a, RamState>),
+    After(Vec<TWire<'a, RamState>>),
 }
 
 #[derive(Migrate)]
@@ -612,7 +613,7 @@ impl<'a> SegGraphBuilder<'a> {
             StateSource::Network(id) => match self.network {
                 NetworkState::Before(_) =>
                     panic!("tried to access {:?} before building network", id),
-                NetworkState::After(ref net) => &net[id],
+                NetworkState::After(ref net) => &net[id.into_raw()],
             },
             StateSource::CycleBreak(idx) =>
                 self.cycle_breaks[idx].secret.wire(),
@@ -722,7 +723,8 @@ impl<'a> SegGraphBuilder<'a> {
             routing.connect(src_input, dest_output);
         }
 
-        self.network = NetworkState::After(routing);
+        let outputs = routing.finish(b);
+        self.network = NetworkState::After(outputs);
     }
 
     pub fn finish(self, cx: &Context<'a>, b: &Builder<'a>) -> SegGraph<'a> {
@@ -828,13 +830,6 @@ impl<'a> SegGraphBuilder<'a> {
 
         // Build the final SegGraph
 
-        let sg = SegGraph {
-            network: match self.network {
-                NetworkState::Before(_) => panic!("must call build_network() before finish()"),
-                NetworkState::After(net) => net,
-            },
-        };
-
         // `segments` was consumed above.
         // `network_inputs` is no longer needed after `build_network()`.
         // `edges` was consumed above.
@@ -842,7 +837,7 @@ impl<'a> SegGraphBuilder<'a> {
         // `to_net` is not needed, as the secret flags there were set in `new()`.
         // `network` was consumed above.
 
-        sg
+        SegGraph { _marker: PhantomData }
     }
 }
 
@@ -872,7 +867,7 @@ pub enum SegGraphItem {
 
 
 pub struct SegGraph<'a> {
-    network: Routing<'a, RamState>,
+    _marker: PhantomData<TWire<'a, u8>>,
 }
 
 impl<'a> SegGraph<'a> {
@@ -885,8 +880,7 @@ impl<'a> SegGraph<'a> {
     ) {
     }
 
-    pub fn finish(self, b: &Builder<'a>) {
-        self.network.finish(b);
+    pub fn finish(self, _b: &Builder<'a>) {
     }
 }
 
