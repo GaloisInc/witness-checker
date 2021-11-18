@@ -7,7 +7,7 @@ use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{Memory, EquivSegments};
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
-use crate::micro_ram::trace::{SegmentBuilder, Segment};
+use crate::micro_ram::trace::SegmentBuilder;
 use crate::micro_ram::types::{ExecBody, RamState};
 
 
@@ -22,8 +22,9 @@ pub struct ExecBuilder<'a> {
     mem: Memory<'a>,
     fetch: Fetch<'a>,
     seg_graph_builder: SegGraphBuilder<'a>,
-    segments_map: HashMap<usize, Segment<'a>>,
-    segments: Vec<Option<Segment<'a>>>,
+    /// Map from segment index to the index of the trace chunk that uses that segment, along with
+    /// the initial cycle of that chunk.
+    seg_user_map: HashMap<usize, (usize, u32)>,
 
     // These fields come last because they contain caches keyed on `Wire`s.  On migration, only
     // wires that were used during the migration of some previous field will be kept in the cache.
@@ -79,8 +80,7 @@ impl<'a> ExecBuilder<'a> {
             fetch: Fetch::new(b, &exec.program),
             seg_graph_builder: SegGraphBuilder::new(
                 b, &exec.segments, &exec.params, init_state, &exec.trace),
-            segments_map: HashMap::new(),
-            segments: Vec::new(),
+            seg_user_map: HashMap::new(),
 
             cx,
             ev: CachingEvaluator::new()
@@ -98,53 +98,37 @@ impl<'a> ExecBuilder<'a> {
             kmem.init_segment(seg, &values);
         }
         self.seg_graph_builder.set_cpu_init_mem(kmem);
+
+        let mut cycle = 0;
+        for (i, chunk) in exec.trace.iter().enumerate() {
+            if let Some(c) = chunk.debug.as_ref().and_then(|d| d.cycle) {
+                cycle = c;
+            }
+
+            let old = self.seg_user_map.insert(chunk.segment, (i, cycle));
+            assert!(old.is_none());
+
+            cycle += chunk.states.len() as u32;
+        }
+
         self
     }
 
     fn run(mut self, b: &Builder<'a>, exec: &ExecBody) -> Self {
         for item in self.seg_graph_builder.get_order() {
-            self.add_segment(b, exec, item);
+            match item {
+                SegGraphItem::Segment(idx) => self.add_segment(b, exec, idx),
+                SegGraphItem::Network => {
+                    self.seg_graph_builder.build_network(&b);
+                },
+            }
             self = self;
-        }
-
-        // Segments are wrapped in `Option`, with `None` indicating unreachable segments for which
-        // no circuit was generated.
-        self.segments = (0 .. exec.segments.len()).map(|i| {
-            self.segments_map.remove(&i)
-        }).collect::<Vec<Option<_>>>();
-        debug_assert!(self.segments_map.len() == 0);
-
-        // Fill in advice and other secrets.
-
-        let mut cycle = 0;
-        let mut prev_state = self.init_state.clone();
-        for chunk in &exec.trace {
-            if let Some(ref debug) = chunk.debug {
-                if let Some(c) = debug.cycle {
-                    cycle = c;
-                }
-                if let Some(ref s) = debug.prev_state {
-                    prev_state = s.clone();
-                }
-            }
-
-            let seg = self.segments[chunk.segment].as_mut()
-                .unwrap_or_else(|| panic!("trace uses unreachable segment {}", chunk.segment));
-            assert_eq!(seg.idx, chunk.segment);
-            seg.set_states(b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
-            seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
-
-            cycle += chunk.states.len() as u32;
-            if chunk.states.len() > 0 {
-                prev_state = chunk.states.last().unwrap().clone();
-                prev_state.cycle = cycle;
-            }
         }
 
         self
     }
 
-    fn add_segment(&mut self, b: &Builder<'a>, exec: &ExecBody, item: SegGraphItem) {
+    fn add_segment(&mut self, b: &Builder<'a>, exec: &ExecBody, idx: usize) {
         let mut segment_builder = SegmentBuilder {
             cx: &self.cx,
             b: b,
@@ -156,22 +140,30 @@ impl<'a> ExecBuilder<'a> {
             check_steps: self.check_steps,
         };
 
-        let idx = match item {
-            SegGraphItem::Segment(idx) => idx,
-            SegGraphItem::Network => {
-                self.seg_graph_builder.build_network(&b);
-                return;
-            },
-        };
-
         let seg_def = &exec.segments[idx];
         let prev_state = self.seg_graph_builder.get_initial(&b, idx).clone();
         let prev_kmem = self.seg_graph_builder.take_initial_mem(idx);
-        let (seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem);
+        let (mut seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem);
         self.seg_graph_builder.set_final(idx, seg.final_state().clone());
         self.seg_graph_builder.set_final_mem(idx, kmem);
-        assert!(!self.segments_map.contains_key(&idx));
-        self.segments_map.insert(idx, seg);
+
+        if let Some(&(chunk_idx, cycle)) = self.seg_user_map.get(&idx) {
+            let chunk = &exec.trace[chunk_idx];
+            let debug_prev_state = chunk.debug.as_ref().and_then(|d| d.prev_state.as_ref());
+            let prev_state = if let Some(s) = debug_prev_state {
+                s
+            } else if chunk_idx == 0 {
+                &self.init_state
+            } else {
+                exec.trace[chunk_idx - 1].states.last().expect("empty chunk")
+            };
+            seg.set_states(b, &exec.program, cycle, prev_state, &chunk.states, &exec.advice);
+            seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
+
+            if chunk_idx == exec.trace.len() - 1 {
+                check_last(&self.cx, b, seg.final_state(), self.expect_zero);
+            }
+        }
     }
 
     fn finish(self, b: &Builder<'a>, _exec: &ExecBody) -> (Context<'a>, EquivSegments<'a>) {
@@ -181,19 +173,9 @@ impl<'a> ExecBuilder<'a> {
         // to the next is `x`, and `x` is always migrated as a unit.
 
         let x = {
-            let mut eb = self;
-
-            check_last(
-                &eb.cx, b,
-                eb.segments.last().unwrap().as_ref().unwrap().final_state(),
-                eb.expect_zero,
-            );
+            let eb = self;
 
             eb.seg_graph_builder.finish(&eb.cx, b);
-
-            // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are
-            // set before we move on.
-            eb.segments.clear();
 
             // Some consistency checks involve sorting, which requires that all the relevant
             // secrets be initialized first.
