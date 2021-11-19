@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
+use std::marker::PhantomData;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
     self, Ty, Wire, Secret, Erased, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp,
-    CmpOp,
+    CmpOp, GateValue,
 };
 
 use self::Value::Single;
@@ -124,10 +125,8 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
 /// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
 /// sharing.
 pub struct CachingEvaluator<'a, S> {
-    /// We cache both success and failure results.  Failures can be invalidated if the `Secret`
-    /// that caused the failure later is assigned a value.
-    cache: HashMap<Wire<'a>, EvalResult<'a>>,
     secret_eval: S,
+    _marker: PhantomData<Wire<'a>>,
 }
 
 /// Result of evaluating a `Wire`.  Evaluation produces a `Value` on success.  It fails if the
@@ -160,9 +159,15 @@ impl<'a> Error<'a> {
 impl<'a, S: Default> CachingEvaluator<'a, S> {
     pub fn new() -> Self {
         CachingEvaluator {
-            cache: HashMap::new(),
             secret_eval: S::default(),
+            _marker: PhantomData,
         }
+    }
+}
+
+impl<'a, S> CachingEvaluator<'a, S> {
+    fn has_valid_entry(&self, w: Wire<'a>) -> bool {
+        w.value.is_valid()
     }
 }
 
@@ -173,24 +178,9 @@ impl<'a, 'b, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, S> {
         self,
         v: &mut V,
     ) -> CachingEvaluator<'b, S::Output> {
-        let cache = self.cache.into_iter()
-            .filter_map(|(w, val)| Some((v.visit_wire_weak(w)?, v.visit(val))))
-            .collect();
         CachingEvaluator {
-            cache,
             secret_eval: v.visit(self.secret_eval),
-        }
-    }
-}
-
-impl<'a, S> CachingEvaluator<'a, S> {
-    fn has_valid_entry(&self, w: Wire<'a>) -> bool {
-        match self.cache.get(&w) {
-            Some(x) => match x {
-                Ok(_) => true,
-                Err(e) => e.is_valid(),
-            },
-            None => false,
+            _marker: PhantomData,
         }
     }
 }
@@ -207,17 +197,12 @@ impl<'a, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, S>
 
 impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
     fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a> {
-        if let Some(result) = self.cache.get(&w) {
-            match *result {
-                Ok(ref x) => return Ok(x.clone()),
-                Err(e) => {
-                    if e.is_valid() {
-                        return Err(e);
-                    }
-                    // Otherwise, the condition that caused the error (usually `UnknownSecret`) has
-                    // changed since the cached evaluation occurred, so the cache entry is invalid.
-                },
-            }
+        match w.value.get() {
+            GateValue::Unset => {},
+            GateValue::Public(v) |
+            GateValue::Secret(v) => return Ok(v),
+            GateValue::NeedsSecret(s) => return Err(Error::UnknownSecret(s)),
+            GateValue::Failed => return Err(Error::Other),
         }
 
         let order = circuit::walk_wires_filtered(
@@ -226,9 +211,19 @@ impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
         ).collect::<Vec<_>>();
         for w in order {
             let result = eval_gate(self, w.kind);
-            self.cache.insert(w, result.clone());
+            w.value.set(match result {
+                Ok(v) => GateValue::Secret(v),
+                Err(Error::UnknownSecret(s)) => GateValue::NeedsSecret(s),
+                Err(Error::Other) => GateValue::Failed,
+            });
         }
-        self.cache.get(&w).unwrap().clone()
+        match w.value.get() {
+            GateValue::Unset => unreachable!(),
+            GateValue::Public(v) |
+            GateValue::Secret(v) => return Ok(v),
+            GateValue::NeedsSecret(s) => return Err(Error::UnknownSecret(s)),
+            GateValue::Failed => return Err(Error::Other),
+        }
     }
 
     fn eval_gadget(&mut self, k: GadgetKindRef<'a>, ws: &[Wire<'a>]) -> EvalResult<'a> {

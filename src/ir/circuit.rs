@@ -18,7 +18,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
-use std::ops::{Deref, Range};
+use std::ops::{Deref, DerefMut, Range};
 use std::slice;
 use std::str;
 use bumpalo::Bump;
@@ -221,6 +221,7 @@ impl<'a> CircuitBase<'a> {
             ty: kind.ty(self),
             kind,
             label: self.current_label.get(),
+            value: Unhashed::default(),
         }))
     }
 
@@ -947,7 +948,7 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
             return new;
         }
 
-        let new = Wire(self.new_circuit.intern_gate(self.visit(*w)));
+        let new = Wire(self.new_circuit.intern_gate(self.visit((*w).clone())));
         self.wire_map.insert(w, new);
         new
     }
@@ -1339,7 +1340,96 @@ impl Ty<'_> {
 }
 
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Unhashed<T>(pub T);
+
+impl<T> PartialEq for Unhashed<T> {
+    fn eq(&self, other: &Self) -> bool { true }
+    fn ne(&self, other: &Self) -> bool { false }
+}
+
+impl<T> Eq for Unhashed<T> {}
+
+impl<T> Hash for Unhashed<T> {
+    fn hash<H: Hasher>(&self, _state: &mut H) {
+        // No-op
+    }
+}
+
+impl<T> Deref for Unhashed<T> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.0 }
+}
+
+impl<T> DerefMut for Unhashed<T> {
+    fn deref_mut(&mut self) -> &mut T { &mut self.0 }
+}
+
+impl<'a, 'b, T: Migrate<'a, 'b>> Migrate<'a, 'b> for Unhashed<T> {
+    type Output = Unhashed<T::Output>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Unhashed<T::Output> {
+        Unhashed(v.visit(self.0))
+    }
+}
+
+
+#[derive(Clone, PartialEq, Eq, Debug, Migrate)]
+pub enum GateValue<'a> {
+    Unset,
+    Public(eval::Value),
+    Secret(eval::Value),
+    NeedsSecret(Secret<'a>),
+    Failed,
+}
+
+impl<'a> Default for GateValue<'a> {
+    fn default() -> GateValue<'a> { GateValue::Unset }
+}
+
+#[derive(Default)]
+pub struct GateValueCell<'a>(Cell<GateValue<'a>>);
+
+impl<'a> GateValueCell<'a> {
+    pub fn get(&self) -> GateValue<'a> {
+        let x = self.0.replace(GateValue::Unset);
+        self.0.set(x.clone());
+        x
+    }
+
+    pub fn set(&self, x: GateValue<'a>) {
+        self.0.set(x);
+    }
+
+    pub fn is_valid(&self) -> bool {
+        let x = self.0.replace(GateValue::Unset);
+        let r = match x {
+            GateValue::Unset => false,
+            GateValue::Public(_) => true,
+            GateValue::Secret(_) => true,
+            GateValue::NeedsSecret(s) => !s.has_val(),
+            GateValue::Failed => true,
+        };
+        self.0.set(x);
+        r
+    }
+}
+
+impl<'a> Clone for GateValueCell<'a> {
+    fn clone(&self) -> Self {
+        GateValueCell(Cell::new(self.get()))
+    }
+}
+
+impl<'a> fmt::Debug for GateValueCell<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let x = self.0.replace(GateValue::Unset);
+        let r = x.fmt(f);
+        self.0.set(x);
+        r
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
     /// Cached output type of this gate.  Computed when the `Gate` is created.  The result is
     /// stored here so that `GateKind::ty` runs in constant time, rather than potentially having
@@ -1347,6 +1437,7 @@ pub struct Gate<'a> {
     pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
     pub label: &'a str,
+    pub value: Unhashed<GateValueCell<'a>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -1499,6 +1590,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Gate<'a> {
             ty: v.visit(self.ty),
             kind: v.visit(self.kind),
             label: v.new_circuit().intern_str(self.label),
+            value: v.visit(self.value),
         }
     }
 }
@@ -1529,6 +1621,13 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 Gadget(gk, ws)
             },
         }
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for GateValueCell<'a> {
+    type Output = GateValueCell<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> GateValueCell<'b> {
+        GateValueCell(Cell::new(v.visit(self.0.into_inner())))
     }
 }
 
