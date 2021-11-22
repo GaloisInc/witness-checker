@@ -86,8 +86,8 @@ define_versions! {
     (0,1,4,1) = { PublicPc PreAdvice HeapInit },
     // 0.1.5.0 adds an upper-bound operand to the `advise` instruction.
     (0,1,5,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound },
-    // 0.1.5.0 adds multiple executions and named memory segments. 
-    (0,1,6,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound MultiExec},
+    // 0.1.6.0 adds multiple executions and named memory segments. 
+    (0,1,6,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound},
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {

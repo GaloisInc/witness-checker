@@ -1241,7 +1241,7 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
 
 
 #[derive(Clone, Debug)]
-pub struct VersionedMultiExec{ // Should this go in parse.rs?
+pub struct VersionedMultiExec{
     pub version: Version,
     /// The set of all enabled features.  This is built by combining `declared_features` with the
     /// baseline features implied by `version`.
