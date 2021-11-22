@@ -1253,13 +1253,13 @@ pub struct VersionedMultiExec{ // Should this go in parse.rs?
 }
 
 impl VersionedMultiExec {
-    // Checks if all internal executions have the feature.
-    // All executions should have the same features, but it is not enforced here.
+    // Checks if the executions have the given feature.
+    // All internal, executions have the same features by construction.
     pub fn has_feature(&self, feature: Feature) -> bool {
         self.features.contains(&feature)
     }
     pub fn validate(&self) -> Result<(), String> {
-	self.inner.validate(&self.features)
+        self.inner.validate(&self.features)
     }
 }
 
@@ -1271,10 +1271,10 @@ pub struct MultiExec {
 
 impl MultiExec {
     pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
-	for (_, exec) in self.execs.iter() { 
-	    exec.validate(features).unwrap();
-	}
-	Ok(())
+        for (_, exec) in self.execs.iter() { 
+            exec.validate(features).unwrap();
+        }
+        Ok(())
     }
 }
 

@@ -30,50 +30,50 @@ impl<'a> Memory<'a> {
     }
 
     pub fn init_segment(&mut self
-			, b: &Builder<'a>
-			, seg: &MemSegment
-			, equivs: &mut HashMap<String, usize>
-			, equiv_segments: &mut Vec<Option<Vec<TWire<'a,u64>>>> ) {
+                        , b: &Builder<'a>
+                        , seg: &MemSegment
+                        , equivs: &mut HashMap<String, usize>
+                        , equiv_segments: &mut Vec<Option<Vec<TWire<'a,u64>>>> ) {
         self.ports.reserve(seg.len as usize);
 
-	
+        
         // Get the values of the word.  `data` is implicitly zero-padded out to
         // `seg.len`, to support `.bss`-style zero-initialized segments.  For secret segments
         // in verifier mode, `seg.data` is always empty, so the `value` is zero (but unused).
-	let values:Vec<u64> = (0..seg.len).map(|i| seg.data.get(i as usize).cloned().unwrap_or(0)).collect(); 
+        let values:Vec<u64> = (0..seg.len).map(|i| seg.data.get(i as usize).cloned().unwrap_or(0)).collect(); 
 
-	// Then create the wires. Depends on whether the
-	// segment is part of an qeuivalence class
-	let mem_wires:Vec<TWire<u64>> = {
-	    let wires:Vec<TWire<u64>>;
-	    match equivs.get(&seg.name) {
-		Some(&i) => {
-		    match &equiv_segments[i] {
-			Some (wires1) => {
-			    //TODO: check equality with supplied values.
-			    wires1.clone()},
-			None => {
-			    // all memory equivalences must be on secret segments
-			    assert!(seg.secret);
-			    wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
-			    equiv_segments[i] = Some (wires.clone());
-			    wires
-			}
-		    }
-		},
-		// If the segmetn is not in an equivalence class
-		// just build new wires depending on whether the
-		// segment is secret or not
-		None => if seg.secret {
-		    wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
-		    wires
-		} else {
-		    wires = values.iter().map(|&value| b.lit(value)).collect();
-		    wires
-		}
-	    }
-	};
-	// Then create the memports 
+        // Then create the wires. Depends on whether the
+        // segment is part of an qeuivalence class
+        let mem_wires:Vec<TWire<u64>> = {
+            let wires:Vec<TWire<u64>>;
+            match equivs.get(&seg.name) {
+                Some(&i) => {
+                    match &equiv_segments[i] {
+                        Some (wires1) => {
+                            //TODO: check equality with supplied values.
+                            wires1.clone()},
+                        None => {
+                            // all memory equivalences must be on secret segments
+                            assert!(seg.secret);
+                            wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
+                            equiv_segments[i] = Some (wires.clone());
+                            wires
+                        }
+                    }
+                },
+                // If the segmetn is not in an equivalence class
+                // just build new wires depending on whether the
+                // segment is secret or not
+                None => if seg.secret {
+                    wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
+                    wires
+                } else {
+                    wires = values.iter().map(|&value| b.lit(value)).collect();
+                    wires
+                }
+            }
+        };
+        // Then create the memports 
         for (i, mem_wire) in mem_wires.iter().enumerate() {
             // Initial memory values are given in terms of words, not bytes.
             let waddr = seg.start + (i as u64);
@@ -89,7 +89,7 @@ impl<'a> Memory<'a> {
                 width: MemOpWidth::WORD,
             });
 
-	    mp.value = *mem_wire;
+            mp.value = *mem_wire;
             self.ports.push(mp);
         }
 

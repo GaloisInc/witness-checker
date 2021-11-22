@@ -86,17 +86,15 @@ impl<'de> Visitor<'de> for VersionedMultiExecVisitor {
         }
         let inner = with_features(all_features.clone(), || {
             if has_feature(Feature::MultiExec) {
-		println!("Reading full multi execs");
                 seq.next_element::<MultiExec>()
             } else {
-		println!("Reading Single execBody");
                 let body = seq.next_element::<ExecBody>()?;
-		let mut execs = HashMap::new();
-		execs.insert("".to_string(),body);
+                let mut execs = HashMap::new();
+                execs.insert("".to_string(),body);
                 Ok(MultiExec {
-		    execs: execs,
-		    mem_equiv: Vec::new()
-		})
+                    execs: execs,
+                    mem_equiv: Vec::new()
+                })
             }
         })?;
         seq.finish()?;

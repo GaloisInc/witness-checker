@@ -177,30 +177,30 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
     let mut provided_init_state = None;
     if !multi_exec.has_feature(Feature::PublicPc) {
-	for (_name,exec) in multi_exec.inner.execs.iter_mut(){
-	    assert!(exec.segments.len() == 0);
+        for (_name,exec) in multi_exec.inner.execs.iter_mut(){
+            assert!(exec.segments.len() == 0);
             assert!(exec.trace.len() == 1);
             let chunk = &exec.trace[0];
-	    
+            
             let new_segment = Segment {
-		constraints: vec![],
-		len: exec.params.trace_len.unwrap() - 1,
-		successors: vec![],
-		enter_from_network: false,
-		exit_to_network: false,
+                constraints: vec![],
+                len: exec.params.trace_len.unwrap() - 1,
+                successors: vec![],
+                enter_from_network: false,
+                exit_to_network: false,
             };
-	    
+            
             provided_init_state = Some(chunk.states[0].clone());
             let new_chunk = TraceChunk {
-		segment: 0,
-		states: chunk.states[1..].to_owned(),
-		debug: None,
+                segment: 0,
+                states: chunk.states[1..].to_owned(),
+                debug: None,
             };
-	    
+            
             exec.segments = vec![new_segment];
             exec.trace = vec![new_chunk];
-	    
-	}
+            
+        }
     }
 
     // Memory Equivalence: For every memory equivalence
@@ -213,36 +213,36 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // segments names to an index in equiv_segments where
     // the wires for the segment are stored.  
     let mut mem_equiv:std::collections::HashMap<String, HashMap<String, usize>> = {
-	let mut mem_equiv = HashMap::new();
-	for (i,mem_eq) in multi_exec.inner.mem_equiv.iter().enumerate() {
-	    for (exec_name, seg) in mem_eq.iter() {
-		let exec_equivs = mem_equiv.entry(exec_name.to_owned()).or_insert_with(|| HashMap::new());
-		// For the segment, add a pointer to the location
-		// where the segment's wires will be stored.
-		exec_equivs.insert(seg.to_owned(),i);
-	    }
-	}
-	mem_equiv
+        let mut mem_equiv = HashMap::new();
+        for (i,mem_eq) in multi_exec.inner.mem_equiv.iter().enumerate() {
+            for (exec_name, seg) in mem_eq.iter() {
+                let exec_equivs = mem_equiv.entry(exec_name.to_owned()).or_insert_with(|| HashMap::new());
+                // For the segment, add a pointer to the location
+                // where the segment's wires will be stored.
+                exec_equivs.insert(seg.to_owned(),i);
+            }
+        }
+        mem_equiv
     };
     
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
     // for equivalent mem segments. 
     for (name,exec) in multi_exec.inner.execs.iter(){
-	// Set up memory ports and check consistency.
-	let mut mem = Memory::new();
-	for seg in &exec.init_mem {
+        // Set up memory ports and check consistency.
+        let mut mem = Memory::new();
+        for seg in &exec.init_mem {
             mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
-	}
+        }
 
-	// Set up instruction-fetch ports and check consistency.
-	let mut fetch = Fetch::new(&b, &exec.program);
+        // Set up instruction-fetch ports and check consistency.
+        let mut fetch = Fetch::new(&b, &exec.program);
 
-	// Generate IR code to check the trace.
-	let check_steps = args.value_of("check-steps")
+        // Generate IR code to check the trace.
+        let check_steps = args.value_of("check-steps")
             .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
-	let mut segments_map = HashMap::new();
-	let mut segment_builder = SegmentBuilder {
+        let mut segments_map = HashMap::new();
+        let mut segment_builder = SegmentBuilder {
             cx: &cx,
             b: &b,
             ev: CachingEvaluator::new(b.circuit()),
@@ -251,67 +251,67 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             params: &exec.params,
             prog: &exec.program,
             check_steps,
-	};
+        };
 
-	let init_state = provided_init_state.clone().unwrap_or_else(|| {
+        let init_state = provided_init_state.clone().unwrap_or_else(|| {
             let mut regs = vec![0; exec.params.num_regs];
             regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
             let tainted_regs = IfMode::new(|_| vec![WORD_UNTAINTED; exec.params.num_regs]);
             RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
-	});
-	if provided_init_state.is_some() {
+        });
+        if provided_init_state.is_some() {
             let init_state_wire = b.lit(init_state.clone());
             check_first(&cx, &b, &init_state_wire);
-	}
+        }
 
-	let mut seg_graph_builder = SegGraphBuilder::new(
+        let mut seg_graph_builder = SegGraphBuilder::new(
             &b, &exec.segments, &exec.params, init_state.clone());
 
-	for item in seg_graph_builder.get_order() {
+        for item in seg_graph_builder.get_order() {
             let idx = match item {
-		SegGraphItem::Segment(idx) => idx,
-		SegGraphItem::Network => {
+                SegGraphItem::Segment(idx) => idx,
+                SegGraphItem::Network => {
                     seg_graph_builder.build_network(&b);
                     continue;
-		},
+                },
             };
-	    
+            
             let seg_def = &exec.segments[idx];
             let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
             let seg = segment_builder.run(idx, seg_def, prev_state);
             seg_graph_builder.set_final(idx, seg.final_state().clone());
             assert!(!segments_map.contains_key(&idx));
             segments_map.insert(idx, seg);
-	}
+        }
 
-	let mut seg_graph = seg_graph_builder.finish(&cx, &b);
+        let mut seg_graph = seg_graph_builder.finish(&cx, &b);
 
-	let mut segments = (0 .. exec.segments.len()).map(|i| {
+        let mut segments = (0 .. exec.segments.len()).map(|i| {
             segments_map.remove(&i)
-		.unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
-	}).collect::<Vec<_>>();
-	drop(segments_map);
+                .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
+        }).collect::<Vec<_>>();
+        drop(segments_map);
 
-	check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
+        check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
 
-	// Fill in advice and other secrets.
-	let mut cycle = 0;
-	let mut prev_state = init_state.clone();
-	let mut prev_segment = None;
-	for chunk in &exec.trace {
+        // Fill in advice and other secrets.
+        let mut cycle = 0;
+        let mut prev_state = init_state.clone();
+        let mut prev_segment = None;
+        for chunk in &exec.trace {
             if let Some(ref debug) = chunk.debug {
-		if let Some(c) = debug.cycle {
+                if let Some(c) = debug.cycle {
                     cycle = c;
-		}
-		if let Some(ref s) = debug.prev_state {
+                }
+                if let Some(ref s) = debug.prev_state {
                     prev_state = s.clone();
-		}
-		if debug.clear_prev_segment {
+                }
+                if debug.clear_prev_segment {
                     prev_segment = None;
-		}
-		if let Some(idx) = debug.prev_segment {
+                }
+                if let Some(idx) = debug.prev_segment {
                     prev_segment = Some(idx);
-		}
+                }
             }
 
             let seg = &mut segments[chunk.segment];
@@ -320,30 +320,30 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
 
             if let Some(prev_segment) = prev_segment {
-		seg_graph.make_edge_live(&b, prev_segment, chunk.segment, &prev_state);
+                seg_graph.make_edge_live(&b, prev_segment, chunk.segment, &prev_state);
             }
             prev_segment = Some(chunk.segment);
 
             cycle += chunk.states.len() as u32;
             if chunk.states.len() > 0 {
-		prev_state = chunk.states.last().unwrap().clone();
-		prev_state.cycle = cycle;
+                prev_state = chunk.states.last().unwrap().clone();
+                prev_state.cycle = cycle;
             }
-	}
-	
-	seg_graph.finish(&b);
+        }
+        
+        seg_graph.finish(&b);
 
-	// Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
-	// before we move on.
-	drop(segments);
+        // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
+        // before we move on.
+        drop(segments);
 
-	// Some consistency checks involve sorting, which requires that all the relevant secrets be
-	// initialized first.
-	mem.assert_consistent(&cx, &b);
-	fetch.assert_consistent(&cx, &b);
+        // Some consistency checks involve sorting, which requires that all the relevant secrets be
+        // initialized first.
+        mem.assert_consistent(&cx, &b);
+        fetch.assert_consistent(&cx, &b);
 
     }
-	
+        
     // Collect assertions and bugs.
     drop(b);
     let (asserts, bugs) = cx.finish();
@@ -355,8 +355,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         c.all_true(asserts.iter().cloned())
     } else {
         c.and(
-	    c.all_true(asserts.iter().cloned()),
-	    c.any_true(bugs.iter().cloned()),
+            c.all_true(asserts.iter().cloned()),
+            c.any_true(bugs.iter().cloned()),
         )
     };
 
@@ -377,16 +377,16 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
         let flag_vals = flags.iter().map(|&w| {
-	    ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
+            ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();
 
         let asserts_ok: u32 = flag_vals[1 .. 1 + num_asserts].iter().map(|&ok| ok as u32).sum();
         let bugs_ok: u32 = flag_vals[1 + num_asserts ..].iter().map(|&ok| ok as u32).sum();
 
         eprintln!(
-	    "internal evaluator: {} asserts passed, {} failed; found {} bugs; overall status: {}",
-	    asserts_ok, num_asserts as u32 - asserts_ok, bugs_ok,
-	    if flag_vals[0] { "GOOD" } else { "BAD" },
+            "internal evaluator: {} asserts passed, {} failed; found {} bugs; overall status: {}",
+            asserts_ok, num_asserts as u32 - asserts_ok, bugs_ok,
+            if flag_vals[0] { "GOOD" } else { "BAD" },
         );
     }
 
@@ -413,61 +413,61 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         eprintln!("validating zkif...");
 
         if !args.is_present("skip-backend-validation") {
-	    // Validate the circuit and witness.
-	    cli(&Options {
+            // Validate the circuit and witness.
+            cli(&Options {
                 tool: "simulate".to_string(),
                 paths: vec![workspace.to_path_buf()],
                 field_order: Default::default(),
-	    }).unwrap();
+            }).unwrap();
         }
 
         // Print statistics.
         cli(&Options {
-	    tool: "stats".to_string(),
-	    paths: vec![workspace.to_path_buf()],
-	    field_order: Default::default(),
+            tool: "stats".to_string(),
+            paths: vec![workspace.to_path_buf()],
+            field_order: Default::default(),
         }).unwrap();
     }
 
     #[cfg(feature = "sieve_ir")]
     if let Some(workspace) = args.value_of("sieve-ir-out") {
         use cheesecloth::back::sieve_ir::{
-	    backend::{Backend, Scalar},
-	    ir_builder::IRBuilder,
+            backend::{Backend, Scalar},
+            ir_builder::IRBuilder,
         };
         use zki_sieve::{
-	    cli::{cli, Options, StructOpt},
-	    FilesSink,
+            cli::{cli, Options, StructOpt},
+            FilesSink,
         };
 
         { // restrict ir_builder to its own scope
-	    // Generate the circuit and witness.
-	    let sink = FilesSink::new_clean(&workspace).unwrap();
-	    sink.print_filenames();
-	    let mut ir_builder = IRBuilder::new::<Scalar>(sink);
-	    // ir_builder.enable_profiler();
-	    if !args.is_present("sieve-ir-dedup") {
+            // Generate the circuit and witness.
+            let sink = FilesSink::new_clean(&workspace).unwrap();
+            sink.print_filenames();
+            let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+            // ir_builder.enable_profiler();
+            if !args.is_present("sieve-ir-dedup") {
                 ir_builder.disable_dedup();
-	    }
+            }
 
-	    { // restrict backend to its own scope to save memory
+            { // restrict backend to its own scope to save memory
                 let mut backend = Backend::new(&mut ir_builder);
 
                 let accepted = flags[0];
                 backend.enforce_true(accepted);
                 backend.finish();
-	    }
-	    eprintln!();
-	    ir_builder.prof.as_ref().map(|p| p.print_report());
-	    ir_builder.dedup.as_ref().map(|p| p.print_report());
-	    ir_builder.finish();
+            }
+            eprintln!();
+            ir_builder.prof.as_ref().map(|p| p.print_report());
+            ir_builder.dedup.as_ref().map(|p| p.print_report());
+            ir_builder.finish();
         }
 
         // Validate the circuit and witness.
         eprintln!("\nValidating SIEVE IR files...");
         if !args.is_present("skip-backend-validation") {
-	    cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
-	    cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
+            cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
+            cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
         }
         cli(&Options::from_iter(&["zki_sieve", "metrics", workspace])).unwrap();
     }
