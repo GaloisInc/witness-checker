@@ -406,8 +406,8 @@ pub trait CircuitTrait<'a> {
     /// place.  There must be no outstanding references to the filter.
     ///
     /// This will panic when called on a `CircuitRef`, which doesn't have ownership of its filter.
-    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>);
-    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>);
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a>);
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a>);
 }
 
 impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
@@ -418,8 +418,8 @@ impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
         self.gate(kind)
     }
 
-    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {}
-    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {}
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a>) {}
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a>) {}
 }
 
 impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
@@ -432,10 +432,10 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
         self.filter().gate(&self.base, kind)
     }
 
-    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>) {
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a>) {
         (*self.filter.get()).migrate_in_place(v)
     }
-    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>) {
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a>) {
         (*self.filter.get()).erase_in_place(v)
     }
 }
@@ -448,10 +448,10 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for CircuitRef<'a, '_, 
         self.filter.gate(self.base, kind)
     }
 
-    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a>) {
         panic!("can't migrate CircuitRef");
     }
-    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a>) {
         panic!("can't erase CircuitRef");
     }
 }
@@ -464,8 +464,8 @@ pub type DynCircuitRef<'a, 'c> = CircuitRef<'a, 'c, dyn CircuitFilter<'a> + 'c>;
 pub trait CircuitFilter<'a> {
     fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a);
 
-    fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>);
-    fn erase_in_place(&mut self, v: &mut EraseVisitor<'a, '_>);
+    fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a>);
+    fn erase_in_place(&mut self, v: &mut EraseVisitor<'a>);
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a>;
 
@@ -490,11 +490,11 @@ macro_rules! circuit_filter_common_methods {
     () => {
         fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
 
-        fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a, '_>) {
+        fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a>) {
             $crate::ir::migrate::migrate_in_place(v, self);
         }
 
-        fn erase_in_place(&mut self, v: &mut $crate::ir::circuit::EraseVisitor<'a, '_>) {
+        fn erase_in_place(&mut self, v: &mut $crate::ir::circuit::EraseVisitor<'a>) {
             $crate::ir::migrate::migrate_in_place(v, self);
         }
     };
@@ -860,7 +860,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// This method will panic when called on a `CircuitRef`.  It should only be called when the
     /// concrete type is `CircuitBase` or `Circuit`.
     unsafe fn migrate<T: Migrate<'a, 'a, Output = T>>(
-        &self,
+        &'a self,
         x: T,
     ) -> T {
         use crate::ir::migrate::Visitor;
@@ -886,7 +886,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// This method is unsafe because it mutates the circuit filter (if any) in place, so the
     /// caller must ensure there are no outstanding references to the filter.
     unsafe fn erase<T: Migrate<'a, 'a, Output = T>>(
-        &self,
+        &'a self,
         x: T,
     ) -> T {
         use crate::ir::migrate::Visitor;
@@ -903,7 +903,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
     /// Shorthand for `erase` followed by `migrate`.
     unsafe fn erase_and_migrate<T: Migrate<'a, 'a, Output = T>>(
-        &self,
+        &'a self,
         x: T,
     ) -> T {
         let x = self.erase(x);
@@ -915,18 +915,18 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 impl<'a, C: CircuitTrait<'a> + ?Sized> CircuitExt<'a> for C {}
 
 
-pub struct MigrateVisitor<'a, 'b, 'c> {
-    new_circuit: &'c CircuitBase<'b>,
+pub struct MigrateVisitor<'a, 'b> {
+    new_circuit: &'b CircuitBase<'b>,
 
     wire_map: HashMap<Wire<'a>, Wire<'b>>,
     secret_map: HashMap<Secret<'a>, Secret<'b>>,
     erased_map: HashMap<Erased<'a>, Erased<'b>>,
 }
 
-impl<'a, 'b, 'c> MigrateVisitor<'a, 'b, 'c> {
+impl<'a, 'b> MigrateVisitor<'a, 'b> {
     fn new(
-        new_circuit: &'c CircuitBase<'b>,
-    ) -> MigrateVisitor<'a, 'b, 'c> {
+        new_circuit: &'b CircuitBase<'b>,
+    ) -> MigrateVisitor<'a, 'b> {
         MigrateVisitor {
             new_circuit,
 
@@ -937,8 +937,8 @@ impl<'a, 'b, 'c> MigrateVisitor<'a, 'b, 'c> {
     }
 }
 
-impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b, '_> {
-    fn new_circuit(&self) -> &CircuitBase<'b> {
+impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
+    fn new_circuit(&self) -> &'b CircuitBase<'b> {
         self.new_circuit
     }
 
@@ -978,16 +978,16 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b, '_> {
 }
 
 
-pub struct EraseVisitor<'a, 'c> {
-    circuit: &'c CircuitBase<'a>,
+pub struct EraseVisitor<'a> {
+    circuit: &'a CircuitBase<'a>,
     eval: CachingEvaluator<'a, eval::RevealSecrets>,
     erased_map: HashMap<Wire<'a>, Erased<'a>>,
 }
 
-impl<'a, 'c> EraseVisitor<'a, 'c> {
+impl<'a> EraseVisitor<'a> {
     fn new(
-        circuit: &'c CircuitBase<'a>,
-    ) -> EraseVisitor<'a, 'c> {
+        circuit: &'a CircuitBase<'a>,
+    ) -> EraseVisitor<'a> {
         EraseVisitor {
             circuit,
             eval: CachingEvaluator::new(),
@@ -996,8 +996,8 @@ impl<'a, 'c> EraseVisitor<'a, 'c> {
     }
 }
 
-impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
-    fn new_circuit(&self) -> &CircuitBase<'a> {
+impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
+    fn new_circuit(&self) -> &'a CircuitBase<'a> {
         self.circuit
     }
 

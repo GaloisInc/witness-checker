@@ -17,7 +17,7 @@ pub trait Migrate<'a, 'b> {
 }
 
 pub trait Visitor<'a, 'b> {
-    fn new_circuit(&self) -> &CircuitBase<'b>;
+    fn new_circuit(&self) -> &'b CircuitBase<'b>;
 
     fn visit<T: Migrate<'a, 'b>>(&mut self, x: T) -> T::Output {
         Migrate::migrate(x, self)
