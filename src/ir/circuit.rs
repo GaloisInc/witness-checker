@@ -69,6 +69,7 @@ impl<'a> CircuitBase<'a> {
             is_prover,
         };
         c.preload_common_types();
+        c.preload_common_bits();
         c
     }
 
@@ -76,6 +77,13 @@ impl<'a> CircuitBase<'a> {
         let mut intern = self.intern_ty.borrow_mut();
         for &ty in COMMON_TYPES {
             intern.insert(ty);
+        }
+    }
+
+    fn preload_common_bits(&self) {
+        let mut intern = self.intern_bits.borrow_mut();
+        for &bits in COMMON_BITS {
+            intern.insert(bits);
         }
     }
 
@@ -2193,6 +2201,14 @@ impl<'a> Bits<'a> {
             _ => panic!("expected an integer type, but got {:?}", ty),
         }
     }
+
+    pub fn zero() -> Bits<'a> {
+        Bits(&COMMON_BITS_ZERO)
+    }
+
+    pub fn one() -> Bits<'a> {
+        Bits(&COMMON_BITS_ONE)
+    }
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
@@ -2201,6 +2217,14 @@ impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
         v.new_circuit().intern_bits(self.0)
     }
 }
+
+static COMMON_BITS_ZERO: [u32; 1] = [0];
+static COMMON_BITS_ONE: [u32; 1] = [1];
+
+static COMMON_BITS: &[&[u32]] = &[
+    &COMMON_BITS_ZERO,
+    &COMMON_BITS_ONE,
+];
 
 pub trait AsBits {
     /// Convert `self` to `Bits`, interned in circuit `c`.  `width` is the size of the output;
