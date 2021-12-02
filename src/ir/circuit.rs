@@ -627,10 +627,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         val
     }
 
-    fn bits_dyn(&self, ty: Ty<'a>, val: AnyAsBits) -> Bits<'a> {
-        self.bits(ty, val)
-    }
-
 
     /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
     /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
@@ -677,11 +673,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
     fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
         let val = self.bits(ty, val);
-        self.gate(GateKind::Lit(val, ty))
-    }
-
-    fn lit_dyn(&self, ty: Ty<'a>, val: AnyAsBits) -> Wire<'a> {
-        let val = self.bits_dyn(ty, val);
         self.gate(GateKind::Lit(val, ty))
     }
 
@@ -2215,26 +2206,11 @@ pub trait AsBits {
     /// Convert `self` to `Bits`, interned in circuit `c`.  `width` is the size of the output;
     /// signed integers should be sign-extended to this width before conversion.
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a>;
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a>;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum AnyAsBits<'a> {
-    Bits(Bits<'a>),
-    BigUint(&'a BigUint),
-    BigInt(&'a BigInt),
-    U32(u32),
-    U64(u64),
 }
 
 impl AsBits for Bits<'_> {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, _width: IntSize) -> Bits<'a> {
         c.intern_bits(self.0)
-    }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::Bits(*self)
     }
 }
 
@@ -2242,19 +2218,11 @@ impl AsBits for BigUint {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, _width: IntSize) -> Bits<'a> {
         c.intern_bits(&self.to_u32_digits())
     }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::BigUint(self)
-    }
 }
 
 impl AsBits for u8 {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
         (*self as u32).as_bits(c, width)
-    }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::U32(*self as u32)
     }
 }
 
@@ -2262,19 +2230,11 @@ impl AsBits for u16 {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
         (*self as u32).as_bits(c, width)
     }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::U32(*self as u32)
-    }
 }
 
 impl AsBits for u32 {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, _width: IntSize) -> Bits<'a> {
         c.intern_bits(&[*self])
-    }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::U32(*self)
     }
 }
 
@@ -2283,10 +2243,6 @@ impl AsBits for u64 {
         let lo = *self as u32;
         let hi = (*self >> 32) as u32;
         c.intern_bits(&[lo, hi])
-    }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::U64(*self)
     }
 }
 
@@ -2297,19 +2253,11 @@ impl AsBits for BigInt {
         assert!(sign != Sign::Minus);
         val.as_bits(c, width)
     }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::BigInt(self)
-    }
 }
 
 impl AsBits for &'_ BigInt {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
         (*self).as_bits(c, width)
-    }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::BigInt(*self)
     }
 }
 
@@ -2321,10 +2269,6 @@ impl AsBits for i32 {
             BigInt::from(*self).as_bits(c, width)
         }
     }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::U32(*self as u32)
-    }
 }
 
 impl AsBits for i64 {
@@ -2334,26 +2278,6 @@ impl AsBits for i64 {
         } else {
             BigInt::from(*self).as_bits(c, width)
         }
-    }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        AnyAsBits::U64(*self as u64)
-    }
-}
-
-impl AsBits for AnyAsBits<'_> {
-    fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
-        match *self {
-            AnyAsBits::Bits(x) => x.as_bits(c, width),
-            AnyAsBits::BigUint(x) => x.as_bits(c, width),
-            AnyAsBits::BigInt(x) => x.as_bits(c, width),
-            AnyAsBits::U32(x) => x.as_bits(c, width),
-            AnyAsBits::U64(x) => x.as_bits(c, width),
-        }
-    }
-
-    fn as_any<'a>(&'a self) -> AnyAsBits<'a> {
-        *self
     }
 }
 
