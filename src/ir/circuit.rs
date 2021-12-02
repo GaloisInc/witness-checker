@@ -991,7 +991,7 @@ impl<'a> EraseVisitor<'a> {
     ) -> EraseVisitor<'a> {
         EraseVisitor {
             circuit,
-            eval: CachingEvaluator::new(),
+            eval: CachingEvaluator::new(circuit),
             erased_map: HashMap::new(),
         }
     }

@@ -7,8 +7,8 @@ use num_traits::{Signed, Zero};
 use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
-    self, Ty, Wire, Secret, Erased, Bits, GateKind, TyKind, GadgetKindRef, UnOp, BinOp, ShiftOp,
-    CmpOp, GateValue,
+    self, CircuitBase, CircuitTrait, Ty, Wire, Secret, Erased, Bits, AsBits, GateKind, TyKind,
+    GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp, GateValue,
 };
 
 use self::Value::Single;
@@ -126,7 +126,7 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
 /// sharing.
 pub struct CachingEvaluator<'a, S> {
     secret_eval: S,
-    _marker: PhantomData<Wire<'a>>,
+    circuit: &'a CircuitBase<'a>,
 }
 
 /// Result of evaluating a `Wire`.  Evaluation produces a `Value` on success.  It fails if the
@@ -157,10 +157,10 @@ impl<'a> Error<'a> {
 }
 
 impl<'a, S: Default> CachingEvaluator<'a, S> {
-    pub fn new() -> Self {
+    pub fn new<C: CircuitTrait<'a> + ?Sized>(circuit: &'a C) -> Self {
         CachingEvaluator {
             secret_eval: S::default(),
-            _marker: PhantomData,
+            circuit: circuit.as_base(),
         }
     }
 }
@@ -180,7 +180,7 @@ impl<'a, 'b, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, S> {
     ) -> CachingEvaluator<'b, S::Output> {
         CachingEvaluator {
             secret_eval: v.visit(self.secret_eval),
-            _marker: PhantomData,
+            circuit: v.new_circuit(),
         }
     }
 }

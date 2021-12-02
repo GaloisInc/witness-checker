@@ -85,7 +85,7 @@ impl<'a> ExecBuilder<'a> {
             seg_user_map: HashMap::new(),
 
             cx,
-            ev: CachingEvaluator::new()
+            ev: CachingEvaluator::new(b.circuit())
         }
     }
 

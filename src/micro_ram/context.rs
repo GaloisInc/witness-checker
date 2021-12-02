@@ -187,11 +187,11 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    pub fn new<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Context<'a> {
+    pub fn new<C: CircuitTrait<'a> + ?Sized>(c: &'a C) -> Context<'a> {
         Context {
             asserts: RefCell::new(Vec::new()),
             bugs: RefCell::new(Vec::new()),
-            eval: Some(RefCell::new(CachingEvaluator::new())),
+            eval: Some(RefCell::new(CachingEvaluator::new(c))),
             is_prover: c.is_prover(),
         }
     }

@@ -7,13 +7,15 @@ use cheesecloth::ir::circuit::{
 };
 use cheesecloth::lower;
 
-fn make_circuit<'a>(arenas: &'a Arenas) -> impl CircuitTrait<'a> + 'a {
-    let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-    let c = Circuit::new(arenas, true, cf);
-    c
+macro_rules! make_circuit {
+    ($arenas:expr) => {{
+        let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+        let c = Circuit::new($arenas, true, cf);
+        c
+    }};
 }
 
-fn finish<'a>(w: Wire<'a>) {
+fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     use cheesecloth::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
@@ -21,7 +23,7 @@ fn finish<'a>(w: Wire<'a>) {
 
 
     // Make sure the circuit is valid.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
     let val = ev.eval_wire(w).ok();
     assert_eq!(val, Some(eval::Value::Single(BigInt::from(1))));
 
@@ -57,7 +59,7 @@ fn finish<'a>(w: Wire<'a>) {
 #[test]
 fn mux_true() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 
@@ -70,13 +72,13 @@ fn mux_true() {
         c.lit(t_i8, 10),
     );
 
-    finish(w);
+    finish(&c, w);
 }
 
 #[test]
 fn mux_false() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_bool = c.ty(TyKind::BOOL);
     let t_i8 = c.ty(TyKind::I8);
 
@@ -89,5 +91,5 @@ fn mux_false() {
         c.lit(t_i8, 20),
     );
 
-    finish(w);
+    finish(&c, w);
 }

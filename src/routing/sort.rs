@@ -1,10 +1,12 @@
 use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
+use crate::ir::circuit::CircuitTrait;
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 use crate::routing::RoutingBuilder;
 
 
-fn sorting_permutation<'a, T, F>(
+fn sorting_permutation<'a, C: CircuitTrait<'a> + ?Sized, T, F>(
+    c: &'a C,
     xs: &mut [TWire<'a, T>],
     compare: &mut F,
 ) -> Option<Vec<usize>>
@@ -17,7 +19,7 @@ where
     }
 
     // `RevealSecrets` is okay here because the output is also secret.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
 
     let mut r2l = (0 .. xs.len()).collect::<Vec<_>>();
     let mut try_compare = |x, y| -> Option<bool> {
@@ -71,7 +73,7 @@ where
     let outputs = (0 .. xs.len()).map(|_| routing_builder.add_output()).collect::<Vec<_>>();
     let mut routing = routing_builder.finish_exact(b);
 
-    let perm = sorting_permutation(xs, compare);
+    let perm = sorting_permutation(b.circuit(), xs, compare);
     if let Some(ref perm) = perm {
         for (i, &j) in perm.iter().enumerate() {
             routing.connect(inputs[i], outputs[j]);
@@ -102,7 +104,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
         sort(&b, &mut ws, &mut |&x, &y| b.lt(x, y));

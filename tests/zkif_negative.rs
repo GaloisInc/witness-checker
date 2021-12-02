@@ -7,13 +7,15 @@ use cheesecloth::ir::circuit::{
 };
 use cheesecloth::lower;
 
-fn make_circuit<'a>(arenas: &'a Arenas) -> impl CircuitTrait<'a> + 'a {
-    let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-    let c = Circuit::new(arenas, true, cf);
-    c
+macro_rules! make_circuit {
+    ($arenas:expr) => {{
+        let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+        let c = Circuit::new($arenas, true, cf);
+        c
+    }};
 }
 
-fn finish<'a>(w: Wire<'a>) {
+fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     use cheesecloth::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
@@ -21,7 +23,7 @@ fn finish<'a>(w: Wire<'a>) {
 
 
     // Make sure the circuit is valid.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
     let val = ev.eval_wire(w).ok();
     assert_eq!(val, Some(eval::Value::Single(BigInt::from(1))));
 
@@ -57,7 +59,7 @@ fn finish<'a>(w: Wire<'a>) {
 #[test]
 fn add_neg_one() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_u8 = c.ty(TyKind::U8);
 
     let w = c.eq(
@@ -65,13 +67,13 @@ fn add_neg_one() {
         c.lit(t_u8, 99),
     );
 
-    finish(w);
+    finish(&c, w);
 }
 
 #[test]
 fn add_neg_one_u64() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_u64 = c.ty(TyKind::U64);
 
     let w = c.eq(
@@ -79,7 +81,7 @@ fn add_neg_one_u64() {
         c.lit(t_u64, 99),
     );
 
-    finish(w);
+    finish(&c, w);
 }
 
 /// Divide a number by a large denominator.  A case like this can occur when dividing by negative
@@ -87,7 +89,7 @@ fn add_neg_one_u64() {
 #[test]
 fn div_large() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_u8 = c.ty(TyKind::U8);
 
     let w = c.eq(
@@ -95,13 +97,13 @@ fn div_large() {
         c.lit(t_u8, 0),
     );
 
-    finish(w);
+    finish(&c, w);
 }
 
 #[test]
 fn neg_one() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
 
     let w = c.eq(
@@ -109,13 +111,13 @@ fn neg_one() {
         c.lit(t_i8, -1),
     );
 
-    finish(w);
+    finish(&c, w);
 }
 
 #[test]
 fn not_zero() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
 
     let w = c.eq(
@@ -123,13 +125,13 @@ fn not_zero() {
         c.lit(t_i8, -1),
     );
 
-    finish(w);
+    finish(&c, w);
 }
 
 #[test]
 fn neg_one_shr() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
     let t_u8 = c.ty(TyKind::U8);
 
@@ -138,13 +140,13 @@ fn neg_one_shr() {
         c.lit(t_i8, -1),
     );
 
-    finish(w);
+    finish(&c, w);
 }
 
 #[test]
 fn neg_one_shl() {
     let arenas = Arenas::new();
-    let c = make_circuit(&arenas);
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
     let t_u8 = c.ty(TyKind::U8);
 
@@ -153,5 +155,5 @@ fn neg_one_shl() {
         c.lit(t_i8, -2),
     );
 
-    finish(w);
+    finish(&c, w);
 }
