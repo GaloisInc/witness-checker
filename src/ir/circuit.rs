@@ -130,7 +130,7 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
-    fn intern_bits(&self, b: &[u32]) -> Bits<'a> {
+    pub fn intern_bits(&self, b: &[u32]) -> Bits<'a> {
         let mut intern = self.intern_bits.borrow_mut();
         match intern.get(b) {
             Some(&x) => Bits(x),
@@ -1274,6 +1274,20 @@ impl TyKind<'_> {
             },
         }
     }
+
+    /// Compute the number of bignum digits required to represent this type as `Bits`.  The total
+    /// size in bits is `self.digits() * Bits::DIGIT_BITS`.
+    pub fn digits(&self) -> usize {
+        match *self {
+            TyKind::Int(sz) |
+            TyKind::Uint(sz) => {
+                (sz.bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
+            },
+            TyKind::Bundle(tys) => {
+                tys.iter().map(|ty| ty.digits()).sum()
+            },
+        }
+    }
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
@@ -1373,12 +1387,17 @@ impl<'a, 'b, T: Migrate<'a, 'b>> Migrate<'a, 'b> for Unhashed<T> {
 }
 
 
-#[derive(Clone, PartialEq, Eq, Debug, Migrate)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Migrate)]
 pub enum GateValue<'a> {
+    /// The gate hasn't been evaluated yet.
     Unset,
-    Public(eval::Value),
-    Secret(eval::Value),
+    /// The gate evaluated to this value, using only public information.
+    Public(Bits<'a>),
+    /// The gate evaluated to this value, but its value depends on a secret input.
+    Secret(Bits<'a>),
+    /// The gate can't be evaluated until the value of this `Secret` is set.
     NeedsSecret(Secret<'a>),
+    /// Evaluation of the gate failed unrecoverably.
     Failed,
 }
 
@@ -2069,6 +2088,8 @@ impl<'a, T> Drop for CellResetGuard<'a, T> {
 pub struct Bits<'a>(pub &'a [u32]);
 
 impl<'a> Bits<'a> {
+    pub const DIGIT_BITS: usize = 32;
+
     pub fn width(&self) -> u16 {
         for (i, &x) in self.0.iter().enumerate().rev() {
             if x != 0 {

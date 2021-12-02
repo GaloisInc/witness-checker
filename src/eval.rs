@@ -22,8 +22,44 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn from_lit(ty: Ty, bits: Bits) -> Value {
-        Value::Single(bits.to_bigint(ty))
+    pub fn from_bits(ty: Ty, bits: Bits) -> Value {
+        match *ty {
+            TyKind::Int(_) |
+            TyKind::Uint(_) => {
+                Value::Single(bits.to_bigint(ty))
+            },
+            TyKind::Bundle(tys) => {
+                let mut vals = Vec::with_capacity(tys.len());
+                let mut pos = 0;
+                for &ty in tys {
+                    let end = pos + ty.digits();
+                    let field_bits = Bits(&bits.0[pos .. end]);
+                    vals.push(Value::from_bits(ty, field_bits));
+                    pos = end;
+                }
+                assert_eq!(pos, bits.0.len());
+                Value::Bundle(vals)
+            },
+        }
+    }
+
+    pub fn to_bits<'a>(&self, c: &CircuitBase<'a>, ty: Ty<'a>) -> Bits<'a> {
+        match (self, *ty) {
+            (&Value::Single(ref v), TyKind::Int(sz)) |
+            (&Value::Single(ref v), TyKind::Uint(sz)) => {
+                v.as_bits(c, sz)
+            },
+            (&Value::Bundle(ref vs), TyKind::Bundle(tys)) => {
+                assert_eq!(vs.len(), tys.len());
+                let mut digits = Vec::with_capacity(ty.digits());
+                for (v, &ty) in vs.iter().zip(tys.iter()) {
+                    let bits = v.to_bits(c, ty);
+                    digits.extend_from_slice(&bits.0);
+                }
+                c.intern_bits(&digits)
+            },
+            _ => panic!("value {:?} doesn't match type {:?}", self, ty),
+        }
     }
 
     /// Truncate an arbitrary-precision value `i` to the appropriate range for `ty`.
@@ -113,7 +149,7 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
             Some(x) => x,
             None => return Err(Error::UnknownSecret(s)),
         };
-        Ok(Value::from_lit(s.ty, val))
+        Ok(Value::from_bits(s.ty, val))
     }
 
     fn eval_erased(&mut self, e: Erased<'a>) -> EvalResult<'a> {
@@ -199,8 +235,8 @@ impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
     fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a> {
         match w.value.get() {
             GateValue::Unset => {},
-            GateValue::Public(v) |
-            GateValue::Secret(v) => return Ok(v),
+            GateValue::Public(bits) |
+            GateValue::Secret(bits) => return Ok(Value::from_bits(w.ty, bits)),
             GateValue::NeedsSecret(s) => return Err(Error::UnknownSecret(s)),
             GateValue::Failed => return Err(Error::Other),
         }
@@ -212,15 +248,15 @@ impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
         for w in order {
             let result = eval_gate(self, w.kind);
             w.value.set(match result {
-                Ok(v) => GateValue::Secret(v),
+                Ok(v) => GateValue::Secret(v.to_bits(self.circuit, w.ty)),
                 Err(Error::UnknownSecret(s)) => GateValue::NeedsSecret(s),
                 Err(Error::Other) => GateValue::Failed,
             });
         }
         match w.value.get() {
             GateValue::Unset => unreachable!(),
-            GateValue::Public(v) |
-            GateValue::Secret(v) => return Ok(v),
+            GateValue::Public(bits) |
+            GateValue::Secret(bits) => return Ok(Value::from_bits(w.ty, bits)),
             GateValue::NeedsSecret(s) => return Err(Error::UnknownSecret(s)),
             GateValue::Failed => return Err(Error::Other),
         }
@@ -249,7 +285,7 @@ impl<'a> SecretEvaluator<'a> for LiteralEvaluator {
 impl<'a> Evaluator<'a> for LiteralEvaluator {
     fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a> {
         match w.kind {
-            GateKind::Lit(bits, ty) => Ok(Value::from_lit(ty, bits)),
+            GateKind::Lit(bits, ty) => Ok(Value::from_bits(ty, bits)),
             _ => Err(Error::Other),
         }
     }
@@ -272,7 +308,7 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
 
 pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> EvalResult<'a> {
     Ok(match gk {
-        GateKind::Lit(bits, ty) => Value::from_lit(ty, bits),
+        GateKind::Lit(bits, ty) => Value::from_bits(ty, bits),
 
         GateKind::Secret(s) => return e.eval_secret(s),
 
