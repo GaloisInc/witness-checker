@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
 use std::ops::{Deref, DerefMut, Range};
@@ -1405,46 +1406,104 @@ impl<'a> Default for GateValue<'a> {
     fn default() -> GateValue<'a> { GateValue::Unset }
 }
 
-#[derive(Default)]
-pub struct GateValueCell<'a>(Cell<GateValue<'a>>);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PackedGateValue<'a> {
+    inner: (usize, usize),
+    _marker: PhantomData<GateValue<'a>>,
+}
+
+impl<'a> PackedGateValue<'a> {
+    pub fn unpack(self) -> GateValue<'a> {
+        unsafe {
+            match self.inner {
+                (0, 0) => GateValue::Unset,
+                (0, 1) => GateValue::Failed,
+                (0, secret) => GateValue::NeedsSecret(mem::transmute(secret)),
+                (x, len) => {
+                    let ptr = x & !1;
+                    let is_secret = x & 1 != 0;
+                    let bits = slice::from_raw_parts(ptr as *const _, len);
+                    if is_secret {
+                        GateValue::Secret(Bits(bits))
+                    } else {
+                        GateValue::Public(Bits(bits))
+                    }
+                },
+            }
+        }
+    }
+}
+
+impl<'a> GateValue<'a> {
+    pub fn pack(self) -> PackedGateValue<'a> {
+        unsafe {
+            let inner = match self {
+                GateValue::Unset => (0, 0),
+                GateValue::Failed => (0, 1),
+                GateValue::NeedsSecret(s) => {
+                    let y = mem::transmute(s);
+                    assert!(y != 0 && y != 1);
+                    (0, y)
+                },
+                GateValue::Public(bits) => {
+                    let ptr = bits.0.as_ptr() as usize;
+                    assert!(ptr != 0 && ptr & 1 == 0);
+                    let x = ptr;
+                    let y = bits.0.len();
+                    (x, y)
+                },
+                GateValue::Secret(bits) => {
+                    let ptr = bits.0.as_ptr() as usize;
+                    assert!(ptr != 0 && ptr & 1 == 0);
+                    let x = ptr | 1;
+                    let y = bits.0.len();
+                    (x, y)
+                },
+            };
+            PackedGateValue { inner, _marker: PhantomData }
+        }
+    }
+}
+
+impl<'a> Default for PackedGateValue<'a> {
+    fn default() -> PackedGateValue<'a> { GateValue::default().pack() }
+}
+
+impl<'a> fmt::Debug for PackedGateValue<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&self.unpack(), f)
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for PackedGateValue<'a> {
+    type Output = PackedGateValue<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PackedGateValue<'b> {
+        self.unpack().migrate(v).pack()
+    }
+}
+
+
+#[derive(Clone, Debug, Default)]
+pub struct GateValueCell<'a>(Cell<PackedGateValue<'a>>);
 
 impl<'a> GateValueCell<'a> {
     pub fn get(&self) -> GateValue<'a> {
-        let x = self.0.replace(GateValue::Unset);
-        self.0.set(x.clone());
-        x
+        self.0.get().unpack()
     }
 
     pub fn set(&self, x: GateValue<'a>) {
-        self.0.set(x);
+        self.0.set(x.pack());
     }
 
     pub fn is_valid(&self) -> bool {
-        let x = self.0.replace(GateValue::Unset);
-        let r = match x {
+        match self.0.get().unpack() {
             GateValue::Unset => false,
-            GateValue::Public(_) => true,
+            GateValue::Public(_) |
             GateValue::Secret(_) => true,
             GateValue::NeedsSecret(s) => !s.has_val(),
             GateValue::Failed => true,
-        };
-        self.0.set(x);
-        r
-    }
-}
-
-impl<'a> Clone for GateValueCell<'a> {
-    fn clone(&self) -> Self {
-        GateValueCell(Cell::new(self.get()))
-    }
-}
-
-impl<'a> fmt::Debug for GateValueCell<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let x = self.0.replace(GateValue::Unset);
-        let r = x.fmt(f);
-        self.0.set(x);
-        r
+        }
     }
 }
 
