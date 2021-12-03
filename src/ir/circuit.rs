@@ -226,11 +226,16 @@ impl<'a> CircuitBase<'a> {
             _ => {},
         }
 
+        let value = match kind {
+            GateKind::Lit(bits, _) => GateValueCell::new(GateValue::Public(bits)),
+            _ => GateValueCell::new(GateValue::Unset),
+        };
+
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
             label: self.current_label.get(),
-            value: Unhashed::default(),
+            value: Unhashed(value),
         }))
     }
 
@@ -1487,6 +1492,10 @@ impl<'a, 'b> Migrate<'a, 'b> for PackedGateValue<'a> {
 pub struct GateValueCell<'a>(Cell<PackedGateValue<'a>>);
 
 impl<'a> GateValueCell<'a> {
+    pub fn new(gv: GateValue<'a>) -> GateValueCell<'a> {
+        GateValueCell(Cell::new(gv.pack()))
+    }
+
     pub fn get(&self) -> GateValue<'a> {
         self.0.get().unpack()
     }
@@ -2241,6 +2250,13 @@ impl AsBits for Bits<'_> {
 impl AsBits for BigUint {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, _width: IntSize) -> Bits<'a> {
         c.intern_bits(&self.to_u32_digits())
+    }
+}
+
+impl AsBits for bool {
+    fn as_bits<'a>(&self, _c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
+        assert_eq!(width, IntSize(1));
+        if *self { Bits::one() } else { Bits::zero() }
     }
 }
 

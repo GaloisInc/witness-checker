@@ -151,9 +151,9 @@ fn try_const_fold<'a>(
         return None;
     }
 
-    let val = eval::eval_gate(&mut LiteralEvaluator, gk).ok()?;
-    let i = val.as_single()?;
     let ty = gk.ty(c);
+    let val = eval::eval_gate_public(c, ty, gk)?;
+    let i = val.as_single()?;
     Some(c.lit(ty, i))
 }
 
