@@ -25,7 +25,7 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use crate::eval::{self, Evaluator, CachingEvaluator};
+use crate::eval;
 use crate::ir::migrate::{self, Migrate};
 
 
@@ -227,15 +227,16 @@ impl<'a> CircuitBase<'a> {
         }
 
         let value = match kind {
-            GateKind::Lit(bits, _) => GateValueCell::new(GateValue::Public(bits)),
-            _ => GateValueCell::new(GateValue::Unset),
+            GateKind::Lit(bits, _) => GateValue::Public(bits),
+            GateKind::Erased(e) => e.gate_value(),
+            _ => GateValue::Unset,
         };
 
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
             label: self.current_label.get(),
-            value: Unhashed(value),
+            value: Unhashed(GateValueCell::new(value)),
         }))
     }
 
@@ -986,7 +987,6 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
 
 pub struct EraseVisitor<'a> {
     circuit: &'a CircuitBase<'a>,
-    eval: CachingEvaluator<'a, eval::RevealSecrets>,
     erased_map: HashMap<Wire<'a>, Erased<'a>>,
 }
 
@@ -996,7 +996,6 @@ impl<'a> EraseVisitor<'a> {
     ) -> EraseVisitor<'a> {
         EraseVisitor {
             circuit,
-            eval: CachingEvaluator::new(circuit),
             erased_map: HashMap::new(),
         }
     }
@@ -1021,19 +1020,19 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
             return self.circuit.erased(e);
         }
 
-        let secret_value = self.eval.eval_wire(w).ok();
-        if self.circuit.is_prover && secret_value.is_none() {
-            // Losing track of the value for this wire will leave us unable to construct the
-            // witness.  We can't simply choose not to erase the wire because that would leave the
-            // `GateKind` visible to later rewrite passes, which could cause the prover and
-            // verifier circuits to diverge.
-            panic!("failed to evaluate erased wire: {:?}", w);
-        }
+        // `eval_wire` will update `w.value`.
+        let (bits, secret) = match eval::eval_wire(self.circuit, w) {
+            Ok(x) => x,
+            Err(e) => {
+                // Losing track of the value for this wire will leave us unable to construct the
+                // witness.  We can't simply choose not to erase the wire because that would leave
+                // the `GateKind` visible to later rewrite passes, which could cause the prover and
+                // verifier circuits to diverge.
+                panic!("failed to evaluate erased wire {:?}: {:?}", w, e);
+            },
+        };
 
-        let e = Erased(self.circuit.arena().alloc(ErasedData {
-            ty: w.ty,
-            secret_value,
-        }));
+        let e = Erased(self.circuit.arena().alloc(ErasedData::new(w.ty, bits, secret)));
         self.erased_map.insert(w, e);
         self.circuit.erased(e)
     }
@@ -1408,6 +1407,16 @@ pub enum GateValue<'a> {
 
 impl<'a> Default for GateValue<'a> {
     fn default() -> GateValue<'a> { GateValue::Unset }
+}
+
+impl<'a> GateValue<'a> {
+    pub fn from_bits(bits: Bits<'a>, secret: bool) -> GateValue<'a> {
+        if secret {
+            GateValue::Secret(bits)
+        } else {
+            GateValue::Public(bits)
+        }
+    }
 }
 
 
@@ -1953,9 +1962,36 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretHandle<'a> {
 #[derive(Clone, Debug, Migrate)]
 pub struct ErasedData<'a> {
     pub ty: Ty<'a>,
-    /// In prover mode, this stores the value of the wire as it was computed before erasing the
-    /// gate.  The value is computed in `RevealSecrets` mode, so it must be treated as a secret.
-    pub secret_value: Option<eval::Value>,
+    value: PackedGateValue<'a>,
+}
+
+impl<'a> ErasedData<'a> {
+    pub fn new(ty: Ty<'a>, bits: Bits<'a>, secret: bool) -> ErasedData<'a> {
+        ErasedData {
+            ty,
+            value: GateValue::from_bits(bits, secret).pack(),
+        }
+    }
+
+    pub fn gate_value(&self) -> GateValue<'a> {
+        self.value.unpack()
+    }
+
+    pub fn bits(&self) -> Bits<'a> {
+        match self.value.unpack() {
+            GateValue::Public(bits) => bits,
+            GateValue::Secret(bits) => bits,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn is_secret(&self) -> bool {
+        match self.value.unpack() {
+            GateValue::Public(_) => false,
+            GateValue::Secret(_) => true,
+            _ => unreachable!(),
+        }
+    }
 }
 
 declare_interned_pointer! {

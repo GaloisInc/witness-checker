@@ -1,14 +1,12 @@
-use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use std::marker::PhantomData;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
-    self, CircuitBase, CircuitTrait, Ty, Wire, Secret, Erased, Bits, AsBits, GateKind, TyKind,
-    GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp, GateValue,
+    self, CircuitBase, CircuitTrait, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
+    ShiftOp, CmpOp, GateValue,
 };
 
 use self::Value::Single;
@@ -225,15 +223,19 @@ impl<'a> Evaluator<'a> for LiteralEvaluator {
 }
 
 
-/// Get the value of `w` as `Bits` and a flag indicating whether the value is derived from secrets.
-fn get_value<'a>(w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
-    match w.value.get() {
+fn convert_gate_value<'a>(gv: GateValue<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
+    match gv {
         GateValue::Unset => Err(Error::UnevalInput),
         GateValue::Public(bits) => Ok((bits, false)),
         GateValue::Secret(bits) => Ok((bits, true)),
         GateValue::NeedsSecret(s) => Err(Error::UnknownSecret(s)),
         GateValue::Failed => Err(Error::Other),
     }
+}
+
+/// Get the value of `w` as `Bits` and a flag indicating whether the value is derived from secrets.
+fn get_value<'a>(w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
+    convert_gate_value(w.value.get())
 }
 
 fn get_int_value<'a>(w: Wire<'a>) -> Result<(BigInt, bool), Error<'a>> {
@@ -266,15 +268,7 @@ pub fn eval_gate<'a>(
             None => return Err(Error::UnknownSecret(s)),
         },
 
-        // TODO: set `value` on construction for `Erased` gates
-        //GateKind::Erased(_) => return Err(Error::Other),
-        GateKind::Erased(e) => match e.secret_value {
-            Some(ref v) => {
-                let bits = v.to_bits(c, ty);
-                (bits, true)
-            },
-            None => return Err(Error::Other),
-        },
+        GateKind::Erased(e) => convert_gate_value(e.gate_value())?,
 
         GateKind::Unary(op, a) => {
             let (a_val, a_sec) = get_int_value(a)?;
