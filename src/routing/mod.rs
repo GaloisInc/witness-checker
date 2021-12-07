@@ -2,6 +2,9 @@ use std::ops::Index;
 use log::*;
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Repr, Lit, Mux};
 
+pub mod sort;
+
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct InputId(usize);
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

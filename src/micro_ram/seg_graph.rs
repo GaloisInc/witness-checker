@@ -3,8 +3,8 @@ use std::iter;
 use std::mem;
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
-use crate::micro_ram::routing::{Routing, RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::types::{self, RamState, Params};
+use crate::routing::{Routing, RoutingBuilder, InputId, OutputId};
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

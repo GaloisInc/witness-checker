@@ -15,7 +15,7 @@ use crate::micro_ram::types::{
 };
 use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
-use crate::sort;
+use crate::routing::sort;
 
 pub struct Memory<'a> {
     ports: Vec<TWire<'a, MemPort>>,

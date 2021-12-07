@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::CircuitTrait;
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
-use crate::micro_ram::routing::RoutingBuilder;
+use crate::routing::RoutingBuilder;
 
 
 fn sorting_permutation<'a, T, F>(
