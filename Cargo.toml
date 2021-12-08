@@ -21,6 +21,7 @@ zki_sieve = { optional = true, path = "deps/zkinterface-sieve/rust" }
 # Use the crate ff_derive. The dependencies must be repeated to use in the macro derive(PrimeField).
 ff = { optional = true, version = "0.8.0", features = ["derive"] }
 
+bitflags = "1.3.2"
 bitvec = "0.18"
 byteorder = "1"
 rand_core = "0.5"
