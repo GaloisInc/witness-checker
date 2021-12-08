@@ -168,11 +168,12 @@ pub struct FinishRouting<'a, T: Repr<'a>> {
 
 impl<'a, T> FinishRouting<'a, T>
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
-    pub fn empty() -> FinishRouting<'a, T> {
+    pub fn trivial(ws: Vec<TWire<'a, T>>) -> FinishRouting<'a, T> {
+        let num_outputs = ws.len();
         FinishRouting {
             bn: benes::BenesNetwork::new(0, 0),
-            ws: Vec::new(),
-            num_outputs: 0,
+            ws: ws.into_iter().map(Some).collect(),
+            num_outputs,
             layer: 0,
         }
     }

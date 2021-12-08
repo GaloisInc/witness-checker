@@ -3,12 +3,11 @@ use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::CircuitTrait;
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 use crate::routing::{RoutingBuilder, FinishRouting};
-use crate::util::PanicOnDrop;
 
 
 fn sorting_permutation<'a, C: CircuitTrait<'a> + ?Sized, T, F>(
     c: &'a C,
-    xs: &mut [TWire<'a, T>],
+    xs: &[TWire<'a, T>],
     compare: &mut F,
 ) -> Option<Vec<usize>>
 where
@@ -56,11 +55,11 @@ where
 /// `b`.
 ///
 /// This is an unstable sort.
-pub fn sort<'a, 'b, T, F>(
+pub fn sort<'a, T, F>(
     b: &Builder<'a>,
-    xs: &'b mut [TWire<'a, T>],
+    xs: &[TWire<'a, T>],
     mut compare: F,
-) -> Sort<'a, 'b, T, F>
+) -> Sort<'a, T, F>
 where
     T: Mux<'a, bool, T, Output = T>,
     T::Repr: Clone,
@@ -69,10 +68,8 @@ where
     // Sequences of length 0 and 1 are already sorted, trivially.
     if xs.len() <= 1 {
         return Sort {
-            routing: FinishRouting::empty(),
-            xs,
+            routing: FinishRouting::trivial(xs.to_owned()),
             compare,
-            panic_on_drop: PanicOnDrop::new(),
         };
     }
 
@@ -89,20 +86,16 @@ where
     let routing = routing.finish_exact(b);
     Sort {
         routing,
-        xs,
         compare,
-        panic_on_drop: PanicOnDrop::new(),
     }
 }
 
-pub struct Sort<'a, 'b, T: Repr<'a>, F> {
+pub struct Sort<'a, T: Repr<'a>, F> {
     routing: FinishRouting<'a, T>,
-    xs: &'b mut [TWire<'a, T>],
     compare: F,
-    panic_on_drop: PanicOnDrop,
 }
 
-impl<'a, 'b, T, F> Sort<'a, 'b, T, F>
+impl<'a, T, F> Sort<'a, T, F>
 where
     T: Mux<'a, bool, T, Output = T>,
     T::Repr: Clone,
@@ -116,25 +109,21 @@ where
         self.routing.step(b)
     }
 
-    /// The returned `TWire` is `true` when the output is correctly sorted.  The caller must
+    /// The returned `TWire<bool>` is `true` when the output is correctly sorted.  The caller must
     /// assert it to validate the sort results; otherwise the prover may cheat by reordering `xs`
     /// arbitrarily.
-    pub fn finish(mut self, b: &Builder<'a>) -> TWire<'a, bool> {
+    pub fn finish(mut self, b: &Builder<'a>) -> (Vec<TWire<'a, T>>, TWire<'a, bool>) {
         let output_wires = self.routing.finish();
-        for (x, w) in self.xs.iter_mut().zip(output_wires.into_iter()) {
-            *x = w;
-        }
 
         let mut sorted = b.lit(true);
-        for (x, y) in self.xs.iter().zip(self.xs.iter().skip(1)) {
+        for (x, y) in output_wires.iter().zip(output_wires.iter().skip(1)) {
             sorted = b.and(sorted, (self.compare)(x, y));
         }
 
-        self.panic_on_drop.defuse();
-        sorted
+        (output_wires, sorted)
     }
 
-    pub fn run(mut self, b: &Builder<'a>) -> TWire<'a, bool> {
+    pub fn run(mut self, b: &Builder<'a>) -> (Vec<TWire<'a, T>>, TWire<'a, bool>) {
         while !self.is_ready() {
             self.step(b);
         }
@@ -159,8 +148,8 @@ mod test {
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
-        let mut ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
-        sort(&b, &mut ws, |&x, &y| b.lt(x, y)).run(&b);
+        let ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
+        let (ws, _) = sort(&b, &ws, |&x, &y| b.lt(x, y)).run(&b);
 
         let vals = ws.iter()
             .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())
