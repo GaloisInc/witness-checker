@@ -209,7 +209,7 @@ impl<'a> Memory<'a> {
             }).collect::<Vec<_>>();
             // Using `lt` instead of `le` for the comparison here means the sortedness check will
             // also ensure that every `MemPort` is distinct.
-            let sorted = sort::sort(&b, &mut packed_ports, &mut |&x, &y| b.lt(x, y));
+            let sorted = sort::sort(&b, &mut packed_ports, |&x, &y| b.lt(x, y)).run(b);
             wire_assert!(&cx, sorted, "memory op sorting failed");
             packed_ports.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
         };

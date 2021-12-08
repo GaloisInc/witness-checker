@@ -68,7 +68,7 @@ impl<'a> Fetch<'a> {
             let mut packed_ports = self.ports.iter().map(|&fp| {
                 PackedFetchPort::from_unpacked(&b, fp)
             }).collect::<Vec<_>>();
-            let sorted = sort::sort(&b, &mut packed_ports, &mut |&x, &y| b.le(x, y));
+            let sorted = sort::sort(&b, &mut packed_ports, |&x, &y| b.le(x, y)).run(b);
             wire_assert!(&cx, sorted, "instruction fetch sorting failed");
             packed_ports.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
         };

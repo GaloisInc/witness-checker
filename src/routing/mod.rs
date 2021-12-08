@@ -66,13 +66,13 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
     }
 
     /// Finish building the routing network circuit.
-    pub fn finish(self, b: &Builder<'a>) -> Vec<TWire<'a, T>>
+    pub fn finish(self, b: &Builder<'a>) -> FinishRouting<'a, T>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a> + Default, T::Repr: Clone {
         self.finish_with_default(b, T::default())
     }
 
     /// Finish building the routing network circuit.
-    pub fn finish_with_default(mut self, b: &Builder<'a>, default: T) -> Vec<TWire<'a, T>>
+    pub fn finish_with_default(mut self, b: &Builder<'a>, default: T) -> FinishRouting<'a, T>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a>, T::Repr: Clone {
         let pad = b.lit(default);
 
@@ -91,17 +91,26 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
 
     /// Finish building the routing network circuit.  Panics if the number of inputs is not equal
     /// to the number of outputs.
-    pub fn finish_exact(self, b: &Builder<'a>) -> Vec<TWire<'a, T>>
+    pub fn finish_exact(self, _b: &Builder<'a>) -> FinishRouting<'a, T>
     where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
         assert!(self.inputs.len() == self.num_outputs);
         let n = self.inputs.len();
-        if n <= 1 {
-            return self.inputs;
-        }
 
         let mut bn = benes::BenesNetwork::new(n as u32, n as u32);
-        bn.set_routes(&self.routes);
-        benes_build(b, &bn, self.inputs, self.num_outputs)
+        if n >= 2 {
+            bn.set_routes(&self.routes);
+        }
+
+        let ws = self.inputs.into_iter().map(Some)
+            .chain((n .. 2 * bn.layer_size).map(|_| None))
+            .collect::<Vec<_>>();
+
+        FinishRouting {
+            bn,
+            ws,
+            num_outputs: self.num_outputs,
+            layer: 0,
+        }
     }
 }
 
@@ -150,29 +159,40 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
     (x2, y2)
 }
 
-/// Build a Benes network for permuting `inputs`.
-fn benes_build<'a, T>(
-    b: &Builder<'a>,
-    bn: &benes::BenesNetwork,
-    inputs: Vec<TWire<'a, T>>,
+pub struct FinishRouting<'a, T: Repr<'a>> {
+    bn: benes::BenesNetwork,
+    ws: Vec<Option<TWire<'a, T>>>,
     num_outputs: usize,
-) -> Vec<TWire<'a, T>>
+    layer: usize,
+}
+
+impl<'a, T> FinishRouting<'a, T>
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
-    if inputs.len() <= 1 {
-        return inputs;
+    pub fn empty() -> FinishRouting<'a, T> {
+        FinishRouting {
+            bn: benes::BenesNetwork::new(0, 0),
+            ws: Vec::new(),
+            num_outputs: 0,
+            layer: 0,
+        }
     }
 
-    assert!(inputs.len() <= 2 * bn.layer_size);
-    let num_inputs = inputs.len();
-    let mut ws = inputs.into_iter().map(Some)
-        .chain((num_inputs .. 2 * bn.layer_size).map(|_| None))
-        .collect::<Vec<_>>();
-    debug_assert!(ws.len() == 2 * bn.layer_size);
-    for l in 0 .. bn.num_layers {
+    /// Check whether `self` is ready to produce a final result.
+    pub fn is_ready(&self) -> bool {
+        self.layer == self.bn.num_layers
+    }
+
+    /// Run one step of circuit construction.
+    pub fn step(&mut self, b: &Builder<'a>) {
+        assert!(self.layer < self.bn.num_layers);
+        let bn = &self.bn;
+        let ws = &mut self.ws;
+        let l = self.layer;
+
         let mut new_ws = Vec::with_capacity(bn.layer_size);
         for i in 0 .. bn.layer_size {
             let [j0, j1] = bn.switch(l, i);
-            let (out0, out1) = match (ws[j0 as usize].clone(), ws[j1 as usize].clone()) {
+            let (out0, out1) = match (ws[j0 as usize].take(), ws[j1 as usize].take()) {
                 (Some(inp0), Some(inp1)) => {
                     let (out0, out1) = benes_switch(b, inp0, inp1, bn.flags(l, i));
                     (Some(out0), Some(out1))
@@ -190,14 +210,44 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
             new_ws.push(out0);
             new_ws.push(out1);
         }
+
         assert_eq!(ws.len(), new_ws.len());
-        ws = new_ws;
+        self.ws = new_ws;
+        self.layer += 1;
     }
 
-    let outputs = ws.into_iter().take(num_outputs).enumerate()
-        .map(|(i, w)| w.unwrap_or_else(|| panic!("missing output for index {}", i)))
-        .collect();
-    outputs
+    /// Finish circuit construction and return the final result.
+    pub fn finish(self) -> Vec<TWire<'a, T>> {
+        assert!(self.is_ready());
+        self.ws.into_iter().take(self.num_outputs).enumerate()
+            .map(|(i, w)| w.unwrap_or_else(|| panic!("missing output for index {}", i)))
+            .collect()
+    }
+
+    pub fn run(mut self, b: &Builder<'a>) -> Vec<TWire<'a, T>> {
+        while !self.is_ready() {
+            self.step(b);
+        }
+        self.finish()
+    }
+}
+
+
+impl<'a, 'b, T> Migrate<'a, 'b> for FinishRouting<'a, T>
+where
+    T: for<'c> Repr<'c>,
+    TWire<'a, T>: Migrate<'a, 'b, Output = TWire<'b, T>>,
+{
+    type Output = FinishRouting<'b, T>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> FinishRouting<'b, T> {
+        FinishRouting {
+            bn: self.bn,
+            ws: v.visit(self.ws),
+            num_outputs: self.num_outputs,
+            layer: self.layer,
+        }
+    }
 }
 
 
@@ -231,7 +281,7 @@ mod test {
         for (i, &j) in perm[..n].iter().enumerate() {
             rb.connect(input_ids[i], output_ids[j]);
         }
-        let outputs = rb.finish_exact(&b);
+        let outputs = rb.finish_exact(&b).run(&b);
 
         let output_vals = outputs.iter()
             .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())

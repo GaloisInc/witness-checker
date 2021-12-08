@@ -9,6 +9,7 @@ use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
 use crate::routing::{RoutingBuilder, InputId, OutputId};
+use crate::util::PanicOnDrop;
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
@@ -725,7 +726,7 @@ impl<'a> SegGraphBuilder<'a> {
             routing.connect(src_input, dest_output);
         }
 
-        let outputs = routing.finish_with_default(b, default);
+        let outputs = routing.finish_with_default(b, default).run(b);
         self.network = NetworkState::After(outputs);
     }
 
@@ -856,28 +857,6 @@ impl<'a> SegmentNode<'a> {
 pub enum SegGraphItem {
     Segment(usize),
     Network,
-}
-
-
-#[derive(Debug, Migrate)]
-struct PanicOnDrop {
-    defused: bool,
-}
-
-impl PanicOnDrop {
-    pub fn new() -> PanicOnDrop {
-        PanicOnDrop { defused: false }
-    }
-
-    pub fn defuse(&mut self) {
-        self.defused = true;
-    }
-}
-
-impl Drop for PanicOnDrop {
-    fn drop(&mut self) {
-        assert!(self.defused, "must call finish() before dropping SegGraphBuilder");
-    }
 }
 
 
