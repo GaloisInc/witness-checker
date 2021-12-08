@@ -8,7 +8,7 @@ use crate::routing::{RoutingBuilder, FinishRouting};
 fn sorting_permutation<'a, C: CircuitTrait<'a> + ?Sized, T, F>(
     c: &'a C,
     xs: &[TWire<'a, T>],
-    compare: &mut F,
+    mut compare: F,
 ) -> Option<Vec<usize>>
 where
     T: Repr<'a>,
@@ -59,17 +59,17 @@ pub fn sort<'a, T, F>(
     b: &Builder<'a>,
     xs: &[TWire<'a, T>],
     mut compare: F,
-) -> Sort<'a, T, F>
+) -> Sort<'a, T>
 where
     T: Mux<'a, bool, T, Output = T>,
     T::Repr: Clone,
-    F: FnMut(&TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool>,
+    F: FnMut(&Builder<'a>, &TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool> + 'a,
 {
     // Sequences of length 0 and 1 are already sorted, trivially.
     if xs.len() <= 1 {
         return Sort {
             routing: FinishRouting::trivial(xs.to_owned()),
-            compare,
+            compare: Box::new(compare),
         };
     }
 
@@ -77,7 +77,7 @@ where
     let inputs = xs.iter().map(|w| routing.add_input(w.clone())).collect::<Vec<_>>();
     let outputs = (0 .. xs.len()).map(|_| routing.add_output()).collect::<Vec<_>>();
 
-    let perm = sorting_permutation(b.circuit(), xs, &mut compare);
+    let perm = sorting_permutation(b.circuit(), xs, |x, y| compare(b, x, y));
     if let Some(ref perm) = perm {
         for (i, &j) in perm.iter().enumerate() {
             routing.connect(inputs[i], outputs[j]);
@@ -86,20 +86,19 @@ where
     let routing = routing.finish_exact(b);
     Sort {
         routing,
-        compare,
+        compare: Box::new(compare),
     }
 }
 
-pub struct Sort<'a, T: Repr<'a>, F> {
+pub struct Sort<'a, T: Repr<'a>> {
     routing: FinishRouting<'a, T>,
-    compare: F,
+    compare: Box<dyn FnMut(&Builder<'a>, &TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool> + 'a>,
 }
 
-impl<'a, T, F> Sort<'a, T, F>
+impl<'a, T> Sort<'a, T>
 where
     T: Mux<'a, bool, T, Output = T>,
     T::Repr: Clone,
-    F: FnMut(&TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool>,
 {
     pub fn is_ready(&self) -> bool {
         self.routing.is_ready()
@@ -117,7 +116,7 @@ where
 
         let mut sorted = b.lit(true);
         for (x, y) in output_wires.iter().zip(output_wires.iter().skip(1)) {
-            sorted = b.and(sorted, (self.compare)(x, y));
+            sorted = b.and(sorted, (self.compare)(b, x, y));
         }
 
         (output_wires, sorted)
@@ -149,7 +148,7 @@ mod test {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
-        let (ws, _) = sort(&b, &ws, |&x, &y| b.lt(x, y)).run(&b);
+        let (ws, _) = sort(&b, &ws, |b, &x, &y| b.lt(x, y)).run(&b);
 
         let vals = ws.iter()
             .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())
