@@ -205,10 +205,11 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
 }
 
 
-#[cfg(old_test)]
+#[cfg(test)]
 mod test {
     use std::convert::TryInto;
     use bumpalo::Bump;
+    use log::*;
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::Circuit;
     use crate::ir::circuit::DynCircuit;
@@ -233,8 +234,8 @@ mod test {
         let inputs = (0 .. n).map(|i| b.lit(i as u32)).collect::<Vec<_>>();
         let input_ids = inputs.iter().map(|&w| rb.add_input(w)).collect::<Vec<_>>();
         let output_ids = (0 .. n).map(|_| rb.add_output()).collect::<Vec<_>>();
-        let r = rb.finish_exact(&b);
-        for (i, &j) in perm.iter().enumerate() {
+        let mut r = rb.finish_exact(&b);
+        for (i, &j) in perm[..n].iter().enumerate() {
             r.connect(input_ids[i], output_ids[j]);
         }
         let outputs = r.finish(&b);
