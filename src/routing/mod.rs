@@ -1,7 +1,6 @@
-use std::ops::Index;
 use std::u32;
 use crate::ir::migrate::{self, Migrate};
-use crate::ir::typed::{TWire, TSecretHandle, Builder, Repr, Lit, Mux};
+use crate::ir::typed::{TWire, Builder, Repr, Lit, Mux};
 
 mod benes;
 pub mod sort;
@@ -30,6 +29,7 @@ impl OutputId {
 pub struct RoutingBuilder<'a, T: Repr<'a>> {
     inputs: Vec<TWire<'a, T>>,
     num_outputs: usize,
+    routes: Vec<benes::Route>,
 }
 
 impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
@@ -37,6 +37,7 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
         RoutingBuilder {
             inputs: Vec::new(),
             num_outputs: 0,
+            routes: Vec::new(),
         }
     }
 
@@ -56,14 +57,22 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
         id
     }
 
+    pub fn connect(&mut self, inp: InputId, out: OutputId) {
+        self.routes.push(benes::Route {
+            input: inp.0 as u32,
+            output: out.0 as u32,
+            public: false,
+        });
+    }
+
     /// Finish building the routing network circuit.
-    pub fn finish(self, b: &Builder<'a>) -> Routing<'a, T>
+    pub fn finish(self, b: &Builder<'a>) -> Vec<TWire<'a, T>>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a> + Default, T::Repr: Clone {
         self.finish_with_default(b, T::default())
     }
 
     /// Finish building the routing network circuit.
-    pub fn finish_with_default(mut self, b: &Builder<'a>, default: T) -> Routing<'a, T>
+    pub fn finish_with_default(mut self, b: &Builder<'a>, default: T) -> Vec<TWire<'a, T>>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a>, T::Repr: Clone {
         let pad = b.lit(default);
 
@@ -82,20 +91,17 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
 
     /// Finish building the routing network circuit.  Panics if the number of inputs is not equal
     /// to the number of outputs.
-    pub fn finish_exact(self, b: &Builder<'a>) -> Routing<'a, T>
+    pub fn finish_exact(self, b: &Builder<'a>) -> Vec<TWire<'a, T>>
     where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
         assert!(self.inputs.len() == self.num_outputs);
         let n = self.inputs.len();
-        let bn = benes::BenesNetwork::new(n as u32, n as u32);
-        let (outputs, secrets) = benes_build(b, &bn, self.inputs, self.num_outputs);
-        Routing {
-            bn,
-            outputs,
-            secrets,
-            connected_a: vec![false; n],
-            connected_b: vec![false; n],
-            routes: Vec::with_capacity(n),
+        if n <= 1 {
+            return self.inputs;
         }
+
+        let mut bn = benes::BenesNetwork::new(n as u32, n as u32);
+        bn.set_routes(&self.routes);
+        benes_build(b, &bn, self.inputs, self.num_outputs)
     }
 }
 
@@ -116,87 +122,32 @@ where
         RoutingBuilder {
             inputs: v.visit(self.inputs),
             num_outputs: v.visit(self.num_outputs),
-        }
-    }
-}
-
-
-pub struct Routing<'a, T: Repr<'a>> {
-    bn: benes::BenesNetwork,
-    outputs: Vec<TWire<'a, T>>,
-    secrets: Vec<Option<TSecretHandle<'a, bool>>>,
-
-    connected_a: Vec<bool>,
-    connected_b: Vec<bool>,
-    routes: Vec<benes::Route>,
-}
-
-impl<'a, T: Repr<'a>> Index<OutputId> for Routing<'a, T> {
-    type Output = TWire<'a, T>;
-    fn index(&self, id: OutputId) -> &TWire<'a, T> {
-        &self.outputs[id.0]
-    }
-}
-
-impl<'a, T: Repr<'a>> Routing<'a, T> {
-    /// Configure the routing network to connect `inp` to `out`.
-    pub fn connect(&mut self, inp: InputId, out: OutputId) {
-        assert!(!self.connected_a[inp.0], "input {:?} is already connected", inp);
-        assert!(!self.connected_b[out.0], "output {:?} is already connected", out);
-        self.connected_a[inp.0] = true;
-        self.connected_b[out.0] = true;
-        self.routes.push(benes::Route {
-            input: inp.0 as u32,
-            output: out.0 as u32,
-            public: false,
-        });
-    }
-
-    /// Set the secret routing bits.  Returns the outputs for further use.
-    pub fn finish(mut self, b: &Builder<'a>) -> Vec<TWire<'a, T>> {
-        self.bn.set_routes(&self.routes);
-        if b.is_prover() {
-            for (sh, &flags) in self.secrets.into_iter().zip(self.bn.flags.iter()) {
-                if let Some(sh) = sh {
-                    sh.set(b, flags.contains(benes::SwitchFlags::F_SWAP));
-                }
-            }
-        }
-
-        self.outputs
-    }
-}
-
-impl<'a, 'b, T> Migrate<'a, 'b> for Routing<'a, T>
-where
-    T: for<'c> Repr<'c>,
-    TWire<'a, T>: Migrate<'a, 'b, Output = TWire<'b, T>>,
-{
-    type Output = Routing<'b, T>;
-
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Routing<'b, T> {
-        Routing {
-            bn: self.bn,
-            outputs: v.visit(self.outputs),
-            secrets: v.visit(self.secrets),
-            connected_a: self.connected_a,
-            connected_b: self.connected_b,
             routes: self.routes,
         }
     }
 }
 
 
-fn maybe_swap<'a, T>(
+fn benes_switch<'a, T>(
     b: &Builder<'a>,
     x: TWire<'a, T>,
     y: TWire<'a, T>,
-) -> (TWire<'a, T>, TWire<'a, T>, TSecretHandle<'a, bool>)
+    flags: benes::SwitchFlags,
+) -> (TWire<'a, T>, TWire<'a, T>)
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
-    let (swap, sh) = b.secret();
+    let swap_flag = flags.contains(benes::SwitchFlags::F_SWAP);
+    if flags.contains(benes::SwitchFlags::F_PUBLIC) {
+        if swap_flag {
+            return (y, x);
+        } else {
+            return (x, y);
+        }
+    }
+
+    let swap = b.secret_init(|| swap_flag);
     let x2 = b.mux(swap, y.clone(), x.clone());
     let y2 = b.mux(swap, x, y);
-    (x2, y2, sh)
+    (x2, y2)
 }
 
 /// Build a Benes network for permuting `inputs`.
@@ -205,10 +156,10 @@ fn benes_build<'a, T>(
     bn: &benes::BenesNetwork,
     inputs: Vec<TWire<'a, T>>,
     num_outputs: usize,
-) -> (Vec<TWire<'a, T>>, Vec<Option<TSecretHandle<'a, bool>>>)
+) -> Vec<TWire<'a, T>>
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
     if inputs.len() <= 1 {
-        return (inputs, Vec::new());
+        return inputs;
     }
 
     assert!(inputs.len() <= 2 * bn.layer_size);
@@ -217,29 +168,27 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
         .chain((num_inputs .. 2 * bn.layer_size).map(|_| None))
         .collect::<Vec<_>>();
     debug_assert!(ws.len() == 2 * bn.layer_size);
-    let mut secrets = Vec::with_capacity(bn.num_layers * bn.layer_size);
     for l in 0 .. bn.num_layers {
         let mut new_ws = Vec::with_capacity(bn.layer_size);
         for i in 0 .. bn.layer_size {
             let [j0, j1] = bn.switch(l, i);
-            let (out0, out1, sh) = match (ws[j0 as usize].clone(), ws[j1 as usize].clone()) {
+            let (out0, out1) = match (ws[j0 as usize].clone(), ws[j1 as usize].clone()) {
                 (Some(inp0), Some(inp1)) => {
-                    let (out0, out1, sh) = maybe_swap(b, inp0, inp1);
-                    (Some(out0), Some(out1), Some(sh))
+                    let (out0, out1) = benes_switch(b, inp0, inp1, bn.flags(l, i));
+                    (Some(out0), Some(out1))
                 },
                 (Some(inp0), None) => {
-                    (Some(inp0.clone()), Some(inp0), None)
+                    (Some(inp0.clone()), Some(inp0))
                 },
                 (None, Some(inp1)) => {
-                    (Some(inp1.clone()), Some(inp1), None)
+                    (Some(inp1.clone()), Some(inp1))
                 },
                 (None, None) => {
-                    (None, None, None)
+                    (None, None)
                 },
             };
             new_ws.push(out0);
             new_ws.push(out1);
-            secrets.push(sh);
         }
         assert_eq!(ws.len(), new_ws.len());
         ws = new_ws;
@@ -248,7 +197,7 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
     let outputs = ws.into_iter().take(num_outputs).enumerate()
         .map(|(i, w)| w.unwrap_or_else(|| panic!("missing output for index {}", i)))
         .collect();
-    (outputs, secrets)
+    outputs
 }
 
 
@@ -279,11 +228,10 @@ mod test {
         let inputs = (0 .. n).map(|i| b.lit(i as u32)).collect::<Vec<_>>();
         let input_ids = inputs.iter().map(|&w| rb.add_input(w)).collect::<Vec<_>>();
         let output_ids = (0 .. n).map(|_| rb.add_output()).collect::<Vec<_>>();
-        let mut r = rb.finish_exact(&b);
         for (i, &j) in perm[..n].iter().enumerate() {
-            r.connect(input_ids[i], output_ids[j]);
+            rb.connect(input_ids[i], output_ids[j]);
         }
-        let outputs = r.finish(&b);
+        let outputs = rb.finish_exact(&b);
 
         let output_vals = outputs.iter()
             .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())

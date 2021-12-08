@@ -716,7 +716,6 @@ impl<'a> SegGraphBuilder<'a> {
         }
 
         let default = self.default_state.clone();
-        let mut routing = routing.finish_with_default(b, default);
 
         for &(src, dest) in &self.network_conns {
             let src_input = self.segments[src].to_net
@@ -726,7 +725,7 @@ impl<'a> SegGraphBuilder<'a> {
             routing.connect(src_input, dest_output);
         }
 
-        let outputs = routing.finish(b);
+        let outputs = routing.finish_with_default(b, default);
         self.network = NetworkState::After(outputs);
     }
 

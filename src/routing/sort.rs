@@ -68,10 +68,9 @@ where
         return b.lit(true);
     }
 
-    let mut routing_builder = RoutingBuilder::new();
-    let inputs = xs.iter().map(|w| routing_builder.add_input(w.clone())).collect::<Vec<_>>();
-    let outputs = (0 .. xs.len()).map(|_| routing_builder.add_output()).collect::<Vec<_>>();
-    let mut routing = routing_builder.finish_exact(b);
+    let mut routing = RoutingBuilder::new();
+    let inputs = xs.iter().map(|w| routing.add_input(w.clone())).collect::<Vec<_>>();
+    let outputs = (0 .. xs.len()).map(|_| routing.add_output()).collect::<Vec<_>>();
 
     let perm = sorting_permutation(b.circuit(), xs, compare);
     if let Some(ref perm) = perm {
@@ -79,7 +78,7 @@ where
             routing.connect(inputs[i], outputs[j]);
         }
     }
-    let output_wires = routing.finish(b);
+    let output_wires = routing.finish_exact(b);
     xs.clone_from_slice(&output_wires);
 
     let mut sorted = b.lit(true);
