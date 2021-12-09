@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::CircuitTrait;
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
 use crate::routing::{RoutingBuilder, FinishRouting};
 
@@ -55,21 +56,20 @@ where
 /// `b`.
 ///
 /// This is an unstable sort.
-pub fn sort<'a, T, F>(
+pub fn sort<'a, T>(
     b: &Builder<'a>,
     xs: &[TWire<'a, T>],
-    mut compare: F,
+    compare: for<'b> fn(&Builder<'b>, &TWire<'b, T>, &TWire<'b, T>) -> TWire<'b, bool>,
 ) -> Sort<'a, T>
 where
     T: Mux<'a, bool, T, Output = T>,
     T::Repr: Clone,
-    F: FnMut(&Builder<'a>, &TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool> + 'a,
 {
     // Sequences of length 0 and 1 are already sorted, trivially.
     if xs.len() <= 1 {
         return Sort {
             routing: FinishRouting::trivial(xs.to_owned()),
-            compare: Box::new(compare),
+            compare,
         };
     }
 
@@ -84,15 +84,12 @@ where
         }
     }
     let routing = routing.finish_exact(b);
-    Sort {
-        routing,
-        compare: Box::new(compare),
-    }
+    Sort { routing, compare }
 }
 
 pub struct Sort<'a, T: Repr<'a>> {
     routing: FinishRouting<'a, T>,
-    compare: Box<dyn FnMut(&Builder<'a>, &TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool> + 'a>,
+    compare: for<'b> fn(&Builder<'b>, &TWire<'b, T>, &TWire<'b, T>) -> TWire<'b, bool>,
 }
 
 impl<'a, T> Sort<'a, T>
@@ -111,7 +108,7 @@ where
     /// The returned `TWire<bool>` is `true` when the output is correctly sorted.  The caller must
     /// assert it to validate the sort results; otherwise the prover may cheat by reordering `xs`
     /// arbitrarily.
-    pub fn finish(mut self, b: &Builder<'a>) -> (Vec<TWire<'a, T>>, TWire<'a, bool>) {
+    pub fn finish(self, b: &Builder<'a>) -> (Vec<TWire<'a, T>>, TWire<'a, bool>) {
         let output_wires = self.routing.finish();
 
         let mut sorted = b.lit(true);
@@ -127,6 +124,21 @@ where
             self.step(b);
         }
         self.finish(b)
+    }
+}
+
+impl<'a, 'b, T> Migrate<'a, 'b> for Sort<'a, T>
+where
+    T: for<'c> Repr<'c>,
+    TWire<'a, T>: Migrate<'a, 'b, Output = TWire<'b, T>>,
+{
+    type Output = Sort<'b, T>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Sort<'b, T> {
+        Sort {
+            routing: v.visit(self.routing),
+            compare: self.compare,
+        }
     }
 }
 
