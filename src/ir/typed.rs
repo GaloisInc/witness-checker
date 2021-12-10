@@ -17,6 +17,10 @@ impl<'a> Builder<'a> {
         Builder { c: c }
     }
 
+    pub fn is_prover(&self) -> bool {
+        self.c.is_prover()
+    }
+
     pub fn circuit(&self) -> & &'a DynCircuit<'a> {
         &self.c
     }

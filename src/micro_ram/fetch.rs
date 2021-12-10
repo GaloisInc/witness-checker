@@ -6,7 +6,7 @@ use log::*;
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
-use crate::sort;
+use crate::routing::sort;
 
 pub struct Fetch<'a> {
     ports: Vec<TWire<'a, FetchPort>>,
