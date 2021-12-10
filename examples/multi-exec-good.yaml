@@ -1,0 +1,141 @@
+# An example of multiple executions in a single file. Two programs `a`
+# and `b` execute and the third `c` program checks that their "outputs" are
+# distinct, triggering a bug if so.
+
+- [0,1,6,0]
+- [multi-exec]
+-
+  execs:
+    a:
+      program:
+        - [mov, 0, null, true, 12]        # mov r0, 12
+        - [mov, 1, null, true, 16]        # mov r1, 16
+        - [load8, 0, null, false, 1]      # load8 r0, [r1]
+        - [sub, 0, 0, true, 42]           # sub r0, r0, 42
+     
+      params:
+        num_regs: 2
+      
+      # The memory 
+      init_mem:
+        - start: 2
+          len: 1
+          read_only: true
+          secret: true
+          data: [42]
+          name: OUTPUT
+          heap_init: true
+      
+      segments:
+        - constraints: []
+          len: 4
+          successors: []
+          enter_from_network: true
+          exit_to_network: true
+      
+      trace:
+        - segment: 0
+          states:
+            - [1, [12, 0]]
+            - [2, [12, 16]]
+            - [3, [42, 16]]
+            - [4, [0, 16]]
+      
+      advice:
+        2: [[MemOp, 16, 42, read, 8]]
+
+    b:
+      program:
+        - [mov, 0, null, true, 12]        # mov r0, 12
+        - [mov, 1, null, true, 16]        # mov r1, 16
+        - [load8, 0, null, false, 1]      # load8 r0, [r1]
+        - [sub, 0, 0, true, 42]           # sub r0, r0, 42
+     
+      params:
+        num_regs: 2
+      
+      # The memory 
+      init_mem:
+        - start: 2
+          len: 1
+          read_only: true
+          secret: true
+          data: [42]
+          name: OUTPUT
+          heap_init: true
+      
+      segments:
+        - constraints: []
+          len: 4
+          successors: []
+          enter_from_network: true
+          exit_to_network: true
+      
+      trace:
+        - segment: 0
+          states:
+            - [1, [12, 0]]
+            - [2, [12, 16]]
+            - [3, [42, 16]]
+            - [4, [0, 16]]
+      
+      advice:
+        2: [[MemOp, 16, 42, read, 8]]
+    c:
+      program:
+        - [load8, 0, null, true, 16]      # load8 r0, 16
+        - [load8, 1, null, true, 24]      # load8 r1, 24
+        # Check the two inputs are distinct and trigger a bug if so. 
+        - [cmpe, 0, 0, false, 1]          # cmpe r1, r0, r0   
+        - [cjmp, null, 0, true, 5]        # cjmp r0, 5
+        # program label 4
+        - [poison8, 0, null, true, 0]     # poison8 r0 0
+        # program label 5
+        - [load8, 0, null, true, 0]       # load8 r0, 0 
+     
+      params:
+        num_regs: 2
+      
+      # The memory 
+      init_mem:
+        - start: 2
+          len: 1
+          read_only: true
+          secret: true
+          data: [42]
+          name: A_OUTPUT
+          heap_init: true
+        - start: 3
+          len: 1
+          read_only: true
+          secret: true
+          data: [11]
+          name: B_OUTPU
+          heap_init: true
+      
+      segments:
+        - constraints: []
+          len: 6
+          successors: []
+          enter_from_network: true
+          exit_to_network: true
+      
+      trace:
+        - segment: 0
+          states:
+            - [1, [42, 0]]
+            - [2, [42, 11]]
+            - [3, [0, 11]]
+            - [4, [0, 11]]
+            - [5, [0, 11]]
+            - [6, [0, 11]]
+      
+      advice:
+        0: [[MemOp, 16, 42, read, 8]]
+        1: [[MemOp, 24, 11, read, 8]]
+        4: [[MemOp, 0, 0, poison, 8]]
+        5: [[MemOp, 0, 0, read, 8]]
+
+  mem_equiv:
+     - [[a,OUTPUT],[c,A_OUTPUT]]
+     - [[b,OUTPUT],[c,B_OUTPUT]]
