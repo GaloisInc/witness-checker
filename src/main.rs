@@ -125,6 +125,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let is_prover = !args.is_present("verifier-mode");
 
     let arenas = Arenas::new();
+    let mcx = cheesecloth::ir::migrate::handle::MigrateContext::new();
 
     let arg_test_gadget_eval = args.is_present("test-gadget-eval");
     let arg_zkif_out = args.is_present("zkif-out");
@@ -234,7 +235,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             .map(|s| s.to_owned());
 
         let (new_cx, new_equiv_segments) = ExecBuilder::build(
-            &b, cx, &exec, name, equiv_segments, init_state,
+            &b, &mcx, cx, &exec, name, equiv_segments, init_state,
             check_steps, expect_zero, debug_segment_graph_path);
         cx = new_cx;
         equiv_segments = new_equiv_segments;

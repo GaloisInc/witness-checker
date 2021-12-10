@@ -11,6 +11,9 @@ use crate::ir::typed::{TWire, Repr};
 pub use cheesecloth_derive_migrate::{Migrate, impl_migrate_trivial};
 use super::migrate;
 
+pub mod handle;
+
+
 pub trait Migrate<'a, 'b> {
     type Output;
     fn migrate<V: Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Self::Output;

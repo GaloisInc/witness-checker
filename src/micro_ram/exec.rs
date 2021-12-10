@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::mem;
 use log::info;
 use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::CircuitExt;
+use crate::ir::circuit::{CircuitTrait, CircuitExt};
 use crate::ir::migrate::{self, Migrate};
+use crate::ir::migrate::handle::{MigrateContext, MigrateHandle};
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::Fetch;
@@ -37,6 +39,7 @@ pub struct ExecBuilder<'a> {
 impl<'a> ExecBuilder<'a> {
     pub fn build(
         b: &Builder<'a>,
+        mcx: &'a MigrateContext<'a>,
         cx: Context<'a>,
         exec: &ExecBody,
         exec_name: &str,
@@ -58,7 +61,7 @@ impl<'a> ExecBuilder<'a> {
         );
         let eb = eb.init(b, exec, exec_name);
         let eb = eb.run(b, exec);
-        eb.finish(b, exec)
+        eb.finish(b, mcx, exec)
     }
 
     fn new(
@@ -177,43 +180,36 @@ impl<'a> ExecBuilder<'a> {
         }
     }
 
-    fn finish(self, b: &Builder<'a>, _exec: &ExecBody) -> (Context<'a>, EquivSegments<'a>) {
-        // This method is written in an unusual style to ensure that no unmigrated wires are left
-        // dangling.  The only local variable allowed at top level is `x` - even `self` is consumed
-        // as soon as possible so it can't be used later.  So the only data passed from one block
-        // to the next is `x`, and `x` is always migrated as a unit.
+    fn finish(
+        self,
+        b: &Builder<'a>,
+        mcx: &'a MigrateContext<'a>,
+        _exec: &ExecBody,
+    ) -> (Context<'a>, EquivSegments<'a>) {
+        let mut mh = MigrateHandle::new(mcx);
+        let mh = &mut mh;
 
-        let x = {
-            let eb = self;
-            (eb.cx, eb.equiv_segments, eb.seg_graph_builder, eb.mem, eb.fetch)
-        };
-        let x = unsafe { b.circuit().erase_and_migrate(x) };
+        let x = self;
+        let mut cx = mh.root(x.cx);
+        let mut equiv_segments = mh.root(x.equiv_segments);
+        let mut seg_graph_builder = mh.root(x.seg_graph_builder);
+        let mut mem = mh.root(x.mem);
+        let mut fetch = mh.root(x.fetch);
+        let x = ();
 
-        let x = {
-            let (cx, equiv_segments, seg_graph_builder, mem, fetch) = x;
-            info!("seg_graph_builder.finish");
-            seg_graph_builder.finish(&cx, b);
-            (cx, equiv_segments, mem, fetch)
-        };
-        let x = unsafe { b.circuit().erase_and_migrate(x) };
+        info!("seg_graph_builder.finish");
+        seg_graph_builder.take().finish(&cx.open(mh), b);
+        unsafe { mh.erase_and_migrate(b.circuit()) };
 
-        let x = {
-            let (cx, equiv_segments, mem, fetch) = x;
-            info!("mem.assert_consistent");
-            mem.assert_consistent(&cx, b);
-            (cx, equiv_segments, fetch)
-        };
-        let x = unsafe { b.circuit().erase_and_migrate(x) };
+        info!("mem.assert_consistent");
+        mem.take().assert_consistent(&cx.open(mh), b);
+        unsafe { mh.erase_and_migrate(b.circuit()) };
 
-        let x = {
-            let (cx, equiv_segments, fetch) = x;
-            info!("fetch.assert_consistent");
-            fetch.assert_consistent(&cx, b);
-            (cx, equiv_segments)
-        };
-        let x = unsafe { b.circuit().erase_and_migrate(x) };
+        info!("fetch.assert_consistent");
+        fetch.take().assert_consistent(&cx.open(mh), b);
+        unsafe { mh.erase_and_migrate(b.circuit()) };
 
-        x
+        (cx.take(), equiv_segments.take())
     }
 }
 

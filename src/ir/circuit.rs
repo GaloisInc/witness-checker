@@ -856,6 +856,23 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
+    unsafe fn migrate_with<F: FnOnce(&mut MigrateVisitor<'a, 'a>) -> R, R>(&'a self, f: F) -> R {
+        let old_arenas = self.as_base().pre_migrate();
+        let mut v = MigrateVisitor::new(self.as_base());
+
+        self.migrate_filter(&mut v);
+        let r = f(&mut v);
+
+        info!("migrated {} wires, {} secrets", v.wire_map.len(), v.secret_map.len());
+        info!("  old size: {} bytes", old_arenas.allocated_bytes());
+        info!("  new size: {} bytes", self.as_base().arena().allocated_bytes());
+
+        drop(v);
+        drop(old_arenas);
+
+        r
+    }
+
     /// Migrate all wires in `self` and `x` to a fresh arena.  Essentially, this garbage-collects
     /// all unused wires.
     ///
@@ -871,21 +888,18 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         x: T,
     ) -> T {
         use crate::ir::migrate::Visitor;
+        self.migrate_with(|v| v.visit(x))
+    }
 
-        let old_arenas = self.as_base().pre_migrate();
-        let mut v = MigrateVisitor::new(self.as_base());
+    unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a>) -> R, R>(&'a self, f: F) -> R {
+        let mut v = EraseVisitor::new(self.as_base());
 
-        self.migrate_filter(&mut v);
-        let x = v.visit(x);
-
-        info!("migrated {} wires, {} secrets", v.wire_map.len(), v.secret_map.len());
-        info!("  old size: {} bytes", old_arenas.allocated_bytes());
-        info!("  new size: {} bytes", self.as_base().arena().allocated_bytes());
+        self.erase_filter(&mut v);
+        let r = f(&mut v);
 
         drop(v);
-        drop(old_arenas);
 
-        x
+        r
     }
 
     /// Replace all non-trivial top-level wires in `self` and `x` with `GateKind::Erased`.
@@ -897,15 +911,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         x: T,
     ) -> T {
         use crate::ir::migrate::Visitor;
-
-        let mut v = EraseVisitor::new(self.as_base());
-
-        self.erase_filter(&mut v);
-        let x = v.visit(x);
-
-        drop(v);
-
-        x
+        self.erase_with(|v| v.visit(x))
     }
 
     /// Shorthand for `erase` followed by `migrate`.
