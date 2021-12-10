@@ -1008,7 +1008,7 @@ impl<'a> typed::Eq<'a, WordAddr> for WordAddr {
 
 pub struct PackedMemPort;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct PackedMemPortRepr<'a> {
     key: Wire<'a>,
     data: Wire<'a>,
@@ -1159,7 +1159,7 @@ where
 
 pub struct PackedFetchPort;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct PackedFetchPortRepr<'a> {
     key: Wire<'a>,
     data: Wire<'a>,

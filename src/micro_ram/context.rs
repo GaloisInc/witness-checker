@@ -22,6 +22,11 @@ macro_rules! wire_assert {
         }
     };
 
+    ($cx:ident = $cx_expr:expr, $cond:expr, $($args:tt)*) => {{
+        let $cx = $cx_expr;
+        wire_assert!($cx, $cond, $($args)*);
+    }};
+
     (& $cx:ident, $cond:expr, $($args:tt)*) => {{
         let $cx = &$cx;
         wire_assert!($cx, $cond, $($args)*);

@@ -202,11 +202,11 @@ impl<'a> ExecBuilder<'a> {
         unsafe { mh.erase_and_migrate(b.circuit()) };
 
         info!("mem.assert_consistent");
-        mem.take().assert_consistent(&cx.open(mh), b);
+        mem.take().assert_consistent(mh, &mut cx, b);
         unsafe { mh.erase_and_migrate(b.circuit()) };
 
         info!("fetch.assert_consistent");
-        fetch.take().assert_consistent(&cx.open(mh), b);
+        fetch.take().assert_consistent(mh, &mut cx, b);
         unsafe { mh.erase_and_migrate(b.circuit()) };
 
         (cx.take(), equiv_segments.take())

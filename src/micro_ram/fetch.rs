@@ -4,6 +4,7 @@
 //! the sorted list.
 use log::*;
 use crate::ir::migrate::{self, Migrate};
+use crate::ir::migrate::handle::{MigrateHandle, Rooted};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
@@ -62,43 +63,72 @@ impl<'a> Fetch<'a> {
     /// Assert that this set of instruction fetch operations is internally consistent.
     ///
     /// This takes `self` by value to prevent adding more `FetchPort`s after the consistency check.
-    pub fn assert_consistent(self, cx: &Context<'a>, b: &Builder<'a>) {
-        let sorted_ports = {
-            let _g = b.scoped_label("sort fetch");
-            let packed_ports = self.ports.iter().map(|&fp| {
-                PackedFetchPort::from_unpacked(&b, fp)
-            }).collect::<Vec<_>>();
-            let (packed_ports, sorted) =
-                sort::sort(&b, &packed_ports, |b, &x, &y| b.le(x, y)).run(b);
-            wire_assert!(&cx, sorted, "instruction fetch sorting failed");
-            packed_ports.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
+    pub fn assert_consistent(
+        self,
+        mh: &mut MigrateHandle<'a>,
+        cx: &mut Rooted<'a, Context<'a>>,
+        b: &Builder<'a>,
+    ) {
+        let (mut ports,) = {
+            let Fetch { ports, default_instr: _ } = self;
+            (mh.root(ports),)
         };
 
+        let mut sorted_ports = Rooted::new({
+            let _g = b.scoped_label("sort fetch");
+            let mut sort = Rooted::new({
+                let packed_ports = ports.open(mh).iter().map(|&fp| {
+                    PackedFetchPort::from_unpacked(&b, fp)
+                }).collect::<Vec<_>>();
+                sort::sort(&b, &packed_ports, |b, &x, &y| b.le(x, y))
+            }, mh);
+
+            while !sort.open(mh).is_ready() {
+                sort.open(mh).step(b);
+                unsafe { mh.erase_and_migrate(b.circuit()) };
+            }
+
+            let (packed_ports, sorted) = sort.take().finish(b);
+            wire_assert!(cx = &cx.open(mh), sorted, "instruction fetch sorting failed");
+            packed_ports.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
+        }, mh);
+
         // Debug logging, showing the state before and after sorting.
-        trace!("fetches:");
-        for (i, port) in self.ports.iter().enumerate() {
-            trace!(
-                "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
-                cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-                cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
-            );
-        }
-        trace!("sorted fetches:");
-        for (i, port) in sorted_ports.iter().enumerate() {
-            trace!(
-                "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
-                cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-                cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
-            );
+        {
+            let cx = cx.open(mh);
+            trace!("fetches:");
+            for (i, port) in ports.open(mh).iter().enumerate() {
+                trace!(
+                    "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
+                    i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
+                    cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
+                    cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+                );
+            }
+            trace!("sorted fetches:");
+            for (i, port) in sorted_ports.open(mh).iter().enumerate() {
+                trace!(
+                    "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
+                    i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
+                    cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
+                    cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+                );
+            }
         }
 
         // Run the consistency check.
-        check_first_fetch(cx, b, sorted_ports[0]);
-        let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
-        for (i, (&port1, &port2)) in it {
-            check_fetch(cx, b, i, port1, port2);
+        check_first_fetch(&cx.open(mh), b, sorted_ports.open(mh)[0]);
+
+        for i in 1 .. sorted_ports.open(mh).len() {
+            let cx = cx.open(mh);
+            let sorted_ports = sorted_ports.open(mh);
+            let port1 = sorted_ports[i - 1];
+            let port2 = sorted_ports[i];
+            check_fetch(&cx, b, i, port1, port2);
+
+            if i % 10000 == 0 {
+                unsafe { mh.erase_and_migrate(b.circuit()) };
+            }
         }
     }
 }

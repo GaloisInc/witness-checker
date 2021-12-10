@@ -80,7 +80,7 @@ impl<'a> MigrateHandle<'a> {
     }
 
     pub fn root<T: Migrate<'a, 'a, Output = T>>(&self, x: T) -> Rooted<'a, T> {
-        Rooted::new(self.mcx, x)
+        Rooted::from_context(x, self.mcx)
     }
 
     /// Open a `Rooted` value to access its value.
@@ -112,7 +112,21 @@ impl<'a> MigrateHandle<'a> {
 }
 
 impl<'a, T: Migrate<'a, 'a, Output = T>> Rooted<'a, T> {
-    pub fn new(mcx: &'a MigrateContext<'a>, x: T) -> Rooted<'a, T> {
+    /// Equivalent to `mh.root(x)`, but with an argument order that's more convenient in some
+    /// cases.  With this constructor, `mh` is not borrowed during the evaluation of `x`, so code
+    /// like the following is valid:
+    ///
+    /// ```Rust,ignore
+    /// let x = Rooted::new({
+    ///     // This call mutably borrows `mh`:
+    ///     mh.erase_and_migrate(c);
+    /// }, mh);
+    /// ```
+    pub fn new(x: T, mh: &MigrateHandle<'a>) -> Rooted<'a, T> {
+        mh.root(x)
+    }
+
+    pub fn from_context(x: T, mcx: &'a MigrateContext<'a>) -> Rooted<'a, T> {
         let ptr = mcx.alloc(x);
         Rooted { ptr, mcx }
     }

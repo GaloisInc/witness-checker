@@ -11,6 +11,7 @@ use std::rc::Rc;
 use log::*;
 use crate::gadget::bit_pack;
 use crate::ir::circuit::CircuitExt;
+use crate::ir::migrate::handle::{MigrateHandle, Rooted};
 use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
@@ -190,59 +191,88 @@ impl<'a> Memory<'a> {
     /// Assert that this set of memory operations is internally consistent.
     ///
     /// This takes `self` by value to prevent adding more `MemPort`s after the consistency check.
-    pub fn assert_consistent(self, cx: &Context<'a>, b: &Builder<'a>) {
-        let unused = self.unused.0.borrow();
-        let ports = &self.ports;
-        assert!(ports.len() == unused.len());
-        let iter_ports = || {
-            ports.iter().zip(unused.iter()).filter_map(|(p, &unused)| {
-                if unused { None } else { Some(p) }
-            })
+    pub fn assert_consistent(
+        self,
+        mh: &mut MigrateHandle<'a>,
+        cx: &mut Rooted<'a, Context<'a>>,
+        b: &Builder<'a>,
+    ) {
+        let (mut ports, unused): (_, Vec<bool>) = {
+            let Memory { ports, unused } = self;
+            let unused = unused.0.borrow();
+            (mh.root(ports), unused.clone())
         };
+        assert_eq!(ports.open(mh).len(), unused.len());
 
         // Sort the memory ports by addres and then by cycle.  Most of the ordering logic is
         // handled by the `typed::Lt` impl for `PackedMemPort`.
-        let sorted_ports = {
+        let mut sorted_ports = Rooted::new({
             let _g = b.scoped_label("sort mem");
-            let packed_ports = iter_ports().map(|&mp| {
-                PackedMemPort::from_unpacked(&b, mp)
-            }).collect::<Vec<_>>();
-            // Using `lt` instead of `le` for the comparison here means the sortedness check will
-            // also ensure that every `MemPort` is distinct.
-            let (packed_ports, sorted) =
-                sort::sort(&b, &packed_ports, |b, &x, &y| b.lt(x, y)).run(b);
-            wire_assert!(&cx, sorted, "memory op sorting failed");
+            let mut sort = Rooted::new({
+                let packed_ports = ports.open(mh).iter().zip(unused.iter())
+                    .filter_map(|(mp, &unused)| if unused { None } else { Some(mp) })
+                    .map(|&mp| PackedMemPort::from_unpacked(&b, mp))
+                    .collect::<Vec<_>>();
+                // Using `lt` instead of `le` for the comparison here means the sortedness check will
+                // also ensure that every `MemPort` is distinct.
+                sort::sort(&b, &packed_ports, |b, &x, &y| b.lt(x, y))
+            }, mh);
+
+            while !sort.open(mh).is_ready() {
+                sort.open(mh).step(b);
+                unsafe { mh.erase_and_migrate(b.circuit()) };
+            }
+
+            let (packed_ports, sorted) = sort.take().finish(b);
+            wire_assert!(cx = &cx.open(mh), sorted, "memory op sorting failed");
             packed_ports.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
-        };
+        }, mh);
 
         // Debug logging, showing the state before and after sorting.
-        trace!("mem ops:");
-        for (i, port) in iter_ports().enumerate() {
-            trace!(
-                "mem op {:3}: op{}, {:x}, value {}, cycle {}",
-                i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value),
-                cx.eval(port.cycle),
-            );
-        }
-        trace!("sorted mem ops:");
-        for (i, port) in sorted_ports.iter().enumerate() {
-            trace!(
-                "mem op {:3}: op{}, {:x}, value {}, cycle {}",
-                i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value),
-                cx.eval(port.cycle),
-            );
+        {
+            let cx = cx.open(mh);
+            trace!("mem ops:");
+            for (i, (port, &unused)) in ports.open(mh).iter().zip(unused.iter()).enumerate() {
+                if unused {
+                    trace!("mem op {:3}: unused", i);
+                } else {
+                    trace!(
+                        "mem op {:3}: op{}, {:x}, value {}, cycle {}",
+                        i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value),
+                        cx.eval(port.cycle),
+                    );
+                }
+            }
+            trace!("sorted mem ops:");
+            for (i, port) in sorted_ports.open(mh).iter().enumerate() {
+                trace!(
+                    "mem op {:3}: op{}, {:x}, value {}, cycle {}",
+                    i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value),
+                    cx.eval(port.cycle),
+                );
+            }
         }
 
         // Run the consistency check.
         // The first port has no previous port.  Supply a dummy port and set `prev_valid = false`.
-        if sorted_ports.len() > 0 {
+        if sorted_ports.open(mh).len() > 0 {
+            let cx = cx.open(mh);
+            let sorted_ports = sorted_ports.open(mh);
             check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
         }
 
-        let it = sorted_ports.iter().zip(sorted_ports.iter().skip(1)).enumerate();
-        for (i, (prev, &port)) in it {
+        for i in 1 .. sorted_ports.open(mh).len() {
+            let cx = cx.open(mh);
+            let sorted_ports = sorted_ports.open(mh);
+            let prev = &sorted_ports[i - 1];
+            let port = sorted_ports[i];
+
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
             check_mem(&cx, &b, i + 1, prev, prev_valid, port);
+
+            if i % 10000 == 0 {
+                unsafe { mh.erase_and_migrate(b.circuit()) };
+            }
         }
     }
 }
