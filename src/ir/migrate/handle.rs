@@ -14,9 +14,11 @@
 //!
 //! `Rooted` values must be explicitly "opened" for access.  The lifetimes are arranged to ensure
 //! that it is impossible to call `erase_and_migrate` while any `Rooted` values are currently open.
+use std::alloc::Layout;
+use std::any;
 use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::mem;
+use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, MigrateVisitor, EraseVisitor};
@@ -43,9 +45,12 @@ pub struct Open<'h, 'r, T> {
     _marker: PhantomData<(&'h (), &'r mut ())>,
 }
 
-pub struct ProjectRooted<'a, 'b, T> {
-    inner: Rooted<'a, T>,
-    _marker: PhantomData<&'b mut ()>,
+/// Thin wrapper used for `Rooted::project`.  This is identical to `&'a mut T`, but avoids holding
+/// an actual `&mut` across `MigrateHandle::erase_and_migrate`, which would cause an aliasing
+/// violation.
+pub struct Projected<'a, T> {
+    ptr: *mut T,
+    _marker: PhantomData<&'a mut T>,
 }
 
 
@@ -60,19 +65,17 @@ impl<'a> MigrateContext<'a> {
         self.inner.borrow_mut().alloc(x)
     }
 
-    /// Free `ptr`, which was produced by `self.alloc`.  Allocations must follow stack discipline:
-    /// the last object allocated must be the first one freed.  If `ptr` is not the last allocated
-    /// object, this method will panic.
-    fn free<T>(&self, ptr: *mut T) {
+    fn alloc_no_migrate<T>(&self, x: T) -> *mut T {
+        self.inner.borrow_mut().alloc_no_migrate(x)
+    }
+
+    /// Free `ptr`, which was produced by `self.alloc`.
+    unsafe fn free<T>(&self, ptr: *mut T) {
         self.inner.borrow_mut().free(ptr)
     }
 
-    fn take<T>(&self, ptr: *mut T) -> T {
+    unsafe fn take<T>(&self, ptr: *mut T) -> T {
         self.inner.borrow_mut().take(ptr)
-    }
-
-    pub fn push_borrow<T>(&self, ptr: *mut T) {
-        self.inner.borrow_mut().push_borrow(ptr);
     }
 
     fn migrate_in_place(&self, v: &mut MigrateVisitor<'a, 'a>) {
@@ -105,6 +108,7 @@ impl<'a> MigrateHandle<'a> {
     pub fn open<'h, 'r, T>(&'h self, rooted: &'r mut Rooted<'a, T>) -> Open<'h, 'r, T>
     where 'a: 'h {
         unsafe {
+            assert!(!rooted.ptr.is_null());
             Open {
                 ptr: &mut *rooted.ptr,
                 _marker: PhantomData,
@@ -154,38 +158,49 @@ impl<'a, T> Rooted<'a, T> {
     }
 
     pub fn take(&mut self) -> T {
-        self.mcx.take(self.ptr)
+        unsafe {
+            let ptr = mem::replace(&mut self.ptr, ptr::null_mut());
+            self.mcx.take(ptr)
+        }
     }
 
-    pub fn project<'b, U, F>(&'b mut self, f: F) -> ProjectRooted<'a, 'b, U>
+    pub fn project<'b, U, F>(
+        &'b mut self,
+        mh: &MigrateHandle<'a>,
+        f: F,
+    ) -> Rooted<'a, Projected<'b, U>>
     where F: for<'c> FnOnce(&'c mut T) -> &'c mut U {
         unsafe {
-            let ptr: *mut U = f(&mut *self.ptr);
-            self.mcx.push_borrow(ptr);
-            ProjectRooted {
-                inner: Rooted { ptr, mcx: self.mcx },
+            let inner = f(&mut *self.ptr);
+            let ptr = self.mcx.alloc_no_migrate(Projected {
+                ptr: inner,
                 _marker: PhantomData,
-            }
+            });
+            Rooted { ptr, mcx: self.mcx }
         }
     }
 }
 
 impl<'a, T> Drop for Rooted<'a, T> {
     fn drop(&mut self) {
-        self.mcx.free(self.ptr);
+        unsafe {
+            if !self.ptr.is_null() {
+                self.mcx.free(self.ptr);
+            }
+        }
     }
 }
 
-impl<'a, T> Deref for ProjectRooted<'a, '_, T> {
-    type Target = Rooted<'a, T>;
-    fn deref(&self) -> &Rooted<'a, T> {
-        &self.inner
+impl<T> Deref for Projected<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.ptr }
     }
 }
 
-impl<'a, T> DerefMut for ProjectRooted<'a, '_, T> {
-    fn deref_mut(&mut self) -> &mut Rooted<'a, T> {
-        &mut self.inner
+impl<T> DerefMut for Projected<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.ptr }
     }
 }
 
@@ -204,69 +219,189 @@ impl<T> DerefMut for Open<'_, '_, T> {
 
 
 struct MigrateContextInner<'a> {
-    stack: Vec<(*mut (), &'static Vtable)>,
+    head: *mut StorageHeader,
+    tail: *mut StorageHeader,
     _marker: PhantomData<&'a &'a ()>,
+}
+
+struct StorageHeader {
+    prev: *mut StorageHeader,
+    next: *mut StorageHeader,
+    vtable: &'static Vtable,
+}
+
+#[repr(C)]
+struct Storage<T> {
+    header: StorageHeader,
+    data: T,
+}
+
+impl<T> Storage<T> {
+    pub fn new(vtable: &'static Vtable, x: T) -> Storage<T> {
+        Storage {
+            header: StorageHeader {
+                prev: ptr::null_mut(),
+                next: ptr::null_mut(),
+                vtable,
+            },
+            data: x,
+        }
+    }
+
+    pub fn from_data_ptr_raw(ptr: *mut T) -> *mut Storage<T> {
+        unsafe {
+            let (_, off) = Self::layout_and_data_offset();
+            (ptr as *mut u8).sub(off) as *mut Storage<T>
+        }
+    }
+
+    fn layout_and_data_offset() -> (Layout, usize) {
+        let (l, off) = Layout::new::<StorageHeader>()
+            .extend(Layout::new::<T>()).unwrap();
+        (l.pad_to_align(), off)
+    }
 }
 
 impl<'a> MigrateContextInner<'a> {
     pub fn new() -> MigrateContextInner<'a> {
         MigrateContextInner {
-            stack: Vec::new(),
+            head: ptr::null_mut(),
+            tail: ptr::null_mut(),
             _marker: PhantomData,
+        }
+    }
+
+    fn debug_check_list(&self) {
+        unsafe {
+            if self.head.is_null() {
+                assert!(self.tail.is_null());
+                return;
+            } else {
+                assert!(!self.tail.is_null());
+            }
+
+            let mut cur = self.head;
+            while !cur.is_null() {
+                if !(*cur).next.is_null() {
+                    assert_eq!((*(*cur).next).prev, cur);
+                } else {
+                    assert_eq!(cur, self.tail);
+                }
+
+                if !(*cur).prev.is_null() {
+                    assert_eq!((*(*cur).prev).next, cur);
+                } else {
+                    assert_eq!(cur, self.head);
+                }
+
+                cur = (*cur).next;
+            }
+        }
+    }
+
+    unsafe fn append(&mut self, node: *mut StorageHeader) {
+        (*node).prev = self.tail;
+        (*node).next = ptr::null_mut();
+        if !self.tail.is_null() {
+            (*self.tail).next = node;
+        }
+        self.tail = node;
+        if self.head.is_null() {
+            self.head = node;
+        }
+
+        if cfg!(debug_assertions) {
+            self.debug_check_list();
+        }
+    }
+
+    unsafe fn remove(&mut self, node: *mut StorageHeader) {
+        if self.head == node {
+            self.head = (*node).next;
+        }
+        if self.tail == node {
+            self.tail = (*node).prev;
+        }
+        if !(*node).prev.is_null() {
+            (*(*node).prev).next = (*node).next;
+        }
+        if !(*node).next.is_null() {
+            (*(*node).next).prev = (*node).prev;
+        }
+
+        if cfg!(debug_assertions) {
+            self.debug_check_list();
+        }
+    }
+
+    unsafe fn alloc_with_vtable<T>(&mut self, x: T, vtable: &'static Vtable) -> *mut T {
+        unsafe {
+            let node = Box::into_raw(Box::new(Storage::new(vtable, x)));
+            self.append(&mut (*node).header);
+            let ptr = &mut (*node).data;
+            ptr
         }
     }
 
     pub fn alloc<T>(&mut self, x: T) -> *mut T
     where T: Migrate<'a, 'a, Output = T> {
         unsafe {
-            let ptr = Box::into_raw(Box::new(x));
             let vtable = Vtable::get::<T>(self);
-            self.stack.push((ptr as *mut (), vtable));
-            ptr
+            self.alloc_with_vtable(x, vtable)
         }
     }
 
-    pub fn free<T>(&mut self, ptr: *mut T) {
+    /// Allocate a node with a value of type `T`, but ignore it when erasing/migrating nodes.  This
+    /// is useful for `Rooted::project`: the resulting reference needs to be wrapped in `Rooted` so
+    /// we can track its usage via `Rooted::open`, but it doesn't need to be migrated (the value it
+    /// points to will already be migrated thanks to its own entry in the list).
+    pub fn alloc_no_migrate<T>(&mut self, x: T) -> *mut T {
         unsafe {
-            let (ptr2, vtable) = self.stack.pop().unwrap();
-            assert_eq!(ptr as *mut (), ptr2);
-            (vtable.drop_box)(ptr as *mut ());
+            let vtable = Vtable::get_no_migrate::<T>();
+            self.alloc_with_vtable(x, vtable)
         }
     }
 
-    pub fn take<T>(&mut self, ptr: *mut T) -> T {
+    pub unsafe fn free<T>(&mut self, ptr: *mut T) {
         unsafe {
-            // FIXME: avoid linear scan
-            let &mut (_, ref mut vtable) = self.stack.iter_mut()
-                .filter(|& &mut (ptr2, _)| ptr2 == ptr as *mut ())
-                .next().unwrap();
-            assert!(
-                *vtable as *const _ != Vtable::get_dummy::<T>() as *const _,
-                "can't take this Rooted value",
-            );
-            *vtable = Vtable::get_dummy::<T>();
-            // FIXME: this leaks the allocation
-            ptr::read(ptr)
+            let node = Storage::from_data_ptr_raw(ptr);
+            self.remove(&mut (*node).header);
+            let vtable = (*node).header.vtable;
+            (vtable.drop_box)(node as *mut Storage<()>);
         }
     }
 
-    pub fn push_borrow<T>(&mut self, ptr: *mut T) {
-        let dummy_vtable = Vtable::get_dummy::<T>();
-        self.stack.push((ptr as *mut (), dummy_vtable));
+    pub unsafe fn take<T>(&mut self, ptr: *mut T) -> T {
+        unsafe {
+            let node = Storage::from_data_ptr_raw(ptr);
+            let vtable = (*node).header.vtable;
+            self.remove(&mut (*node).header);
+            let mut dest = MaybeUninit::uninit();
+            (vtable.take_box)(node as *mut Storage<()>, dest.as_ptr() as *mut ());
+            dest.assume_init()
+        }
     }
 
     pub fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
         unsafe {
-            for &(ptr, vtable) in &self.stack {
-                (vtable.migrate_in_place)(ptr, v as *mut _ as *mut () as *mut _);
+            let v_ptr = v as *mut _ as *mut () as *mut _;
+            let mut node = self.head;
+            while !node.is_null() {
+                let vtable = (*node).vtable;
+                (vtable.migrate_in_place)(node as *mut Storage<()>, v_ptr);
+                node = (*node).next;
             }
         }
     }
 
     pub fn erase_in_place(&mut self, v: &mut EraseVisitor<'a>) {
         unsafe {
-            for &(ptr, vtable) in &self.stack {
-                (vtable.erase_in_place)(ptr, v as *mut _ as *mut () as *mut _);
+            let v_ptr = v as *mut _ as *mut () as *mut _;
+            let mut node = self.head;
+            while !node.is_null() {
+                let vtable = (*node).vtable;
+                (vtable.erase_in_place)(node as *mut Storage<()>, v_ptr);
+                node = (*node).next;
             }
         }
     }
@@ -274,37 +409,53 @@ impl<'a> MigrateContextInner<'a> {
 
 
 struct Vtable {
-    drop_box: unsafe fn(*mut ()),
-    migrate_in_place: unsafe fn(*mut (), *mut MigrateVisitor<'static, 'static>),
-    erase_in_place: unsafe fn(*mut (), *mut EraseVisitor<'static>),
+    /// `drop_box(ptr)`: Reconstitute `ptr` as a `Box<T>` and drop it.
+    drop_box: unsafe fn(*mut Storage<()>),
+    /// `take_box(ptr, dest)`: Reconstitute `ptr` as a `Box<T>` and move its value into `*dest`.
+    /// On return, `*dest` is always initialized.
+    take_box: unsafe fn(*mut Storage<()>, *mut ()),
+    /// `migrate_in_place(ptr, v)`: Apply visitor `v` to `*ptr` in-place.
+    migrate_in_place: unsafe fn(*mut Storage<()>, *mut MigrateVisitor<'static, 'static>),
+    /// `erase_in_place(ptr, v)`: Apply visitor `v` to `*ptr` in-place.
+    erase_in_place: unsafe fn(*mut Storage<()>, *mut EraseVisitor<'static>),
 }
 
 impl Vtable {
     fn get<'a, T: Migrate<'a, 'a, Output = T>>(mcxi: &MigrateContextInner<'a>) -> &'static Vtable {
         &Vtable {
             drop_box: |ptr| unsafe {
-                drop(Box::from_raw(ptr as *mut T))
+                drop(Box::from_raw(ptr as *mut Storage<T>))
+            },
+            take_box: |ptr, dest| unsafe {
+                let x = Box::from_raw(ptr as *mut Storage<T>).data;
+                ptr::write(dest as *mut T, x);
             },
             migrate_in_place: |ptr, v| unsafe {
                 migrate::migrate_in_place(
                     &mut *(v as *mut () as *mut MigrateVisitor<'a, 'a>),
-                    &mut *(ptr as *mut T),
+                    &mut (*(ptr as *mut Storage<T>)).data,
                 );
             },
             erase_in_place: |ptr, v| unsafe {
                 migrate::migrate_in_place(
                     &mut *(v as *mut () as *mut EraseVisitor<'a>),
-                    &mut *(ptr as *mut T),
+                    &mut (*(ptr as *mut Storage<T>)).data,
                 );
             },
         }
     }
 
-    fn get_dummy<T>() -> &'static Vtable {
+    fn get_no_migrate<T>() -> &'static Vtable {
         &Vtable {
-            drop_box: |_| {},
-            migrate_in_place: |_, _| {},
-            erase_in_place: |_, _| {},
+            drop_box: |ptr| unsafe {
+                drop(Box::from_raw(ptr as *mut Storage<T>))
+            },
+            take_box: |ptr, dest| unsafe {
+                let x = Box::from_raw(ptr as *mut Storage<T>).data;
+                ptr::write(dest as *mut T, x);
+            },
+            migrate_in_place: |_, _| unsafe {},
+            erase_in_place: |_, _| unsafe {},
         }
     }
 }

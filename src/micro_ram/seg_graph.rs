@@ -4,7 +4,7 @@ use std::fmt::Write;
 use std::iter;
 use std::mem;
 use crate::ir::migrate::{self, Migrate};
-use crate::ir::migrate::handle::{MigrateHandle, Rooted};
+use crate::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
@@ -721,7 +721,7 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     pub fn build_network(
-        this: &mut Rooted<'a, Self>,
+        this: &mut Rooted<'a, Projected<Self>>,
         mh: &mut MigrateHandle<'a>,
         b: &Builder<'a>,
     ) {
