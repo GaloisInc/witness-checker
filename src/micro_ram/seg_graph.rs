@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::iter;
 use std::mem;
 use crate::ir::migrate::{self, Migrate};
+use crate::ir::migrate::handle::{MigrateHandle, Rooted};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
@@ -697,13 +698,7 @@ impl<'a> SegGraphBuilder<'a> {
         wire
     }
 
-    pub fn build_network(&mut self, b: &Builder<'a>) {
-        let _g = b.scoped_label("seg_graph/build_network");
-        let mut routing = match self.network {
-            NetworkState::Before(ref mut rb) => mem::take(rb),
-            NetworkState::After(_) => panic!("already built the routing network"),
-        };
-
+    fn pre_build_network(&mut self, routing: &mut RoutingBuilder<'a, RamState>) {
         for inp in &self.network_inputs {
             let mut state = self.get_final(inp.pred.src).clone();
             // Force `state.live` to `false` if the edge leading to this network port is not live.
@@ -716,8 +711,6 @@ impl<'a> SegGraphBuilder<'a> {
             self.segments[inp.segment_index].to_net = Some(id);
         }
 
-        let default = self.default_state.clone();
-
         for &(src, dest) in &self.network_conns {
             let src_input = self.segments[src].to_net
                 .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
@@ -725,9 +718,32 @@ impl<'a> SegGraphBuilder<'a> {
                 .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
             routing.connect(src_input, dest_output);
         }
+    }
 
-        let outputs = routing.finish_with_default(b, default).run(b);
-        self.network = NetworkState::After(outputs);
+    pub fn build_network(
+        this: &mut Rooted<'a, Self>,
+        mh: &mut MigrateHandle<'a>,
+        b: &Builder<'a>,
+    ) {
+        let _g = b.scoped_label("seg_graph/build_network");
+        let mut routing = Rooted::new(match this.open(mh).network {
+            NetworkState::Before(ref mut rb) => mem::take(rb),
+            NetworkState::After(_) => panic!("already built the routing network"),
+        }, mh);
+
+        this.open(mh).pre_build_network(&mut routing.open(mh));
+
+        let mut r = Rooted::new({
+            let default = this.open(mh).default_state.clone();
+            routing.take().finish_with_default(b, default)
+        }, mh);
+        while !r.open(mh).is_ready() {
+            r.open(mh).step(b);
+            unsafe { mh.erase_and_migrate(b.circuit()) };
+        }
+
+        let outputs = r.take().finish();
+        this.open(mh).network = NetworkState::After(outputs);
     }
 
     pub fn finish(mut self, cx: &Context<'a>, b: &Builder<'a>) {

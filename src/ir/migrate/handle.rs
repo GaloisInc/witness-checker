@@ -42,6 +42,11 @@ pub struct Open<'h, 'r, T> {
     _marker: PhantomData<(&'h (), &'r mut ())>,
 }
 
+pub struct ProjectRooted<'a, 'b, T> {
+    inner: Rooted<'a, T>,
+    _marker: PhantomData<&'b mut ()>,
+}
+
 
 impl<'a> MigrateContext<'a> {
     pub fn new() -> MigrateContext<'a> {
@@ -63,6 +68,10 @@ impl<'a> MigrateContext<'a> {
 
     fn take<T>(&self, ptr: *mut T) -> T {
         self.inner.borrow_mut().take(ptr)
+    }
+
+    pub fn push_borrow<T>(&self, ptr: *mut T) {
+        self.inner.borrow_mut().push_borrow(ptr);
     }
 
     fn migrate_in_place(&self, v: &mut MigrateVisitor<'a, 'a>) {
@@ -130,7 +139,9 @@ impl<'a, T: Migrate<'a, 'a, Output = T>> Rooted<'a, T> {
         let ptr = mcx.alloc(x);
         Rooted { ptr, mcx }
     }
+}
 
+impl<'a, T> Rooted<'a, T> {
     pub fn open<'r, 'h>(&'r mut self, mh: &'h MigrateHandle<'a>) -> Open<'h, 'r, T> {
         mh.open(self)
     }
@@ -138,11 +149,36 @@ impl<'a, T: Migrate<'a, 'a, Output = T>> Rooted<'a, T> {
     pub fn take(&mut self) -> T {
         self.mcx.take(self.ptr)
     }
+
+    pub fn project<'b, U, F>(&'b mut self, f: F) -> ProjectRooted<'a, 'b, U>
+    where F: for<'c> FnOnce(&'c mut T) -> &'c mut U {
+        unsafe {
+            let ptr: *mut U = f(&mut *self.ptr);
+            self.mcx.push_borrow(ptr);
+            ProjectRooted {
+                inner: Rooted { ptr, mcx: self.mcx },
+                _marker: PhantomData,
+            }
+        }
+    }
 }
 
 impl<'a, T> Drop for Rooted<'a, T> {
     fn drop(&mut self) {
         self.mcx.free(self.ptr);
+    }
+}
+
+impl<'a, T> Deref for ProjectRooted<'a, '_, T> {
+    type Target = Rooted<'a, T>;
+    fn deref(&self) -> &Rooted<'a, T> {
+        &self.inner
+    }
+}
+
+impl<'a, T> DerefMut for ProjectRooted<'a, '_, T> {
+    fn deref_mut(&mut self) -> &mut Rooted<'a, T> {
+        &mut self.inner
     }
 }
 
@@ -197,10 +233,19 @@ impl<'a> MigrateContextInner<'a> {
             let &mut (_, ref mut vtable) = self.stack.iter_mut()
                 .filter(|& &mut (ptr2, _)| ptr2 == ptr as *mut ())
                 .next().unwrap();
+            assert!(
+                *vtable as *const _ != Vtable::get_dummy::<T>() as *const _,
+                "can't take this Rooted value",
+            );
             *vtable = Vtable::get_dummy::<T>();
             // FIXME: this leaks the allocation
             ptr::read(ptr)
         }
+    }
+
+    pub fn push_borrow<T>(&mut self, ptr: *mut T) {
+        let dummy_vtable = Vtable::get_dummy::<T>();
+        self.stack.push((ptr as *mut (), dummy_vtable));
     }
 
     pub fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a>) {

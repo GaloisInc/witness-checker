@@ -4,7 +4,7 @@ use log::info;
 use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::{CircuitTrait, CircuitExt};
 use crate::ir::migrate::{self, Migrate};
-use crate::ir::migrate::handle::{MigrateContext, MigrateHandle};
+use crate::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::Fetch;
@@ -49,19 +49,16 @@ impl<'a> ExecBuilder<'a> {
         expect_zero: bool,
         debug_segment_graph_path: Option<String>,
     ) -> (Context<'a>, EquivSegments<'a>) {
-        let eb = ExecBuilder::new(
-            b,
-            cx,
-            exec,
-            equiv_segments,
-            init_state,
-            check_steps,
-            expect_zero,
-            debug_segment_graph_path,
-        );
-        let eb = eb.init(b, exec, exec_name);
-        let eb = eb.run(b, exec);
-        eb.finish(b, mcx, exec)
+        let mut mh = MigrateHandle::new(mcx);
+        let mh = &mut mh;
+
+        let mut eb = mh.root(ExecBuilder::new(
+            b, cx, exec, equiv_segments, init_state,
+            check_steps, expect_zero, debug_segment_graph_path,
+        ));
+        eb.open(mh).init(b, exec, exec_name);
+        ExecBuilder::run(&mut eb, mh, b, exec);
+        eb.take().finish(mh, b, exec)
     }
 
     fn new(
@@ -92,10 +89,11 @@ impl<'a> ExecBuilder<'a> {
         }
     }
 
-    fn init(mut self, b: &Builder<'a>, exec: &ExecBody, exec_name: &str) -> Self {
+    fn init(&mut self, b: &Builder<'a>, exec: &ExecBody, exec_name: &str) {
         if let Some(ref out_path) = self.debug_segment_graph_path {
             std::fs::write(out_path, self.seg_graph_builder.dump()).unwrap();
         }
+
         let mut kmem = KnownMem::with_default(b.lit(0));
         for seg in &exec.init_mem {
             let values = self.mem.init_segment(
@@ -115,31 +113,33 @@ impl<'a> ExecBuilder<'a> {
 
             cycle += chunk.states.len() as u32;
         }
-
-        self
     }
 
-    fn run(mut self, b: &Builder<'a>, exec: &ExecBody) -> Self {
+    fn run(
+        this: &mut Rooted<'a, Self>,
+        mh: &mut MigrateHandle<'a>,
+        b: &Builder<'a>,
+        exec: &ExecBody,
+    ) {
         let mut counter = 0;
-        for item in self.seg_graph_builder.get_order() {
+        for item in this.open(mh).seg_graph_builder.get_order() {
             match item {
-                SegGraphItem::Segment(idx) => self.add_segment(b, exec, idx),
+                SegGraphItem::Segment(idx) => this.open(mh).add_segment(b, exec, idx),
                 SegGraphItem::Network => {
-                    self = unsafe { b.circuit().erase_and_migrate(self) };
+                    unsafe { mh.erase_and_migrate(b.circuit()) };
                     info!("seg_graph_builder.build_network");
-                    self.seg_graph_builder.build_network(&b);
-                    self = unsafe { b.circuit().erase_and_migrate(self) };
+                    let mut seg_graph_builder = this.project(|eb| &mut eb.seg_graph_builder);
+                    SegGraphBuilder::build_network(&mut seg_graph_builder, mh, b);
+                    unsafe { mh.erase_and_migrate(b.circuit()) };
                     continue;
                 },
             }
 
             if counter % 100 == 0 {
-                self = unsafe { b.circuit().erase_and_migrate(self) };
+                unsafe { mh.erase_and_migrate(b.circuit()) };
             }
             counter += 1;
         }
-
-        self
     }
 
     fn add_segment(&mut self, b: &Builder<'a>, exec: &ExecBody, idx: usize) {
@@ -182,13 +182,10 @@ impl<'a> ExecBuilder<'a> {
 
     fn finish(
         self,
+        mh: &mut MigrateHandle<'a>,
         b: &Builder<'a>,
-        mcx: &'a MigrateContext<'a>,
         _exec: &ExecBody,
     ) -> (Context<'a>, EquivSegments<'a>) {
-        let mut mh = MigrateHandle::new(mcx);
-        let mh = &mut mh;
-
         let x = self;
         let mut cx = mh.root(x.cx);
         let mut equiv_segments = mh.root(x.equiv_segments);
