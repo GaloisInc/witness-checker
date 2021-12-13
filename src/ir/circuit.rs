@@ -91,6 +91,10 @@ impl<'a> CircuitBase<'a> {
         self.arenas.arena()
     }
 
+    pub fn arena_size(&self) -> usize {
+        self.arena().allocated_bytes()
+    }
+
     fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {
         let mut intern = self.intern_gate.borrow_mut();
         match intern.get(&gate) {

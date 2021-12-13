@@ -121,7 +121,6 @@ impl<'a> ExecBuilder<'a> {
         b: &Builder<'a>,
         exec: &ExecBody,
     ) {
-        let mut counter = 0;
         for item in this.open(mh).seg_graph_builder.get_order() {
             match item {
                 SegGraphItem::Segment(idx) => this.open(mh).add_segment(b, exec, idx),
@@ -135,10 +134,7 @@ impl<'a> ExecBuilder<'a> {
                 },
             }
 
-            if counter % 100 == 0 {
-                unsafe { mh.erase_and_migrate(b.circuit()) };
-            }
-            counter += 1;
+            unsafe { mh.erase_and_migrate(b.circuit()) };
         }
     }
 

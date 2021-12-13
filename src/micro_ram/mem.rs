@@ -270,9 +270,7 @@ impl<'a> Memory<'a> {
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
             check_mem(&cx, &b, i + 1, prev, prev_valid, port);
 
-            if i % 10000 == 0 {
-                unsafe { mh.erase_and_migrate(b.circuit()) };
-            }
+            unsafe { mh.erase_and_migrate(b.circuit()) };
         }
     }
 }
