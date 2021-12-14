@@ -91,8 +91,15 @@ impl<'a> CircuitBase<'a> {
         self.arenas.arena()
     }
 
-    pub fn arena_size(&self) -> usize {
-        self.arena().allocated_bytes()
+    /// Size metric for deciding when to garbage collect (`erase_and_migrate`).
+    ///
+    /// For determinism, we use the gate count rather than the arena size.  The arena size will be
+    /// different between the prover and the verifier since the prover allocates `Bits` for secret
+    /// wires.  This means using arena size would cause GC decisions to happen differently, causing
+    /// one side to have `Erased` where the other side has an actual gate.  Then any optimization
+    /// that inspects the unequal gates might produce unequal results.
+    pub fn gc_size(&self) -> usize {
+        self.intern_gate.borrow().len()
     }
 
     fn intern_gate(&self, gate: Gate<'a>) -> &'a Gate<'a> {

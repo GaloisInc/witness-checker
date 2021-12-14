@@ -91,7 +91,7 @@ impl<'a> MigrateHandle<'a> {
     pub fn new(mcx: &'a MigrateContext<'a>) -> MigrateHandle<'a> {
         MigrateHandle {
             mcx,
-            prev_size: 1024 * 1024,
+            prev_size: 0,
         }
     }
 
@@ -123,10 +123,10 @@ impl<'a> MigrateHandle<'a> {
     /// with `'a` lifetime are accessible outside of a `Rooted` wrapper, those references may be
     /// left dangling after calling this method.
     pub unsafe fn erase_and_migrate<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &'a C) {
-        if c.as_base().arena_size() > 2 * self.prev_size {
+        if c.as_base().gc_size() > self.prev_size * 5 / 2 {
             c.erase_with(|v| self.mcx.erase_in_place(v));
             c.migrate_with(|v| self.mcx.migrate_in_place(v));
-            self.prev_size = c.as_base().arena_size();
+            self.prev_size = c.as_base().gc_size();
         }
     }
 }
