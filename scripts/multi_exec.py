@@ -1,5 +1,5 @@
 import argparse
-import cbor
+from cbor import cbor
 import sys
 
 ## Parse arguments

@@ -2,6 +2,7 @@
 //!
 //! This includes setting up initial memory, adding `MemPort`s for each cycle, sorting, and
 //! checking the sorted list.
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
 use log::*;
@@ -28,38 +29,70 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn init_segment(&mut self, b: &Builder<'a>, seg: &MemSegment) {
+    pub fn init_segment(&mut self
+                        , b: &Builder<'a>
+                        , seg: &MemSegment
+                        , equivs: &mut HashMap<String, usize>
+                        , equiv_segments: &mut Vec<Option<Vec<TWire<'a,u64>>>> ) {
         self.ports.reserve(seg.len as usize);
 
-        for i in 0 .. seg.len {
+        
+        // Get the values of the word.  `data` is implicitly zero-padded out to
+        // `seg.len`, to support `.bss`-style zero-initialized segments.  For secret segments
+        // in verifier mode, `seg.data` is always empty, so the `value` is zero (but unused).
+        let values:Vec<u64> = (0..seg.len).map(|i| seg.data.get(i as usize).cloned().unwrap_or(0)).collect(); 
+
+        // Then create the wires. Depends on whether the
+        // segment is part of an qeuivalence class
+        let mem_wires:Vec<TWire<u64>> = {
+            let wires:Vec<TWire<u64>>;
+            match equivs.get(&seg.name) {
+                Some(&i) => {
+                    match &equiv_segments[i] {
+                        Some (wires1) => {
+                            //TODO: check equality with supplied values.
+                            wires1.clone()},
+                        None => {
+                            // all memory equivalences must be on secret segments
+                            assert!(seg.secret);
+                            wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
+                            equiv_segments[i] = Some (wires.clone());
+                            wires
+                        }
+                    }
+                },
+                // If the segmetn is not in an equivalence class
+                // just build new wires depending on whether the
+                // segment is secret or not
+                None => if seg.secret {
+                    wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
+                    wires
+                } else {
+                    wires = values.iter().map(|&value| b.lit(value)).collect();
+                    wires
+                }
+            }
+        };
+        // Then create the memports 
+        for (i, mem_wire) in mem_wires.iter().enumerate() {
             // Initial memory values are given in terms of words, not bytes.
-            let waddr = seg.start + i;
+            let waddr = seg.start + (i as u64);
 
 
             // Most of the MemPort is public.  Only the value is secret, if `seg.secret` is set.
             let mut mp = b.lit(MemPort {
                 cycle: MEM_PORT_PRELOAD_CYCLE,
                 addr: waddr * MemOpWidth::WORD.bytes() as u64,
-                // Dummy value for now.  We fill in this field differently depending on `prover`
-                // and `seg.secret`.
                 value: 0,
                 op: MemOpKind::Write,
                 tainted: IfMode::new(|pf| seg.tainted.as_ref().unwrap(&pf).get(i as usize).cloned().unwrap_or(WORD_UNTAINTED)),
                 width: MemOpWidth::WORD,
             });
 
-            // Get the value of the word at index `i`.  `data` is implicitly zero-padded out to
-            // `seg.len`, to support `.bss`-style zero-initialized segments.  For secret segments
-            // in verifier mode, `seg.data` is always empty, so the `value` is zero (but unused).
-            let value = seg.data.get(i as usize).cloned().unwrap_or(0);
-            if seg.secret {
-                mp.value = b.secret_init(|| value);
-            } else {
-                mp.value = b.lit(value);
-            }
-
+            mp.value = *mem_wire;
             self.ports.push(mp);
         }
+
     }
 
     pub fn add_cycles<'b>(

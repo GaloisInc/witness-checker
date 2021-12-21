@@ -17,10 +17,9 @@ use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
 use cheesecloth::micro_ram::mem::Memory;
-use cheesecloth::micro_ram::parse::ParseExecution;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{RamState, Segment, TraceChunk, WORD_UNTAINTED};
+use cheesecloth::micro_ram::types::{VersionedMultiExec,RamState, Segment, TraceChunk, WORD_UNTAINTED};
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -163,158 +162,188 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
     let content = fs::read(trace_path).unwrap();
-    let parse_exec: ParseExecution = match trace_path.extension().and_then(|os| os.to_str()) {
+    let parse_exec: VersionedMultiExec = match trace_path.extension().and_then(|os| os.to_str()) {
         Some("yaml") => serde_yaml::from_slice(&content).unwrap(),
         Some("cbor") => serde_cbor::from_slice(&content).unwrap(),
         Some("json") => serde_json::from_slice(&content).unwrap(),
         _ => serde_cbor::from_slice(&content).unwrap(),
     };
-    let mut exec = parse_exec.into_inner().validate().unwrap();
-
+    parse_exec.validate().unwrap();
+    let mut multi_exec = parse_exec;
     // Check that --mode leak-tainted is provided iff the feature is present.
-    assert!(is_mode::<AnyTainted>() == exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
+    assert!(is_mode::<AnyTainted>() == multi_exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
     // Adjust non-public-pc traces to fit the public-pc format.
     // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
     let mut provided_init_state = None;
-    if !exec.has_feature(Feature::PublicPc) {
-        assert!(exec.segments.len() == 0);
-        assert!(exec.trace.len() == 1);
-        let chunk = &exec.trace[0];
-
-        let new_segment = Segment {
-            constraints: vec![],
-            len: exec.params.trace_len.unwrap() - 1,
-            successors: vec![],
-            enter_from_network: false,
-            exit_to_network: false,
-        };
-
-        provided_init_state = Some(chunk.states[0].clone());
-        let new_chunk = TraceChunk {
-            segment: 0,
-            states: chunk.states[1..].to_owned(),
-            debug: None,
-        };
-
-        exec.segments = vec![new_segment];
-        exec.trace = vec![new_chunk];
+    if !multi_exec.has_feature(Feature::PublicPc) {
+        for (_name,exec) in multi_exec.inner.execs.iter_mut(){
+            assert!(exec.segments.len() == 0);
+            assert!(exec.trace.len() == 1);
+            let chunk = &exec.trace[0];
+            
+            let new_segment = Segment {
+                constraints: vec![],
+                len: exec.params.trace_len.unwrap() - 1,
+                successors: vec![],
+                enter_from_network: false,
+                exit_to_network: false,
+            };
+            
+            provided_init_state = Some(chunk.states[0].clone());
+            let new_chunk = TraceChunk {
+                segment: 0,
+                states: chunk.states[1..].to_owned(),
+                debug: None,
+            };
+            
+            exec.segments = vec![new_segment];
+            exec.trace = vec![new_chunk];
+            
+        }
     }
 
+    // Memory Equivalence: For every memory equivalence
+    // create wires that go accross executions.
+    // We want an array with those wires, however we can't
+    // know the length of the segment until we inspect the execution, se they start as None
+    let mut equiv_segments:Vec<Option<Vec<TWire<u64>>>> = vec![None; multi_exec.inner.mem_equiv.len()];
 
-    // Set up memory ports and check consistency.
-    let mut mem = Memory::new();
-    for seg in &exec.init_mem {
-        mem.init_segment(&b, seg);
-    }
-
-    // Set up instruction-fetch ports and check consistency.
-    let mut fetch = Fetch::new(&b, &exec.program);
-
-    // Generate IR code to check the trace.
-    let check_steps = args.value_of("check-steps")
-        .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
-    let mut segments_map = HashMap::new();
-    let mut segment_builder = SegmentBuilder {
-        cx: &cx,
-        b: &b,
-        ev: CachingEvaluator::new(b.circuit()),
-        mem: &mut mem,
-        fetch: &mut fetch,
-        params: &exec.params,
-        prog: &exec.program,
-        check_steps,
+    // For every execution, create a dictionary mapping
+    // segments names to an index in equiv_segments where
+    // the wires for the segment are stored.  
+    let mut mem_equiv:std::collections::HashMap<String, HashMap<String, usize>> = {
+        let mut mem_equiv = HashMap::new();
+        for (i,mem_eq) in multi_exec.inner.mem_equiv.iter().enumerate() {
+            for (exec_name, seg) in mem_eq.iter() {
+                let exec_equivs = mem_equiv.entry(exec_name.to_owned()).or_insert_with(|| HashMap::new());
+                // For the segment, add a pointer to the location
+                // where the segment's wires will be stored.
+                exec_equivs.insert(seg.to_owned(),i);
+            }
+        }
+        mem_equiv
     };
+    
+    // Build Circuit for each execution,
+    // using the memequivalences to use the same wire
+    // for equivalent mem segments. 
+    for (name,exec) in multi_exec.inner.execs.iter(){
+        // Set up memory ports and check consistency.
+        let mut mem = Memory::new();
+        for seg in &exec.init_mem {
+            mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
+        }
 
-    let init_state = provided_init_state.clone().unwrap_or_else(|| {
-        let mut regs = vec![0; exec.params.num_regs];
-        regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
-        let tainted_regs = IfMode::new(|_| vec![WORD_UNTAINTED; exec.params.num_regs]);
-        RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
-    });
-    if provided_init_state.is_some() {
-        let init_state_wire = b.lit(init_state.clone());
-        check_first(&cx, &b, &init_state_wire);
-    }
+        // Set up instruction-fetch ports and check consistency.
+        let mut fetch = Fetch::new(&b, &exec.program);
 
-    let mut seg_graph_builder = SegGraphBuilder::new(
-        &b, &exec.segments, &exec.params, init_state.clone());
-
-    for item in seg_graph_builder.get_order() {
-        let idx = match item {
-            SegGraphItem::Segment(idx) => idx,
-            SegGraphItem::Network => {
-                seg_graph_builder.build_network(&b);
-                continue;
-            },
+        // Generate IR code to check the trace.
+        let check_steps = args.value_of("check-steps")
+            .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
+        let mut segments_map = HashMap::new();
+        let mut segment_builder = SegmentBuilder {
+            cx: &cx,
+            b: &b,
+            ev: CachingEvaluator::new(b.circuit()),
+            mem: &mut mem,
+            fetch: &mut fetch,
+            params: &exec.params,
+            prog: &exec.program,
+            check_steps,
         };
 
-        let seg_def = &exec.segments[idx];
-        let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
-        let seg = segment_builder.run(idx, seg_def, prev_state);
-        seg_graph_builder.set_final(idx, seg.final_state().clone());
-        assert!(!segments_map.contains_key(&idx));
-        segments_map.insert(idx, seg);
+        let init_state = provided_init_state.clone().unwrap_or_else(|| {
+            let mut regs = vec![0; exec.params.num_regs];
+            regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
+            let tainted_regs = IfMode::new(|_| vec![WORD_UNTAINTED; exec.params.num_regs]);
+            RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
+        });
+        if provided_init_state.is_some() {
+            let init_state_wire = b.lit(init_state.clone());
+            check_first(&cx, &b, &init_state_wire);
+        }
+
+        let mut seg_graph_builder = SegGraphBuilder::new(
+            &b, &exec.segments, &exec.params, init_state.clone());
+
+        for item in seg_graph_builder.get_order() {
+            let idx = match item {
+                SegGraphItem::Segment(idx) => idx,
+                SegGraphItem::Network => {
+                    seg_graph_builder.build_network(&b);
+                    continue;
+                },
+            };
+            
+            let seg_def = &exec.segments[idx];
+            let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
+            let seg = segment_builder.run(idx, seg_def, prev_state);
+            seg_graph_builder.set_final(idx, seg.final_state().clone());
+            assert!(!segments_map.contains_key(&idx));
+            segments_map.insert(idx, seg);
+        }
+
+        let mut seg_graph = seg_graph_builder.finish(&cx, &b);
+
+        let mut segments = (0 .. exec.segments.len()).map(|i| {
+            segments_map.remove(&i)
+                .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
+        }).collect::<Vec<_>>();
+        drop(segments_map);
+
+        check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
+
+        // Fill in advice and other secrets.
+        let mut cycle = 0;
+        let mut prev_state = init_state.clone();
+        let mut prev_segment = None;
+        for chunk in &exec.trace {
+            if let Some(ref debug) = chunk.debug {
+                if let Some(c) = debug.cycle {
+                    cycle = c;
+                }
+                if let Some(ref s) = debug.prev_state {
+                    prev_state = s.clone();
+                }
+                if debug.clear_prev_segment {
+                    prev_segment = None;
+                }
+                if let Some(idx) = debug.prev_segment {
+                    prev_segment = Some(idx);
+                }
+            }
+
+            let seg = &mut segments[chunk.segment];
+            assert_eq!(seg.idx, chunk.segment);
+            seg.set_states(&b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
+            seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
+
+            if let Some(prev_segment) = prev_segment {
+                seg_graph.make_edge_live(&b, prev_segment, chunk.segment, &prev_state);
+            }
+            prev_segment = Some(chunk.segment);
+
+            cycle += chunk.states.len() as u32;
+            if chunk.states.len() > 0 {
+                prev_state = chunk.states.last().unwrap().clone();
+                prev_state.cycle = cycle;
+            }
+        }
+        
+        seg_graph.finish(&b);
+
+        // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
+        // before we move on.
+        drop(segments);
+
+        // Some consistency checks involve sorting, which requires that all the relevant secrets be
+        // initialized first.
+        mem.assert_consistent(&cx, &b);
+        fetch.assert_consistent(&cx, &b);
+
     }
-
-    let mut seg_graph = seg_graph_builder.finish(&cx, &b);
-
-    let mut segments = (0 .. exec.segments.len()).map(|i| {
-        segments_map.remove(&i)
-            .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
-    }).collect::<Vec<_>>();
-    drop(segments_map);
-
-    check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
-
-    // Fill in advice and other secrets.
-    let mut cycle = 0;
-    let mut prev_state = init_state.clone();
-    let mut prev_segment = None;
-    for chunk in &exec.trace {
-        if let Some(ref debug) = chunk.debug {
-            if let Some(c) = debug.cycle {
-                cycle = c;
-            }
-            if let Some(ref s) = debug.prev_state {
-                prev_state = s.clone();
-            }
-            if debug.clear_prev_segment {
-                prev_segment = None;
-            }
-            if let Some(idx) = debug.prev_segment {
-                prev_segment = Some(idx);
-            }
-        }
-
-        let seg = &mut segments[chunk.segment];
-        assert_eq!(seg.idx, chunk.segment);
-        seg.set_states(&b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
-        seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
-
-        if let Some(prev_segment) = prev_segment {
-            seg_graph.make_edge_live(&b, prev_segment, chunk.segment, &prev_state);
-        }
-        prev_segment = Some(chunk.segment);
-
-        cycle += chunk.states.len() as u32;
-        if chunk.states.len() > 0 {
-            prev_state = chunk.states.last().unwrap().clone();
-            prev_state.cycle = cycle;
-        }
-    }
-
-    seg_graph.finish(&b);
-
-    // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
-    // before we move on.
-    drop(segments);
-
-    // Some consistency checks involve sorting, which requires that all the relevant secrets be
-    // initialized first.
-    mem.assert_consistent(&cx, &b);
-    fetch.assert_consistent(&cx, &b);
-
+        
     // Collect assertions and bugs.
     drop(b);
     let (asserts, bugs) = cx.finish();
@@ -335,9 +364,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let num_asserts = asserts.len();
     let flags =
         iter::once(accepted)
-            .chain(asserts.into_iter())
-            .chain(bugs.into_iter())
-            .collect::<Vec<_>>();
+        .chain(asserts.into_iter())
+        .chain(bugs.into_iter())
+        .collect::<Vec<_>>();
 
     if args.is_present("stats") {
         eprintln!(" ===== stats: after lowering =====");

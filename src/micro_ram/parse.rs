@@ -5,7 +5,7 @@ use std::mem;
 use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
-    Execution, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
+    VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
     Segment, SegmentConstraint,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
@@ -50,38 +50,22 @@ pub fn with_features<R>(fs: HashSet<Feature>, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-
-/// A wrapper around `Execution` to support custom parsing logic.
-#[derive(Deserialize)]
-#[serde(transparent)]
-pub struct ParseExecution(VersionedExecution);
-
-impl ParseExecution {
-    pub fn into_inner(self) -> Execution {
-        self.0.0
-    }
-}
-
-
-/// Newtype wrapper around `Execution` that reads a version number and then deserializes according
-/// to that version.
-pub struct VersionedExecution(Execution);
-
-impl<'de> Deserialize<'de> for VersionedExecution {
+impl<'de> Deserialize<'de> for VersionedMultiExec {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_tuple(3, VersionedExecutionVisitor)
+        d.deserialize_tuple(3, VersionedMultiExecVisitor)
     }
 }
 
-struct VersionedExecutionVisitor;
-impl<'de> Visitor<'de> for VersionedExecutionVisitor {
-    type Value = VersionedExecution;
+
+struct VersionedMultiExecVisitor;
+impl<'de> Visitor<'de> for VersionedMultiExecVisitor {
+    type Value = VersionedMultiExec;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "a sequence of 3 items")
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<VersionedExecution, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<VersionedMultiExec, A::Error> {
         let mut seq = CountedSeqAccess::new(seq, 3);
         let ver = seq.next_element::<Version>()?;
         let features = seq.next_element::<HashSet<Feature>>()?;
@@ -100,56 +84,49 @@ impl<'de> Visitor<'de> for VersionedExecutionVisitor {
                 ver, features_list,
             );
         }
-        let exec = with_features(all_features.clone(), || {
-            seq.next_element::<Execution>()
+        let inner = with_features(all_features.clone(), || {
+            if has_feature(Feature::MultiExec) {
+                seq.next_element::<MultiExec>()
+            } else {
+                let body = seq.next_element::<ExecBody>()?;
+                let mut execs = HashMap::new();
+                execs.insert("".to_string(),body);
+                Ok(MultiExec {
+                    execs: execs,
+                    mem_equiv: Vec::new()
+                })
+            }
         })?;
         seq.finish()?;
-        Ok(VersionedExecution(Execution {
+        Ok(VersionedMultiExec {
             version: ver,
             features: all_features,
             declared_features: features,
-            .. exec
-        }))
+            inner: inner
+        })
     }
 }
 
-
-/// Newtype wrapper around `Execution` that expects no version number wrapper and deserializes
-/// according to the current version.
-pub struct UnversionedExecution(Execution);
-
-impl<'de> Deserialize<'de> for UnversionedExecution {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let exec = Execution::deserialize(d)?;
-        Ok(UnversionedExecution(exec))
-    }
-}
-
-
-impl<'de> Deserialize<'de> for Execution {
+impl<'de> Deserialize<'de> for ExecBody {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         d.deserialize_struct(
-            "Execution",
+            "ExecBody",
             &["program", "init_mem", "params", "trace", "advice"],
-            ExecutionVisitor,
+            ExecBodyVisitor,
         )
     }
 }
 
-struct ExecutionVisitor;
-impl<'de> Visitor<'de> for ExecutionVisitor {
-    type Value = Execution;
+struct ExecBodyVisitor;
+impl<'de> Visitor<'de> for ExecBodyVisitor {
+    type Value = ExecBody;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "an execution object")
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Execution, A::Error> {
-        let mut ex = Execution {
-            version: Version::default(),
-            features: HashSet::new(),
-            declared_features: HashSet::new(),
-
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ExecBody, A::Error> {
+        let mut ex = ExecBody {
             program: Vec::new(),
             init_mem: Vec::new(),
             params: Params::default(),
@@ -204,7 +181,6 @@ impl<'de> Visitor<'de> for ExecutionVisitor {
         Ok(ex)
     }
 }
-
 
 impl<'de> Deserialize<'de> for Opcode {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
