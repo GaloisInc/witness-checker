@@ -51,17 +51,17 @@ pub type Num = num::Num<Scalar>;
 /// - Walk through gates.
 /// - Allocate and retrieve representations of wires.
 /// - Write files.
-pub struct Backend<'w, 'irb, IRB: IRBuilderT> {
+pub struct Backend<'w, IRB: IRBuilderT> {
     wire_to_repr: BTreeMap<Wire<'w>, ReprId>,
     representer: Representer,
     usage: BTreeMap<Wire<'w>, u64>, // tells the number of times a given wire is used as an input.
     optim: bool,
-    builder: &'irb mut IRB,
+    builder: IRB,
 }
 
-impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
+impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
     /// Must call finish() to finalize the files in the workspace.
-    pub fn new(ir_builder: &'irb mut IRB) -> Self {
+    pub fn new(ir_builder: IRB) -> Self {
         Backend {
             wire_to_repr: BTreeMap::new(),
             representer: Representer::new(),
@@ -71,32 +71,34 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
         }
     }
 
-    pub fn finish(self) {}
+    pub fn finish(self) -> IRB {
+        self.builder
+    }
 
     pub fn enforce_true(&mut self, wire: Wire<'w>) {
         let repr_id = self.represent(wire);
-        let bool = self.representer.mut_repr(repr_id).as_boolean(self.builder);
-        bool.enforce_true(self.builder).unwrap();
+        let bool = self.representer.mut_repr(repr_id).as_boolean(&mut self.builder);
+        bool.enforce_true(&mut self.builder).unwrap();
     }
 
     fn get_num(&mut self, repr_id: ReprId) -> Num {
-        self.representer.mut_repr(repr_id).as_num(self.builder)
+        self.representer.mut_repr(repr_id).as_num(&mut self.builder)
     }
 
     fn get_num_trunc(&mut self, repr_id: ReprId, width: impl Into<usize>) -> Num {
         self.representer
             .mut_repr(repr_id)
-            .as_num_trunc(self.builder, width.into())
+            .as_num_trunc(&mut self.builder, width.into())
     }
 
     fn get_int(&mut self, repr_id: ReprId, width: impl Into<usize>) -> Int {
         self.representer
             .mut_repr(repr_id)
-            .as_int(self.builder, width.into())
+            .as_int(&mut self.builder, width.into())
     }
 
     fn get_boolean(&mut self, repr_id: ReprId) -> Boolean {
-        self.representer.mut_repr(repr_id).as_boolean(self.builder)
+        self.representer.mut_repr(repr_id).as_boolean(&mut self.builder)
     }
 
     fn represent(&mut self, wire: Wire<'w>) -> ReprId {
@@ -149,7 +151,7 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
         let repr = match wire.kind {
             GateKind::Lit(val, ty) => match *ty {
                 TyKind::Uint(sz) | TyKind::Int(sz) => {
-                    let num = Num::from_biguint(self.builder, sz.bits(), &val.to_biguint());
+                    let num = Num::from_biguint(&mut self.builder, sz.bits(), &val.to_biguint());
                     WireRepr::from(num)
                 }
 
@@ -160,7 +162,7 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                     TyKind::Uint(sz) | TyKind::Int(sz) => {
                         // TODO: can we use Num::alloc here instead?
                         let int = Int::alloc(
-                            self.builder,
+                            &mut self.builder,
                             sz.bits() as usize,
                             secret.val().map(|val| val.to_biguint()),
                         );
@@ -194,10 +196,10 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                             UnOp::Neg => {
                                 let num = self.get_num(aw);
                                 let out_num = num
-                                    .neg(self.builder)
+                                    .neg(&mut self.builder)
                                     .or_else(|_| {
                                         let num = self.get_num_trunc(aw, sz.bits());
-                                        num.neg(self.builder)
+                                        num.neg(&mut self.builder)
                                     })
                                     .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
                                 self.forget_wire_if_required(&arg, aw);
@@ -231,12 +233,12 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
 
                         let out_bool = match op {
                             BinOp::Xor | BinOp::Add | BinOp::Sub => {
-                                Boolean::xor(self.builder, &lb, &rb)
+                                Boolean::xor(&mut self.builder, &lb, &rb)
                             }
 
-                            BinOp::And | BinOp::Mul => Boolean::and(self.builder, &lb, &rb),
+                            BinOp::And | BinOp::Mul => Boolean::and(&mut self.builder, &lb, &rb),
 
-                            BinOp::Or => bool_or(self.builder, &lb, &rb),
+                            BinOp::Or => bool_or(&mut self.builder, &lb, &rb),
 
                             BinOp::Div | BinOp::Mod => unimplemented!("{:?} for {:?}", op, wire.ty),
                         };
@@ -262,11 +264,11 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                                 // The operation might fail if the `real_bits` of `left` and
                                 // `right` are too big.  In that case, use `as_num_trunc` to reduce
                                 // the `real_bits` as much as possible, then try again.
-                                let out_num = do_bin_op(left_num, right_num, self.builder)
+                                let out_num = do_bin_op(left_num, right_num, &mut self.builder)
                                     .or_else(|_| {
                                         let left = self.get_num_trunc(lw, sz.bits());
                                         let right = self.get_num_trunc(rw, sz.bits());
-                                        do_bin_op(left, right, self.builder)
+                                        do_bin_op(left, right, &mut self.builder)
                                     })
                                     .unwrap_or_else(|e| panic!("failed to {:?}: {}", op, e));
                                 self.forget_wire_if_required(&left, lw);
@@ -289,7 +291,7 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                                 let denom_int = self.get_int(rw, sz.bits());
 
                                 let (quot_num, quot_int, rest_num, rest_int) = int_ops::div(
-                                    self.builder,
+                                    &mut self.builder,
                                     &numer_num,
                                     &numer_int,
                                     &denom_num,
@@ -314,11 +316,11 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                                 let ru = self.get_int(rw, sz.bits());
 
                                 let out_int = match op {
-                                    BinOp::Xor => int_ops::bitwise_xor(self.builder, &lu, &ru),
+                                    BinOp::Xor => int_ops::bitwise_xor(&mut self.builder, &lu, &ru),
 
-                                    BinOp::And => int_ops::bitwise_and(self.builder, &lu, &ru),
+                                    BinOp::And => int_ops::bitwise_and(&mut self.builder, &lu, &ru),
 
-                                    BinOp::Or => int_ops::bitwise_or(self.builder, &lu, &ru),
+                                    BinOp::Or => int_ops::bitwise_or(&mut self.builder, &lu, &ru),
 
                                     _ => unreachable!(),
                                 };
@@ -369,7 +371,7 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                     CmpOp::Eq => {
                         // Needs a truncated `Num`, with no bogus high bits.
                         let left = self.get_num_trunc(lw, width);
-                        left.equals_zero(self.builder)
+                        left.equals_zero(&mut self.builder)
                     }
 
                     CmpOp::Ge => {
@@ -390,9 +392,8 @@ impl<'w, 'irb, IRB: IRBuilderT> Backend<'w, 'irb, IRB> {
                 let cond_num = self.get_num_trunc(cw, 1 as usize);
                 let then_num = self.get_num(tw);
                 let else_num = self.get_num(ew);
-                let out_num = then_num.mux(&else_num, &cond_num, self.builder).unwrap_or_else(|e| {
-                    panic!("failed to mux: {}", e);
-                });
+                let out_num = then_num.mux(&else_num, &cond_num, &mut self.builder)
+                    .unwrap_or_else(|e| panic!("failed to mux: {}", e));
                 self.forget_wire_if_required(&then_, tw);
                 self.forget_wire_if_required(&else_, ew);
                 self.forget_wire_if_required(&cond, cw);
@@ -483,7 +484,7 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     ir_builder.enable_profiler();
     ir_builder.prof.as_mut().map(|p| p.warnings_panic = false);
 
-    let mut back = Backend::new(&mut ir_builder);
+    let mut back = Backend::new(ir_builder);
     back.optim = false;
 
     let arenas = Arenas::new();
@@ -513,14 +514,14 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     back.represent(is_ge_zero1);
     back.represent(is_ge_zero2);
 
-    fn check_int<'w, 'irb>(b: &Backend<'w, 'irb, impl IRBuilderT>, w: Wire<'w>, expect: u64) {
+    fn check_int<'w>(b: &Backend<'w, impl IRBuilderT>, w: Wire<'w>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.int.as_ref().unwrap();
         assert_eq!(int.value, Some(BigUint::from(expect)));
     }
 
-    fn check_num<'w, 'irb>(b: &Backend<'w, 'irb, impl IRBuilderT>, w: Wire<'w>, expect: u64) {
+    fn check_num<'w>(b: &Backend<'w, impl IRBuilderT>, w: Wire<'w>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();
         let wr = &b.representer.wire_reprs[wi.0];
         let int = wr.num.as_ref().unwrap();
@@ -535,7 +536,7 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     check_int(&back, diff1, 12 * 13 - 11);
     check_int(&back, diff2, (11 - 12 * 13) as u64);
 
-    back.finish();
+    let ir_builder = back.finish();
     ir_builder.prof.as_ref().map(|p| p.print_report());
     ir_builder.dedup.as_ref().map(|p| p.print_report());
     let sink = ir_builder.finish();

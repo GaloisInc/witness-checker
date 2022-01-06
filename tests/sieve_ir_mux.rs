@@ -32,9 +32,9 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
 
     let sink = FilesSink::new_clean(&dir.path()).unwrap();
     let mut ir_builder = IRBuilder::new::<Scalar>(sink);
-    let mut backend = Backend::new(&mut ir_builder);
+    let mut backend = Backend::new(ir_builder);
     backend.enforce_true(w);
-    backend.finish();
+    let ir_builder = backend.finish();
     ir_builder.finish();
 
     // TODO: Validate the circuit and witness.

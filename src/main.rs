@@ -353,11 +353,11 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             }
 
             { // restrict backend to its own scope to save memory
-                let mut backend = Backend::new(&mut ir_builder);
+                let mut backend = Backend::new(ir_builder);
 
                 let accepted = flags[0];
                 backend.enforce_true(accepted);
-                backend.finish();
+                ir_builder = backend.finish();
             }
             eprintln!();
             ir_builder.prof.as_ref().map(|p| p.print_report());
