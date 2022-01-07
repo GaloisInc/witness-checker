@@ -34,7 +34,6 @@ use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor, MigrateVisitor,
 };
-use crate::ir::migrate::{self, Migrate, Visitor as _};
 
 use super::ir_builder::{IRBuilder, IRBuilderT};
 use super::{
@@ -444,6 +443,8 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
     }
 
     pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+        use crate::ir::migrate::Visitor as _;
+
         let mut old_representer = mem::replace(&mut self.representer, Representer::new());
         let old_wire_to_repr = mem::take(&mut self.wire_to_repr);
 

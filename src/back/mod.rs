@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use crate::ir::circuit::{Wire, EraseVisitor, MigrateVisitor};
 use crate::ir::migrate::{self, Migrate};
 
@@ -30,39 +30,59 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
         use self::zkif::backend::Backend;
         use zkinterface::{cli::{cli, Options}, clean_workspace};
 
+
+        struct BackendWrapper<'a> {
+            backend: Backend<'a>,
+            workspace: PathBuf,
+        }
+
+
         // Clean workspace.
         let workspace = Path::new(dest);
         clean_workspace(workspace).unwrap();
 
         // Generate the circuit and witness.
         let backend = Backend::new(workspace, true);
-        Box::new(backend)
+        return Box::new(BackendWrapper {
+            backend,
+            workspace: workspace.to_owned(),
+        });
 
-        /*
 
-        backend.enforce_true(accepted);
+        unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+                self.backend.post_erase(v);
+            }
 
-        // Write files.
-        backend.finish().unwrap();
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+                self.backend.post_migrate(v);
+            }
 
-        eprintln!("validating zkif...");
+            fn finish(mut self: Box<Self>, accepted: Wire<'w>, validate: bool) {
+                self.backend.enforce_true(accepted);
 
-        if !args.is_present("skip-backend-validation") {
-            // Validate the circuit and witness.
-            cli(&Options {
-                tool: "simulate".to_string(),
-                paths: vec![workspace.to_path_buf()],
-                field_order: Default::default(),
-            }).unwrap();
+                // Write files.
+                self.backend.finish().unwrap();
+
+                eprintln!("validating zkif...");
+
+                if validate {
+                    // Validate the circuit and witness.
+                    cli(&Options {
+                        tool: "simulate".to_string(),
+                        paths: vec![self.workspace.clone()],
+                        field_order: Default::default(),
+                    }).unwrap();
+                }
+
+                // Print statistics.
+                cli(&Options {
+                    tool: "stats".to_string(),
+                    paths: vec![self.workspace.clone()],
+                    field_order: Default::default(),
+                }).unwrap();
+            }
         }
-
-        // Print statistics.
-        cli(&Options {
-            tool: "stats".to_string(),
-            paths: vec![workspace.to_path_buf()],
-            field_order: Default::default(),
-        }).unwrap();
-        */
     }
     #[cfg(not(feature = "bellman"))]
     {

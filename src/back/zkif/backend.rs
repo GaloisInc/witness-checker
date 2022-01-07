@@ -1,36 +1,39 @@
-use num_bigint::BigUint;
-use num_traits::Zero;
-/// # Wire representations
-///
-/// We use two different representations of wire values: a bitwise representation (`Int`) where a
-/// value is a list of booleans, and a packed representation (`Num`) where a value is encoded as a
-/// single field element.
-///
-/// Conversion from bitwise to packed representation always uses an unsigned interpretation of the
-/// bits.  For example, the packed representation of the signed integer `-1_i8` is `255` - notably,
-/// it is *not* equal to the negation (in the field) of the field element `1`.  Arithmetic on the
-/// packed representation must account for this.  For example, we negate the packed 8-bit value `1`
-/// by computing `256 - 1`, giving the correct result `255`.
-///
-/// Converting from packed back to bitwise representation requires knowing how many bits are needed
-/// to represent the full range of values that the wire might carry.  Some operations on packed
-/// values can increase the range.  For example, negating `0_i8` produces `256 - 0 = 256`, which is
-/// 9 bits wide.  However, this wire still logically carries an 8-bit value; only the lower 8 bits
-/// are meaningful.  The conversion to bitwise representation thus converts to a 9-bit value
-/// (otherwise the conversion could fail for values like `256`), then truncates to 8 bits.
-///
-/// This implies some values may have multiple equivalent packed representations.  Specifically,
-/// these are equivalence classes mod `2^N`.  Field elements `0`, `256`, `512`, etc all represent
-/// the bitwise value `0_u8`.  Since `2^N` does not evenly divide the field modulus, the
-/// highest-valued field elements are not safe to use.  The `Num` type will automatically truncate
-/// if the operation might return a value that is out of range.
+//! # Wire representations
+//!
+//! We use two different representations of wire values: a bitwise representation (`Int`) where a
+//! value is a list of booleans, and a packed representation (`Num`) where a value is encoded as a
+//! single field element.
+//!
+//! Conversion from bitwise to packed representation always uses an unsigned interpretation of the
+//! bits.  For example, the packed representation of the signed integer `-1_i8` is `255` - notably,
+//! it is *not* equal to the negation (in the field) of the field element `1`.  Arithmetic on the
+//! packed representation must account for this.  For example, we negate the packed 8-bit value `1`
+//! by computing `256 - 1`, giving the correct result `255`.
+//!
+//! Converting from packed back to bitwise representation requires knowing how many bits are needed
+//! to represent the full range of values that the wire might carry.  Some operations on packed
+//! values can increase the range.  For example, negating `0_i8` produces `256 - 0 = 256`, which is
+//! 9 bits wide.  However, this wire still logically carries an 8-bit value; only the lower 8 bits
+//! are meaningful.  The conversion to bitwise representation thus converts to a 9-bit value
+//! (otherwise the conversion could fail for values like `256`), then truncates to 8 bits.
+//!
+//! This implies some values may have multiple equivalent packed representations.  Specifically,
+//! these are equivalence classes mod `2^N`.  Field elements `0`, `256`, `512`, etc all represent
+//! the bitwise value `0_u8`.  Since `2^N` does not evenly divide the field modulus, the
+//! highest-valued field elements are not safe to use.  The `Num` type will automatically truncate
+//! if the operation might return a value that is out of range.
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
+use std::mem;
 use std::path::Path;
+use num_bigint::BigUint;
+use num_traits::Zero;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
-use crate::ir::circuit::{self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire};
+use crate::ir::circuit::{
+    self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor, MigrateVisitor,
+};
 
 use super::{
     field::QuarkScalar,
@@ -78,7 +81,7 @@ impl<'a> Backend<'a> {
     }
 
     pub fn enforce_true(&mut self, wire: Wire<'a>) {
-        let repr_id = self.wire(wire);
+        let repr_id = self.convert_wires(&[wire])[0];
         let bool = self.representer.mut_repr(repr_id).as_boolean(&mut self.cs);
         enforce_true(&mut self.cs, &bool);
     }
@@ -89,21 +92,22 @@ impl<'a> Backend<'a> {
         bool.get_value()
     }
 
-    fn wire(&mut self, wire: Wire<'a>) -> ReprId {
-        if let Some(wid) = self.wire_to_repr.get(&wire) {
-            return *wid; // This Wire was already processed.
-        }
-
-        let order =
-            circuit::walk_wires_filtered(iter::once(wire), |w| !self.wire_to_repr.contains_key(&w))
-                .collect::<Vec<_>>();
+    fn convert_wires(&mut self, wires: &[Wire<'a>]) -> Vec<ReprId> {
+        let order = circuit::walk_wires_filtered(
+            wires.iter().cloned(),
+            |w| !self.wire_to_repr.contains_key(&w),
+        ).collect::<Vec<_>>();
 
         for wire in order {
             let wid = self.make_repr(wire);
             self.wire_to_repr.insert(wire, wid);
         }
 
-        self.wire_to_repr.get(&wire).cloned().unwrap()
+        wires.iter().map(|&wire| self.wire_to_repr[&wire]).collect()
+    }
+
+    fn wire(&mut self, wire: Wire<'a>) -> ReprId {
+        self.wire_to_repr[&wire]
     }
 
     fn make_repr(&mut self, wire: Wire<'a>) -> ReprId {
@@ -437,6 +441,36 @@ impl<'a> Backend<'a> {
 
         self.representer.new_repr(repr)
     }
+
+    pub fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {
+        // Each entry `old -> new` in `v.erased_map()` indicates that wire `old` was replaced with
+        // the new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a
+        // `ReprId` for `old` and copy it into `wire_to_repr[new]` as well.
+        let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased_map().iter()
+            .map(|(&old, &new)| (old, new)).unzip();
+        let old_reprs = self.convert_wires(&old_wires);
+        for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
+            assert!(!self.wire_to_repr.contains_key(&new_wire));
+            self.wire_to_repr.insert(new_wire, old_repr);
+        }
+    }
+
+    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
+        use crate::ir::migrate::Visitor as _;
+
+        let mut old_representer = mem::replace(&mut self.representer, Representer::new());
+        let old_wire_to_repr = mem::take(&mut self.wire_to_repr);
+
+        for (old_wire, old_repr_id) in old_wire_to_repr {
+            let new_wire = match v.visit_wire_weak(old_wire) {
+                Some(x) => x,
+                None => continue,
+            };
+            let repr = old_representer.take_repr(old_repr_id);
+            let new_repr_id = self.representer.new_repr(repr);
+            self.wire_to_repr.insert(new_wire, new_repr_id);
+        }
+    }
 }
 
 fn as_lit(wire: Wire) -> Option<BigUint> {
@@ -467,9 +501,7 @@ fn test_zkif() -> Result<()> {
     let diff2 = c.sub(lit, prod);
     let is_ge_zero2 = c.compare(CmpOp::Ge, diff2, zero);
 
-    b.wire(is_zero);
-    b.wire(is_ge_zero1);
-    b.wire(is_ge_zero2);
+    b.convert_wires(&[is_zero, is_ge_zero1, is_ge_zero2]);
 
     fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();

@@ -1,3 +1,4 @@
+use std::mem;
 use zkinterface_bellman::bellman::gadgets::boolean::Boolean;
 use super::{
     backend::{Num, CS},
@@ -21,6 +22,10 @@ impl Representer {
 
     pub fn mut_repr(&mut self, wid: ReprId) -> &mut WireRepr {
         &mut self.wire_reprs[wid.0]
+    }
+
+    pub fn take_repr(&mut self, wid: ReprId) -> WireRepr {
+        mem::take(&mut self.wire_reprs[wid.0])
     }
 }
 
