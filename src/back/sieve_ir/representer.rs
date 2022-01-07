@@ -158,9 +158,4 @@ impl WireRepr {
         assert!(i.bits.len() == 1);
         i.bits[0].clone()
     }
-
-    pub fn deallocate(&mut self) {
-        self.int = None;
-        self.num = None;
-    }
 }

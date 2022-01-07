@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::mem;
 use log::info;
 use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::{CircuitTrait, CircuitExt};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
 use crate::ir::typed::{Builder, TWire};
@@ -188,6 +186,8 @@ impl<'a> ExecBuilder<'a> {
         let mut seg_graph_builder = mh.root(x.seg_graph_builder);
         let mut mem = mh.root(x.mem);
         let mut fetch = mh.root(x.fetch);
+        // Make sure no fields of `self`/`x` are used past this point.
+        #[allow(unused)]
         let x = ();
 
         info!("seg_graph_builder.finish");

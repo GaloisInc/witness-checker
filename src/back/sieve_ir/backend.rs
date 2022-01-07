@@ -23,19 +23,17 @@
 //! highest-valued field elements are not safe to use.  The `Num` type will automatically truncate
 //! if the operation might return a value that is out of range.
 use std::collections::BTreeMap;
-use std::{convert::TryFrom, iter};
+use std::convert::TryFrom;
 use std::mem;
 use num_bigint::BigUint;
 use num_traits::Zero;
-use zki_sieve::Sink;
 
-use crate::back;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor, MigrateVisitor,
 };
 
-use super::ir_builder::{IRBuilder, IRBuilderT};
+use super::ir_builder::IRBuilderT;
 use super::{
     boolean::Boolean,
     field::QuarkScalar,

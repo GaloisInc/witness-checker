@@ -15,7 +15,6 @@
 //! `Rooted` values must be explicitly "opened" for access.  The lifetimes are arranged to ensure
 //! that it is impossible to call `erase_and_migrate` while any `Rooted` values are currently open.
 use std::alloc::Layout;
-use std::any;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem::{self, MaybeUninit};
@@ -178,7 +177,7 @@ impl<'a, T> Rooted<'a, T> {
 
     pub fn project<'b, U, F>(
         &'b mut self,
-        mh: &MigrateHandle<'a>,
+        _mh: &MigrateHandle<'a>,
         f: F,
     ) -> Rooted<'a, Projected<'b, U>>
     where F: for<'c> FnOnce(&'c mut T) -> &'c mut U {
@@ -219,13 +218,13 @@ impl<T> DerefMut for Projected<'_, T> {
 impl<T> Deref for Open<'_, '_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        unsafe { &*self.ptr }
+        self.ptr
     }
 }
 
 impl<T> DerefMut for Open<'_, '_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.ptr }
+        self.ptr
     }
 }
 
@@ -357,12 +356,10 @@ impl<'a> MigrateContextInner<'a> {
     }
 
     unsafe fn alloc_with_vtable<T>(&mut self, x: T, vtable: &'static Vtable) -> *mut T {
-        unsafe {
-            let node = Box::into_raw(Box::new(Storage::new(vtable, x)));
-            self.append(&mut (*node).header);
-            let ptr = &mut (*node).data;
-            ptr
-        }
+        let node = Box::into_raw(Box::new(Storage::new(vtable, x)));
+        self.append(&mut (*node).header);
+        let ptr = &mut (*node).data;
+        ptr
     }
 
     pub fn alloc<T>(&mut self, x: T) -> *mut T
@@ -385,23 +382,19 @@ impl<'a> MigrateContextInner<'a> {
     }
 
     pub unsafe fn free<T>(&mut self, ptr: *mut T) {
-        unsafe {
-            let node = Storage::from_data_ptr_raw(ptr);
-            self.remove(&mut (*node).header);
-            let vtable = (*node).header.vtable;
-            (vtable.drop_box)(node as *mut Storage<()>);
-        }
+        let node = Storage::from_data_ptr_raw(ptr);
+        self.remove(&mut (*node).header);
+        let vtable = (*node).header.vtable;
+        (vtable.drop_box)(node as *mut Storage<()>);
     }
 
     pub unsafe fn take<T>(&mut self, ptr: *mut T) -> T {
-        unsafe {
-            let node = Storage::from_data_ptr_raw(ptr);
-            let vtable = (*node).header.vtable;
-            self.remove(&mut (*node).header);
-            let mut dest = MaybeUninit::uninit();
-            (vtable.take_box)(node as *mut Storage<()>, dest.as_ptr() as *mut ());
-            dest.assume_init()
-        }
+        let node = Storage::from_data_ptr_raw(ptr);
+        let vtable = (*node).header.vtable;
+        self.remove(&mut (*node).header);
+        let mut dest = MaybeUninit::uninit();
+        (vtable.take_box)(node as *mut Storage<()>, dest.as_mut_ptr() as *mut ());
+        dest.assume_init()
     }
 
     pub fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
@@ -451,7 +444,12 @@ struct Vtable {
 }
 
 impl Vtable {
-    fn get<'a, T: Migrate<'a, 'a, Output = T>>(mcxi: &MigrateContextInner<'a>) -> &'static Vtable {
+    /// Get the `Vtable` for values of type `T`.  The `MigrateContextInner` argument ensures that
+    /// the `'a` used for the `<T as Migrate<'a, 'a>>` methods is compatible with the lifetime of
+    /// the `MigrateContext`.  (The value of the argument is not used for anything.)
+    fn get<'a, T: Migrate<'a, 'a, Output = T>>(
+        _mcxi: &MigrateContextInner<'a>,
+    ) -> &'static Vtable {
         &Vtable {
             drop_box: |ptr| unsafe {
                 drop(Box::from_raw(ptr as *mut Storage<T>))
@@ -484,8 +482,8 @@ impl Vtable {
                 let x = Box::from_raw(ptr as *mut Storage<T>).data;
                 ptr::write(dest as *mut T, x);
             },
-            migrate_in_place: |_, _| unsafe {},
-            erase_in_place: |_, _| unsafe {},
+            migrate_in_place: |_, _| {},
+            erase_in_place: |_, _| {},
         }
     }
 }

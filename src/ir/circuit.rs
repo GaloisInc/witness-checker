@@ -1388,12 +1388,16 @@ impl Ty<'_> {
 }
 
 
+/// Wrapper for a `T` which ignores the wrapped value for equality and hashing purposes.  Comparing
+/// two `Unhashed<T>`s always reports that they are equal, and hashing an `Unhashed<T>` has no
+/// effect on the hasher state.  `Unhashed<Cell<T>>` is useful for cache fields that should be
+/// ignored when the containing struct is inserted into a `HashMap` or `HashSet`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Unhashed<T>(pub T);
 
 impl<T> PartialEq for Unhashed<T> {
-    fn eq(&self, other: &Self) -> bool { true }
-    fn ne(&self, other: &Self) -> bool { false }
+    fn eq(&self, _other: &Self) -> bool { true }
+    fn ne(&self, _other: &Self) -> bool { false }
 }
 
 impl<T> Eq for Unhashed<T> {}

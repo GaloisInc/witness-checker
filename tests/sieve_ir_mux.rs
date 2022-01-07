@@ -31,7 +31,7 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     let dir = tempfile::tempdir().unwrap();
 
     let sink = FilesSink::new_clean(&dir.path()).unwrap();
-    let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+    let ir_builder = IRBuilder::new::<Scalar>(sink);
     let mut backend = Backend::new(ir_builder);
     backend.enforce_true(w);
     let ir_builder = backend.finish();

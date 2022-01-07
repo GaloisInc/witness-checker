@@ -24,7 +24,6 @@
 //! if the operation might return a value that is out of range.
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::iter;
 use std::mem;
 use std::path::Path;
 use num_bigint::BigUint;

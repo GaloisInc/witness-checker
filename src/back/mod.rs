@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use crate::ir::circuit::{Wire, EraseVisitor, MigrateVisitor};
-use crate::ir::migrate::{self, Migrate};
 
 
 pub unsafe trait Backend<'a> {
