@@ -902,15 +902,21 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.migrate_with(|v| v.visit(x))
     }
 
-    unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a>) -> R, R>(&'a self, f: F) -> R {
+    unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a>) -> R, R>(
+        &'a self,
+        f: F,
+    ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
         let mut v = EraseVisitor::new(self.as_base());
 
         self.erase_filter(&mut v);
         let r = f(&mut v);
 
-        drop(v);
+        let erased_map = {
+            let v = v;
+            v.erased_map
+        };
 
-        r
+        (r, erased_map)
     }
 
     /// Replace all non-trivial top-level wires in `self` and `x` with `GateKind::Erased`.
@@ -920,7 +926,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     unsafe fn erase<T: Migrate<'a, 'a, Output = T>>(
         &'a self,
         x: T,
-    ) -> T {
+    ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
         use crate::ir::migrate::Visitor;
         self.erase_with(|v| v.visit(x))
     }
@@ -929,10 +935,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     unsafe fn erase_and_migrate<T: Migrate<'a, 'a, Output = T>>(
         &'a self,
         x: T,
-    ) -> T {
+    ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
         let x = self.erase(x);
-        let x = self.migrate(x);
-        x
+        let (x, erased_map) = self.migrate(x);
+        (x, erased_map)
     }
 }
 
@@ -1004,7 +1010,7 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
 
 pub struct EraseVisitor<'a> {
     circuit: &'a CircuitBase<'a>,
-    erased_map: HashMap<Wire<'a>, Erased<'a>>,
+    erased_map: HashMap<Wire<'a>, Wire<'a>>,
 }
 
 impl<'a> EraseVisitor<'a> {
@@ -1034,7 +1040,7 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
         }
 
         if let Some(&e) = self.erased_map.get(&w) {
-            return self.circuit.erased(e);
+            return e;
         }
 
         // `eval_wire` will update `w.value`.
@@ -1049,13 +1055,20 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
             },
         };
 
-        let e = Erased(self.circuit.arena().alloc(ErasedData::new(w.ty, bits, secret)));
+        let ed = self.circuit.arena().alloc(ErasedData::new(w.ty, bits, secret));
+        let e = self.circuit.erased(Erased(ed));
         self.erased_map.insert(w, e);
-        self.circuit.erased(e)
+        e
     }
 
     fn visit_secret(&mut self, s: Secret<'a>) -> Secret<'a> { s }
     fn visit_erased(&mut self, e: Erased<'a>) -> Erased<'a> { e }
+}
+
+impl<'a> EraseVisitor<'a> {
+    pub fn erased_map(&self) -> &HashMap<Wire<'a>, Wire<'a>> {
+        &self.erased_map
+    }
 }
 
 

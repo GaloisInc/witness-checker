@@ -21,6 +21,7 @@ use std::marker::PhantomData;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
+use crate::back::Backend;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, MigrateVisitor, EraseVisitor};
 use crate::ir::migrate::{self, Migrate};
 
@@ -59,6 +60,17 @@ impl<'a> MigrateContext<'a> {
         MigrateContext {
             inner: RefCell::new(MigrateContextInner::new()),
         }
+    }
+
+    pub fn set_backend<'b>(&'b self, backend: &'b mut (dyn Backend<'a> + 'a)) -> BackendGuard<'a, 'b> {
+        unsafe {
+            self.inner.borrow_mut().set_backend(backend);
+            BackendGuard { mcx: self }
+        }
+    }
+
+    pub fn clear_backend(&self) {
+        self.inner.borrow_mut().clear_backend();
     }
 
     fn alloc<T: Migrate<'a, 'a, Output = T>>(&self, x: T) -> *mut T {
@@ -221,6 +233,7 @@ impl<T> DerefMut for Open<'_, '_, T> {
 struct MigrateContextInner<'a> {
     head: *mut StorageHeader,
     tail: *mut StorageHeader,
+    backend: *mut (dyn Backend<'a> + 'a),
     _marker: PhantomData<&'a &'a ()>,
 }
 
@@ -267,8 +280,17 @@ impl<'a> MigrateContextInner<'a> {
         MigrateContextInner {
             head: ptr::null_mut(),
             tail: ptr::null_mut(),
+            backend: (&mut ()) as &mut dyn Backend as *mut dyn Backend,
             _marker: PhantomData,
         }
+    }
+
+    pub unsafe fn set_backend(&mut self, backend: &mut (dyn Backend<'a> + 'a)) {
+        self.backend = backend;
+    }
+
+    pub fn clear_backend(&mut self) {
+        self.backend = (&mut ()) as &mut dyn Backend as *mut dyn Backend;
     }
 
     fn debug_check_list(&self) {
@@ -391,6 +413,10 @@ impl<'a> MigrateContextInner<'a> {
                 (vtable.migrate_in_place)(node as *mut Storage<()>, v_ptr);
                 node = (*node).next;
             }
+
+            if !self.backend.is_null() {
+                (*self.backend).post_migrate(v);
+            }
         }
     }
 
@@ -402,6 +428,10 @@ impl<'a> MigrateContextInner<'a> {
                 let vtable = (*node).vtable;
                 (vtable.erase_in_place)(node as *mut Storage<()>, v_ptr);
                 node = (*node).next;
+            }
+
+            if !self.backend.is_null() {
+                (*self.backend).post_erase(v);
             }
         }
     }
@@ -457,5 +487,16 @@ impl Vtable {
             migrate_in_place: |_, _| unsafe {},
             erase_in_place: |_, _| unsafe {},
         }
+    }
+}
+
+
+pub struct BackendGuard<'a, 'b> {
+    mcx: &'b MigrateContext<'a>
+}
+
+impl<'a, 'b> Drop for BackendGuard<'a, 'b> {
+    fn drop(&mut self) {
+        self.mcx.clear_backend();
     }
 }

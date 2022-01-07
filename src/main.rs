@@ -7,6 +7,7 @@ use env_logger;
 use num_traits::One;
 
 use cheesecloth::wire_assert;
+use cheesecloth::back;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::gadget;
@@ -110,18 +111,6 @@ fn check_first<'a>(
 
 
 fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
-    #[cfg(not(feature = "bellman"))]
-    if args.is_present("zkif-out") {
-        eprintln!("error: zkinterface output is not supported - build with `--features bellman`");
-        std::process::exit(1);
-    }
-
-    #[cfg(not(feature = "sieve_ir"))]
-    if args.is_present("sieve-ir-out") {
-        eprintln!("error: sieve_ir output is not supported - build with `--features sieve_ir`");
-        std::process::exit(1);
-    }
-
     let is_prover = !args.is_present("verifier-mode");
 
     let arenas = Arenas::new();
@@ -208,6 +197,19 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
 
+    // Set up the backend.
+    let mut backend =
+        if let Some(workspace) = args.value_of("sieve-ir-out") {
+            let dedup = args.is_present("sieve-ir-dedup");
+            back::new_sieve_ir(workspace, dedup)
+        } else if let Some(dest) = args.value_of_os("zkif-out") {
+            back::new_zkif(dest)
+        } else {
+            back::new_dummy()
+        };
+    let mcx_backend_guard = mcx.set_backend(&mut *backend);
+
+
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
     // for equivalent mem segments. 
@@ -240,7 +242,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         cx = new_cx;
         equiv_segments = new_equiv_segments;
     }
-        
+
     // Collect assertions and bugs.
     drop(b);
     let (asserts, bugs) = cx.finish();
@@ -293,6 +295,12 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         return Ok(());
     }
 
+    drop(mcx_backend_guard);
+    let accepted = flags[0];
+    let validate = !args.is_present("skip-backend-validation");
+    backend.finish(accepted, validate);
+
+    /*
     #[cfg(feature = "bellman")]
     if let Some(dest) = args.value_of_os("zkif-out") {
         use cheesecloth::back::zkif::backend::Backend;
@@ -373,6 +381,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         }
         cli(&Options::from_iter(&["zki_sieve", "metrics", workspace])).unwrap();
     }
+    */
 
     // Unused in some configurations.
     let _ = num_asserts;

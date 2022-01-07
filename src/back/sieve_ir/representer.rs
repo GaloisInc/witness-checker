@@ -1,3 +1,5 @@
+use std::mem;
+use crate::ir::migrate::{self, Migrate};
 use super::{backend::Num, boolean::Boolean, int::Int, ir_builder::IRBuilderT};
 
 pub struct Representer {
@@ -17,10 +19,14 @@ impl Representer {
     pub fn mut_repr(&mut self, wid: ReprId) -> &mut WireRepr {
         &mut self.wire_reprs[wid.0]
     }
+
+    pub fn take_repr(&mut self, wid: ReprId) -> WireRepr {
+        mem::take(&mut self.wire_reprs[wid.0])
+    }
 }
 
 // ReprId is a reference to a wire representation.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Migrate)]
 pub struct ReprId(pub usize);
 
 // WireRepr holds one or several equivalent representations of an abstract wire as zki_sieve wires.
@@ -154,13 +160,7 @@ impl WireRepr {
     }
 
     pub fn deallocate(&mut self) {
-        if let Some(int) = &self.int {
-            drop(int);
-        }
         self.int = None;
-        if let Some(num) = &self.num {
-            drop(num);
-        }
         self.num = None;
     }
 }
