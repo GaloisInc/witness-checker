@@ -181,6 +181,7 @@ impl<'a> SegGraphBuilder<'a> {
         }
 
         sg.break_cycles(b, params);
+        sg.mark_unreachable();
         sg.count_final_mem_users();
 
         sg
@@ -309,6 +310,95 @@ impl<'a> SegGraphBuilder<'a> {
         }
     }
 
+    /// Mark all nodes that are unreachable from the init state and the network.  Nodes are marked
+    /// by clearing their predecessor list, making them obviously unreachable.
+    fn mark_unreachable(&mut self) {
+        // If a node's "dead" flag is set, the node is unreachable from the init state and the
+        // network.
+        let mut segment_dead = vec![false; self.segments.len()];
+        let mut cycle_break_dead = vec![false; self.cycle_breaks.len()];
+
+        // Scan nodes to initialize dead flags.
+        let mut changed = false;
+        for (i, seg) in self.segments.iter().enumerate() {
+            if seg.preds.len() == 0 {
+                segment_dead[i] = true;
+                changed = true;
+            }
+        }
+        for (i, cb) in self.cycle_breaks.iter().enumerate() {
+            if cb.preds.len() == 0 {
+                cycle_break_dead[i] = true;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            // No nodes are dead.
+            return;
+        }
+
+
+        // Delete dead nodes from predecessor lists, and mark any nodes that become newly dead as a
+        // result.  Running time is `O(n*m)` where `n` is the number of nodes and `m` is the length
+        // of the longest path containing only dead nodes.
+
+        fn pred_is_dead(
+            segment_dead: &[bool],
+            cycle_break_dead: &[bool],
+            pred: &Predecessor,
+        ) -> bool {
+            match pred.src {
+                StateSource::CpuInit => false,
+                StateSource::Segment(i) => segment_dead[i],
+                StateSource::Network(_) => false,
+                StateSource::CycleBreak(i) => cycle_break_dead[i],
+            }
+        }
+
+        /// Remove predecessors from `preds` that refer to dead nodes.  Returns `true` if `preds`
+        /// was nonempty but became empty after filtering.
+        fn filter_preds(
+            segment_dead: &[bool],
+            cycle_break_dead: &[bool],
+            preds: &mut Vec<Predecessor>,
+        ) -> bool {
+            if preds.len() == 0 {
+                return false;
+            }
+            preds.retain(|p| !pred_is_dead(segment_dead, cycle_break_dead, p));
+            preds.len() == 0
+        }
+
+        while changed {
+            changed = false;
+            for (i, seg) in self.segments.iter_mut().enumerate() {
+                if filter_preds(&segment_dead, &cycle_break_dead, &mut seg.preds) {
+                    segment_dead[i] = true;
+                    changed = true;
+                }
+            }
+            for (i, cb) in self.cycle_breaks.iter_mut().enumerate() {
+                if filter_preds(&segment_dead, &cycle_break_dead, &mut cb.preds) {
+                    cycle_break_dead[i] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        // Delete `NetworkInputNode`s whose predecessor is dead.  These are handled separately
+        // since they need different handling.  Only one pass is needed here since these nodes have
+        // no successors.
+        let to_net = &mut self.to_net;
+        self.network_inputs.retain(|n| {
+            let dead = pred_is_dead(&segment_dead, &cycle_break_dead, &n.pred);
+            if dead {
+                to_net.remove(&n.segment_index);
+            }
+            !dead
+        });
+    }
+
     /// Get the order in which to construct the segment circuits.  This ordering is guaranteed to
     /// respect dependencies between the segments.  Specifically, calling `get_initial` on element
     /// `k` of the ordering is guaranteed to succeed if `set_final` has been called on all elements
@@ -328,6 +418,7 @@ impl<'a> SegGraphBuilder<'a> {
 
         let mut stack = Vec::new();
         let mut order = Vec::with_capacity(self.segments.len());
+        let mut num_dead = 0;
         for i in 0 .. self.segments.len() {
             if done[i] {
                 continue;
@@ -349,14 +440,19 @@ impl<'a> SegGraphBuilder<'a> {
                         }
                     },
                     Step::Exit(i) => {
-                        order.push(i);
+                        // Only include non-dead nodes in the order.
+                        if self.segments[i].preds.len() > 0 {
+                            order.push(i);
+                        } else {
+                            num_dead += 1;
+                        }
                         done[i] = true;
                     },
                 }
             }
             debug_assert!(stack.len() == 0);
         }
-        debug_assert!(order.len() == self.segments.len());
+        debug_assert!(order.len() + num_dead == self.segments.len());
 
         order.into_iter().map(SegGraphItem::Segment)
             .chain(iter::once(SegGraphItem::Network))
@@ -558,8 +654,7 @@ impl<'a> SegGraphBuilder<'a> {
             assert!(wires.len() <= u8::MAX as usize);
 
             let segment_live = self.segments[i].final_state.as_ref()
-                .unwrap_or_else(|| panic!("missing final state for segment {}", i))
-                .live;
+                .map_or_else(|| b.lit(false), |s| s.live);
             // Check that the number of live outgoing edges is within the appropriate bounds,
             // depending on `segment_live`.  The `count` is also produced for debugging purposes.
             let (ok, count) = match wires.len() {

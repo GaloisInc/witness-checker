@@ -303,13 +303,18 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
         let mut seg_graph = seg_graph_builder.finish(&cx, &b);
 
+        // Segments are wrapped in `Option`, with `None` indicating unreachable segments for which
+        // no circuit was generated.
         let mut segments = (0 .. exec.segments.len()).map(|i| {
             segments_map.remove(&i)
-                .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
-        }).collect::<Vec<_>>();
+        }).collect::<Vec<Option<_>>>();
         drop(segments_map);
 
-        check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
+        check_last(
+            &cx, &b,
+            segments.last().unwrap().as_ref().unwrap().final_state(),
+            args.is_present("expect-zero"),
+        );
 
         // Fill in advice and other secrets.
         let mut cycle = 0;
@@ -331,7 +336,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
                 }
             }
 
-            let seg = &mut segments[chunk.segment];
+            let seg = segments[chunk.segment].as_mut()
+                .unwrap_or_else(|| panic!("trace uses unreachable segment {}", chunk.segment));
             assert_eq!(seg.idx, chunk.segment);
             seg.set_states(&b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
             seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);

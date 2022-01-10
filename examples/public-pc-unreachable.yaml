@@ -1,0 +1,54 @@
+## FLAGS: --validate-only --expect-zero
+# A simple `public-pc` example with two segments, directly connected.
+
+- [0,1,0,0]
+- [public-pc]
+-
+  program:
+    - [mov, 0, null, true, 2]   # mov r0, 2
+    - [mull, 2, 0, false, 0]    # mull r2, r0, r0
+    - [mull, 1, 0, true, 3]     # mull r1, r0, 3
+    - [add, 0, 1, false, 2]     # add r0, r1, r2
+    - [sub, 0, 0, true, 10]     # sub r0, r0, 10
+    - [mov, 0, 0, false, 0]
+
+  params:
+    num_regs: 3
+
+  segments:
+    - constraints: [[pc, 0]]
+      len: 3
+      successors: [3]
+      enter_from_network: false
+      exit_to_network: false
+
+    # These two segments have no predecessors - they are unreachable.
+    - constraints: [[pc, 3]]
+      len: 3
+      successors: []
+      enter_from_network: false
+      exit_to_network: true
+    - constraints: []
+      len: 3
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+    # This segment must be last to satisfy --expect-zero
+    - constraints: [[pc, 3]]
+      len: 3
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [2, 0, 0]]
+        - [2, [2, 0, 4]]
+        - [3, [2, 6, 4]]
+    - segment: 3
+      states:
+        - [4, [10, 6, 4]]
+        - [5, [0, 6, 4]]
+        - [6, [0, 6, 4]]
