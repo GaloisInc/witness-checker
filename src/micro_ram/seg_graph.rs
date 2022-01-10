@@ -1,8 +1,11 @@
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::iter;
 use std::mem;
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
+use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params};
 use crate::routing::{Routing, RoutingBuilder, InputId, OutputId};
 
@@ -51,6 +54,10 @@ struct SegmentNode<'a> {
 
     from_net: Option<OutputId>,
     to_net: Option<InputId>,
+
+    /// Tracks whether `take_initial_mem` has been called on this segment.
+    took_initial_mem: bool,
+    final_mem: Counted<KnownMem<'a>>,
 }
 
 /// A `CycleBreakNode` logically computes an initial state from its predecessors and returns it
@@ -94,6 +101,7 @@ pub struct SegGraphBuilder<'a> {
     default_state: RamState,
     cpu_init_state: RamState,
     cpu_init_state_wire: TWire<'a, RamState>,
+    cpu_init_mem: Counted<KnownMem<'a>>,
 }
 
 impl<'a> SegGraphBuilder<'a> {
@@ -118,6 +126,7 @@ impl<'a> SegGraphBuilder<'a> {
             default_state: RamState::default_with_regs(params.num_regs),
             cpu_init_state: cpu_init_state.clone(),
             cpu_init_state_wire: b.lit(cpu_init_state),
+            cpu_init_mem: Counted::new(),
         };
 
         let network = match sg.network {
@@ -172,27 +181,222 @@ impl<'a> SegGraphBuilder<'a> {
         }
 
         sg.break_cycles(b, params);
+        sg.mark_unreachable();
+        sg.count_final_mem_users();
 
         sg
     }
 
+    pub fn dump(&self) -> String {
+        let mut s = String::new();
+
+        macro_rules! source_node {
+            ($src:expr) => {
+                match $src {
+                    StateSource::CpuInit => "init".to_string(),
+                    StateSource::Segment(j) => format!("seg{}", j),
+                    StateSource::Network(out_id) => {
+                        writeln!(s, r#"net_out{} [ label = "*" ];"#, out_id.into_raw()).unwrap();
+                        format!("net_out{}", out_id.into_raw())
+                    },
+                    StateSource::CycleBreak(j) => format!("cb{}", j),
+                }
+            };
+        }
+
+        writeln!(s, "digraph {{").unwrap();
+        writeln!(s, "init;").unwrap();
+
+        for (i, seg) in self.segments.iter().enumerate() {
+            writeln!(s, r#"seg{} [ label="seg{}" ];"#, i, i).unwrap();
+            for pred in &seg.preds {
+                let pred_node = source_node!(pred.src);
+                writeln!(s, "{} -> seg{};", pred_node, i).unwrap();
+            }
+        }
+
+        for (i, cb) in self.cycle_breaks.iter().enumerate() {
+            writeln!(s, r#"cb{} [ label="cb{}" ];"#, i, i).unwrap();
+            for pred in &cb.preds {
+                let pred_node = source_node!(pred.src);
+                writeln!(s, "{} -> cb{};", pred_node, i).unwrap();
+            }
+        }
+
+        for (i, net) in self.network_inputs.iter().enumerate() {
+            writeln!(s, r#"net_in{} [ label="*" ];"#, i).unwrap();
+            let pred_node = source_node!(net.pred.src);
+            writeln!(s, "{} -> net_in{};", pred_node, i).unwrap();
+        }
+
+        writeln!(s, "}}").unwrap();
+
+        s
+    }
+
     /// Break cycles in the graph by inserting `CycleBreakNodes`.
     fn break_cycles(&mut self, b: &Builder<'a>, params: &Params) {
-        // For now, just insert a cycle-breaker before each segment.  This is very inefficient, but
-        // is definitely correct.
-        for (i, seg) in self.segments.iter_mut().enumerate() {
-            let _g = b.scoped_label(format_args!("cycle break {}", i));
-            let preds = mem::take(&mut seg.preds);
-            let j = self.cycle_breaks.len();
-            self.cycle_breaks.push(CycleBreakNode {
-                preds,
-                secret: RamState::secret(b, params.num_regs).1,
-            });
-            seg.preds.push(Predecessor {
-                src: StateSource::CycleBreak(j),
-                live: Liveness::Always,
-            });
+        // If a segment's `good` flag is set, then there are no cycles involving that node or any
+        // of its (transitive) predecessors.
+        let mut good = vec![false; self.segments.len()];
+
+        enum Step {
+            Enter(usize),
+            Exit(usize),
         }
+
+        let mut visited = HashSet::new();
+        let mut stack = Vec::new();
+
+        for i in 0 .. self.segments.len() {
+            if good[i] {
+                continue;
+            }
+
+            stack.push(Step::Enter(i));
+
+            while let Some(step) = stack.pop() {
+                let i = match step {
+                    Step::Enter(i) => i,
+                    Step::Exit(i) => {
+                        visited.remove(&i);
+                        good[i] = true;
+                        continue;
+                    },
+                };
+                if good[i] {
+                    continue;
+                }
+
+                debug_assert!(!visited.contains(&i));
+                visited.insert(i);
+                // Push `Exit(i)` first so that it happens last, after all outgoing edges have been
+                // processed.
+                stack.push(Step::Exit(i));
+
+                let seg = &mut self.segments[i];
+                for pred in &mut seg.preds {
+                    match pred.src {
+                        StateSource::Segment(j) => {
+                            if good[j] {
+                                continue;
+                            }
+                            if !visited.contains(&j) {
+                                stack.push(Step::Enter(j));
+                                continue;
+                            }
+                            // Otherwise, the edge from `i` to `j` is a back edge, so insert a
+                            // cycle break for it.
+                        },
+                        // Always insert a cycle break on edges from network.
+                        StateSource::Network(_) => {},
+                        _ => continue,
+                    }
+
+                    let cb_idx = self.cycle_breaks.len();
+                    self.cycle_breaks.push(CycleBreakNode {
+                        preds: vec![*pred],
+                        secret: RamState::secret(b, params.num_regs).1,
+                    });
+                    *pred = Predecessor {
+                        src: StateSource::CycleBreak(cb_idx),
+                        live: Liveness::Always,
+                    };
+                }
+            }
+
+            debug_assert!(stack.len() == 0);
+            debug_assert!(visited.len() == 0);
+        }
+    }
+
+    /// Mark all nodes that are unreachable from the init state and the network.  Nodes are marked
+    /// by clearing their predecessor list, making them obviously unreachable.
+    fn mark_unreachable(&mut self) {
+        // If a node's "dead" flag is set, the node is unreachable from the init state and the
+        // network.
+        let mut segment_dead = vec![false; self.segments.len()];
+        let mut cycle_break_dead = vec![false; self.cycle_breaks.len()];
+
+        // Scan nodes to initialize dead flags.
+        let mut changed = false;
+        for (i, seg) in self.segments.iter().enumerate() {
+            if seg.preds.len() == 0 {
+                segment_dead[i] = true;
+                changed = true;
+            }
+        }
+        for (i, cb) in self.cycle_breaks.iter().enumerate() {
+            if cb.preds.len() == 0 {
+                cycle_break_dead[i] = true;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            // No nodes are dead.
+            return;
+        }
+
+
+        // Delete dead nodes from predecessor lists, and mark any nodes that become newly dead as a
+        // result.  Running time is `O(n*m)` where `n` is the number of nodes and `m` is the length
+        // of the longest path containing only dead nodes.
+
+        fn pred_is_dead(
+            segment_dead: &[bool],
+            cycle_break_dead: &[bool],
+            pred: &Predecessor,
+        ) -> bool {
+            match pred.src {
+                StateSource::CpuInit => false,
+                StateSource::Segment(i) => segment_dead[i],
+                StateSource::Network(_) => false,
+                StateSource::CycleBreak(i) => cycle_break_dead[i],
+            }
+        }
+
+        /// Remove predecessors from `preds` that refer to dead nodes.  Returns `true` if `preds`
+        /// was nonempty but became empty after filtering.
+        fn filter_preds(
+            segment_dead: &[bool],
+            cycle_break_dead: &[bool],
+            preds: &mut Vec<Predecessor>,
+        ) -> bool {
+            if preds.len() == 0 {
+                return false;
+            }
+            preds.retain(|p| !pred_is_dead(segment_dead, cycle_break_dead, p));
+            preds.len() == 0
+        }
+
+        while changed {
+            changed = false;
+            for (i, seg) in self.segments.iter_mut().enumerate() {
+                if filter_preds(&segment_dead, &cycle_break_dead, &mut seg.preds) {
+                    segment_dead[i] = true;
+                    changed = true;
+                }
+            }
+            for (i, cb) in self.cycle_breaks.iter_mut().enumerate() {
+                if filter_preds(&segment_dead, &cycle_break_dead, &mut cb.preds) {
+                    cycle_break_dead[i] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        // Delete `NetworkInputNode`s whose predecessor is dead.  These are handled separately
+        // since they need different handling.  Only one pass is needed here since these nodes have
+        // no successors.
+        let to_net = &mut self.to_net;
+        self.network_inputs.retain(|n| {
+            let dead = pred_is_dead(&segment_dead, &cycle_break_dead, &n.pred);
+            if dead {
+                to_net.remove(&n.segment_index);
+            }
+            !dead
+        });
     }
 
     /// Get the order in which to construct the segment circuits.  This ordering is guaranteed to
@@ -200,7 +404,57 @@ impl<'a> SegGraphBuilder<'a> {
     /// `k` of the ordering is guaranteed to succeed if `set_final` has been called on all elements
     /// prior to `k`.
     pub fn get_order(&self) -> impl Iterator<Item = SegGraphItem> {
-        (0 .. self.segments.len()).map(SegGraphItem::Segment)
+        // Compute a postorder traversal of the graph.  This way each node is processed only after
+        // all its predecessors have been processed.
+
+        // If a segment's `done` flag is set, then it has already been inserted into `order`, and
+        // doesn't need to be traversed again.
+        let mut done = vec![false; self.segments.len()];
+
+        enum Step {
+            Enter(usize),
+            Exit(usize),
+        }
+
+        let mut stack = Vec::new();
+        let mut order = Vec::with_capacity(self.segments.len());
+        let mut num_dead = 0;
+        for i in 0 .. self.segments.len() {
+            if done[i] {
+                continue;
+            }
+            stack.push(Step::Enter(i));
+            while let Some(step) = stack.pop() {
+                match step {
+                    Step::Enter(i) => {
+                        stack.push(Step::Exit(i));
+                        for pred in &self.segments[i].preds {
+                            match pred.src {
+                                StateSource::Segment(j) => {
+                                    if !done[j] {
+                                        stack.push(Step::Enter(j));
+                                    }
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    Step::Exit(i) => {
+                        // Only include non-dead nodes in the order.
+                        if self.segments[i].preds.len() > 0 {
+                            order.push(i);
+                        } else {
+                            num_dead += 1;
+                        }
+                        done[i] = true;
+                    },
+                }
+            }
+            debug_assert!(stack.len() == 0);
+        }
+        debug_assert!(order.len() + num_dead == self.segments.len());
+
+        order.into_iter().map(SegGraphItem::Segment)
             .chain(iter::once(SegGraphItem::Network))
     }
 
@@ -243,6 +497,63 @@ impl<'a> SegGraphBuilder<'a> {
             StateSource::CycleBreak(idx) =>
                 self.cycle_breaks[idx].secret.wire(),
         }
+    }
+
+    fn count_final_mem_users(&mut self) {
+        let mut pred_idxs = Vec::new();
+        for i in 0..self.segments.len() {
+            if !self.segments[i].has_initial_mem() {
+                continue;
+            }
+
+            for pred in &self.segments[i].preds {
+                match pred.src {
+                    StateSource::CpuInit => { self.cpu_init_mem.add_user(); },
+                    StateSource::Segment(j) => pred_idxs.push(j),
+                    _ => {},
+                }
+            }
+            for &j in &pred_idxs {
+                self.segments[j].final_mem.add_user();
+            }
+            pred_idxs.clear();
+        }
+    }
+
+    /// Obtain the initial memory state for segment `idx`.
+    ///
+    /// To avoid expensive clones, this method returns ownership of the memory state.  As a result,
+    /// this method will panic if it's called multiple times with the same `idx`.
+    pub fn take_initial_mem(&mut self, idx: usize) -> KnownMem<'a> {
+        assert!(!self.segments[idx].took_initial_mem,
+            "duplicate call to take_initial_mem({})", idx);
+        if !self.segments[idx].has_initial_mem() {
+            return KnownMem::new();
+        }
+
+        let mut mem: Option<KnownMem> = None;
+        for j in 0 .. self.segments[idx].preds.len() {
+            let pred = &self.segments[idx].preds[j];
+            let pred_mem = match pred.src {
+                StateSource::CpuInit => self.cpu_init_mem.take(),
+                StateSource::Segment(j) => self.segments[j].final_mem.take(),
+                _ => continue,
+            };
+
+            match mem {
+                Some(ref mut mem) => mem.merge(&pred_mem),
+                None => { mem = Some(pred_mem.into_owned()); },
+            }
+        }
+        mem.unwrap()
+    }
+
+    pub fn set_final_mem(&mut self, idx: usize, mem: KnownMem<'a>) {
+        self.segments[idx].final_mem.set(mem);
+    }
+
+    pub fn set_cpu_init_mem(&mut self, mem: KnownMem<'a>) {
+        self.cpu_init_mem.set(mem);
     }
 
     fn liveness_flag(&self, b: &Builder<'a>, l: Liveness) -> TWire<'a, bool> {
@@ -343,8 +654,7 @@ impl<'a> SegGraphBuilder<'a> {
             assert!(wires.len() <= u8::MAX as usize);
 
             let segment_live = self.segments[i].final_state.as_ref()
-                .unwrap_or_else(|| panic!("missing final state for segment {}", i))
-                .live;
+                .map_or_else(|| b.lit(false), |s| s.live);
             // Check that the number of live outgoing edges is within the appropriate bounds,
             // depending on `segment_live`.  The `count` is also produced for debugging purposes.
             let (ok, count) = match wires.len() {
@@ -510,6 +820,24 @@ impl<'a> SegGraphBuilder<'a> {
     }
 }
 
+impl<'a> SegmentNode<'a> {
+    fn has_initial_mem(&self) -> bool {
+        for pred in &self.preds {
+            match pred.src {
+                StateSource::CpuInit => {},
+                StateSource::Segment(_) => {},
+                // `Network`/`CycleBreak` always has unknown initial memory state, and merging
+                // unknown with anything produces unknown.  Thus there's no point in computing an
+                // initial memory for segments with these predecessors.
+                StateSource::Network(_) |
+                StateSource::CycleBreak(_) => return false,
+            }
+        }
+
+        true
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SegGraphItem {
     Segment(usize),
@@ -567,5 +895,48 @@ impl<'a> SegGraph<'a> {
 
     pub fn finish(self, b: &Builder<'a>) {
         self.network.finish(b);
+    }
+}
+
+
+/// A value of type `T`, along with a user count, which limits how many times `take()` can be
+/// called.  The last user gets ownership of the `T`; all other users get a reference instead.
+#[derive(Default)]
+struct Counted<T> {
+    /// The wrapped value, if it has been set.
+    ///
+    /// **Invariant**:  If `user_count` is zero, then `value` is `None`.
+    value: Option<T>,
+    user_count: usize,
+}
+
+impl<T: Clone> Counted<T> {
+    pub fn new() -> Counted<T> {
+        Counted {
+            value: None,
+            user_count: 0,
+        }
+    }
+
+    pub fn add_user(&mut self) {
+        self.user_count += 1;
+    }
+
+    pub fn set(&mut self, value: T) {
+        assert!(self.value.is_none(), "multiple calls to set_value");
+        if self.user_count > 0 {
+            self.value = Some(value);
+        }
+    }
+
+    pub fn take(&mut self) -> Cow<T> {
+        assert!(self.user_count > 0, "called take() too many times");
+        assert!(self.value.is_some(), "called take() before set");
+        self.user_count -= 1;
+        if self.user_count == 0 {
+            Cow::Owned(self.value.take().unwrap())
+        } else {
+            Cow::Borrowed(self.value.as_ref().unwrap())
+        }
     }
 }

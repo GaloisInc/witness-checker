@@ -1,5 +1,7 @@
+use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use num_traits::Zero;
@@ -68,6 +70,28 @@ where T: Repr<'a>, T::Repr: Clone {
 
 impl<'a, T> Copy for TWire<'a, T>
 where T: Repr<'a>, T::Repr: Copy {
+}
+
+impl<'a, T, U> PartialEq<TWire<'a, U>> for TWire<'a, T>
+where T: Repr<'a>, U: Repr<'a>, T::Repr: PartialEq<U::Repr> {
+    fn eq(&self, other: &TWire<'a, U>) -> bool {
+        self.repr.eq(&other.repr)
+    }
+
+    fn ne(&self, other: &TWire<'a, U>) -> bool {
+        self.repr.ne(&other.repr)
+    }
+}
+
+impl<'a, T> cmp::Eq for TWire<'a, T>
+where T: Repr<'a>, T::Repr: cmp::Eq {
+}
+
+impl<'a, T> Hash for TWire<'a, T>
+where T: Repr<'a>, T::Repr: Hash {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.repr.hash(state)
+    }
 }
 
 impl<'a, T: Repr<'a>> Deref for TWire<'a, T> {

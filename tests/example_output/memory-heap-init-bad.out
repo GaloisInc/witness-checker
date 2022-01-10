@@ -1,4 +1,9 @@
-invalid trace: CycleBreak 1 incoming edge Edge(0, 1) is live, but state doesn't match Segment(0)
+invalid trace: segment 1: step 0's mem port stores value 7 at 400 (expected value 0)
+invalid trace: segment 3: step 0's mem port stores value 7 at 410 (expected value 0)
 invalid trace: segment 0: cycle 0 sets reg 0 to 7 (expected 0)
 invalid trace: segment 0: cycle 1 sets reg 0 to 7 (expected 0)
-internal evaluator: 166 asserts passed, 3 failed; found 0 bugs; overall status: BAD
+invalid trace: segment 1: cycle 2 sets reg 0 to 7 (expected 0)
+invalid trace: segment 1: cycle 3 sets reg 0 to 7 (expected 0)
+invalid trace: segment 3: cycle 4 sets reg 0 to 7 (expected 0)
+invalid trace: segment 3: cycle 5 sets reg 0 to 0 (expected 18446744073709551609)
+internal evaluator: 93 asserts passed, 8 failed; found 0 bugs; overall status: BAD

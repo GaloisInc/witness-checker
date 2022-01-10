@@ -736,7 +736,7 @@ where
 
 
 mk_named_enum! {
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
     pub enum MemOpWidth {
         W1 = 0,
         W2 = 1,
@@ -1501,5 +1501,7 @@ pub struct CalcIntermediate<'a> {
     pub y: TWire<'a,u64>,
     pub result: TWire<'a,u64>,
     pub tainted: IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
+    /// If set, then this step is publicly known not to use any `MemPort`.
+    pub mem_port_unused: bool,
 }
 

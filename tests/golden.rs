@@ -56,7 +56,7 @@ fn golden_tests() -> io::Result<()> {
             .stdout(dest.try_clone()?)
             .stderr(dest)
             .output()?;
-        assert!(output.status.success());
+        assert!(output.status.success(), "failed on test {:?}", path);
     }
 
     // Check the contents of the `dest` files against the golden files.

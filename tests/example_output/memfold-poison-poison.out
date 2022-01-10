@@ -1,0 +1,3 @@
+invalid trace: double poison of address 400 on cycle 2
+found bug: access of poisoned address 400 on cycle 3
+internal evaluator: 86 asserts passed, 1 failed; found 1 bugs; overall status: BAD

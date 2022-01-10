@@ -1,0 +1,36 @@
+## FLAGS:
+# Basic memory folding test case.
+
+- [0,1,0,0]
+- [public-pc]
+-
+  program:
+    - [mov, 0, null, true, 123]
+    - [poison8, null, 0, true, 1024]
+    - [load8, 1, 0, true, 1024]
+    - [load8, 1, 0, true, 1032]
+
+  params:
+    num_regs: 2
+
+  init_mem: []
+
+  segments:
+    - constraints: [[pc, 0]]
+      len: 4
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [123, 0]]
+        - [2, [123, 0]]
+        - [3, [123, 123]]
+        - [4, [123, 0]]
+
+  advice:
+    2: [[MemOp, 1024, 123, poison, 8]]
+    3: [[MemOp, 1024, 123, read, 8]]
+    4: [[MemOp, 1032, 0, read, 8]]

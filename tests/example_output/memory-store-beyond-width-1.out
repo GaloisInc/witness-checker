@@ -1,4 +1,4 @@
 invalid trace: Write to 0 on cycle 2 modified outside width W1: 0x101010101010101 != 0x1
 invalid trace: Write to 0 on cycle 5 modified outside width W2: 0x202020202020202 != 0x101010101010202
 invalid trace: Write to 0 on cycle 8 modified outside width W4: 0x404040404040404 != 0x202020204040404
-internal evaluator: 358 asserts passed, 3 failed; found 0 bugs; overall status: BAD
+internal evaluator: 344 asserts passed, 3 failed; found 0 bugs; overall status: BAD

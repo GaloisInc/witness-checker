@@ -16,6 +16,7 @@ use cheesecloth::lower::{self, AddPass};
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::fetch::Fetch;
+use cheesecloth::micro_ram::known_mem::KnownMem;
 use cheesecloth::micro_ram::mem::Memory;
 use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use cheesecloth::micro_ram::trace::SegmentBuilder;
@@ -69,6 +70,14 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("skip-backend-validation")
              .long("skip-backend-validation")
              .help("don't validate the circuit constructed by the backend"))
+
+        // Debug flags
+        .arg(Arg::with_name("debug-segment-graph")
+             .long("debug-segment-graph")
+             .takes_value(true)
+             .value_name("OUT.DOT")
+             .help("dump the segment graph to a file for debugging"))
+
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -231,8 +240,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     for (name,exec) in multi_exec.inner.execs.iter(){
         // Set up memory ports and check consistency.
         let mut mem = Memory::new();
+        let mut kmem = KnownMem::with_default(b.lit(0));
         for seg in &exec.init_mem {
-            mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
+            let values = mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
+            kmem.init_segment(seg, &values);
         }
 
         // Set up instruction-fetch ports and check consistency.
@@ -266,6 +277,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
         let mut seg_graph_builder = SegGraphBuilder::new(
             &b, &exec.segments, &exec.params, init_state.clone());
+        if let Some(out_path) = args.value_of("debug-segment-graph") {
+            std::fs::write(out_path, seg_graph_builder.dump()).unwrap();
+        }
+        seg_graph_builder.set_cpu_init_mem(kmem);
 
         for item in seg_graph_builder.get_order() {
             let idx = match item {
@@ -278,21 +293,28 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             
             let seg_def = &exec.segments[idx];
             let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
-            let seg = segment_builder.run(idx, seg_def, prev_state);
+            let prev_kmem = seg_graph_builder.take_initial_mem(idx);
+            let (seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem);
             seg_graph_builder.set_final(idx, seg.final_state().clone());
+            seg_graph_builder.set_final_mem(idx, kmem);
             assert!(!segments_map.contains_key(&idx));
             segments_map.insert(idx, seg);
         }
 
         let mut seg_graph = seg_graph_builder.finish(&cx, &b);
 
+        // Segments are wrapped in `Option`, with `None` indicating unreachable segments for which
+        // no circuit was generated.
         let mut segments = (0 .. exec.segments.len()).map(|i| {
             segments_map.remove(&i)
-                .unwrap_or_else(|| panic!("seg_graph omitted segment {}", i))
-        }).collect::<Vec<_>>();
+        }).collect::<Vec<Option<_>>>();
         drop(segments_map);
 
-        check_last(&cx, &b, segments.last().unwrap().final_state(), args.is_present("expect-zero"));
+        check_last(
+            &cx, &b,
+            segments.last().unwrap().as_ref().unwrap().final_state(),
+            args.is_present("expect-zero"),
+        );
 
         // Fill in advice and other secrets.
         let mut cycle = 0;
@@ -314,7 +336,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
                 }
             }
 
-            let seg = &mut segments[chunk.segment];
+            let seg = segments[chunk.segment].as_mut()
+                .unwrap_or_else(|| panic!("trace uses unreachable segment {}", chunk.segment));
             assert_eq!(seg.idx, chunk.segment);
             seg.set_states(&b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
             seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
