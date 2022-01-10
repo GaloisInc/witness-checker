@@ -222,7 +222,7 @@ impl<'a> GadgetKind<'a> for ExtractBits {
 
     fn eval(&self, _arg_tys: &[Ty<'a>], args: &[Option<Value>]) -> Option<Value> {
         let val = args[0].as_ref()?.as_single().unwrap();
-        let mask = (BigInt::from(1) << self.end) - 1;
+        let mask = (BigInt::from(1) << (self.end - self.start)) - 1;
         Some(Value::Single((val >> self.start) & mask))
     }
 }
