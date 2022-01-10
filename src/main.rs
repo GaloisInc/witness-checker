@@ -70,6 +70,14 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("skip-backend-validation")
              .long("skip-backend-validation")
              .help("don't validate the circuit constructed by the backend"))
+
+        // Debug flags
+        .arg(Arg::with_name("debug-segment-graph")
+             .long("debug-segment-graph")
+             .takes_value(true)
+             .value_name("OUT.DOT")
+             .help("dump the segment graph to a file for debugging"))
+
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
 }
@@ -269,7 +277,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
         let mut seg_graph_builder = SegGraphBuilder::new(
             &b, &exec.segments, &exec.params, init_state.clone());
-        std::fs::write("out.dot", seg_graph_builder.dump()).unwrap();
+        if let Some(out_path) = args.value_of("debug-segment-graph") {
+            std::fs::write(out_path, seg_graph_builder.dump()).unwrap();
+        }
         seg_graph_builder.set_cpu_init_mem(kmem);
 
         for item in seg_graph_builder.get_order() {
