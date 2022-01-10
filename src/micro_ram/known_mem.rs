@@ -662,7 +662,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
@@ -681,7 +681,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
@@ -698,7 +698,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
@@ -722,7 +722,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0x8877665544332211));
         for &i in &[1,2,3,5,6] {
@@ -741,7 +741,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::new();
         for i in 0..8 {
@@ -775,7 +775,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
         for &i in &[1,2,3,5,6] {
@@ -798,7 +798,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0x0000000000000201), MemOpWidth::W8, false);
@@ -817,7 +817,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0), MemOpWidth::W2, false);
@@ -839,7 +839,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -874,7 +874,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -904,7 +904,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -925,7 +925,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
