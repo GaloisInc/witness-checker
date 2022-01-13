@@ -3,6 +3,12 @@ use std::path::{Path, PathBuf};
 use crate::ir::circuit::{Wire, EraseVisitor, MigrateVisitor};
 
 
+/// Trait for abstracting over backends.  `post_erase` and `post_migrate` are callbacks to be
+/// invoked during `MigrateHandle::erase_and_migrate`.  `finish` is used to finish writing the
+/// low-level circuit.
+///
+/// This trait is unsafe because `MigrateHandle` places special requirements on the behavior of
+/// `post_migrate` for memory safety.
 pub unsafe trait Backend<'a> {
     /// Called at the end of the `erase` step, after the `EraseVisitor` has been applied to all
     /// other objects in the program.
@@ -11,10 +17,12 @@ pub unsafe trait Backend<'a> {
     /// Called at the end of the `migrate` step, after the `MigrateVisitor` has been applied to all
     /// other objects in the program.
     ///
-    /// This method must migrate all wires stored within the backend.  Any wires not migrated will
-    /// be left dangling.
+    /// Safety: This method must migrate all wires stored within the backend.  Any wires not
+    /// migrated will be left dangling when `MigrateHandle::erase_and_migrate` is called.
     fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>);
 
+    /// Assert that `accepted` is true, and finish writing out the circuit.  If `validate` is set,
+    /// a validation pass will be run on the output afterward.
     fn finish(self: Box<Self>, accepted: Wire<'a>, validate: bool);
 }
 
