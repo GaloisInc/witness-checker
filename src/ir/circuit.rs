@@ -285,8 +285,9 @@ impl<'a> CircuitBase<'a> {
 /// operations over literals can be computed entirely at compile time.
 ///
 /// If a witness is available, the `Circuit` includes its values.  This allows circuit
-/// transformations to make corresponding changes to the witness if necessary.  The full witness is
-/// not represented explicitly, but the individual values are accessible through the
+/// transformations to make corresponding changes to the witness if necessary, such as splitting a
+/// 64-bit secret into a pair of 32-bit secrets that together make up the original value.  The full
+/// witness is not represented explicitly, but the individual values are accessible through the
 /// `GateKind::Secret` gates present in the circuit.  Use the `walk_witness` function to obtain the
 /// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a, F: ?Sized> {
