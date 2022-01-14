@@ -1,8 +1,17 @@
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
+use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
     CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, GadgetKind, GadgetKindRef,
 };
 use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
+
+
+fn overflow_result(ty: Ty, raw: BigInt) -> Value {
+    let v = Value::trunc(ty, raw.clone());
+    let overflowed = v.as_single().unwrap() != &raw;
+    Value::Bundle(vec![v, Value::trunc(Ty::bool(), BigInt::from(overflowed as u32))])
+}
+
 
 /// Add two unsigned integers and check for overflow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -30,6 +39,12 @@ impl<'a> GadgetKind<'a> for AddWithOverflow {
         let sum = c.add(args[0], args[1]);
         let overflow = c.lt(sum, args[0]);
         c.pack(&[sum, overflow])
+    }
+
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
+        let a = args[0].as_ref()?.as_single().unwrap();
+        let b = args[1].as_ref()?.as_single().unwrap();
+        Ok(overflow_result(arg_tys[0], a + b))
     }
 }
 
@@ -59,6 +74,12 @@ impl<'a> GadgetKind<'a> for SubWithOverflow {
         let diff = c.sub(args[0], args[1]);
         let overflow = c.gt(diff, args[0]);
         c.pack(&[diff, overflow])
+    }
+
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
+        let a = args[0].as_ref()?.as_single().unwrap();
+        let b = args[1].as_ref()?.as_single().unwrap();
+        Ok(overflow_result(arg_tys[0], a - b))
     }
 }
 
@@ -178,6 +199,16 @@ impl<'a> GadgetKind<'a> for WideMul {
 
 
         c.pack(&[c0, c1])
+    }
+
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
+        let sz = arg_tys[0].integer_size();
+        let a = args[0].as_ref()?.as_single().unwrap();
+        let b = args[1].as_ref()?.as_single().unwrap();
+        let product = a * b;
+        let low = Value::Single(&product & ((BigInt::from(1) << sz.bits()) - 1));
+        let high = Value::trunc(arg_tys[0], product >> sz.bits());
+        Ok(Value::Bundle(vec![low, high]))
     }
 }
 

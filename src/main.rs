@@ -1,28 +1,26 @@
-use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter;
 use std::path::Path;
-use bumpalo::Bump;
 use clap::{App, Arg, ArgMatches};
+use env_logger;
 use num_traits::One;
 
 use cheesecloth::wire_assert;
+use cheesecloth::back;
 use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
+use cheesecloth::gadget;
 use cheesecloth::ir::circuit::{
-    Circuit, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
+    Circuit, Arenas, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
 };
 use cheesecloth::ir::typed::{Builder, TWire};
 use cheesecloth::lower;
 use cheesecloth::micro_ram::context::Context;
+use cheesecloth::micro_ram::exec::ExecBuilder;
 use cheesecloth::micro_ram::feature::Feature;
-use cheesecloth::micro_ram::fetch::Fetch;
-use cheesecloth::micro_ram::known_mem::KnownMem;
-use cheesecloth::micro_ram::mem::Memory;
-use cheesecloth::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
-use cheesecloth::micro_ram::trace::SegmentBuilder;
-use cheesecloth::micro_ram::types::{VersionedMultiExec,RamState, Segment, TraceChunk, WORD_UNTAINTED};
+use cheesecloth::micro_ram::mem::EquivSegments;
+use cheesecloth::micro_ram::types::{VersionedMultiExec, RamState, Segment, TraceChunk, WORD_UNTAINTED};
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -79,6 +77,9 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("OUT.DOT")
              .help("dump the segment graph to a file for debugging"))
+        .arg(Arg::with_name("test-gadget-eval")
+             .long("test-gadget-eval")
+             .help("test GadgetKind::eval behavior for all gadgets in the circuit"))
 
         .after_help("With no output options, prints the result of evaluating the circuit.")
         .get_matches()
@@ -108,45 +109,23 @@ fn check_first<'a>(
     tainted::check_first(cx, b, &s.tainted_regs);
 }
 
-fn check_last<'a>(
-    cx: &Context<'a>,
-    b: &Builder<'a>,
-    s: &TWire<'a, RamState>,
-    expect_zero: bool,
-) {
-    let _g = b.scoped_label("check_last");
-    let r0 = s.regs[0];
-    if expect_zero {
-        wire_assert!(
-            cx, b.eq(r0, b.lit(0)),
-            "final r0 is {} (expected {})",
-            cx.eval(r0), 0,
-        );
-    }
-}
-
 
 fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
-    #[cfg(not(feature = "bellman"))]
-    if args.is_present("zkif-out") {
-        eprintln!("error: zkinterface output is not supported - build with `--features bellman`");
-        std::process::exit(1);
-    }
-
-    #[cfg(not(feature = "sieve_ir"))]
-    if args.is_present("sieve-ir-out") {
-        eprintln!("error: sieve_ir output is not supported - build with `--features sieve_ir`");
-        std::process::exit(1);
-    }
-
     let is_prover = !args.is_present("verifier-mode");
 
-    let arena = Bump::new();
+    let arenas = Arenas::new();
+    let mcx = cheesecloth::ir::migrate::handle::MigrateContext::new();
 
-    let gadget_supported = |g: GadgetKindRef| {
+    let arg_test_gadget_eval = args.is_present("test-gadget-eval");
+    let arg_zkif_out = args.is_present("zkif-out");
+    let arg_sieve_out = args.is_present("sieve-out");
+    let gadget_supported = move |g: GadgetKindRef| {
         use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
         let mut ok = false;
-        if args.is_present("zkif-out") || args.is_present("sieve-out") {
+        if arg_test_gadget_eval {
+            return true;
+        }
+        if arg_zkif_out || arg_sieve_out {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
         }
@@ -164,13 +143,13 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = lower::const_fold::ConstFold(cf);
     let cf = cf.add_pass(lower::bundle::simplify);
     let cf = cf.add_pass(lower::bundle::unbundle_mux);
-    let cf = lower::gadget::DecomposeGadgets::new(cf, |g| !gadget_supported(g));
+    let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
-    let c = Circuit::new(&arena, is_prover, cf);
+    let c = Circuit::new(&arenas, is_prover, cf);
     let c = &c as &DynCircuit;
 
     let b = Builder::new(c);
-    let cx = Context::new(c);
+    let mut cx = Context::new(c);
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
@@ -216,61 +195,32 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         }
     }
 
-    // Memory Equivalence: For every memory equivalence
-    // create wires that go accross executions.
-    // We want an array with those wires, however we can't
-    // know the length of the segment until we inspect the execution, se they start as None
-    let mut equiv_segments:Vec<Option<Vec<TWire<u64>>>> = vec![None; multi_exec.inner.mem_equiv.len()];
+    let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
 
-    // For every execution, create a dictionary mapping
-    // segments names to an index in equiv_segments where
-    // the wires for the segment are stored.  
-    let mut mem_equiv:std::collections::HashMap<String, HashMap<String, usize>> = {
-        let mut mem_equiv = HashMap::new();
-        for (i,mem_eq) in multi_exec.inner.mem_equiv.iter().enumerate() {
-            for (exec_name, seg) in mem_eq.iter() {
-                let exec_equivs = mem_equiv.entry(exec_name.to_owned()).or_insert_with(|| HashMap::new());
-                // For the segment, add a pointer to the location
-                // where the segment's wires will be stored.
-                exec_equivs.insert(seg.to_owned(),i);
-            }
-        }
-        mem_equiv
-    };
-    
+    // Set up the backend.
+    let mut backend =
+        if let Some(workspace) = args.value_of("sieve-ir-out") {
+            let dedup = args.is_present("sieve-ir-dedup");
+            back::new_sieve_ir(workspace, dedup)
+        } else if let Some(dest) = args.value_of_os("zkif-out") {
+            back::new_zkif(dest)
+        } else {
+            back::new_dummy()
+        };
+    let mcx_backend_guard = mcx.set_backend(&mut *backend);
+
+
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
     // for equivalent mem segments. 
     for (name,exec) in multi_exec.inner.execs.iter(){
-        // Set up memory ports and check consistency.
-        let mut mem = Memory::new();
-        let mut kmem = KnownMem::with_default(b.lit(0));
-        for seg in &exec.init_mem {
-            let values = mem.init_segment(&b, seg, mem_equiv.entry(name.to_owned()).or_insert_with(|| HashMap::new()), &mut equiv_segments);
-            kmem.init_segment(seg, &values);
-        }
-
-        // Set up instruction-fetch ports and check consistency.
-        let mut fetch = Fetch::new(&b, &exec.program);
-
         // Generate IR code to check the trace.
-        let check_steps = args.value_of("check-steps")
-            .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
-        let mut segments_map = HashMap::new();
-        let mut segment_builder = SegmentBuilder {
-            cx: &cx,
-            b: &b,
-            ev: CachingEvaluator::new(b.circuit()),
-            mem: &mut mem,
-            fetch: &mut fetch,
-            params: &exec.params,
-            prog: &exec.program,
-            check_steps,
-        };
-
         let init_state = provided_init_state.clone().unwrap_or_else(|| {
             let mut regs = vec![0; exec.params.num_regs];
-            regs[0] = exec.init_mem.iter().filter(|ms| ms.heap_init == false).map(|ms| ms.start + ms.len).max().unwrap_or(0);
+            regs[0] = exec.init_mem.iter()
+                .filter(|ms| ms.heap_init == false)
+                .map(|ms| ms.start + ms.len)
+                .max().unwrap_or(0);
             let tainted_regs = IfMode::new(|_| vec![WORD_UNTAINTED; exec.params.num_regs]);
             RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
         });
@@ -279,98 +229,20 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             check_first(&cx, &b, &init_state_wire);
         }
 
-        let mut seg_graph_builder = SegGraphBuilder::new(
-            &b, &exec.segments, &exec.params, init_state.clone());
-        if let Some(out_path) = args.value_of("debug-segment-graph") {
-            std::fs::write(out_path, seg_graph_builder.dump()).unwrap();
-        }
-        seg_graph_builder.set_cpu_init_mem(kmem);
+        let check_steps = args.value_of("check-steps")
+            .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
 
-        for item in seg_graph_builder.get_order() {
-            let idx = match item {
-                SegGraphItem::Segment(idx) => idx,
-                SegGraphItem::Network => {
-                    seg_graph_builder.build_network(&b);
-                    continue;
-                },
-            };
-            
-            let seg_def = &exec.segments[idx];
-            let prev_state = seg_graph_builder.get_initial(&b, idx).clone();
-            let prev_kmem = seg_graph_builder.take_initial_mem(idx);
-            let (seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem);
-            seg_graph_builder.set_final(idx, seg.final_state().clone());
-            seg_graph_builder.set_final_mem(idx, kmem);
-            assert!(!segments_map.contains_key(&idx));
-            segments_map.insert(idx, seg);
-        }
+        let expect_zero = args.is_present("expect-zero");
+        let debug_segment_graph_path = args.value_of("debug-segment-graph")
+            .map(|s| s.to_owned());
 
-        let mut seg_graph = seg_graph_builder.finish(&cx, &b);
-
-        // Segments are wrapped in `Option`, with `None` indicating unreachable segments for which
-        // no circuit was generated.
-        let mut segments = (0 .. exec.segments.len()).map(|i| {
-            segments_map.remove(&i)
-        }).collect::<Vec<Option<_>>>();
-        drop(segments_map);
-
-        check_last(
-            &cx, &b,
-            segments.last().unwrap().as_ref().unwrap().final_state(),
-            args.is_present("expect-zero"),
-        );
-
-        // Fill in advice and other secrets.
-        let mut cycle = 0;
-        let mut prev_state = init_state.clone();
-        let mut prev_segment = None;
-        for chunk in &exec.trace {
-            if let Some(ref debug) = chunk.debug {
-                if let Some(c) = debug.cycle {
-                    cycle = c;
-                }
-                if let Some(ref s) = debug.prev_state {
-                    prev_state = s.clone();
-                }
-                if debug.clear_prev_segment {
-                    prev_segment = None;
-                }
-                if let Some(idx) = debug.prev_segment {
-                    prev_segment = Some(idx);
-                }
-            }
-
-            let seg = segments[chunk.segment].as_mut()
-                .unwrap_or_else(|| panic!("trace uses unreachable segment {}", chunk.segment));
-            assert_eq!(seg.idx, chunk.segment);
-            seg.set_states(&b, &exec.program, cycle, &prev_state, &chunk.states, &exec.advice);
-            seg.check_states(&cx, &b, cycle, check_steps, &chunk.states);
-
-            if let Some(prev_segment) = prev_segment {
-                seg_graph.make_edge_live(&b, prev_segment, chunk.segment, &prev_state);
-            }
-            prev_segment = Some(chunk.segment);
-
-            cycle += chunk.states.len() as u32;
-            if chunk.states.len() > 0 {
-                prev_state = chunk.states.last().unwrap().clone();
-                prev_state.cycle = cycle;
-            }
-        }
-        
-        seg_graph.finish(&b);
-
-        // Explicitly drop anything that contains a `SecretHandle`, ensuring that defaults are set
-        // before we move on.
-        drop(segments);
-
-        // Some consistency checks involve sorting, which requires that all the relevant secrets be
-        // initialized first.
-        mem.assert_consistent(&cx, &b);
-        fetch.assert_consistent(&cx, &b);
-
+        let (new_cx, new_equiv_segments) = ExecBuilder::build(
+            &b, &mcx, cx, &exec, name, equiv_segments, init_state,
+            check_steps, expect_zero, debug_segment_graph_path);
+        cx = new_cx;
+        equiv_segments = new_equiv_segments;
     }
-        
+
     // Collect assertions and bugs.
     drop(b);
     let (asserts, bugs) = cx.finish();
@@ -404,7 +276,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
         let flag_vals = flags.iter().map(|&w| {
-            ev.eval_wire(w).as_ref().and_then(|v| v.as_single()).unwrap().is_one()
+            ev.eval_wire(w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();
 
         let asserts_ok: u32 = flag_vals[1 .. 1 + num_asserts].iter().map(|&ok| ok as u32).sum();
@@ -417,86 +289,16 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         );
     }
 
-    #[cfg(feature = "bellman")]
-    if let Some(dest) = args.value_of_os("zkif-out") {
-        use cheesecloth::back::zkif::backend::Backend;
-        use zkinterface::{cli::{cli, Options}, clean_workspace};
-
-        let accepted = flags[0];
-
-        // Clean workspace.
-        let workspace = Path::new(dest);
-        clean_workspace(workspace).unwrap();
-
-        // Generate the circuit and witness.
-        let mut backend = Backend::new(workspace, true);
-
-        backend.enforce_true(accepted);
-
-        // Write files.
-        backend.finish().unwrap();
-
-        eprintln!("validating zkif...");
-
-        if !args.is_present("skip-backend-validation") {
-            // Validate the circuit and witness.
-            cli(&Options {
-                tool: "simulate".to_string(),
-                paths: vec![workspace.to_path_buf()],
-                field_order: Default::default(),
-            }).unwrap();
-        }
-
-        // Print statistics.
-        cli(&Options {
-            tool: "stats".to_string(),
-            paths: vec![workspace.to_path_buf()],
-            field_order: Default::default(),
-        }).unwrap();
+    if args.is_present("test-gadget-eval") {
+        let count = gadget::test_gadget_eval(c.as_base(), [accepted].iter().cloned());
+        eprintln!("all {} gadgets passed", count);
+        return Ok(());
     }
 
-    #[cfg(feature = "sieve_ir")]
-    if let Some(workspace) = args.value_of("sieve-ir-out") {
-        use cheesecloth::back::sieve_ir::{
-            backend::{Backend, Scalar},
-            ir_builder::IRBuilder,
-        };
-        use zki_sieve::{
-            cli::{cli, Options, StructOpt},
-            FilesSink,
-        };
-
-        { // restrict ir_builder to its own scope
-            // Generate the circuit and witness.
-            let sink = FilesSink::new_clean(&workspace).unwrap();
-            sink.print_filenames();
-            let mut ir_builder = IRBuilder::new::<Scalar>(sink);
-            // ir_builder.enable_profiler();
-            if !args.is_present("sieve-ir-dedup") {
-                ir_builder.disable_dedup();
-            }
-
-            { // restrict backend to its own scope to save memory
-                let mut backend = Backend::new(&mut ir_builder);
-
-                let accepted = flags[0];
-                backend.enforce_true(accepted);
-                backend.finish();
-            }
-            eprintln!();
-            ir_builder.prof.as_ref().map(|p| p.print_report());
-            ir_builder.dedup.as_ref().map(|p| p.print_report());
-            ir_builder.finish();
-        }
-
-        // Validate the circuit and witness.
-        eprintln!("\nValidating SIEVE IR files...");
-        if !args.is_present("skip-backend-validation") {
-            cli(&Options::from_iter(&["zki_sieve", "validate", workspace])).unwrap();
-            cli(&Options::from_iter(&["zki_sieve", "evaluate", workspace])).unwrap();
-        }
-        cli(&Options::from_iter(&["zki_sieve", "metrics", workspace])).unwrap();
-    }
+    drop(mcx_backend_guard);
+    let accepted = flags[0];
+    let validate = !args.is_present("skip-backend-validation");
+    backend.finish(accepted, validate);
 
     // Unused in some configurations.
     let _ = num_asserts;
@@ -505,6 +307,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
+    env_logger::init();
     let args = parse_args();
 
     let mode = match args.value_of("mode") {

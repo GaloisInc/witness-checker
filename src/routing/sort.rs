@@ -1,17 +1,17 @@
 use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::CircuitTrait;
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{Builder, TWire, Repr, Mux, EvaluatorExt};
-use crate::routing::RoutingBuilder;
+use crate::routing::{RoutingBuilder, FinishRouting};
 
 
-fn sorting_permutation<'a, C, T, F>(
-    c: &C,
-    xs: &mut [TWire<'a, T>],
-    compare: &mut F,
+fn sorting_permutation<'a, C: CircuitTrait<'a> + ?Sized, T, F>(
+    c: &'a C,
+    xs: &[TWire<'a, T>],
+    mut compare: F,
 ) -> Option<Vec<usize>>
 where
-    C: CircuitTrait<'a> + ?Sized,
     T: Repr<'a>,
     F: FnMut(&TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool>,
 {
@@ -53,49 +53,100 @@ where
 
 
 /// Sort `xs` in-place.  `compare(a, b)` should return `true` when `a` is less than or equal to
-/// `b`.  The returned `TWire` is `true` when the output is correctly sorted.  The caller must
-/// assert it to validate the sort results; otherwise the prover may cheat by reordering `xs`
-/// arbitrarily.
+/// `b`.
 ///
 /// This is an unstable sort.
-pub fn sort<'a, T, F>(b: &Builder<'a>, xs: &mut [TWire<'a, T>], compare: &mut F) -> TWire<'a, bool>
+pub fn sort<'a, T>(
+    b: &Builder<'a>,
+    xs: &[TWire<'a, T>],
+    compare: for<'b> fn(&Builder<'b>, &TWire<'b, T>, &TWire<'b, T>) -> TWire<'b, bool>,
+) -> Sort<'a, T>
 where
     T: Mux<'a, bool, T, Output = T>,
     T::Repr: Clone,
-    F: FnMut(&TWire<'a, T>, &TWire<'a, T>) -> TWire<'a, bool>,
 {
     // Sequences of length 0 and 1 are already sorted, trivially.
     if xs.len() <= 1 {
-        return b.lit(true);
+        return Sort {
+            routing: FinishRouting::trivial(xs.to_owned()),
+            compare,
+        };
     }
 
-    let mut routing_builder = RoutingBuilder::new();
-    let inputs = xs.iter().map(|w| routing_builder.add_input(w.clone())).collect::<Vec<_>>();
-    let outputs = (0 .. xs.len()).map(|_| routing_builder.add_output()).collect::<Vec<_>>();
-    let mut routing = routing_builder.finish_exact(b);
+    let mut routing = RoutingBuilder::new();
+    let inputs = xs.iter().map(|w| routing.add_input(w.clone())).collect::<Vec<_>>();
+    let outputs = (0 .. xs.len()).map(|_| routing.add_output()).collect::<Vec<_>>();
 
-    let perm = sorting_permutation(b.circuit(), xs, compare);
+    let perm = sorting_permutation(b.circuit(), xs, |x, y| compare(b, x, y));
     if let Some(ref perm) = perm {
         for (i, &j) in perm.iter().enumerate() {
             routing.connect(inputs[i], outputs[j]);
         }
     }
-    let output_wires = routing.finish(b);
-    xs.clone_from_slice(&output_wires);
+    let routing = routing.finish_exact(b);
+    Sort { routing, compare }
+}
 
-    let mut sorted = b.lit(true);
-    for (x, y) in xs.iter().zip(xs.iter().skip(1)) {
-        sorted = b.and(sorted, compare(x, y));
+pub struct Sort<'a, T: Repr<'a>> {
+    routing: FinishRouting<'a, T>,
+    compare: for<'b> fn(&Builder<'b>, &TWire<'b, T>, &TWire<'b, T>) -> TWire<'b, bool>,
+}
+
+impl<'a, T> Sort<'a, T>
+where
+    T: Mux<'a, bool, T, Output = T>,
+    T::Repr: Clone,
+{
+    pub fn is_ready(&self) -> bool {
+        self.routing.is_ready()
     }
-    sorted
+
+    pub fn step(&mut self, b: &Builder<'a>) {
+        self.routing.step(b)
+    }
+
+    /// The returned `TWire<bool>` is `true` when the output is correctly sorted.  The caller must
+    /// assert it to validate the sort results; otherwise the prover may cheat by reordering `xs`
+    /// arbitrarily.
+    pub fn finish(self, b: &Builder<'a>) -> (Vec<TWire<'a, T>>, TWire<'a, bool>) {
+        let output_wires = self.routing.finish();
+
+        let mut sorted = b.lit(true);
+        for (x, y) in output_wires.iter().zip(output_wires.iter().skip(1)) {
+            sorted = b.and(sorted, (self.compare)(b, x, y));
+        }
+
+        (output_wires, sorted)
+    }
+
+    pub fn run(mut self, b: &Builder<'a>) -> (Vec<TWire<'a, T>>, TWire<'a, bool>) {
+        while !self.is_ready() {
+            self.step(b);
+        }
+        self.finish(b)
+    }
+}
+
+impl<'a, 'b, T> Migrate<'a, 'b> for Sort<'a, T>
+where
+    T: for<'c> Repr<'c>,
+    TWire<'a, T>: Migrate<'a, 'b, Output = TWire<'b, T>>,
+{
+    type Output = Sort<'b, T>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Sort<'b, T> {
+        Sort {
+            routing: v.visit(self.routing),
+            compare: self.compare,
+        }
+    }
 }
 
 
 #[cfg(test)]
 mod test {
     use std::convert::TryInto;
-    use bumpalo::Bump;
-    use crate::ir::circuit::{Circuit, FilterNil};
+    use crate::ir::circuit::{Arenas, Circuit, FilterNil};
     use super::*;
 
     fn init() {
@@ -103,13 +154,13 @@ mod test {
     }
 
     fn check_benes_sort(inputs: &[u32]) {
-        let arena = Bump::new();
-        let c = Circuit::new(&arena, true, FilterNil);
+        let arenas = Arenas::new();
+        let c = Circuit::new(&arenas, true, FilterNil);
         let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
-        let mut ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
-        sort(&b, &mut ws, &mut |&x, &y| b.lt(x, y));
+        let ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
+        let (ws, _) = sort(&b, &ws, |b, &x, &y| b.lt(x, y)).run(&b);
 
         let vals = ws.iter()
             .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())

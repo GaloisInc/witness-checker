@@ -1,5 +1,6 @@
 use crate::eval::Evaluator;
 use crate::ir::circuit::{CircuitTrait, Ty, Wire};
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{Builder, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire};
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
@@ -258,6 +259,17 @@ impl<M: ModePred, T: PartialEq> PartialEq for IfMode<M, T> {
 }
 
 impl<M: ModePred, T: Eq> Eq for IfMode<M, T> {}
+
+impl<'a, 'b, M: ModePred, T: Migrate<'a, 'b>> Migrate<'a, 'b> for IfMode<M, T> {
+    type Output = IfMode<M, T::Output>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> IfMode<M, T::Output> {
+        IfMode {
+            inner: v.visit(self.inner),
+            _marker: PhantomData,
+        }
+    }
+}
 
 /// Provides an implementation of IfMode that panics when in mode M, effectively requiring the
 /// field to be provided.

@@ -8,6 +8,7 @@ use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
 use crate::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
+use crate::ir::migrate::{self, Migrate};
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
@@ -15,7 +16,7 @@ use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Migrate)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u8,
@@ -83,7 +84,7 @@ impl RamInstr {
 pub const REG_NONE: u8 = 254;
 pub const REG_PC: u8 = 255;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct RamInstrRepr<'a> {
     pub opcode: TWire<'a, u8>,
     pub dest: TWire<'a, u8>,
@@ -174,7 +175,7 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 
 
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Migrate)]
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
@@ -211,7 +212,7 @@ impl RamState {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Migrate)]
 pub struct RamStateRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub pc: TWire<'a, u64>,
@@ -551,7 +552,7 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 /// Currently, labels only use the lower two bits. See the
 /// [MicroRAM](https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/blob/cec7edad98ccacb68708777a610900703b1568a9/src/Compiler/Tainted.hs#L11)
 /// implementation for lattice details.
-#[derive(Copy, Clone, Debug, Deserialize)]
+#[derive(Copy, Clone, Debug, Deserialize, Migrate)]
 pub struct Label (
     #[serde(deserialize_with = "validate_label")]
     pub u8,
@@ -736,7 +737,7 @@ where
 
 
 mk_named_enum! {
-    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Migrate)]
     pub enum MemOpWidth {
         W1 = 0,
         W2 = 1,
@@ -829,7 +830,7 @@ impl<'a> Cast<'a, u8> for MemOpWidth {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct MemPortRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub addr: TWire<'a, u64>,
@@ -1007,7 +1008,7 @@ impl<'a> typed::Eq<'a, WordAddr> for WordAddr {
 
 pub struct PackedMemPort;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct PackedMemPortRepr<'a> {
     key: Wire<'a>,
     data: Wire<'a>,
@@ -1095,7 +1096,7 @@ pub struct FetchPort {
     pub write: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct FetchPortRepr<'a> {
     pub addr: TWire<'a, u64>,
     pub instr: TWire<'a, RamInstr>,
@@ -1158,7 +1159,7 @@ where
 
 pub struct PackedFetchPort;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Migrate)]
 pub struct PackedFetchPortRepr<'a> {
     key: Wire<'a>,
     data: Wire<'a>,
@@ -1381,7 +1382,7 @@ impl ExecBody {
     }
 }
 
-type MemoryEquivalence = Vec<(String, String)>;
+pub type MemoryEquivalence = Vec<(String, String)>;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MemSegment {

@@ -4,9 +4,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
+use std::ptr;
 use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
+use crate::ir::migrate::{self, Migrate};
 use crate::micro_ram::types::{Label};
 
 
@@ -129,6 +131,10 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
         T::set_from_lit(&self.secret.repr, &lit.repr, true);
     }
 
+    pub fn apply_default(&self) {
+        T::set_from_lit(&self.secret.repr, &self.default.repr, false);
+    }
+
     pub fn wire(&self) -> &TWire<'a, T> {
         &self.secret
     }
@@ -136,7 +142,7 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
 
 impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> Drop for TSecretHandle<'a, T> {
     fn drop(&mut self) {
-        T::set_from_lit(&self.secret.repr, &self.default.repr, false);
+        self.apply_default();
     }
 }
 
@@ -146,6 +152,29 @@ where T: Repr<'a> + Secret<'a>, T::Repr: Clone {
         TSecretHandle {
             secret: self.secret.clone(),
             default: self.default.clone(),
+        }
+    }
+}
+
+impl<'a, 'b, T> Migrate<'a, 'b> for TSecretHandle<'a, T>
+where
+    T: for<'c> Repr<'c>,
+    T: for<'c> Secret<'c>,
+    <T as Repr<'a>>::Repr: Migrate<'a, 'b, Output = <T as Repr<'b>>::Repr>,
+{
+    type Output = TSecretHandle<'b, T>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> TSecretHandle<'b, T> {
+        // Since `TSecretHandle` implements `Drop`, we can't safely move out of its fields.
+        unsafe {
+            let this = MaybeUninit::new(self);
+            // Avoid `*this.as_ptr()` after we start moving out of the fields.
+            let secret_ptr = &(*this.as_ptr()).secret as *const _;
+            let default_ptr = &(*this.as_ptr()).default as *const _;
+            TSecretHandle {
+                secret: v.visit(ptr::read(secret_ptr)),
+                default: v.visit(ptr::read(default_ptr)),
+            }
         }
     }
 }
@@ -405,7 +434,7 @@ impl<'a> Secret<'a> for bool {
 
 impl<'a> FromEval<'a> for bool {
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = ev.eval_single_wire(a)?;
+        let val = ev.eval_single_wire(a).ok()?;
         Some(!val.is_zero())
     }
 }
@@ -471,7 +500,7 @@ macro_rules! integer_impls {
 
         impl<'a> FromEval<'a> for $T {
             fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-                let val = ev.eval_single_wire(a)?;
+                let val = ev.eval_single_wire(a).ok()?;
                 // Conversion should succeed, assuming `a` really carries a value of type `$T`.
                 Some(<$T as TryFrom<_>>::try_from(val).unwrap())
             }

@@ -1,20 +1,21 @@
 #![cfg(feature = "bellman")]
 
-use bumpalo::Bump;
 use num_bigint::BigInt;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::ir::circuit::{
-    Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
+    Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };
 use cheesecloth::lower;
 
-fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
-    let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-    let c = Circuit::new(arena, true, cf);
-    c
+macro_rules! make_circuit {
+    ($arenas:expr) => {{
+        let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+        let c = Circuit::new($arenas, true, cf);
+        c
+    }};
 }
 
-fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
+fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     use cheesecloth::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
@@ -23,7 +24,7 @@ fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
 
     // Make sure the circuit is valid.
     let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
-    let val = ev.eval_wire(w);
+    let val = ev.eval_wire(w).ok();
     assert_eq!(val, Some(eval::Value::Single(BigInt::from(1))));
 
 
@@ -57,8 +58,8 @@ fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
 
 #[test]
 fn add_neg_one() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit!(&arenas);
     let t_u8 = c.ty(TyKind::U8);
 
     let w = c.eq(
@@ -71,8 +72,8 @@ fn add_neg_one() {
 
 #[test]
 fn add_neg_one_u64() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit!(&arenas);
     let t_u64 = c.ty(TyKind::U64);
 
     let w = c.eq(
@@ -87,8 +88,8 @@ fn add_neg_one_u64() {
 /// one.
 #[test]
 fn div_large() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit!(&arenas);
     let t_u8 = c.ty(TyKind::U8);
 
     let w = c.eq(
@@ -101,8 +102,8 @@ fn div_large() {
 
 #[test]
 fn neg_one() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
 
     let w = c.eq(
@@ -115,8 +116,8 @@ fn neg_one() {
 
 #[test]
 fn not_zero() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
 
     let w = c.eq(
@@ -129,8 +130,8 @@ fn not_zero() {
 
 #[test]
 fn neg_one_shr() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
     let t_u8 = c.ty(TyKind::U8);
 
@@ -144,8 +145,8 @@ fn neg_one_shr() {
 
 #[test]
 fn neg_one_shl() {
-    let arena = Bump::new();
-    let c = make_circuit(&arena);
+    let arenas = Arenas::new();
+    let c = make_circuit!(&arenas);
     let t_i8 = c.ty(TyKind::I8);
     let t_u8 = c.ty(TyKind::U8);
 

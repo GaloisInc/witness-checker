@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::iter;
 use crate::gadget::arith::BuilderExt as _;
 use crate::eval::{self, CachingEvaluator};
+use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{TWire, TSecretHandle, Builder, EvaluatorExt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
@@ -16,6 +17,7 @@ use crate::mode::tainted;
 
 
 
+#[derive(Migrate)]
 pub struct Segment<'a> {
     pub idx: usize,
     len: usize,
@@ -32,7 +34,7 @@ pub struct Segment<'a> {
 pub struct SegmentBuilder<'a, 'b> {
     pub cx: &'b Context<'a>,
     pub b: &'b Builder<'a>,
-    pub ev: CachingEvaluator<'a, 'b, eval::Public>,
+    pub ev: &'b mut CachingEvaluator<'a, eval::Public>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
@@ -252,7 +254,7 @@ fn operand_value<'a>(
 fn calc_step<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    ev: &mut CachingEvaluator<'a, eval::Public>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,

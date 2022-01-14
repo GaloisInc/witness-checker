@@ -5,6 +5,7 @@ use crate::ir::circuit::{
     CircuitTrait, CircuitExt, CircuitBase, CircuitFilter, CircuitRef, DynCircuitRef, Ty, Wire,
     GateKind, TyKind, IntSize, BinOp, ShiftOp, CmpOp,
 };
+use crate::ir::migrate::{self, Migrate};
 
 macro_rules! match_identities {
     (
@@ -119,13 +120,14 @@ fn eval<'a>(
     e: &mut impl Evaluator<'a>,
     w: Wire<'a>,
 ) -> Option<BigInt> {
-    e.eval_wire(w).and_then(Value::unwrap_single)
+    e.eval_wire(w).ok().and_then(Value::unwrap_single)
 }
 
 fn const_foldable(gk: GateKind) -> bool {
     match gk {
         GateKind::Lit(..) => false,
         GateKind::Secret(..) => false,
+        GateKind::Erased(..) => false,
         GateKind::Unary(_, a) => a.is_lit(),
         GateKind::Binary(_, a, b) => a.is_lit() && b.is_lit(),
         GateKind::Shift(_, a, b) => a.is_lit() && b.is_lit(),
@@ -149,9 +151,9 @@ fn try_const_fold<'a>(
         return None;
     }
 
-    let val = eval::eval_gate(&mut LiteralEvaluator, gk)?;
-    let i = val.as_single()?;
     let ty = gk.ty(c);
+    let val = eval::eval_gate_public(c, ty, gk)?;
+    let i = val.as_single()?;
     Some(c.lit(ty, i))
 }
 
@@ -379,8 +381,9 @@ fn try_identity_compare_mux<'a>(
 
 pub struct ConstFold<F>(pub F);
 
-impl<'a, F: CircuitFilter<'a> + 'a> CircuitFilter<'a> for ConstFold<F> {
-    fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
+impl<'a, F: CircuitFilter<'a> + 'a> CircuitFilter<'a> for ConstFold<F>
+where F: Migrate<'a, 'a, Output = F> {
+    circuit_filter_common_methods!();
 
     fn gate(&self, base: &CircuitBase<'a>, gk: GateKind<'a>) -> Wire<'a> {
         if let GateKind::Gadget(k, ws) = gk {
@@ -407,5 +410,15 @@ impl<'a, F: CircuitFilter<'a> + 'a> CircuitFilter<'a> for ConstFold<F> {
             return w;
         }
         c.gate(gk)
+    }
+}
+
+impl<'a, 'b, F> Migrate<'a, 'b> for ConstFold<F>
+where
+    F: Migrate<'a, 'b>,
+{
+    type Output = ConstFold<F::Output>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Self::Output {
+        ConstFold(v.visit(self.0))
     }
 }

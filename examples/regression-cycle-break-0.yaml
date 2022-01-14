@@ -1,0 +1,42 @@
+## FLAGS: --validate-only --expect-zero
+# Regression test for "CycleBreak 0 has live output but no live inputs" when
+# segment 0 has `enter_from_network: true`
+- [0,1,6,0]
+- []
+-
+  program:
+    - [mov, 0, null, true, 12]        # mov r0, 12
+    - [mov, 1, null, true, 16]        # mov r1, 16
+    - [load8, 0, null, false, 1]      # load8 r0, [r1]
+    - [sub, 0, 0, true, 42]           # sub r0, r0, 42
+
+  params:
+    num_regs: 2
+
+  # The memory
+  init_mem:
+    - start: 2
+      len: 1
+      read_only: true
+      secret: true
+      data: [42]
+      name: OUTPUT
+      heap_init: true
+
+  segments:
+    - constraints: []
+      len: 4
+      successors: []
+      enter_from_network: true
+      exit_to_network: true
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [12, 0]]
+        - [2, [12, 16]]
+        - [3, [42, 16]]
+        - [4, [0, 16]]
+
+  advice:
+    2: [[MemOp, 16, 42, read, 8]]

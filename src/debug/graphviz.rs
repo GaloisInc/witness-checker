@@ -34,7 +34,7 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
 }
 
 pub fn make_graph<'a>(
-    c: &impl CircuitTrait<'a>,
+    c: &'a impl CircuitTrait<'a>,
     ws: impl Iterator<Item = Wire<'a>>,
 ) -> Result<String, fmt::Error> {
     let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
@@ -50,6 +50,7 @@ pub fn make_graph<'a>(
         match w.kind {
             GateKind::Lit(_, _) => write!(label, "Lit")?,
             GateKind::Secret(_) => write!(label, "Secret")?,
+            GateKind::Erased(e) => write!(label, "Erased {:p}", e)?,
             GateKind::Unary(op, _) => write!(label, "{:?}", op)?,
             GateKind::Binary(op, _, _) => write!(label, "{:?}", op)?,
             GateKind::Shift(op, _, _) => write!(label, "{:?}", op)?,
@@ -68,8 +69,8 @@ pub fn make_graph<'a>(
 
         let val = ev.eval_wire(w);
         match val {
-            Some(val) => write_val(&mut label, val)?,
-            None => write!(label, "[eval failed]")?,
+            Ok(val) => write_val(&mut label, val)?,
+            _ => write!(label, "[eval failed]")?,
         }
 
         writeln!(s, "\"{:p}\" [ label = {:?} ];", w, label)?;
@@ -83,7 +84,8 @@ pub fn make_graph<'a>(
 
         match w.kind {
             GateKind::Lit(_, _) |
-            GateKind::Secret(_) => {},
+            GateKind::Secret(_) |
+            GateKind::Erased(_) => {},
             GateKind::Unary(_, a) |
             GateKind::Cast(a, _) |
             GateKind::Extract(a, _) => write_edges(&[a])?,
