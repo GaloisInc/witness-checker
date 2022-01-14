@@ -223,8 +223,7 @@ mod test {
     use bumpalo::Bump;
     use log::*;
     use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::Circuit;
-    use crate::ir::circuit::DynCircuit;
+    use crate::ir::circuit::{Circuit, FilterNil};
     use crate::ir::typed::EvaluatorExt;
     use super::*;
 
@@ -238,8 +237,8 @@ mod test {
         assert!(perm.iter().enumerate().skip(n).all(|(i, &j)| i == j));
 
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut rb = RoutingBuilder::new();

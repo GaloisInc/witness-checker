@@ -31,7 +31,7 @@ fn golden_tests() -> io::Result<()> {
         let mut custom_flags = Vec::new();
         let mut has_custom_flags = false;
 
-        let mut f = BufReader::new(File::open(&path)?);
+        let f = BufReader::new(File::open(&path)?);
         for line in f.lines() {
             let line = line?;
             let line = line.trim();
@@ -43,7 +43,7 @@ fn golden_tests() -> io::Result<()> {
             }
         }
 
-        let mut dest = mint.new_goldenfile(
+        let dest = mint.new_goldenfile(
             path.with_extension("out").file_name().unwrap(),
         )?;
 

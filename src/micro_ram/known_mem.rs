@@ -6,7 +6,7 @@ use std::num::Wrapping;
 use arrayvec::ArrayVec;
 use crate::eval::{self, CachingEvaluator};
 use crate::gadget::bit_pack;
-use crate::ir::circuit::{Wire, TyKind, CircuitTrait, CircuitExt, GateKind, UnOp, BinOp};
+use crate::ir::circuit::{Wire, TyKind, CircuitExt, GateKind, UnOp, BinOp};
 use crate::ir::typed::{TWire, Builder, EvaluatorExt};
 use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset, MemSegment};
 
@@ -652,15 +652,15 @@ impl RangeSet {
 mod test {
     use bumpalo::Bump;
     use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::{Circuit, DynCircuit};
+    use crate::ir::circuit::{Circuit, FilterNil};
     use crate::ir::typed::{Builder, EvaluatorExt};
     use super::*;
 
     #[test]
     fn bytes() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -678,8 +678,8 @@ mod test {
     #[test]
     fn bytes_to_word() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -695,8 +695,8 @@ mod test {
     #[test]
     fn word_to_bytes() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -714,8 +714,8 @@ mod test {
     #[test]
     fn bytes_to_word_with_gaps() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0x8877665544332211));
@@ -733,8 +733,8 @@ mod test {
     #[test]
     fn bytes_to_word_no_default() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::new();
@@ -752,8 +752,8 @@ mod test {
     #[test]
     fn bytes_to_word_with_gaps_no_default() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
 
         let mut m = KnownMem::new();
         for &i in &[1,2,3,5,6] {
@@ -767,8 +767,8 @@ mod test {
     #[test]
     fn overwrite_smaller() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -790,8 +790,8 @@ mod test {
     #[test]
     fn overwrite_larger() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -809,8 +809,8 @@ mod test {
     #[test]
     fn overwrite_same_size() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -831,8 +831,8 @@ mod test {
     #[test]
     fn load_end() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
@@ -866,8 +866,8 @@ mod test {
     #[test]
     fn load_end_word() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
@@ -896,8 +896,8 @@ mod test {
     #[test]
     fn store_end_overwrite() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
@@ -917,8 +917,8 @@ mod test {
     #[test]
     fn store_end_replace() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
-        let b = Builder::new(DynCircuit::new(&c));
+        let c = Circuit::new(&arena, true, FilterNil);
+        let b = Builder::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;

@@ -5,14 +5,12 @@
 
 use num_bigint::BigUint;
 use std::cmp;
-use std::ops::{Add, AddAssign, Mul, Sub};
 
-use super::{bit_width::BitWidth, int::Int};
+use super::int::Int;
 use zkinterface_bellman::{
     bellman::gadgets::boolean::{AllocatedBit, Boolean},
-    bellman::{ConstraintSystem, LinearCombination, SynthesisError, Variable},
-    ff::{Field, PrimeField},
-    pairing::Engine,
+    bellman::{ConstraintSystem, LinearCombination, SynthesisError},
+    ff::PrimeField,
     zkif_cs::ZkifCS,
 };
 
@@ -130,7 +128,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         _cs: &mut impl ConstraintSystem<Scalar>,
     ) -> Result<Self, String> {
         match (&mut self.value, &other.value) {
-            (Some(ref mut self_val), Some(ref other_val)) => self_val.add_assign(other_val),
+            (Some(ref mut self_val), Some(ref other_val)) => *self_val += other_val,
             _ => {}
         }
 
@@ -336,7 +334,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
     /// Truncate `self` modulo `2^valid_bits`, producing a new `Num` with `real_bits ==
     /// valid_bits`.
-    pub fn truncate<CS: ConstraintSystem<Scalar>>(mut self, cs: &mut CS) -> Self {
+    pub fn truncate<CS: ConstraintSystem<Scalar>>(self, cs: &mut CS) -> Self {
         if self.real_bits == self.valid_bits {
             return self;
         }

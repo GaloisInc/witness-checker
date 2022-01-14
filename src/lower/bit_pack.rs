@@ -1,8 +1,13 @@
 use crate::gadget::bit_pack::ConcatBits;
-use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, TyKind, GateKind};
+use crate::ir::circuit::{
+    CircuitTrait, CircuitExt, CircuitRef, CircuitFilter, Wire, TyKind, GateKind,
+};
 
 /// Expand any `Bundle` arguments to `ConcatBits`, leaving only `Int` and `Uint`.
-pub fn concat_bits_flat<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn concat_bits_flat<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     if let GateKind::Gadget(g, ws) = gk {
         if let Some(_) = g.cast::<ConcatBits>() {
             if ws.iter().any(|w| !w.ty.is_integer()) {

@@ -5,8 +5,8 @@ use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 
 use crate::ir::circuit::{
-    self, Circuit, CircuitTrait, Ty, Wire, Secret, Bits, GateKind, TyKind, GadgetKindRef, UnOp,
-    BinOp, ShiftOp, CmpOp,
+    self, CircuitBase, CircuitTrait, CircuitExt, Ty, Wire, Secret, Bits, GateKind, TyKind,
+    GadgetKindRef, UnOp, BinOp, ShiftOp, CmpOp,
 };
 
 use self::Value::Single;
@@ -113,14 +113,13 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
 /// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
 /// sharing.
 pub struct CachingEvaluator<'a, 'c, S> {
-    c: &'c Circuit<'a>,
+    c: &'c CircuitBase<'a>,
     cache: HashMap<Wire<'a>, Option<Value>>,
     secret_eval: S,
 }
 impl<'a, 'c, S: Default> CachingEvaluator<'a, 'c, S> {
-    pub fn new(c: &'c impl CircuitTrait<'a>) -> Self {
+    pub fn new<C: CircuitTrait<'a> + ?Sized>(c: &'c C) -> Self {
         CachingEvaluator {
-            // TODO: remove as_base - we only need it for `GadgetKind::decompose`
             c: c.as_base(),
             cache: HashMap::new(),
             secret_eval: S::default(),
@@ -153,7 +152,7 @@ impl<'a, 'c, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, 'c, 
     }
 
     fn eval_gadget(&mut self, k: GadgetKindRef<'a>, ws: &[Wire<'a>]) -> Option<Value> {
-        let w = k.decompose(self.c, ws);
+        let w = k.decompose(self.c.as_ref(), ws);
         self.eval_wire(w)
     }
 }
@@ -283,12 +282,13 @@ pub fn eval_gate<'a, E: Evaluator<'a>>(e: &mut E, gk: GateKind<'a>) -> Option<Va
 #[cfg(test)]
 mod test {
     use bumpalo::Bump;
+    use crate::ir::circuit::{CircuitBase, CircuitExt};
     use super::*;
 
     #[test]
     fn value_trunc_uint_to_int() {
         let arena = Bump::new();
-        let c = Circuit::new(&arena, true);
+        let c = CircuitBase::new(&arena, true);
         let ty_i8 = c.ty(TyKind::I8);
 
         for &x in [0_u8, 1, 126, 127, 128, 129, 254, 255].iter() {

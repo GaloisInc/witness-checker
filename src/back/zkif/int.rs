@@ -8,18 +8,14 @@ use num_bigint::BigUint;
 use num_traits::Zero;
 
 use zkinterface_bellman::{
-    ff::{Field, PrimeField},
+    ff::PrimeField,
     bellman::{
         SynthesisError,
         ConstraintSystem,
-        LinearCombination,
         gadgets::boolean::{Boolean, AllocatedBit},
     },
 };
-use super::{
-    num::Num,
-    bit_width::BitWidth,
-};
+use super::num::Num;
 
 /// Represents an interpretation of SIZE `Boolean` objects as a
 /// unsigned integer, or two-complement signed integer.
@@ -74,8 +70,8 @@ impl Int {
                 for i in 0..width {
                     let idx = i / 32;
                     let off = i % 32;
-                    let digit = digits.get(i / 32).cloned().unwrap_or(0);
-                    let set = digit & (1 << (i % 32)) != 0;
+                    let digit = digits.get(idx).cloned().unwrap_or(0);
+                    let set = digit & (1 << off) != 0;
                     v.push(Some(set));
                 }
 

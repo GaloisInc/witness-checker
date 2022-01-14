@@ -1,7 +1,12 @@
-use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, GateKind, TyKind};
+use crate::ir::circuit::{
+    CircuitTrait, CircuitExt, CircuitRef, CircuitFilter, Wire, GateKind, TyKind,
+};
 
 /// Split a `Mux` gate of `Bundle` type into several independent muxes.
-pub fn unbundle_mux<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn unbundle_mux<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     /// Unbundle a single mux.  This is recursive so it can handle bundles of bundles.
     fn mk_mux<'a>(
         c: &impl CircuitTrait<'a>,
@@ -33,7 +38,10 @@ pub fn unbundle_mux<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a>
 ///
 /// This pass can only remove all bundles if every `Extract` takes a `Pack` as its immediate input.
 /// Other passes, such as `unbundle_mux`, can be used to put the circuit into such a form.
-pub fn simplify<'a>(c: &impl CircuitTrait<'a>, gk: GateKind<'a>) -> Wire<'a> {
+pub fn simplify<'a>(
+    c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    gk: GateKind<'a>,
+) -> Wire<'a> {
     // This correctly handles nested bundles.  Given `x -> P1 -> P2 -> E2 -> E1`, `simplify`
     // applied to `E2` will collapse `P2 -> E2` and return `P1`, leaving `x -> P1 -> E1`.  Then
     // `simplify` applied to `E1` will collapse `P1 -> E1`, leaving only `x`.

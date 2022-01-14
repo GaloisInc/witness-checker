@@ -1,5 +1,6 @@
 use crate::ir::circuit::{
-    Circuit, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize, GadgetKind, GadgetKindRef,
+    CircuitTrait, CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
+    GadgetKindRef,
 };
 use crate::ir::typed::{Builder, TWire, Flatten};
 
@@ -27,11 +28,11 @@ impl<'a> Iterator for BundleTys<'a> {
 }
 
 struct BundleWires<'c, 'a> {
-    c: &'c Circuit<'a>,
+    c: DynCircuitRef<'a, 'c>,
     stk: Vec<Wire<'a>>,
 }
 
-fn bundle_wires<'c, 'a>(c: &'c Circuit<'a>, ws: &[Wire<'a>]) -> BundleWires<'c, 'a> {
+fn bundle_wires<'c, 'a>(c: DynCircuitRef<'a, 'c>, ws: &[Wire<'a>]) -> BundleWires<'c, 'a> {
     BundleWires { c, stk: ws.iter().rev().cloned().collect() }
 }
 
@@ -59,16 +60,16 @@ pub struct ConcatBits;
 impl_gadget_kind_support!(ConcatBits);
 
 impl<'a> GadgetKind<'a> for ConcatBits {
-    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
 
-    fn typecheck(&self, c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
+    fn typecheck(&self, c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
         let width = bundle_tys(arg_tys).map(|ty| ty.integer_size().bits()).sum::<u16>();
         c.ty(TyKind::Uint(IntSize(width)))
     }
 
-    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {
+    fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
         let width = bundle_wires(c, args).map(|w| w.ty.integer_size().bits()).sum::<u16>();
         let out_ty = c.ty(TyKind::Uint(IntSize(width)));
         let u16_ty = c.ty(TyKind::U16);
@@ -89,7 +90,7 @@ pub fn concat_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, x: TWire<'a, T>) -> Wi
     bld.circuit().gadget(gk, &[w])
 }
 
-pub fn concat_bits_raw<'a>(c: &impl CircuitTrait<'a>, ws: &[Wire<'a>]) -> Wire<'a> {
+pub fn concat_bits_raw<'a, C: CircuitTrait<'a> + ?Sized>(c: &C, ws: &[Wire<'a>]) -> Wire<'a> {
     let gk = c.intern_gadget_kind(ConcatBits);
     c.gadget(gk, ws)
 }
@@ -102,11 +103,11 @@ pub struct SplitBits<'a>(pub Ty<'a>);
 impl_gadget_kind_support!(<'a> SplitBits<'a>);
 
 impl<'a> GadgetKind<'a> for SplitBits<'a> {
-    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(SplitBits(self.0.transfer(c)))
     }
 
-    fn typecheck(&self, _c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
+    fn typecheck(&self, _c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
         let width = bundle_tys(&[self.0]).map(|ty| ty.integer_size().bits()).sum::<u16>();
         assert!(arg_tys.len() == 1, "expected exactly 1 input for SplitBits");
         assert!(
@@ -116,18 +117,23 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
         self.0
     }
 
-    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {
-        fn walk<'a>(c: &Circuit<'a>, inp: Wire<'a>, ty: Ty<'a>, pos: &mut u16) -> Wire<'a> {
+    fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
+        fn walk<'a>(
+            c: DynCircuitRef<'a, '_>,
+            inp: Wire<'a>,
+            ty: Ty<'a>,
+            pos: &mut u16,
+        ) -> Wire<'a> {
             match *ty {
                 TyKind::Uint(sz) => {
                     let (start, end) = (*pos, *pos + sz.bits());
                     *pos = end;
-                    extract_bits(c, inp, start, end)
+                    extract_bits(&c, inp, start, end)
                 },
                 TyKind::Int(sz) => {
                     let (start, end) = (*pos, *pos + sz.bits());
                     *pos = end;
-                    c.cast(extract_bits(c, inp, start, end), ty)
+                    c.cast(extract_bits(&c, inp, start, end), ty)
                 },
                 TyKind::Bundle(tys) => {
                     c.pack_iter(tys.iter().map(|&ty| walk(c, inp, ty, pos)))
@@ -155,11 +161,11 @@ pub struct ExtractBits {
 impl_gadget_kind_support!(ExtractBits);
 
 impl<'a> GadgetKind<'a> for ExtractBits {
-    fn transfer<'b>(&self, c: &Circuit<'b>) -> GadgetKindRef<'b> {
+    fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
 
-    fn typecheck(&self, c: &Circuit<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
+    fn typecheck(&self, c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
         assert!(arg_tys.len() == 1, "expected exactly 1 input for ExtractBits");
         let arg_width = match *arg_tys[0] {
             TyKind::Uint(sz) => sz.bits(),
@@ -173,7 +179,7 @@ impl<'a> GadgetKind<'a> for ExtractBits {
         c.ty(TyKind::Uint(IntSize(self.end - self.start)))
     }
 
-    fn decompose(&self, c: &Circuit<'a>, args: &[Wire<'a>]) -> Wire<'a> {
+    fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
         let u16_ty = c.ty(TyKind::U16);
         let out_ty = c.ty(TyKind::Uint(IntSize(self.end - self.start)));
         let shifted = c.shr(args[0], c.lit(u16_ty, self.start));
@@ -181,7 +187,12 @@ impl<'a> GadgetKind<'a> for ExtractBits {
     }
 }
 
-pub fn extract_bits<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>, start: u16, end: u16) -> Wire<'a> {
+pub fn extract_bits<'a, C: CircuitTrait<'a> + ?Sized>(
+    c: &C,
+    w: Wire<'a>,
+    start: u16,
+    end: u16,
+) -> Wire<'a> {
     let gk = c.intern_gadget_kind(ExtractBits { start, end });
     c.gadget(gk, &[w])
 }

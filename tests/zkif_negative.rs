@@ -1,22 +1,24 @@
 #![cfg(feature = "bellman")]
 
-use std::path::Path;
 use bumpalo::Bump;
 use num_bigint::BigInt;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{Circuit, TyKind, Wire};
-use cheesecloth::lower::{self, run_pass};
+use cheesecloth::ir::circuit::{
+    Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
+};
+use cheesecloth::lower;
 
-fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
+fn make_circuit<'a>(arena: &'a Bump) -> impl CircuitTrait<'a> + 'a {
+    let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+    let c = Circuit::new(arena, true, cf);
+    c
+}
+
+fn finish<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>) {
     use cheesecloth::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
     use zkinterface_bellman::zkif_backend::validate;
-
-
-    let ws = vec![w];
-    let ws = run_pass(&c, ws, lower::int::compare_to_greater_or_equal_to_zero);
-    let w = ws[0];
 
 
     // Make sure the circuit is valid.
@@ -32,7 +34,7 @@ fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
     //let workspace = Path::new("out/test");
     let files = vec![
         workspace.join("header.zkif"),
-        workspace.join("constraints.zkif"),
+        workspace.join("constraints_0.zkif"),
         workspace.join("witness.zkif"),
     ];
     for f in &files {
@@ -56,7 +58,7 @@ fn finish<'a>(c: &Circuit<'a>, w: Wire<'a>) {
 #[test]
 fn add_neg_one() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_u8 = c.ty(TyKind::U8);
 
     let w = c.eq(
@@ -70,7 +72,7 @@ fn add_neg_one() {
 #[test]
 fn add_neg_one_u64() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_u64 = c.ty(TyKind::U64);
 
     let w = c.eq(
@@ -86,7 +88,7 @@ fn add_neg_one_u64() {
 #[test]
 fn div_large() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_u8 = c.ty(TyKind::U8);
 
     let w = c.eq(
@@ -100,7 +102,7 @@ fn div_large() {
 #[test]
 fn neg_one() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_i8 = c.ty(TyKind::I8);
 
     let w = c.eq(
@@ -114,7 +116,7 @@ fn neg_one() {
 #[test]
 fn not_zero() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_i8 = c.ty(TyKind::I8);
 
     let w = c.eq(
@@ -128,7 +130,7 @@ fn not_zero() {
 #[test]
 fn neg_one_shr() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_i8 = c.ty(TyKind::I8);
     let t_u8 = c.ty(TyKind::U8);
 
@@ -143,7 +145,7 @@ fn neg_one_shr() {
 #[test]
 fn neg_one_shl() {
     let arena = Bump::new();
-    let c = Circuit::new(&arena);
+    let c = make_circuit(&arena);
     let t_i8 = c.ty(TyKind::I8);
     let t_u8 = c.ty(TyKind::U8);
 

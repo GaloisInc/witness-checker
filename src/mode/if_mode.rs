@@ -312,7 +312,7 @@ impl<'a, M: ModePred, A: Repr<'a>> Repr<'a> for IfMode<M, A> {
 }
 
 impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
-    fn wire_type(c: &impl CircuitTrait<'a>) -> Ty<'a> {
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
         if check_mode::<M>().is_some() {
             A::wire_type(c)
         } else {

@@ -1,5 +1,5 @@
 use num_bigint::BigUint;
-use num_traits::{One, Zero};
+use num_traits::Zero;
 /// # Wire representations
 ///
 /// We use two different representations of wire values: a bitwise representation (`Int`) where a
@@ -27,29 +27,22 @@ use num_traits::{One, Zero};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use std::ops::Sub;
 use std::path::Path;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
-use crate::ir::circuit::{
-    self, BinOp, Circuit, CmpOp, Gate, GateKind, ShiftOp, Ty, TyKind, UnOp, Wire,
-};
+use crate::ir::circuit::{self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire};
 
 use super::{
-    bit_width::BitWidth,
     field::QuarkScalar,
     int::Int,
     int_ops,
     int_ops::{bool_or, enforce_true},
     num,
-    num::{_scalar_from_unsigned, boolean_lc},
     representer::{ReprId, Representer, WireRepr},
 };
 use zkinterface::Result;
 use zkinterface_bellman::{
-    bellman::gadgets::boolean::{AllocatedBit, Boolean},
-    bellman::{ConstraintSystem, SynthesisError},
-    ff::{Field, PrimeField},
+    bellman::gadgets::boolean::Boolean,
     zkif_cs::ZkifCS,
 };
 
@@ -393,15 +386,15 @@ impl<'a> Backend<'a> {
                     (TyKind::Int(sz1), TyKind::Uint(sz2)) if sz1 == sz2 => return aw,
                     (TyKind::Uint(sz1), TyKind::Int(sz2)) if sz1 == sz2 => return aw,
 
-                    (TyKind::Uint(sz1), TyKind::Uint(sz2))
-                    | (TyKind::Uint(sz1), TyKind::Int(sz2)) => {
+                    (TyKind::Uint(_sz1), TyKind::Uint(sz2))
+                    | (TyKind::Uint(_sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
                         bits.resize(sz2.bits() as usize, Boolean::constant(false));
                         WireRepr::from(Int::from_bits(&bits))
                     }
 
-                    (TyKind::Int(sz1), TyKind::Uint(sz2))
-                    | (TyKind::Int(sz1), TyKind::Int(sz2)) => {
+                    (TyKind::Int(_sz1), TyKind::Uint(sz2))
+                    | (TyKind::Int(_sz1), TyKind::Int(sz2)) => {
                         let mut bits = int.bits.clone();
                         let last = bits.last().unwrap().clone();
                         bits.resize(sz2.bits() as usize, last);
@@ -417,7 +410,7 @@ impl<'a> Backend<'a> {
             GateKind::Extract(a, _index) => unimplemented!("EXTRACT {:?}", a.ty),
 
             GateKind::Gadget(gk, ws) => {
-                if let Some(g) = gk.cast::<ConcatBits>() {
+                if let Some(_) = gk.cast::<ConcatBits>() {
                     let mut bits = Vec::new();
                     for &a in ws {
                         let aw = self.wire(a);
@@ -453,15 +446,18 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 
 #[test]
 fn test_zkif() -> Result<()> {
+    use crate::ir::circuit::{CircuitBase, CircuitExt};
+    use super::num::_scalar_from_unsigned;
+
     let mut b = Backend::new(Path::new("local/test"), true);
 
     let arena = bumpalo::Bump::new();
-    let c = Circuit::new(&arena);
+    let c = CircuitBase::new(&arena, true);
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let sec1 = c.new_secret_init(c.ty(TyKind::I64), Some(12));
-    let sec2 = c.new_secret_init(c.ty(TyKind::I64), Some(13));
+    let sec1 = c.new_secret_init(c.ty(TyKind::I64), || 12);
+    let sec2 = c.new_secret_init(c.ty(TyKind::I64), || 13);
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);
