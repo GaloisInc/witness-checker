@@ -1,0 +1,63 @@
+## FLAGS: --validate-only --expect-zero
+# Regression test for a bug that caused `SegGraphBuilder::get_order` to repeat
+# the same segment multiple times (causing a panic).
+
+- [0,1,0,0]
+- [public-pc]
+-
+  program:
+    - [mov, 0, 0, false, 0]
+
+  params:
+    num_regs: 3
+
+  segments:
+    - constraints: []
+      len: 1
+      successors: [3]
+      enter_from_network: false
+      exit_to_network: false
+
+    # Construct a graph that looks like this:
+    #
+    #      ---> 2 ---\
+    #     /           >
+    #   1  ----------> 3
+    #     \           >
+    #      ---> 4 ---/
+    #
+    # The buggy implementation would do the following:
+    # - Visit 1.  Record 2, 3, and 4 to visit later (since none of them are
+    #   `done` yet)
+    # - Visit 2, then 3.  Mark 3 as done.
+    # - Visit 3 again.  Node 3 is now marked as `done`, but 1 queued it for
+    #   later processing before that happened.
+
+    - constraints: []
+      len: 1
+      successors: []
+      enter_from_network: false
+      exit_to_network: false
+
+    - constraints: []
+      len: 1
+      successors: [1]
+      enter_from_network: false
+      exit_to_network: false
+
+    - constraints: []
+      len: 1
+      successors: [1, 2, 4]
+      enter_from_network: false
+      exit_to_network: false
+
+    - constraints: []
+      len: 1
+      successors: [1]
+      enter_from_network: false
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [0, 0, 0]]

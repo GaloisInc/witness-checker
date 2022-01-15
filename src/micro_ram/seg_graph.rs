@@ -558,11 +558,16 @@ impl<'a> SegGraphBuilder<'a> {
             while let Some(step) = stack.pop() {
                 match step {
                     Step::Enter(i) => {
+                        if done[i] {
+                            continue;
+                        }
                         trace!("get_order: enter {}", i);
                         stack.push(Step::Exit(i));
                         for pred in &self.segments[i].preds {
                             match pred.src {
                                 StateSource::Segment(j) => {
+                                    // Optimization: don't push `Enter(j)` if it will just be
+                                    // skipped because it's already done.
                                     if !done[j] {
                                         stack.push(Step::Enter(j));
                                     }
