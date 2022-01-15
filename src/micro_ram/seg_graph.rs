@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::iter;
 use std::mem;
+use log::*;
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
@@ -552,10 +553,12 @@ impl<'a> SegGraphBuilder<'a> {
             if done[i] {
                 continue;
             }
+            trace!("get_order: start {}", i);
             stack.push(Step::Enter(i));
             while let Some(step) = stack.pop() {
                 match step {
                     Step::Enter(i) => {
+                        trace!("get_order: enter {}", i);
                         stack.push(Step::Exit(i));
                         for pred in &self.segments[i].preds {
                             match pred.src {
@@ -569,8 +572,10 @@ impl<'a> SegGraphBuilder<'a> {
                         }
                     },
                     Step::Exit(i) => {
+                        let dead = self.segments[i].preds.len() == 0;
+                        trace!("get_order: finish {} ({})", i, if dead { "dead" } else { "live" });
                         // Only include non-dead nodes in the order.
-                        if self.segments[i].preds.len() > 0 {
+                        if !dead {
                             order.push(i);
                         } else {
                             num_dead += 1;
@@ -579,9 +584,13 @@ impl<'a> SegGraphBuilder<'a> {
                     },
                 }
             }
-            debug_assert!(stack.len() == 0);
+            assert!(stack.len() == 0);
         }
-        debug_assert!(order.len() + num_dead == self.segments.len());
+        assert!(
+            order.len() + num_dead == self.segments.len(),
+            "expected order.len() [{}] + num_dead [{}] == self.segments.len() [{}]",
+            order.len(), num_dead, self.segments.len(),
+        );
 
         order.into_iter().map(SegGraphItem::Segment)
             .chain(iter::once(SegGraphItem::Network))
