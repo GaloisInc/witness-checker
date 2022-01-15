@@ -107,11 +107,13 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
                     // Check that the fetch port is consistent with the step taken.
                     let addr = fp.addr;
                     let pc = prev_state.pc;
-                    wire_assert!(
-                        cx, b.eq(addr, pc),
-                        "segment {}: fetch in slot {} accesses address {:x} (expected {:x})",
-                        idx, i, cx.eval(addr), cx.eval(pc),
-                    );
+                    cx.when(b, prev_state.live, |cx| {
+                        wire_assert!(
+                            cx, b.eq(addr, pc),
+                            "segment {}: fetch in slot {} accesses address {:x} (expected {:x})",
+                            idx, i, cx.eval(addr), cx.eval(pc),
+                        );
+                    });
                 }
                 instr = fp.instr;
 
