@@ -1,6 +1,8 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use crate::ir::circuit::{Wire, EraseVisitor, MigrateVisitor};
+use crate::ir::migrate;
+use crate::stats::Stats;
 
 
 /// Trait for abstracting over backends.  `post_erase` and `post_migrate` are callbacks to be
@@ -174,10 +176,38 @@ pub fn new_dummy<'a>() -> Box<dyn Backend<'a> + 'a> {
     Box::new(())
 }
 
-
 #[allow(unused)]
 unsafe impl<'a> Backend<'a> for () {
     fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {}
     fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {}
     fn finish(self: Box<Self>, accepted: Wire<'a>, validate: bool) {}
+}
+
+
+pub fn new_stats<'a>() -> Box<dyn Backend<'a> + 'a> {
+    #[derive(Default)]
+    struct BackendWrapper<'a> {
+        stats: Stats<'a>,
+    }
+
+    return Box::new(BackendWrapper::default());
+
+
+    unsafe impl<'a> Backend<'a> for BackendWrapper<'a> {
+        fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {
+            self.stats.add_iter(v.erased().iter().map(|&(w, _)| w));
+            migrate::migrate_in_place(v, &mut self.stats);
+        }
+
+        fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
+            migrate::migrate_in_place(v, &mut self.stats);
+        }
+
+        fn finish(mut self: Box<Self>, accepted: Wire<'a>, _validate: bool) {
+            self.stats.add(&[accepted]);
+            eprintln!(" ===== stats =====");
+            self.stats.print();
+            eprintln!(" ===== end stats =====");
+        }
+    }
 }

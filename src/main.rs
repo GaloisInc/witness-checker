@@ -8,7 +8,6 @@ use num_traits::One;
 
 use cheesecloth::wire_assert;
 use cheesecloth::back;
-use cheesecloth::debug;
 use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
 use cheesecloth::gadget;
 use cheesecloth::ir::circuit::{
@@ -204,6 +203,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             back::new_sieve_ir(workspace, dedup)
         } else if let Some(dest) = args.value_of_os("zkif-out") {
             back::new_zkif(dest)
+        } else if args.is_present("stats") {
+            back::new_stats()
         } else {
             back::new_dummy()
         };
@@ -266,12 +267,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         .chain(asserts.into_iter())
         .chain(bugs.into_iter())
         .collect::<Vec<_>>();
-
-    if args.is_present("stats") {
-        eprintln!(" ===== stats: after lowering =====");
-        debug::count_gates::count_gates(&flags);
-        eprintln!(" ===== end stats (after lowering) =====");
-    }
 
     {
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
