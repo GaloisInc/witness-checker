@@ -28,7 +28,7 @@ pub fn count_gates<'a>(wires: &[Wire<'a>]) {
     for w in circuit::walk_wires(wires.iter().cloned()) {
         let mut cur = &mut tree;
         cur.count += 1;
-        for part in w.label.trim_start_matches("/").split("/") {
+        for part in w.label.0.trim_start_matches("/").split("/") {
             cur = cur.children.entry(part).or_insert_with(CountTree::default);
             cur.count += 1;
         }

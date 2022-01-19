@@ -70,6 +70,7 @@ impl<'a> CircuitBase<'a> {
         };
         c.preload_common_types();
         c.preload_common_bits();
+        c.preload_common_strs();
         c
     }
 
@@ -85,6 +86,11 @@ impl<'a> CircuitBase<'a> {
         for &bits in COMMON_BITS {
             intern.insert(bits);
         }
+    }
+
+    fn preload_common_strs(&self) {
+        let mut intern = self.intern_str.borrow_mut();
+        intern.insert("");
     }
 
     fn arena(&self) -> &'a Bump {
@@ -246,7 +252,7 @@ impl<'a> CircuitBase<'a> {
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
-            label: self.current_label.get(),
+            label: Label(self.current_label.get()),
             value: Unhashed(GateValueCell::new(value)),
         }))
     }
@@ -1576,7 +1582,7 @@ pub struct Gate<'a> {
     /// recurse over the entire depth of the circuit.
     pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
-    pub label: &'a str,
+    pub label: Label<'a>,
     pub value: Unhashed<GateValueCell<'a>>,
 }
 
@@ -1729,7 +1735,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Gate<'a> {
         Gate {
             ty: v.visit(self.ty),
             kind: v.visit(self.kind),
-            label: v.new_circuit().intern_str(self.label),
+            label: v.visit(self.label),
             value: v.visit(self.value),
         }
     }
@@ -2226,6 +2232,25 @@ impl<'a, T> CellResetGuard<'a, T> {
 impl<'a, T> Drop for CellResetGuard<'a, T> {
     fn drop(&mut self) {
         self.cell.swap(&self.old)
+    }
+}
+
+
+declare_interned_pointer! {
+    #[derive(Debug)]
+    pub struct Label<'a> => str;
+}
+
+impl fmt::Display for Label<'_> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str(self.0)
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Label<'a> {
+    type Output = Label<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Label<'b> {
+        Label(v.new_circuit().intern_str(self.0))
     }
 }
 
