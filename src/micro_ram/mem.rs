@@ -207,7 +207,7 @@ impl<'a> Memory<'a> {
         // Sort the memory ports by addres and then by cycle.  Most of the ordering logic is
         // handled by the `typed::Lt` impl for `PackedMemPort`.
         let mut sorted_ports = Rooted::new({
-            let _g = b.scoped_label("sort mem");
+            let _g = b.scoped_label("mem/sort");
             let mut sort = Rooted::new({
                 let packed_ports = ports.open(mh).iter().zip(unused.iter())
                     .filter_map(|(mp, &unused)| if unused { None } else { Some(mp) })
@@ -258,7 +258,7 @@ impl<'a> Memory<'a> {
         if sorted_ports.open(mh).len() > 0 {
             let cx = cx.open(mh);
             let sorted_ports = sorted_ports.open(mh);
-            check_mem(&cx, &b, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
+            check_mem(&cx, &b, &sorted_ports[0], b.lit(false), sorted_ports[0]);
         }
 
         for i in 1 .. sorted_ports.open(mh).len() {
@@ -268,7 +268,7 @@ impl<'a> Memory<'a> {
             let port = sorted_ports[i];
 
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
-            check_mem(&cx, &b, i + 1, prev, prev_valid, port);
+            check_mem(&cx, &b, prev, prev_valid, port);
 
             unsafe { mh.erase_and_migrate(b.circuit()) };
         }
@@ -575,12 +575,11 @@ fn addr_misalignment<'a>(
 fn check_mem<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    index: usize,
     prev: &TWire<'a, MemPort>,
     prev_valid: TWire<'a, bool>,
     port: TWire<'a, MemPort>,
 ) {
-    let _g = b.scoped_label(format_args!("check_mem/index {}", index));
+    let _g = b.scoped_label("mem/check");
     let active = b.ne(port.cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
 
     // Alignment: `addr` must be a multiple of `width.bytes()`.

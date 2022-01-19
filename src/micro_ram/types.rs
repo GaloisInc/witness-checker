@@ -112,11 +112,11 @@ impl<'a> Lit<'a> for RamInstr {
 impl<'a> Secret<'a> for RamInstr {
     fn secret(bld: &Builder<'a>) -> Self::Repr {
         RamInstrRepr {
-            opcode: bld.with_label("opcode", || bld.secret_uninit()),
-            dest: bld.with_label("dest", || bld.secret_uninit()),
-            op1: bld.with_label("op1", || bld.secret_uninit()),
-            op2: bld.with_label("op2", || bld.secret_uninit()),
-            imm: bld.with_label("imm", || bld.secret_uninit()),
+            opcode: bld.secret_uninit(),
+            dest: bld.secret_uninit(),
+            op1: bld.secret_uninit(),
+            op2: bld.secret_uninit(),
+            imm: bld.secret_uninit(),
         }
     }
 
@@ -261,33 +261,27 @@ impl<'a> Secret<'a> for RamState {
 impl RamState {
     pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            cycle: bld.with_label("cycle", || bld.secret_init(|| a.cycle)),
-            pc: bld.with_label("pc", || bld.secret_init(|| a.pc)),
-            regs: bld.with_label("regs", || {
-                a.regs.iter().enumerate().map(|(i, &x)| {
-                    bld.with_label(i, || bld.secret_init(|| x))
-                }).collect()
-            }),
-            live: bld.with_label("live", || bld.secret_init(|| a.live)),
-            tainted_regs: bld.with_label("tainted_regs", || {
-                a.tainted_regs.map(|v| v.iter().enumerate().map(|(i, &t)| {
-                    bld.with_label(i, || bld.secret_init(|| t))
-                }).collect())
-            }),
+            cycle: bld.secret_init(|| a.cycle),
+            pc: bld.secret_init(|| a.pc),
+            regs: a.regs.iter().map(|&x| bld.secret_init(|| x)).collect(),
+            live: bld.secret_init(|| a.live),
+            tainted_regs: a.tainted_regs.map(|v| v.iter().map(|&t| {
+                bld.secret_init(|| t)
+            }).collect()),
         })
     }
 
     pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
-            cycle: bld.with_label("cycle", || bld.secret_uninit()),
-            pc: bld.with_label("pc", || bld.secret_uninit()),
-            regs: bld.with_label("regs", || (0 .. len).map(|i| {
-                bld.with_label(i, || bld.secret_uninit())
+            cycle: bld.secret_uninit(),
+            pc: bld.secret_uninit(),
+            regs: (0 .. len).map(|_| {
+                bld.secret_uninit()
+            }).collect(),
+            live: bld.secret_uninit(),
+            tainted_regs: IfMode::new(|_| (0 .. len).map(|_| {
+                bld.secret_uninit()
             }).collect()),
-            live: bld.with_label("live", || bld.secret_uninit()),
-            tainted_regs: IfMode::new(|_| bld.with_label("tainted_regs", || (0 .. len).map(|i| {
-                bld.with_label(i, || bld.secret_uninit())
-            }).collect())),
         })
     }
 
@@ -838,12 +832,12 @@ impl<'a> Lit<'a> for MemPort {
 impl<'a> Secret<'a> for MemPort {
     fn secret(bld: &Builder<'a>) -> Self::Repr {
         MemPortRepr {
-            cycle: bld.with_label("cycle", || bld.secret_uninit()),
-            addr: bld.with_label("addr", || bld.secret_uninit()),
-            value: bld.with_label("value", || bld.secret_uninit()),
-            op: bld.with_label("op", || bld.secret_uninit()),
-            width: bld.with_label("width", || bld.secret_uninit()),
-            tainted: bld.with_label("tainted", || bld.secret_uninit()),
+            cycle: bld.secret_uninit(),
+            addr: bld.secret_uninit(),
+            value: bld.secret_uninit(),
+            op: bld.secret_uninit(),
+            width: bld.secret_uninit(),
+            tainted: bld.secret_uninit(),
         }
     }
 
@@ -1098,9 +1092,9 @@ impl<'a> Lit<'a> for FetchPort {
 impl<'a> Secret<'a> for FetchPort {
     fn secret(bld: &Builder<'a>) -> Self::Repr {
         FetchPortRepr {
-            addr: bld.with_label("addr", || bld.secret_uninit()),
-            instr: bld.with_label("instr", || bld.secret_uninit()),
-            write: bld.with_label("write", || bld.secret_uninit()),
+            addr: bld.secret_uninit(),
+            instr: bld.secret_uninit(),
+            write: bld.secret_uninit(),
         }
     }
 
@@ -1424,6 +1418,14 @@ impl Segment {
             }
         }
         None
+    }
+
+    pub fn desc(&self) -> &'static str {
+        if self.init_pc().is_some() {
+            "public"
+        } else {
+            "secret"
+        }
     }
 }
 

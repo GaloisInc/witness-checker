@@ -53,7 +53,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
         let cx = self.cx;
         let b = self.b;
         let ev = &mut self.ev;
-        let _g = b.scoped_label(format_args!("seg {}", idx));
+        let _g = b.scoped_label(format_args!("trace/{}", s.desc()));
 
         let mut mem_ports: mem::CyclePorts;
         let fetch_ports: Option<fetch::CyclePorts>;
@@ -100,7 +100,7 @@ impl<'a, 'b> SegmentBuilder<'a, 'b> {
             if let Some(init_pc) = s.init_pc() {
                 let pc = init_pc + i as u64;
                 let instr_val = self.prog[pc as usize];
-                instr = b.with_label(format_args!("instr {}", pc), || b.lit(instr_val));
+                instr = b.lit(instr_val);
             } else {
                 let fp = fetch_ports.as_ref().unwrap().get(i);
                 {
@@ -168,6 +168,7 @@ impl<'a> Segment<'a> {
         states: &[RamState],
         advice: &HashMap<u64, Vec<Advice>>,
     ) {
+        let _g = b.scoped_label("trace");
         assert_eq!(states.len(), self.len);
         let states_iter = iter::once(init_state).chain(states.iter()).take(self.len);
         for (i, state) in states_iter.enumerate() {
@@ -211,6 +212,7 @@ impl<'a> Segment<'a> {
         check_steps: usize,
         states: &[RamState],
     ) {
+        let _g = b.scoped_label("trace");
         assert_eq!(states.len(), self.len);
         let mut did_final = false;
         if check_steps > 0 {
@@ -264,7 +266,7 @@ fn calc_step<'a>(
     s1: &TWire<'a, RamState>,
     kmem: &mut KnownMem<'a>,
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
-    let _g = b.scoped_label(format_args!("calc_step/cycle {}", idx));
+    let _g = b.scoped_label("calc_step");
 
     let opcode = ev.eval_typed(instr.opcode).and_then(Opcode::from_raw);
 
@@ -480,7 +482,7 @@ fn check_state<'a>(
     calc_s: &TWire<'a, RamState>,
     trace_s: &TWire<'a, RamState>,
 ) {
-    let _g = b.scoped_label(format_args!("check_state/{}", cycle));
+    let _g = b.scoped_label("check_state");
 
     for (i, (&v_calc, &v_new)) in calc_s.regs.iter().zip(trace_s.regs.iter()).enumerate() {
         wire_assert!(
@@ -521,7 +523,7 @@ fn check_step<'a>(
     mem_port: TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
-    let _g = b.scoped_label(format_args!("check_step/{},{}", seg_idx, idx));
+    let _g = b.scoped_label("check_step");
 
     let x = calc_im.x;
     let y = calc_im.y;
