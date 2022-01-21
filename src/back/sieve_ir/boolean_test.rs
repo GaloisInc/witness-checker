@@ -1,7 +1,10 @@
 use super::boolean::{AllocatedBit, Boolean};
 
 use zki_sieve::producers::sink::MemorySink;
-use zki_sieve::{consumers::evaluator::Evaluator, Source};
+use zki_sieve::{
+    consumers::evaluator::{Evaluator, PlaintextBackend},
+    Source,
+};
 use zki_sieve::{Result, Sink};
 
 use crate::back::sieve_ir::field::QuarkScalar;
@@ -15,10 +18,11 @@ fn new_builder() -> IRBuilder<MemorySink> {
     IRBuilder::new::<QuarkScalar>(MemorySink::default())
 }
 
-fn evaluate(b: IRBuilder<MemorySink>) -> Evaluator {
+fn evaluate(b: IRBuilder<MemorySink>) -> Evaluator<PlaintextBackend> {
     let sink = b.finish();
     let source: Source = sink.into();
-    Evaluator::from_messages(source.iter_messages())
+    let mut backend = PlaintextBackend::default();
+    Evaluator::from_messages(source.iter_messages(), &mut backend)
 }
 
 pub fn u64_into_boolean_vec_le(
