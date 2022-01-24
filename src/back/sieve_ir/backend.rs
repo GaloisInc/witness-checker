@@ -470,7 +470,7 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     use super::field::_scalar_from_unsigned;
     use super::ir_builder::IRBuilder;
     use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
-    use zki_sieve::consumers::evaluator::Evaluator;
+    use zki_sieve::consumers::evaluator::{Evaluator, PlaintextBackend};
     use zki_sieve::producers::sink::MemorySink;
     use zki_sieve::Source;
 
@@ -534,7 +534,8 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     ir_builder.dedup.as_ref().map(|p| p.print_report());
     let sink = ir_builder.finish();
     let source: Source = sink.into();
-    let evaluator = Evaluator::from_messages(source.iter_messages());
+    let mut backend = PlaintextBackend::default();
+    let evaluator = Evaluator::from_messages(source.iter_messages(), &mut backend);
     assert_eq!(evaluator.get_violations(), Vec::<String>::new());
 
     Ok(())
