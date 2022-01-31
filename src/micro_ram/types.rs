@@ -207,7 +207,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; num_regs],
             live: false,
-            tainted_regs: IfMode::new(|_| vec![WORD_UNTAINTED; num_regs]),
+            tainted_regs: IfMode::new(|_| vec![WORD_BOTTOM; num_regs]),
         }
     }
 }
@@ -301,7 +301,7 @@ impl RamState {
             pc: 0,
             regs: vec![0; len],
             live: false,
-            tainted_regs: IfMode::new(|_| vec![WORD_UNTAINTED; len]),
+            tainted_regs: IfMode::new(|_| vec![WORD_BOTTOM; len]),
         });
         (wire.clone(), TSecretHandle::new(wire, default))
     }
@@ -550,22 +550,24 @@ pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
 /// Labels are used to taint registers and memory ports.
 /// Currently, labels only use the lower two bits. See the
-/// [MicroRAM](https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/blob/cec7edad98ccacb68708777a610900703b1568a9/src/Compiler/Tainted.hs#L11)
+/// [MicroRAM](https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/blob/dc22141c/src/Compiler/Tainted.hs#L27)
 /// implementation for lattice details.
 #[derive(Copy, Clone, Debug, Deserialize, Migrate)]
 pub struct Label (
     #[serde(deserialize_with = "validate_label")]
     pub u8,
 );
-pub const UNTAINTED: Label = Label(3);
-pub const WORD_UNTAINTED: WordLabel = [UNTAINTED;WORD_BYTES];
+pub const BOTTOM: Label = Label(3);
+pub const WORD_BOTTOM: WordLabel = [BOTTOM;WORD_BYTES];
+pub const MAYBE_TAINTED: Label = Label(2);
+pub const WORD_MAYBE_TAINTED: WordLabel = [MAYBE_TAINTED;WORD_BYTES];
 pub const LABEL_BITS: u8 = 2;
 
 /// Packed label representing 8 labels of the bytes of a word.
 pub type WordLabel = [Label; WORD_BYTES];
 
 pub fn valid_label(l:u8) -> bool {
-    l <= UNTAINTED.0
+    l <= BOTTOM.0
 }
 
 fn validate_label<'de, D>(d: D) -> Result<u8, D::Error>
@@ -700,7 +702,7 @@ impl Default for MemPort {
             value:   u64::default(),
             op:      MemOpKind::default(),
             width:   MemOpWidth::default(),
-            tainted: IfMode::new(|_pf| WORD_UNTAINTED),
+            tainted: IfMode::new(|_pf| WORD_BOTTOM),
         }
     }
 }
@@ -1493,8 +1495,9 @@ pub struct TraceChunkDebug {
 
 pub struct TaintCalcIntermediate<'a> {
     pub label_x: TWire<'a,WordLabel>,      // Tainted label for x.
+    pub label_y_joined: TWire<'a,Label>,   // Joined labels for y.
     pub label_result: TWire<'a,WordLabel>, // Tainted label for result.
-    pub addr_offset: TWire<'a,ByteOffset>,   // Offset of memory address.
+    pub addr_offset: TWire<'a,ByteOffset>, // Offset of memory address.
 }
 
 pub struct CalcIntermediate<'a> {

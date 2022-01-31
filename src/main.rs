@@ -20,7 +20,7 @@ use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::exec::ExecBuilder;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::mem::EquivSegments;
-use cheesecloth::micro_ram::types::{VersionedMultiExec, RamState, Segment, TraceChunk, WORD_UNTAINTED};
+use cheesecloth::micro_ram::types::{VersionedMultiExec, RamState, Segment, TraceChunk, WORD_BOTTOM};
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -221,7 +221,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
                 .filter(|ms| ms.heap_init == false)
                 .map(|ms| ms.start + ms.len)
                 .max().unwrap_or(0);
-            let tainted_regs = IfMode::new(|_| vec![WORD_UNTAINTED; exec.params.num_regs]);
+            let tainted_regs = IfMode::new(|_| vec![WORD_BOTTOM; exec.params.num_regs]);
             RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
         });
         if provided_init_state.is_some() {

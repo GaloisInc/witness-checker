@@ -447,7 +447,7 @@ fn calc_step<'a>(
         regs.push(b.mux(is_dest, result, v_old));
     }
 
-    let (tainted_regs, tainted_im) = tainted::calc_step(cx, b, idx, instr, mem_port, &s1.tainted_regs, y, dest);
+    let (tainted_regs, tainted_im) = tainted::calc_step(cx, b, idx, instr, mem_port, &s1.tainted_regs, x, y, dest);
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));

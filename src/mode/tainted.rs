@@ -3,7 +3,7 @@ use crate::gadget::bit_pack;
 use crate::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
-    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, WORD_UNTAINTED, WordLabel, RamInstr, TaintCalcIntermediate, UNTAINTED, WORD_BYTES}
+    types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, WORD_BOTTOM, WordLabel, RamInstr, TaintCalcIntermediate, BOTTOM, MAYBE_TAINTED, WORD_BYTES, WORD_MAYBE_TAINTED}
 };
 use crate::mode::if_mode::{check_mode, self, IfMode, AnyTainted};
 use crate::{wire_assert, wire_bug_if};
@@ -16,6 +16,7 @@ pub fn calc_step<'a>(
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
     regs0: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    concrete_x: TWire<'a, u64>,
     concrete_y: TWire<'a, u64>,
     concrete_dest: TWire<'a, u8>,
 ) -> (IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
@@ -34,15 +35,55 @@ pub fn calc_step<'a>(
         let tx = b.index(&regs0, instr.op1, |b, i| b.lit(i as u8));
         // If y is an immediate, set ty to WORD_UNTAINTED.
         let reg_val = b.index(&regs0, instr.op2, |b, i| b.lit(i as u64));
-        let ty = b.mux(instr.imm, b.lit(WORD_UNTAINTED), reg_val);
+        let ty = b.mux(instr.imm, b.lit(WORD_BOTTOM), reg_val);
+
+        let tx_joined = fold1_join_vec(b, tx);
+        let ty_joined = fold1_join_vec(b, ty);
 
         {
             add_case(Opcode::Mov, ty);
         }
 
         {
+            // Extract the dest's previous tainted labels.
+            let tdest = b.index(&regs0, instr.dest, |b, i| b.lit(i as u8));
+
+            // Recheck the conditional.
+            let tbranch = b.mux(b.neq_zero(concrete_x), ty, tdest);
+
+            // Join the conditional label with the branch's label.
+            let t = map_join_vec(b, tx_joined, tbranch);
+
             // Reuse concrete computed dest.
-            add_case(Opcode::Cmov, ty);
+            add_case(Opcode::Cmov, t);
+        }
+
+        {
+            add_case(Opcode::Not, approx(b, ty_joined));
+        }
+
+        {
+            let is_jmp = b.eq(instr.opcode, b.lit(Opcode::Jmp as u8));
+            let is_cjmp  = b.eq(instr.opcode, b.lit(Opcode::Cjmp as u8));
+            let is_cnjmp  = b.eq(instr.opcode, b.lit(Opcode::Cnjmp as u8));
+
+            // Assert that we're not jumping to a tainted location.
+            cx.when(b, b.or(b.or(is_jmp, is_cjmp), is_cnjmp), |cx| {
+                wire_assert!(
+                    cx, b.eq(ty_joined, b.lit(BOTTOM)),
+                    "Invalid jump. Cannot jump to tainted destination {} with label {} at cycle {}",
+                    cx.eval(concrete_y), cx.eval(ty_joined), idx,
+                );
+            });
+
+            // Assert that the conditional is not tainted.
+            cx.when(b, b.or(is_cjmp, is_cnjmp), |cx| {
+                wire_assert!(
+                    cx, b.eq(tx_joined, b.lit(BOTTOM)),
+                    "Invalid jump. Cannot branch on tainted data with label {} at cycle {}",
+                    cx.eval(tx_joined), idx,
+                );
+            });
         }
 
         let offset = bit_pack::extract_low::<ByteOffset>(b, mem_port.addr.repr);
@@ -50,7 +91,9 @@ pub fn calc_step<'a>(
         // Load1, Load2, Load4, Load8
         for w in MemOpWidth::iter() {
             let packed_labels = mem_port.tainted.unwrap(&pf);
-            let result = take_width_at_offset(b, packed_labels, offset, w, UNTAINTED);
+            let labels = take_width_at_offset(b, packed_labels, offset, w, BOTTOM);
+            // Check if the address is tainted.
+            let result = check_vec(b, ty_joined, labels);
             add_case(w.load_opcode(), result);
         }
 
@@ -63,13 +106,14 @@ pub fn calc_step<'a>(
             });
             // Taint1, Taint2, Taint4, Taint8
             for w in MemOpWidth::iter() {
-                let labels = duplicate(b, label, w, UNTAINTED);
+                let labels = duplicate(b, label, w, BOTTOM);
                 add_case(w.taint_opcode(), labels);
             }
         }
 
-        // Fall through to mark destination as untainted.
-        let result = b.mux_multi(&cases, b.lit(WORD_UNTAINTED));
+        // Fall through to the binop case since that is the most common.
+        let binop_label = approx2(b, tx_joined, ty_joined);
+        let result = b.mux_multi(&cases, binop_label);
 
         let mut regs = Vec::with_capacity(regs0.len());
         for (i, &v_old) in regs0.iter().enumerate() {
@@ -79,6 +123,7 @@ pub fn calc_step<'a>(
 
         let timm = TaintCalcIntermediate {
             label_x: tx,
+            label_y_joined: ty_joined,
             label_result: result,
             addr_offset: offset,
         };
@@ -87,6 +132,58 @@ pub fn calc_step<'a>(
         // JP: Better combinator for this? map_with_or?
         (IfMode::none(), IfMode::none())
     }
+}
+
+fn join<'a>(
+    b: &Builder<'a>,
+    label1: TWire<'a,Label>,
+    label2: TWire<'a,Label>,
+) -> TWire<'a,Label> {
+    let mt = b.lit(MAYBE_TAINTED);
+    let bottom = b.lit(BOTTOM);
+
+    let is_mt = b.or(b.eq(label1, mt), b.eq(label2, mt));
+    let cases = [
+        (is_mt, mt),
+        (b.eq(label1, bottom), label2),
+        (b.eq(label2, bottom), label1),
+        (b.eq(label1, label2), label1),
+    ];
+    let cases: Vec<_> = cases.iter().map(|x| TWire::<_>::new(*x)).collect();
+
+    b.mux_multi(&cases, mt)
+}
+
+fn map_join_vec<'a>(
+    b: &Builder<'a>,
+    label: TWire<'a,Label>,
+    labels: TWire<'a,WordLabel>,
+) -> TWire<'a,WordLabel> {
+    let mut res = [b.lit(BOTTOM); WORD_BYTES];
+    for (idx, res) in res.iter_mut().enumerate() {
+        *res = join(b, label, labels[idx]);
+    }
+
+    TWire::new(res)
+}
+
+fn fold1_join_vec<'a>(
+    b: &Builder<'a>,
+    labels: TWire<'a,WordLabel>,
+) -> TWire<'a,Label> {
+    let mut res = labels[0];
+    for l in labels.iter() {
+        *res = *join(b, res, *l);
+    }
+    res
+}
+
+fn check_vec<'a>(
+    b: &Builder<'a>,
+    guard: TWire<'a,Label>,
+    labels: TWire<'a,WordLabel>,
+) -> TWire<'a,WordLabel> {
+    b.mux(b.eq(guard, b.lit(BOTTOM)), labels, b.lit(WORD_MAYBE_TAINTED))
 }
 
 fn is_taint<'a>(
@@ -134,6 +231,25 @@ fn duplicate<'a>(
         }
     }
     TWire::new(res)
+}
+
+fn approx<'a>(
+    b: &Builder<'a>,
+    label: TWire<'a, Label>,
+) -> TWire<'a, WordLabel> {
+    let bottom = b.lit(BOTTOM);
+    let l = b.mux(b.eq(label, bottom), bottom, b.lit(MAYBE_TAINTED));
+    duplicate(b, l, MemOpWidth::W8, BOTTOM)
+}
+
+fn approx2<'a>(
+    b: &Builder<'a>,
+    label1: TWire<'a, Label>,
+    label2: TWire<'a, Label>,
+) -> TWire<'a, WordLabel> {
+    let bottom = b.lit(BOTTOM);
+    let l = b.mux(b.and(b.eq(label1, bottom), b.eq(label2, bottom)), bottom, b.lit(MAYBE_TAINTED));
+    duplicate(b, l, MemOpWidth::W8, BOTTOM)
 }
 
 // Take `width` elements starting at the given offset. Fills the remaining elements with `default`.
@@ -257,9 +373,9 @@ pub fn check_first<'a>(
     if let Some(init_regs) = init_regs.try_get() {
         for (i, &r) in init_regs.iter().enumerate() {
             wire_assert!(
-                cx, b.eq(r, b.lit(WORD_UNTAINTED)),
+                cx, b.eq(r, b.lit(WORD_BOTTOM)),
                 "initial tainted r{} has value {:?} (expected {:?})",
-                i, cx.eval(r), WORD_UNTAINTED,
+                i, cx.eval(r), WORD_BOTTOM,
             );
         }
     }
@@ -287,9 +403,10 @@ pub fn check_step<'a>(
                     if i < w.bytes() {
 
                         // A leak is detected if the label of data being output to a sink does not match the label of
-                        // the sink.
+                        // the sink. Equivalent to `not . canFlowTo`.
+                        let mt = b.lit(MAYBE_TAINTED);
                         wire_bug_if!(
-                            cx, b.and(b.ne(xt, y),b.ne(xt, b.lit(UNTAINTED))),
+                            cx, b.and(b.and(b.ne(xt, y), b.ne(xt, b.lit(BOTTOM))), b.and(b.ne(xt, mt), b.ne(y, mt))),
                             "leak of tainted data from register {:x} (byte {}) with label {} does not match output channel label {} on cycle {},{}",
                             cx.eval(instr.op1), i, cx.eval(xt), cx.eval(y), seg_idx, idx,
                         );
@@ -313,13 +430,13 @@ pub fn check_step_mem<'a, 'b>(
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
         cx.when(b, *is_store_like, |cx| {
-            let TaintCalcIntermediate{label_x: x_taint, label_result: _result_taint, addr_offset: offset} = imm.get(&pf);
-            let expect_tainted = *x_taint;
+            let TaintCalcIntermediate{label_x: x_taint, label_y_joined: ty_joined, label_result: _result_taint, addr_offset: offset} = imm.get(&pf);
+            let expect_tainted = check_vec(b, *ty_joined, *x_taint);
             let offset = *offset;
             let port_tainted = mem_port.tainted.unwrap(&pf);
 
             // Shift position by offset.
-            let port_shifted = shift_labels(b, port_tainted, offset, UNTAINTED);
+            let port_shifted = shift_labels(b, port_tainted, offset, BOTTOM);
 
             let op = mem_port.op;
             let width = mem_port.width;
