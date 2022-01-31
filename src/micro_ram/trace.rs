@@ -414,21 +414,18 @@ fn calc_step<'a>(
 
     if is_mode::<AnyTainted>() {
         // Opcode::Sink is a no-op in the standard interpreter.
-        for w in MemOpWidth::iter() {
-            case!(w.sink_opcode(), {
-                dest = b.lit(REG_NONE);
-                b.lit(0)
-            });
-        }
+        case!(Opcode::Sink1, {
+            dest = b.lit(REG_NONE);
+            b.lit(0)
+        });
+
         // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
         // later taint handling step. We set the value back to itself so that taint operations are treated
         // like `mov rX rX`.
-        for w in MemOpWidth::iter() {
-            case!(w.taint_opcode(), {
-                dest = instr.op1;
-                x
-            });
-        }
+        case!(Opcode::Taint1, {
+            dest = instr.op1;
+            x
+        });
     }
 
     let (result, dest) = if opcode.is_some() {

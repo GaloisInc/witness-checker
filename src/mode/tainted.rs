@@ -44,10 +44,10 @@ pub fn calc_step<'a>(
             add_case(Opcode::Mov, ty);
         }
 
-        {
-            // Extract the dest's previous tainted labels.
-            let tdest = b.index(&regs0, instr.dest, |b, i| b.lit(i as u8));
+        // Extract the dest's previous tainted labels.
+        let tdest = b.index(&regs0, instr.dest, |b, i| b.lit(i as u8));
 
+        {
             // Recheck the conditional.
             let tbranch = b.mux(b.neq_zero(concrete_x), ty, tdest);
 
@@ -104,11 +104,11 @@ pub fn calc_step<'a>(
             let label = cx.when(b, is_taint(b, instr.opcode), |cx| {
                 convert_to_label(cx, b, idx, concrete_y)
             });
-            // Taint1, Taint2, Taint4, Taint8
-            for w in MemOpWidth::iter() {
-                let labels = duplicate(b, label, w, BOTTOM);
-                add_case(w.taint_opcode(), labels);
-            }
+
+            // Taint1
+            let mut labels = tdest.clone();
+            labels[0] = label;
+            add_case(Opcode::Taint1, labels);
         }
 
         // Fall through to the binop case since that is the most common.
@@ -190,11 +190,7 @@ fn is_taint<'a>(
     b: &Builder<'a>,
     opcode: TWire<'a,u8>,
 ) -> TWire<'a, bool> {
-    b.or(b.or(b.eq(opcode, b.lit(Opcode::Taint1 as u8)),
-              b.eq(opcode, b.lit(Opcode::Taint2 as u8))),
-         b.or(b.eq(opcode, b.lit(Opcode::Taint4 as u8)),
-              b.eq(opcode, b.lit(Opcode::Taint8 as u8))),
-        )
+    b.eq(opcode, b.lit(Opcode::Taint1 as u8))
 }
 
 fn convert_to_label<'a,'b>(
@@ -391,29 +387,28 @@ pub fn check_step<'a>(
 ) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         // Sink1, Sink2, Sink4, Sink8
-        for w in MemOpWidth::iter() {
-            cx.when(b, b.eq(instr.opcode, b.lit(w.sink_opcode() as u8)), |cx| {
-                let y = convert_to_label(cx, b, idx, calc_im.y);
-                let xts = calc_im.tainted.as_ref().unwrap(&pf).label_x;
+        let w = MemOpWidth::W1;
+        cx.when(b, b.eq(instr.opcode, b.lit(Opcode::Sink1 as u8)), |cx| {
+            let y = convert_to_label(cx, b, idx, calc_im.y);
+            let xts = calc_im.tainted.as_ref().unwrap(&pf).label_x;
 
-                // Iterate over labels of xts.
-                for (i, &xt) in xts.repr.iter().enumerate() {
+            // Iterate over labels of xts.
+            for (i, &xt) in xts.repr.iter().enumerate() {
 
-                    // When the position is relevant, check for sink.
-                    if i < w.bytes() {
+                // When the position is relevant, check for sink.
+                if i < w.bytes() {
 
-                        // A leak is detected if the label of data being output to a sink does not match the label of
-                        // the sink. Equivalent to `not . canFlowTo`.
-                        let mt = b.lit(MAYBE_TAINTED);
-                        wire_bug_if!(
-                            cx, b.and(b.and(b.ne(xt, y), b.ne(xt, b.lit(BOTTOM))), b.and(b.ne(xt, mt), b.ne(y, mt))),
-                            "leak of tainted data from register {:x} (byte {}) with label {} does not match output channel label {} on cycle {},{}",
-                            cx.eval(instr.op1), i, cx.eval(xt), cx.eval(y), seg_idx, idx,
-                        );
-                    }
+                    // A leak is detected if the label of data being output to a sink does not match the label of
+                    // the sink. Equivalent to `not . canFlowTo`.
+                    let mt = b.lit(MAYBE_TAINTED);
+                    wire_bug_if!(
+                        cx, b.and(b.and(b.ne(xt, y), b.ne(xt, b.lit(BOTTOM))), b.and(b.ne(xt, mt), b.ne(y, mt))),
+                        "leak of tainted data from register {:x} (byte {}) with label {} does not match output channel label {} on cycle {},{}",
+                        cx.eval(instr.op1), i, cx.eval(xt), cx.eval(y), seg_idx, idx,
+                    );
                 }
-            });
-        }
+            }
+        });
     }
 }
 

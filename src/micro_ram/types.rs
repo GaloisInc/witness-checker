@@ -516,15 +516,9 @@ mk_named_enum! {
         /// The destination is unused, first argument is the value being output, and the second is the label of the output
         /// channel.
         Sink1 = 35,
-        Sink2 = 36,
-        Sink4 = 37,
-        Sink8 = 38,
         /// Instructions used for taint analysis that taints a value is with a given label.
         /// The destination is unused, the first argument is the register being tainted, and the second is the label.
         Taint1 = 39,
-        Taint2 = 40,
-        Taint4 = 41,
-        Taint8 = 42,
 
         /// Fake instruction that does nothing and doesn't advace the PC.  `Advice::Stutter` causes
         /// this instruction to be used in place of the one that was fetched.
@@ -778,24 +772,6 @@ impl MemOpWidth {
             MemOpWidth::W2 => Opcode::Store2,
             MemOpWidth::W4 => Opcode::Store4,
             MemOpWidth::W8 => Opcode::Store8,
-        }
-    }
-
-    pub const fn taint_opcode(self) -> Opcode {
-        match self {
-            MemOpWidth::W1 => Opcode::Taint1,
-            MemOpWidth::W2 => Opcode::Taint2,
-            MemOpWidth::W4 => Opcode::Taint4,
-            MemOpWidth::W8 => Opcode::Taint8,
-        }
-    }
-
-    pub const fn sink_opcode(self) -> Opcode {
-        match self {
-            MemOpWidth::W1 => Opcode::Sink1,
-            MemOpWidth::W2 => Opcode::Sink2,
-            MemOpWidth::W4 => Opcode::Sink4,
-            MemOpWidth::W8 => Opcode::Sink8,
         }
     }
 }
