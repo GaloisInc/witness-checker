@@ -4,7 +4,7 @@
 -
   program:
     - [taint8, null, 0, true, 1] # taint r0 1
-    - [sink8,  null, 0, true, 2] # sink r0 2
+    - [sink8,  null, 0, true, 0] # sink r0 0
   
   params:
     num_regs: 1

@@ -8,7 +8,7 @@
     - [taint4, null, 0, true, 1] # taint r0 1
     - [store8, null, 0, true, 0x100000000] # store [0x100000000] r0
     - [load8,  1, null, true, 0x100000000] # load r1 [0x100000000]
-    - [sink4,  null, 1, true, 2] # sink r1 2
+    - [sink4,  null, 1, true, 0] # sink r1 0
   
   init_mem:
     - start: 2
