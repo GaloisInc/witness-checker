@@ -1,5 +1,2 @@
-found bug: leak of tainted data from register 1 (byte 0) with label 1 does not match output channel label 2 on cycle 0,3
-found bug: leak of tainted data from register 1 (byte 1) with label 1 does not match output channel label 2 on cycle 0,3
-found bug: leak of tainted data from register 1 (byte 2) with label 1 does not match output channel label 2 on cycle 0,3
-found bug: leak of tainted data from register 1 (byte 3) with label 1 does not match output channel label 2 on cycle 0,3
-internal evaluator: 160 asserts passed, 0 failed; found 4 bugs; overall status: GOOD
+found bug: leak of tainted data from register 1 (byte 0) with label 1 does not match output channel label 0 on cycle 0,3
+internal evaluator: 156 asserts passed, 0 failed; found 1 bugs; overall status: GOOD
