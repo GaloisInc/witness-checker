@@ -26,7 +26,7 @@ use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
 use crate::eval;
-use crate::ir::migrate::{self, Migrate};
+use crate::ir::migrate::{self, Migrate, Visitor as _};
 
 
 // CircuitBase layer
@@ -52,6 +52,7 @@ pub struct CircuitBase<'a> {
 
     current_label: Cell<&'a str>,
     is_prover: bool,
+    functions: RefCell<HashMap<&'a str, FunctionDef<'a>>>,
 }
 
 impl<'a> CircuitBase<'a> {
@@ -67,6 +68,7 @@ impl<'a> CircuitBase<'a> {
             intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
             is_prover,
+            functions: RefCell::new(HashMap::new()),
         };
         c.preload_common_types();
         c.preload_common_bits();
@@ -338,6 +340,7 @@ impl<'a> CircuitBase<'a> {
             ref intern_gadget_kind, ref intern_str, ref intern_bits,
             ref current_label,
             is_prover: _,
+            functions: _,
         } = *self;
 
         let old_arenas = arenas.take();
@@ -877,6 +880,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let old_arenas = self.as_base().pre_migrate();
         let mut v = MigrateVisitor::new(self.as_base());
 
+        let functions = mem::take(&mut *self.as_base().functions.borrow_mut()).into_iter()
+            .map(|(name, fd)| (v.new_circuit().intern_str(name), v.visit(fd)))
+            .collect();
+        *self.as_base().functions.borrow_mut() = functions;
         self.migrate_filter(&mut v);
         let r = f(&mut v);
 
@@ -914,6 +921,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
         let mut v = EraseVisitor::new(self.as_base());
 
+        // Don't erase inside `self.functions`.
         self.erase_filter(&mut v);
         let r = f(&mut v);
 
@@ -2209,6 +2217,29 @@ impl Eq for HashDynGadgetKind<'_> {}
 impl Hash for HashDynGadgetKind<'_> {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.0.hash_dyn(h)
+    }
+}
+
+
+pub struct FunctionDef<'a> {
+    /// The argument types of this function.  If the function body contains an `Argument(i)` gate,
+    /// the type of that gate is `arg_tys[i]`.
+    pub arg_tys: &'a [Ty<'a>],
+    /// The outputs of the function body.  These will typically depend in some way on the
+    /// function's `Argument` gates.
+    pub result_wires: &'a [Wire<'a>],
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
+    type Output = FunctionDef<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> FunctionDef<'b> {
+        let arg_tys = self.arg_tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
+        let result_wires = self.result_wires.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        FunctionDef {
+            arg_tys: v.new_circuit().intern_ty_list(&arg_tys),
+            result_wires: v.new_circuit().intern_wire_list(&result_wires),
+        }
     }
 }
 
