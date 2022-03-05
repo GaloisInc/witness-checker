@@ -52,7 +52,7 @@ pub struct CircuitBase<'a> {
 
     current_label: Cell<&'a str>,
     is_prover: bool,
-    functions: RefCell<HashMap<&'a str, FunctionDef<'a>>>,
+    functions: RefCell<Vec<Function<'a>>>,
 }
 
 impl<'a> CircuitBase<'a> {
@@ -68,7 +68,7 @@ impl<'a> CircuitBase<'a> {
             intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
             is_prover,
-            functions: RefCell::new(HashMap::new()),
+            functions: RefCell::new(Vec::new()),
         };
         c.preload_common_types();
         c.preload_common_bits();
@@ -881,7 +881,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let mut v = MigrateVisitor::new(self.as_base());
 
         let functions = mem::take(&mut *self.as_base().functions.borrow_mut()).into_iter()
-            .map(|(name, fd)| (v.new_circuit().intern_str(name), v.visit(fd)))
+            .map(|f| v.visit(f))
             .collect();
         *self.as_base().functions.borrow_mut() = functions;
         self.migrate_filter(&mut v);
@@ -965,6 +965,7 @@ pub struct MigrateVisitor<'a, 'b> {
     wire_map: HashMap<Wire<'a>, Wire<'b>>,
     secret_map: HashMap<Secret<'a>, Secret<'b>>,
     erased_map: HashMap<Erased<'a>, Erased<'b>>,
+    function_map: HashMap<Function<'a>, Function<'b>>,
 }
 
 impl<'a, 'b> MigrateVisitor<'a, 'b> {
@@ -977,6 +978,7 @@ impl<'a, 'b> MigrateVisitor<'a, 'b> {
             wire_map: HashMap::new(),
             secret_map: HashMap::new(),
             erased_map: HashMap::new(),
+            function_map: HashMap::new(),
         }
     }
 }
@@ -1013,6 +1015,16 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
 
         let new = Erased(self.new_circuit.arena().alloc(self.visit((*e).clone())));
         self.erased_map.insert(e, new);
+        new
+    }
+
+    fn visit_function(&mut self, f: Function<'a>) -> Function<'b> {
+        if let Some(&new) = self.function_map.get(&f) {
+            return new;
+        }
+
+        let new = Function(self.new_circuit.arena().alloc(self.visit((*f).clone())));
+        self.function_map.insert(f, new);
         new
     }
 
@@ -1088,6 +1100,13 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
 
     fn visit_secret(&mut self, s: Secret<'a>) -> Secret<'a> { s }
     fn visit_erased(&mut self, e: Erased<'a>) -> Erased<'a> { e }
+
+    fn visit_function(&mut self, f: Function<'a>) -> Function<'a> {
+        // Currently, we don't erase any wires inside of function definitions.  Function bodies are
+        // always available.  If this turns out to be unnecessary. we could erase the function's
+        // result wires here.
+        f
+    }
 }
 
 impl<'a> EraseVisitor<'a> {
@@ -2221,13 +2240,18 @@ impl Hash for HashDynGadgetKind<'_> {
 }
 
 
+#[derive(Clone, Debug)]
 pub struct FunctionDef<'a> {
+    pub name: &'a str,
     /// The argument types of this function.  If the function body contains an `Argument(i)` gate,
     /// the type of that gate is `arg_tys[i]`.
     pub arg_tys: &'a [Ty<'a>],
-    /// The outputs of the function body.  These will typically depend in some way on the
-    /// function's `Argument` gates.
-    pub result_wires: &'a [Wire<'a>],
+    /// The types of secrets consumed by this function.
+    pub secret_tys: &'a [Ty<'a>],
+    /// The output of the function body.  This will typically depend in some way on the function's
+    /// `Argument` gates.  For functions that need to return multiple values, this wire can have a
+    /// `Bundle` type.
+    pub result_wire: Wire<'a>,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
@@ -2235,11 +2259,26 @@ impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
 
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> FunctionDef<'b> {
         let arg_tys = self.arg_tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
-        let result_wires = self.result_wires.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let secret_tys = self.secret_tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
         FunctionDef {
+            name: v.new_circuit().intern_str(self.name),
             arg_tys: v.new_circuit().intern_ty_list(&arg_tys),
-            result_wires: v.new_circuit().intern_wire_list(&result_wires),
+            secret_tys: v.new_circuit().intern_ty_list(&secret_tys),
+            result_wire: v.visit(self.result_wire),
         }
+    }
+}
+
+declare_interned_pointer! {
+    #[derive(Debug)]
+    pub struct Function<'a> => FunctionDef<'a>;
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Function<'a> {
+    type Output = Function<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Function<'b> {
+        v.visit_function(self)
     }
 }
 
