@@ -158,6 +158,8 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
 
+            GateKind::Argument(_, _) => unimplemented!("Argument"),
+
             GateKind::Unary(op, arg) => {
                 let aw = self.represent(arg);
 
@@ -422,6 +424,8 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
                     unimplemented!("GADGET {}", gk.name());
                 }
             }
+
+            GateKind::Call(_, _, _) => unimplemented!("Call"),
         };
 
         self.representer.new_repr(repr)

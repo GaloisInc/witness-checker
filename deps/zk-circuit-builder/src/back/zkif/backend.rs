@@ -142,6 +142,8 @@ impl<'a> Backend<'a> {
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
 
+            GateKind::Argument(_, _) => unimplemented!("Argument"),
+
             GateKind::Unary(op, arg) => {
                 let aw = self.wire(arg);
 
@@ -436,6 +438,8 @@ impl<'a> Backend<'a> {
                     unimplemented!("GADGET {}", gk.name());
                 }
             }
+
+            GateKind::Call(_, _, _) => unimplemented!("Call"),
         };
 
         self.representer.new_repr(repr)

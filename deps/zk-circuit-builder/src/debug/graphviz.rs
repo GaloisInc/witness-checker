@@ -51,6 +51,7 @@ pub fn make_graph<'a>(
             GateKind::Lit(_, _) => write!(label, "Lit")?,
             GateKind::Secret(_) => write!(label, "Secret")?,
             GateKind::Erased(e) => write!(label, "Erased {:p}", e)?,
+            GateKind::Argument(i, _) => write!(label, "Argument {}", i)?,
             GateKind::Unary(op, _) => write!(label, "{:?}", op)?,
             GateKind::Binary(op, _, _) => write!(label, "{:?}", op)?,
             GateKind::Shift(op, _, _) => write!(label, "{:?}", op)?,
@@ -60,6 +61,7 @@ pub fn make_graph<'a>(
             GateKind::Pack(_) => write!(label, "Pack")?,
             GateKind::Extract(_, idx) => write!(label, "Extract {}", idx)?,
             GateKind::Gadget(gk, _) => write!(label, "Gadget {}", gk.name())?,
+            GateKind::Call(f, _, _) => write!(label, "Call {}", f.name)?,
         }
         write!(label, " (")?;
         write_ty(&mut label, w.ty)?;
@@ -85,7 +87,8 @@ pub fn make_graph<'a>(
         match w.kind {
             GateKind::Lit(_, _) |
             GateKind::Secret(_) |
-            GateKind::Erased(_) => {},
+            GateKind::Erased(_) |
+            GateKind::Argument(_, _) => {},
             GateKind::Unary(_, a) |
             GateKind::Cast(a, _) |
             GateKind::Extract(a, _) => write_edges(&[a])?,
@@ -94,7 +97,8 @@ pub fn make_graph<'a>(
             GateKind::Compare(_, a, b) => write_edges(&[a, b])?,
             GateKind::Mux(a, b, c) => write_edges(&[a, b, c])?,
             GateKind::Pack(ws) |
-            GateKind::Gadget(_, ws) => write_edges(ws)?,
+            GateKind::Gadget(_, ws) |
+            GateKind::Call(_, ws, _) => write_edges(ws)?,
         }
     }
 

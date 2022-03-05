@@ -270,6 +270,8 @@ pub fn eval_gate<'a>(
 
         GateKind::Erased(e) => convert_gate_value(e.gate_value())?,
 
+        GateKind::Argument(_, _) => panic!("Argument eval NYI"),
+
         GateKind::Unary(op, a) => {
             let (a_val, a_sec) = get_int_value(a)?;
             let val = match op {
@@ -383,6 +385,8 @@ pub fn eval_gate<'a>(
             let bits = v.to_bits(c, ty);
             (bits, sec)
         },
+
+        GateKind::Call(_, _, _) => panic!("Call eval NYI"),
     })
 }
 

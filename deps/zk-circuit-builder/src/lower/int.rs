@@ -207,6 +207,7 @@ pub fn int_to_uint<'a>(
                 return c.new_secret_init(new_ty, || s.val().unwrap());
             }
             GateKind::Erased(_e) => panic!("can't change type of erased gate {:?}", gk),
+            GateKind::Argument(_, _) => panic!("changing type of Argument gate is NYI"),
             GateKind::Unary(_op, _a) => {}
             GateKind::Binary(op, a, b) => match op {
                 // Note `Mul` returns only the lower half of the output, which is unaffected by
@@ -260,6 +261,7 @@ pub fn int_to_uint<'a>(
             // (Gadgets whose output type matches an input should work fine, as all inputs have
             // already been changed to `Uint`.)
             GateKind::Gadget(_, _) => {}
+            GateKind::Call(_, _, _) => panic!("changing type of Call gate is NYI"),
         }
     }
 

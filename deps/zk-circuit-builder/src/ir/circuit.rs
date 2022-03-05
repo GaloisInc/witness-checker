@@ -1198,7 +1198,8 @@ pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
     match w.kind {
         GateKind::Lit(_, _) |
         GateKind::Secret(_) |
-        GateKind::Erased(_) => WireDeps::zero(),
+        GateKind::Erased(_) |
+        GateKind::Argument(_, _) => WireDeps::zero(),
         GateKind::Unary(_, a) |
         GateKind::Cast(a, _) |
         GateKind::Extract(a, _) => WireDeps::one(a),
@@ -1207,7 +1208,8 @@ pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
         GateKind::Compare(_, a, b) => WireDeps::two(a, b),
         GateKind::Mux(c, t, e) => WireDeps::three(c, t, e),
         GateKind::Pack(ws) |
-        GateKind::Gadget(_, ws) => WireDeps::many(ws),
+        GateKind::Gadget(_, ws) |
+        GateKind::Call(_, ws, _) => WireDeps::many(ws),
     }
 }
 
@@ -1621,6 +1623,10 @@ pub enum GateKind<'a> {
     Secret(Secret<'a>),
     /// A gate that has been erased from the in-memory representation of the circuit.
     Erased(Erased<'a>),
+    /// A function argument.  This gate kind should only appear inside function bodies.  `Argument`
+    /// gates are created by the function-definition machinery; they should not be created
+    /// manually.
+    Argument(usize, Ty<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
     Unary(UnOp, Wire<'a>),
     /// Compute a binary operation.  All `BinOp`s have type `T -> T -> T`
@@ -1640,6 +1646,9 @@ pub enum GateKind<'a> {
     /// A custom gadget.
     // TODO: move fields to a struct (this variant is 5 words long)
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
+    /// A function call.  The wires are the arguments to the function, and the secrets are the
+    /// secret values consumed by the function.
+    Call(Function<'a>, &'a [Wire<'a>], &'a [Secret<'a>]),
 }
 
 impl<'a> Gate<'a> {
@@ -1654,6 +1663,7 @@ impl<'a> GateKind<'a> {
             GateKind::Lit(_, ty) => ty,
             GateKind::Secret(s) => s.ty,
             GateKind::Erased(e) => e.ty,
+            GateKind::Argument(_, ty) => ty,
             GateKind::Unary(_, w) => w.ty,
             GateKind::Binary(_, w, _) => w.ty,
             GateKind::Shift(_, w, _) => w.ty,
@@ -1669,6 +1679,7 @@ impl<'a> GateKind<'a> {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
                 k.typecheck(c.as_base(), &tys)
             },
+            GateKind::Call(f, _, _) => f.result_wire.ty,
         }
     }
 
@@ -1702,6 +1713,7 @@ impl<'a> GateKind<'a> {
             Lit(_, _) => "Lit",
             Secret(_) => "Secret",
             Erased(_) => "Erased",
+            Argument(_, _) => "Argument",
             Unary(op, _) => match op {
                 Not => "Not",
                 Neg => "Neg",
@@ -1730,6 +1742,7 @@ impl<'a> GateKind<'a> {
             Pack(_) => "Pack",
             Extract(_, _) => "Extract",
             Gadget(_, _) => "Gadget",
+            Call(_, _, _) => "Call",
         }
     }
 }
@@ -1776,6 +1789,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
             Lit(bits, ty) => Lit(v.visit(bits), v.visit(ty)),
             Secret(s) => Secret(v.visit(s)),
             Erased(e) => Erased(v.visit(e)),
+            Argument(idx, ty) => Argument(idx, v.visit(ty)),
             Unary(op, a) => Unary(op, v.visit(a)),
             Binary(op, a, b) => Binary(op, v.visit(a), v.visit(b)),
             Shift(op, a, b) => Shift(op, v.visit(a), v.visit(b)),
@@ -1792,6 +1806,14 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
                 let ws = v.new_circuit().intern_wire_list(&ws);
                 Gadget(gk, ws)
+            },
+            Call(f, ws, ss) => {
+                let f = v.visit(f);
+                let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+                let ws = v.new_circuit().intern_wire_list(&ws);
+                let ss = ss.iter().map(|&s| v.visit(s)).collect::<Vec<_>>();
+                let ss = v.new_circuit().arena().alloc_slice_copy(&ss);
+                Call(f, ws, ss)
             },
         }
     }
