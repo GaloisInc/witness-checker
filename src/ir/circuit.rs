@@ -1011,6 +1011,15 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
 pub struct EraseVisitor<'a> {
     circuit: &'a CircuitBase<'a>,
     erased_map: HashMap<Wire<'a>, Wire<'a>>,
+    /// Keep track of the order in which we visit wires so that the backend can visit in a
+    /// deterministic order.
+    ///
+    /// Merely changing `erased_map` to a `BTreeMap` is not sufficient for determinism.  Iterating
+    /// over a `BTreeMap` would give the wires in pointer order, but pointer order is not
+    /// deterministic.  When the arena `mmap`s a block of memory to use for allocations, the kernel
+    /// may place that block at any unused address, and that choice affects the ordering of
+    /// pointers.
+    erased_order: Vec<(Wire<'a>, Wire<'a>)>,
 }
 
 impl<'a> EraseVisitor<'a> {
@@ -1020,6 +1029,7 @@ impl<'a> EraseVisitor<'a> {
         EraseVisitor {
             circuit,
             erased_map: HashMap::new(),
+            erased_order: Vec::new(),
         }
     }
 }
@@ -1058,6 +1068,7 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
         let ed = self.circuit.arena().alloc(ErasedData::new(w.ty, bits, secret));
         let e = self.circuit.erased(Erased(ed));
         self.erased_map.insert(w, e);
+        self.erased_order.push((w, e));
         e
     }
 
@@ -1066,8 +1077,8 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
 }
 
 impl<'a> EraseVisitor<'a> {
-    pub fn erased_map(&self) -> &HashMap<Wire<'a>, Wire<'a>> {
-        &self.erased_map
+    pub fn erased(&self) -> &[(Wire<'a>, Wire<'a>)] {
+        &self.erased_order
     }
 }
 
