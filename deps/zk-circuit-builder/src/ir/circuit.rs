@@ -288,9 +288,9 @@ impl<'a> CircuitBase<'a> {
         ty: Ty<'a>,
         default: T,
     ) -> (Wire<'a>, SecretHandle<'a>) {
-        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+        let val = SecretValue::uninit(self.is_prover);
         let default = self.bits(ty, default);
-        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
+        let secret = Secret(self.arena().alloc(SecretData::new(ty, val)));
         let handle = SecretHandle::new(secret, default);
         (self.secret(secret), handle)
     }
@@ -301,21 +301,16 @@ impl<'a> CircuitBase<'a> {
     /// `mk_val` will not be called when running in prover mode.
     fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
     where F: FnOnce() -> T {
-        let val = if self.is_prover {
-            let bits = self.bits(ty, mk_val());
-            Some(SecretValue::with_value(bits))
-        } else {
-            None
-        };
-        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
+        let val = SecretValue::init(self.is_prover, || self.bits(ty, mk_val()));
+        let secret = Secret(self.arena().alloc(SecretData::new(ty, val)));
         self.secret(secret)
     }
 
     /// Create a new uninitialized secret.  When running in prover mode, the secret must be
     /// initialized later using `SecretData::set_from_lit`.
     fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
-        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
+        let val = SecretValue::uninit(self.is_prover);
+        let secret = Secret(self.arena().alloc(SecretData::new(ty, val)));
         self.secret(secret)
     }
 
@@ -1933,75 +1928,164 @@ impl<'a, 'b> Migrate<'a, 'b> for Secret<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Default, Migrate)]
-struct SecretValue<'a>(Cell<Option<Bits<'a>>>);
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Migrate)]
+pub enum SecretValue<'a> {
+    /// The circuit is in prover mode, and the value is initialized.
+    ProverInit(Bits<'a>),
+    /// The circuit is in prover mode, and the value hasn't be initialized yet.
+    ProverUninit,
+    /// The circuit is in verifier mode, so the value will never be initialized.
+    VerifierUninit,
+    /// This secret is inside a function, and its value is taken from one of the function's secret
+    /// inputs.
+    FunctionInput(usize),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PackedSecretValue<'a> {
+    inner: (usize, usize),
+    _marker: PhantomData<Bits<'a>>,
+}
 
 impl<'a> SecretValue<'a> {
-    pub fn with_value(val: Bits<'a>) -> SecretValue<'a> {
-        SecretValue(Cell::new(Some(val)))
-    }
-
-    pub fn set(&self, val: Bits<'a>) {
-        assert!(self.0.get().is_none(), "secret value has already been set");
-        self.0.set(Some(val));
-    }
-
-    pub fn set_default(&self, val: Bits<'a>) {
-        if self.0.get().is_none() {
-            self.0.set(Some(val));
+    /// Produce either `ProverUninit` or `VerifierUninit`, depending on the value of `is_prover`.
+    pub fn uninit(is_prover: bool) -> SecretValue<'a> {
+        if is_prover {
+            SecretValue::ProverUninit
+        } else {
+            SecretValue::VerifierUninit
         }
     }
 
-    pub fn get(&self) -> Bits<'a> {
-        match self.0.get() {
-            Some(x) => x,
-            None => panic!("tried to access uninitialized secret value"),
+    /// Produce either `ProverInit(mk_val())` or `VerifierUninit`, depending on the value of
+    /// `is_prover`.
+    pub fn init(is_prover: bool, mk_val: impl FnOnce() -> Bits<'a>) -> SecretValue<'a> {
+        if is_prover {
+            SecretValue::ProverInit(mk_val())
+        } else {
+            SecretValue::VerifierUninit
         }
     }
 
-    pub fn try_get(&self) -> Option<Bits<'a>> {
-        self.0.get()
-    }
-
-    pub fn is_set(&self) -> bool {
-        self.0.get().is_some()
+    fn pack(self) -> PackedSecretValue<'a> {
+        let inner = match self {
+            SecretValue::ProverInit(bits) => {
+                let ptr = bits.0.as_ptr() as usize;
+                assert!(ptr >= 2);
+                let len = bits.0.len();
+                (ptr, len)
+            },
+            SecretValue::ProverUninit => (0, 0),
+            SecretValue::VerifierUninit => (0, 1),
+            SecretValue::FunctionInput(i) => (1, i),
+        };
+        PackedSecretValue { inner, _marker: PhantomData }
     }
 }
+
+impl<'a> PackedSecretValue<'a> {
+    fn unpack(self) -> SecretValue<'a> {
+        unsafe {
+            match self.inner {
+                (0, 0) => SecretValue::ProverUninit,
+                (0, 1) => SecretValue::VerifierUninit,
+                (1, i) => SecretValue::FunctionInput(i),
+                (ptr, len) => {
+                    let bits = slice::from_raw_parts(ptr as *const _, len);
+                    SecretValue::ProverInit(Bits(bits))
+                }
+            }
+        }
+    }
+}
+
+impl<'a> fmt::Debug for PackedSecretValue<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&self.unpack(), f)
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for PackedSecretValue<'a> {
+    type Output = PackedSecretValue<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PackedSecretValue<'b> {
+        self.unpack().migrate(v).pack()
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug, Migrate)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
-    val: Option<SecretValue<'a>>,
+    val: Cell<PackedSecretValue<'a>>,
 }
 
 impl<'a> SecretData<'a> {
+    fn new(ty: Ty<'a>, val: SecretValue<'a>) -> SecretData<'a> {
+        SecretData {
+            ty,
+            val: Cell::new(val.pack()),
+        }
+    }
+
     /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
     /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
     /// panic.
     pub fn val(&self) -> Option<Bits<'a>> {
-        self.val.as_ref().map(|sv| sv.get())
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(bits) => Some(bits),
+            SecretValue::ProverUninit =>
+                panic!("tried to access uninitialized secert value"),
+            SecretValue::VerifierUninit => None,
+            SecretValue::FunctionInput(_) =>
+                panic!("tried to access value of abstract function input"),
+        }
     }
 
     /// Try to retrieve the value of this secret.  In verifier mode, this always returns `None`.
     /// In prover mode, this returns `Some(bits)` if the value has been initialized and `None`
     /// otherwise.
     pub fn try_val(&self) -> Option<Bits<'a>> {
-        self.val.as_ref().and_then(|sv| sv.try_get())
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(bits) => Some(bits),
+            SecretValue::ProverUninit => None,
+            SecretValue::VerifierUninit => None,
+            SecretValue::FunctionInput(_) =>
+                panic!("tried to access value of abstract function input"),
+        }
     }
 
     pub fn has_val(&self) -> bool {
-        self.val.as_ref().map_or(false, |sv| sv.is_set())
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(_) => true,
+            SecretValue::ProverUninit => false,
+            SecretValue::VerifierUninit => false,
+            SecretValue::FunctionInput(_) =>
+                panic!("tried to access value of abstract function input"),
+        }
     }
 
     pub fn set(&self, bits: Bits<'a>) {
-        let sv = self.val.as_ref()
-            .expect("can't provide secret values when running in verifier mode");
-        sv.set(bits);
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(_) =>
+                panic!("secret value has already been set"),
+            SecretValue::ProverUninit => {
+                self.val.set(SecretValue::ProverInit(bits).pack());
+            },
+            SecretValue::VerifierUninit =>
+                panic!("can't provide secret values when running in verifier mode"),
+            SecretValue::FunctionInput(_) =>
+                panic!("can't provide secret value for abstract function input"),
+        }
     }
 
     pub fn set_default(&self, bits: Bits<'a>) {
-        if let Some(ref sv) = self.val {
-            sv.set_default(bits);
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(_) => {},
+            SecretValue::ProverUninit => {
+                self.val.set(SecretValue::ProverInit(bits).pack());
+            },
+            SecretValue::VerifierUninit => {},
+            SecretValue::FunctionInput(_) => {},
         }
     }
 
