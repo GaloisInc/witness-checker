@@ -1917,7 +1917,19 @@ impl<'a> fmt::Debug for Wire<'a> {
 }
 
 declare_interned_pointer! {
-    /// A secret input value, part of the witness.
+    /// A slot in the witness, which contains a secret value.
+    ///
+    /// For maximum flexibility in constructing and optimizing abstract circuits, the full witness
+    /// is never represented explicitly.  Instead, individual `Secret`s can be created at any point
+    /// and used or discarded as needed.  During lowering to a concrete circuit, each `Secret` in
+    /// use within the circuit is added to the witness in an arbitrary order.
+    ///
+    /// With the addition of call gates, we consider each stack frame to have a separate witness.
+    /// Each `Secret` used in a function body refers to an element of the witness for the current
+    /// stack frame, identified by the `SecretInputId` stored in the `SecretValue::FunctionInput`.
+    /// The `FunctionDef` contains a list of `SecretInputId`s that must be given values at each
+    /// call, and `GateKind::Call` contains a list mapping `SecretInputId`s to `Secret`s in the
+    /// caller's scope.
     #[derive(Debug)]
     pub struct Secret<'a> => SecretData<'a>;
 }
@@ -1944,7 +1956,7 @@ pub enum SecretValue<'a> {
     /// The circuit is in prover mode, and the value hasn't be initialized yet.
     ProverUninit,
     /// The circuit is in verifier mode, so the value will never be initialized.
-    VerifierUninit,
+    VerifierUnknown,
     /// This secret is inside a function, and its value is taken from one of the function's secret
     /// inputs.
     FunctionInput(SecretInputId),
@@ -1957,22 +1969,22 @@ struct PackedSecretValue<'a> {
 }
 
 impl<'a> SecretValue<'a> {
-    /// Produce either `ProverUninit` or `VerifierUninit`, depending on the value of `is_prover`.
+    /// Produce either `ProverUninit` or `VerifierUnknown`, depending on the value of `is_prover`.
     pub fn uninit(is_prover: bool) -> SecretValue<'a> {
         if is_prover {
             SecretValue::ProverUninit
         } else {
-            SecretValue::VerifierUninit
+            SecretValue::VerifierUnknown
         }
     }
 
-    /// Produce either `ProverInit(mk_val())` or `VerifierUninit`, depending on the value of
+    /// Produce either `ProverInit(mk_val())` or `VerifierUnknown`, depending on the value of
     /// `is_prover`.
     pub fn init(is_prover: bool, mk_val: impl FnOnce() -> Bits<'a>) -> SecretValue<'a> {
         if is_prover {
             SecretValue::ProverInit(mk_val())
         } else {
-            SecretValue::VerifierUninit
+            SecretValue::VerifierUnknown
         }
     }
 
@@ -1985,7 +1997,7 @@ impl<'a> SecretValue<'a> {
                 (ptr, len)
             },
             SecretValue::ProverUninit => (0, 0),
-            SecretValue::VerifierUninit => (0, 1),
+            SecretValue::VerifierUnknown => (0, 1),
             SecretValue::FunctionInput(i) => (1, i.0),
         };
         PackedSecretValue { inner, _marker: PhantomData }
@@ -1997,7 +2009,7 @@ impl<'a> PackedSecretValue<'a> {
         unsafe {
             match self.inner {
                 (0, 0) => SecretValue::ProverUninit,
-                (0, 1) => SecretValue::VerifierUninit,
+                (0, 1) => SecretValue::VerifierUnknown,
                 (1, i) => SecretValue::FunctionInput(SecretInputId(i)),
                 (ptr, len) => {
                     let bits = slice::from_raw_parts(ptr as *const _, len);
@@ -2048,7 +2060,7 @@ impl<'a> SecretData<'a> {
             SecretValue::ProverInit(bits) => Some(bits),
             SecretValue::ProverUninit =>
                 panic!("tried to access uninitialized secert value"),
-            SecretValue::VerifierUninit => None,
+            SecretValue::VerifierUnknown => None,
             SecretValue::FunctionInput(_) =>
                 panic!("tried to access value of abstract function input"),
         }
@@ -2061,7 +2073,7 @@ impl<'a> SecretData<'a> {
         match self.val.get().unpack() {
             SecretValue::ProverInit(bits) => Some(bits),
             SecretValue::ProverUninit => None,
-            SecretValue::VerifierUninit => None,
+            SecretValue::VerifierUnknown => None,
             SecretValue::FunctionInput(_) =>
                 panic!("tried to access value of abstract function input"),
         }
@@ -2071,7 +2083,7 @@ impl<'a> SecretData<'a> {
         match self.val.get().unpack() {
             SecretValue::ProverInit(_) => true,
             SecretValue::ProverUninit => false,
-            SecretValue::VerifierUninit => false,
+            SecretValue::VerifierUnknown => false,
             SecretValue::FunctionInput(_) =>
                 panic!("tried to access value of abstract function input"),
         }
@@ -2084,7 +2096,7 @@ impl<'a> SecretData<'a> {
             SecretValue::ProverUninit => {
                 self.val.set(SecretValue::ProverInit(bits).pack());
             },
-            SecretValue::VerifierUninit =>
+            SecretValue::VerifierUnknown =>
                 panic!("can't provide secret values when running in verifier mode"),
             SecretValue::FunctionInput(_) =>
                 panic!("can't provide secret value for abstract function input"),
@@ -2097,7 +2109,7 @@ impl<'a> SecretData<'a> {
             SecretValue::ProverUninit => {
                 self.val.set(SecretValue::ProverInit(bits).pack());
             },
-            SecretValue::VerifierUninit => {},
+            SecretValue::VerifierUnknown => {},
             SecretValue::FunctionInput(_) => {},
         }
     }
