@@ -1641,9 +1641,11 @@ pub enum GateKind<'a> {
     /// A custom gadget.
     // TODO: move fields to a struct (this variant is 5 words long)
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
-    /// A function call.  The wires are the arguments to the function, and the secrets are the
-    /// secret values consumed by the function.
-    Call(Function<'a>, &'a [Wire<'a>], &'a [Secret<'a>]),
+    /// A function call.  The wires are the arguments to the function.  Secret inputs to the
+    /// function are provided as a list of pairs, giving a value for each `SecretInputId` used in
+    /// the function.  (This would be a `HashMap`, but `Gate` is arena-allocated and thus never
+    /// gets dropped, so putting a `HashMap` here would leak memory.)
+    Call(Function<'a>, &'a [Wire<'a>], &'a [(SecretInputId, Secret<'a>)]),
 }
 
 impl<'a> Gate<'a> {
@@ -1928,6 +1930,13 @@ impl<'a, 'b> Migrate<'a, 'b> for Secret<'a> {
     }
 }
 
+/// The ID of a secret input to a function.  This is essentially used as an "argument name" when
+/// passing secret values to functions: the `FunctionDef` declares a type for each `SecretInputId`
+/// that it uses, and the caller must provide a value for each `SecretInputId` when it makes the
+/// call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
+pub struct SecretInputId(usize);
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Migrate)]
 pub enum SecretValue<'a> {
     /// The circuit is in prover mode, and the value is initialized.
@@ -1938,7 +1947,7 @@ pub enum SecretValue<'a> {
     VerifierUninit,
     /// This secret is inside a function, and its value is taken from one of the function's secret
     /// inputs.
-    FunctionInput(usize),
+    FunctionInput(SecretInputId),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1977,7 +1986,7 @@ impl<'a> SecretValue<'a> {
             },
             SecretValue::ProverUninit => (0, 0),
             SecretValue::VerifierUninit => (0, 1),
-            SecretValue::FunctionInput(i) => (1, i),
+            SecretValue::FunctionInput(i) => (1, i.0),
         };
         PackedSecretValue { inner, _marker: PhantomData }
     }
@@ -1989,7 +1998,7 @@ impl<'a> PackedSecretValue<'a> {
             match self.inner {
                 (0, 0) => SecretValue::ProverUninit,
                 (0, 1) => SecretValue::VerifierUninit,
-                (1, i) => SecretValue::FunctionInput(i),
+                (1, i) => SecretValue::FunctionInput(SecretInputId(i)),
                 (ptr, len) => {
                     let bits = slice::from_raw_parts(ptr as *const _, len);
                     SecretValue::ProverInit(Bits(bits))
@@ -2025,6 +2034,10 @@ impl<'a> SecretData<'a> {
             ty,
             val: Cell::new(val.pack()),
         }
+    }
+
+    pub fn secret_value(&self) -> SecretValue<'a> {
+        self.val.get().unpack()
     }
 
     /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
@@ -2352,8 +2365,9 @@ pub struct FunctionDef<'a> {
     /// The argument types of this function.  If the function body contains an `Argument(i)` gate,
     /// the type of that gate is `arg_tys[i]`.
     pub arg_tys: &'a [Ty<'a>],
-    /// The types of secrets consumed by this function.
-    pub secret_tys: &'a [Ty<'a>],
+    /// The secret inputs required by this function.  Each `Call` to this function must provide a
+    /// `Secret` of the indicated `Ty` for each `SecretInputId` in this list.
+    pub secret_inputs: &'a [(SecretInputId, Ty<'a>)],
     /// The output of the function body.  This will typically depend in some way on the function's
     /// `Argument` gates.  For functions that need to return multiple values, this wire can have a
     /// `Bundle` type.
@@ -2365,11 +2379,11 @@ impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
 
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> FunctionDef<'b> {
         let arg_tys = self.arg_tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
-        let secret_tys = self.secret_tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
+        let secret_inputs = self.secret_inputs.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
         FunctionDef {
             name: v.new_circuit().intern_str(self.name),
             arg_tys: v.new_circuit().intern_ty_list(&arg_tys),
-            secret_tys: v.new_circuit().intern_ty_list(&secret_tys),
+            secret_inputs: v.new_circuit().arena().alloc_slice_copy(&secret_inputs),
             result_wire: v.visit(self.result_wire),
         }
     }
