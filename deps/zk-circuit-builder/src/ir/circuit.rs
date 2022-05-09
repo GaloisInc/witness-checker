@@ -252,6 +252,17 @@ impl<'a> CircuitBase<'a> {
             _ => {},
         }
 
+        // Forbid using a single `Secret` in multiple gates.
+        match kind {
+            GateKind::Secret(s) => { s.set_used(); },
+            GateKind::Call(_, _, ss) => {
+                for &(_, s) in ss {
+                    s.set_used();
+                }
+            },
+            _ => {},
+        }
+
         let value = match kind {
             GateKind::Lit(bits, _) => GateValue::Public(bits),
             GateKind::Erased(e) => e.gate_value(),
@@ -2121,6 +2132,12 @@ impl<'a, 'b> Migrate<'a, 'b> for PackedSecretValue<'a> {
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
     val: Cell<PackedSecretValue<'a>>,
+    /// Indicates whether this `Secret` has been used to construct a gate.  Each `Secret` can only
+    /// be used in one place in the circuit.  This flag is `false` on construction and becomes
+    /// `true` at the first use; if it is used again after that, a panic occurs.  Note that
+    /// constructing a second gate from the same `Secret` will panic even if the first gate isn't
+    /// used anywhere.
+    used: Cell<bool>,
 }
 
 impl<'a> SecretData<'a> {
@@ -2128,11 +2145,17 @@ impl<'a> SecretData<'a> {
         SecretData {
             ty,
             val: Cell::new(val.pack()),
+            used: Cell::new(false),
         }
     }
 
     pub fn secret_value(&self) -> SecretValue<'a> {
         self.val.get().unpack()
+    }
+
+    pub fn set_used(&self) {
+        assert!(!self.used.get(), "this secret has already been used");
+        self.used.set(true);
     }
 
     /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
