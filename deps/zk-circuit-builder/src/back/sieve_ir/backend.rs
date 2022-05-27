@@ -492,12 +492,12 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
     let sec1 = {
-        let (wire, handle) = c.new_secret(c.ty(TyKind::I64));
+        let (wire, handle) = c.new_secret_wire(c.ty(TyKind::I64));
         handle.set(&c, 12);
         wire
     };
     let sec2 = {
-        let (wire, handle) = c.new_secret(c.ty(TyKind::I64));
+        let (wire, handle) = c.new_secret_wire(c.ty(TyKind::I64));
         handle.set(&c, 13);
         wire
     };
