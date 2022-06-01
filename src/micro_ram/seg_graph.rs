@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::iter;
 use std::mem;
+use log::*;
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
 use crate::ir::typed::{TWire, TSecretHandle, Builder};
@@ -121,7 +122,7 @@ impl<'a> SegGraphBuilder<'a> {
         cpu_init_state: RamState,
         trace: &[TraceChunk],
     ) -> SegGraphBuilder<'a> {
-        let _g = b.scoped_label("seg_graph");
+        let _g = b.scoped_label("seg_graph/new");
         let mut sg = SegGraphBuilder {
             segments: iter::repeat_with(SegmentNode::default).take(seg_defs.len()).collect(),
             cycle_breaks: Vec::new(),
@@ -148,7 +149,7 @@ impl<'a> SegGraphBuilder<'a> {
         };
 
         for (i, seg_def) in seg_defs.iter().enumerate() {
-            let _g = b.scoped_label(format_args!("segment/{}", i));
+            let _g = b.scoped_label(seg_def.desc());
             if i == 0 {
                 sg.segments[i].preds.push(Predecessor {
                     src: StateSource::CpuInit,
@@ -157,7 +158,6 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             for &j in &seg_def.successors {
-                let _g = b.scoped_label(format_args!("successor {}", j));
                 assert!(!sg.edges.contains_key(&(i, j)), "duplicate edge {} -> {}", i, j);
                 sg.edges.insert((i, j), b.secret().1);
 
@@ -169,7 +169,6 @@ impl<'a> SegGraphBuilder<'a> {
 
             if seg_def.enter_from_network {
                 // Note that `enter_from_network` is ignored for segment 0.
-                let _g = b.scoped_label("from net");
                 assert!(!sg.from_net.contains_key(&i), "duplicate edge net -> {}", i);
                 sg.from_net.insert(i, b.secret().1);
                 let output_id = network.add_output();
@@ -181,7 +180,6 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             if seg_def.exit_to_network {
-                let _g = b.scoped_label("to net");
                 assert!(!sg.to_net.contains_key(&i), "duplicate edge {} -> net", i);
                 sg.to_net.insert(i, b.secret().1);
                 sg.network_inputs.push(NetworkInputNode {
@@ -552,14 +550,21 @@ impl<'a> SegGraphBuilder<'a> {
             if done[i] {
                 continue;
             }
+            trace!("get_order: start {}", i);
             stack.push(Step::Enter(i));
             while let Some(step) = stack.pop() {
                 match step {
                     Step::Enter(i) => {
+                        if done[i] {
+                            continue;
+                        }
+                        trace!("get_order: enter {}", i);
                         stack.push(Step::Exit(i));
                         for pred in &self.segments[i].preds {
                             match pred.src {
                                 StateSource::Segment(j) => {
+                                    // Optimization: don't push `Enter(j)` if it will just be
+                                    // skipped because it's already done.
                                     if !done[j] {
                                         stack.push(Step::Enter(j));
                                     }
@@ -569,8 +574,10 @@ impl<'a> SegGraphBuilder<'a> {
                         }
                     },
                     Step::Exit(i) => {
+                        let dead = self.segments[i].preds.len() == 0;
+                        trace!("get_order: finish {} ({})", i, if dead { "dead" } else { "live" });
                         // Only include non-dead nodes in the order.
-                        if self.segments[i].preds.len() > 0 {
+                        if !dead {
                             order.push(i);
                         } else {
                             num_dead += 1;
@@ -579,9 +586,13 @@ impl<'a> SegGraphBuilder<'a> {
                     },
                 }
             }
-            debug_assert!(stack.len() == 0);
+            assert!(stack.len() == 0);
         }
-        debug_assert!(order.len() + num_dead == self.segments.len());
+        assert!(
+            order.len() + num_dead == self.segments.len(),
+            "expected order.len() [{}] + num_dead [{}] == self.segments.len() [{}]",
+            order.len(), num_dead, self.segments.len(),
+        );
 
         order.into_iter().map(SegGraphItem::Segment)
             .chain(iter::once(SegGraphItem::Network))
@@ -589,7 +600,7 @@ impl<'a> SegGraphBuilder<'a> {
 
     /// Obtain the initial state to use for a given segment.
     pub fn get_initial(&mut self, b: &Builder<'a>, idx: usize) -> TWire<'a, RamState> {
-        let _g = b.scoped_label(format_args!("seg_graph/get_initial/{}", idx));
+        let _g = b.scoped_label("seg_graph/get_initial");
         let mut it = self.segments[idx].preds.iter();
         let first_pred = it.next()
             .unwrap_or_else(|| panic!("segment {} has no predecessors", idx));

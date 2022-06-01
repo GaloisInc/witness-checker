@@ -9,4 +9,5 @@ pub mod lower;
 pub mod micro_ram;
 pub mod mode;
 pub mod routing;
+pub mod stats;
 pub mod util;

@@ -1,6 +1,5 @@
 use crate::ir::circuit::{
-    CircuitExt, CircuitBase, CircuitFilter, CircuitRef, DynCircuitRef, Wire, GateKind,
-    GadgetKindRef,
+    CircuitBase, CircuitFilter, CircuitRef, DynCircuitRef, Wire, GateKind, GadgetKindRef,
 };
 use crate::ir::migrate::{self, Migrate};
 
@@ -36,7 +35,6 @@ where
                 // Filter with `self`, not `self.1`, so any newly produced gadgets will be
                 // decomposed recursively.
                 let c: DynCircuitRef = CircuitRef { base, filter: self };
-                let _g = c.scoped_label(k.name());
                 return k.decompose(c, ws);
             }
         }

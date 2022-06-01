@@ -2,6 +2,5 @@ invalid trace: segment 0: cycle 0 sets reg 1 to 1 (expected 0)
 invalid trace: segment 0: cycle 1 sets reg 1 to 2 (expected 0)
 invalid trace: segment 1: cycle 2 sets reg 1 to 3 (expected 0)
 invalid trace: segment 1: cycle 3 sets reg 1 to 4 (expected 0)
-invalid trace: segment 2: fetch in slot 0 accesses address 0 (expected 2)
 invalid trace: segment 3: cycle 4 sets reg 1 to 5 (expected 0)
-internal evaluator: 158 asserts passed, 6 failed; found 0 bugs; overall status: BAD
+internal evaluator: 159 asserts passed, 5 failed; found 0 bugs; overall status: BAD

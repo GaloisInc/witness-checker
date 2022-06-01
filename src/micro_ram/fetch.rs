@@ -75,7 +75,7 @@ impl<'a> Fetch<'a> {
         };
 
         let mut sorted_ports = Rooted::new({
-            let _g = b.scoped_label("sort fetch");
+            let _g = b.scoped_label("fetch/sort");
             let mut sort = Rooted::new({
                 let packed_ports = ports.open(mh).iter().map(|&fp| {
                     PackedFetchPort::from_unpacked(&b, fp)
@@ -124,7 +124,7 @@ impl<'a> Fetch<'a> {
             let sorted_ports = sorted_ports.open(mh);
             let port1 = sorted_ports[i - 1];
             let port2 = sorted_ports[i];
-            check_fetch(&cx, b, i, port1, port2);
+            check_fetch(&cx, b, port1, port2);
 
             if i % 10000 == 0 {
                 unsafe { mh.erase_and_migrate(b.circuit()) };
@@ -170,7 +170,7 @@ fn check_first_fetch<'a>(
     b: &Builder<'a>,
     port: TWire<'a, FetchPort>,
 ) {
-    let _g = b.scoped_label("check_first_fetch");
+    let _g = b.scoped_label("fetch/check_first");
     wire_assert!(
         cx, port.write,
         "uninit fetch from program address {:x}",
@@ -181,11 +181,10 @@ fn check_first_fetch<'a>(
 fn check_fetch<'a>(
     cx: &Context<'a>,
     b: &Builder<'a>,
-    index: usize,
     port1: TWire<'a, FetchPort>,
     port2: TWire<'a, FetchPort>,
 ) {
-    let _g = b.scoped_label(format_args!("check_fetch/index {}", index));
+    let _g = b.scoped_label("fetch/check");
     cx.when(b, b.not(port2.write), |cx| {
         wire_assert!(
             cx, b.eq(port2.addr, port1.addr),
