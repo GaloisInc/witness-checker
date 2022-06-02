@@ -300,13 +300,53 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
+
+    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
+    /// running in prover mode), and return the resulting `Secret`.
+    ///
+    /// `mk_val` will not be called when running in prover mode.
+    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Secret<'a>
+    where F: FnOnce() -> T {
+        let val = SecretValue::init(self.is_prover, || self.bits(ty, mk_val()));
+        self.alloc_secret(ty, val)
+    }
+
+    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
+    /// initialized later using `SecretData::set_from_lit`.
+    fn new_secret_uninit(&self, ty: Ty<'a>) -> Secret<'a> {
+        let val = SecretValue::uninit(self.is_prover);
+        self.alloc_secret(ty, val)
+    }
+
+    /// Add a new secret value to the witness and return it.  The accompanying `SecretHandle` can
+    /// be used to assign a value to the secret after construction.  If the `SecretHandle` is
+    /// dropped without setting a value, the value will be set to zero automatically.
+    fn new_secret(&self, ty: Ty<'a>) -> (Secret<'a>, SecretHandle<'a>) {
+        let default = self.intern_bits(&[]);
+        self.new_secret_default(ty, default)
+    }
+
+    /// Like `new_secret`, but dropping the `SecretHandle` without setting a value will set the
+    /// value to `default` instead of zero.
+    fn new_secret_default<T: AsBits>(
+        &self,
+        ty: Ty<'a>,
+        default: T,
+    ) -> (Secret<'a>, SecretHandle<'a>) {
+        let secret = self.new_secret_uninit(ty);
+        let default = self.bits(ty, default);
+        let handle = SecretHandle::new(secret, default);
+        (secret, handle)
+    }
+
+
     /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
     /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
     /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
     /// automatically.
     fn new_secret_wire(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
-        let default = self.intern_bits(&[]);
-        self.new_secret_wire_default(ty, default)
+        let (s, sh) = self.new_secret(ty);
+        (self.secret(s), sh)
     }
 
     /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
@@ -316,11 +356,8 @@ impl<'a> CircuitBase<'a> {
         ty: Ty<'a>,
         default: T,
     ) -> (Wire<'a>, SecretHandle<'a>) {
-        let val = SecretValue::uninit(self.is_prover);
-        let default = self.bits(ty, default);
-        let secret = self.alloc_secret(ty, val);
-        let handle = SecretHandle::new(secret, default);
-        (self.secret(secret), handle)
+        let (s, sh) = self.new_secret_default(ty, default);
+        (self.secret(s), sh)
     }
 
     /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
@@ -329,17 +366,15 @@ impl<'a> CircuitBase<'a> {
     /// `mk_val` will not be called when running in prover mode.
     fn new_secret_wire_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
     where F: FnOnce() -> T {
-        let val = SecretValue::init(self.is_prover, || self.bits(ty, mk_val()));
-        let secret = self.alloc_secret(ty, val);
-        self.secret(secret)
+        let s = self.new_secret_init(ty, mk_val);
+        self.secret(s)
     }
 
     /// Create a new uninitialized secret.  When running in prover mode, the secret must be
     /// initialized later using `SecretData::set_from_lit`.
     fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        let val = SecretValue::uninit(self.is_prover);
-        let secret = self.alloc_secret(ty, val);
-        self.secret(secret)
+        let s = self.new_secret_uninit(ty);
+        self.secret(s)
     }
 
 
@@ -741,6 +776,55 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
+    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
+    /// running in prover mode), and return a `Secret` that carries that value.
+    ///
+    /// `mk_val` will not be called when running in prover mode.
+    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Secret<'a>
+    where F: FnOnce() -> T {
+        self.as_base().new_secret_init(ty, mk_val)
+    }
+
+    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
+    /// initialized later using `SecretData::set_from_lit`.
+    fn new_secret_uninit(&self, ty: Ty<'a>) -> Secret<'a> {
+        self.as_base().new_secret_uninit(ty)
+    }
+
+    /// Add a new secret value to the witness, and return a `Secret` that carries that value.  The
+    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
+    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
+    /// automatically.
+    fn new_secret(&self, ty: Ty<'a>) -> (Secret<'a>, SecretHandle<'a>) {
+        self.as_base().new_secret(ty)
+    }
+
+    /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
+    /// value to `default` instead of zero.
+    fn new_secret_default<T: AsBits>(
+        &self,
+        ty: Ty<'a>,
+        default: T,
+    ) -> (Secret<'a>, SecretHandle<'a>) {
+        self.as_base().new_secret_default(ty, default)
+    }
+
+
+    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
+    /// running in prover mode), and return a `Wire` that carries that value.
+    ///
+    /// `mk_val` will not be called when running in prover mode.
+    fn new_secret_wire_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
+    where F: FnOnce() -> T {
+        self.as_base().new_secret_wire_init(ty, mk_val)
+    }
+
+    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
+    /// initialized later using `SecretData::set_from_lit`.
+    fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
+        self.as_base().new_secret_wire_uninit(ty)
+    }
+
     /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
     /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
     /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
@@ -757,21 +841,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         default: T,
     ) -> (Wire<'a>, SecretHandle<'a>) {
         self.as_base().new_secret_wire_default(ty, default)
-    }
-
-    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
-    /// running in prover mode), and return a `Wire` that carries that value.
-    ///
-    /// `mk_val` will not be called when running in prover mode.
-    fn new_secret_wire_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
-    where F: FnOnce() -> T {
-        self.as_base().new_secret_wire_init(ty, mk_val)
-    }
-
-    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
-    /// initialized later using `SecretData::set_from_lit`.
-    fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        self.as_base().new_secret_wire_uninit(ty)
     }
 
 
