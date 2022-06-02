@@ -290,14 +290,21 @@ impl<'a> CircuitBase<'a> {
     }
 
 
+    fn alloc_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
+        let mut scope = self.function_scope.borrow_mut();
+        let scope = scope.as_mut().expect("can't use alloc_secret_input outside function body");
+        let id = SecretInputId(scope.secrets.len());
+        scope.secrets.push((id, ty));
+        let s = Secret(self.arena().alloc(SecretData::new(ty, SecretValue::FunctionInput(id))));
+        (s, id)
+    }
+
     fn alloc_secret(&self, ty: Ty<'a>, val: SecretValue<'a>) -> Secret<'a> {
-        if let Some(scope) = self.function_scope.borrow_mut().as_mut() {
-            let id = SecretInputId(scope.secrets.len());
-            scope.secrets.push((id, ty));
-            Secret(self.arena().alloc(SecretData::new(ty, SecretValue::FunctionInput(id))))
-        } else {
-            Secret(self.arena().alloc(SecretData::new(ty, val)))
-        }
+        assert!(
+            self.function_scope.borrow().is_none(),
+            "can't use alloc_secret inside a function body",
+        );
+        Secret(self.arena().alloc(SecretData::new(ty, val)))
     }
 
 
@@ -339,6 +346,12 @@ impl<'a> CircuitBase<'a> {
         (secret, handle)
     }
 
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
+        self.alloc_secret_input(ty)
+    }
+
 
     /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
     /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
@@ -375,6 +388,13 @@ impl<'a> CircuitBase<'a> {
     fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
         let s = self.new_secret_uninit(ty);
         self.secret(s)
+    }
+
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_wire_input(&self, ty: Ty<'a>) -> (Wire<'a>, SecretInputId) {
+        let (s, id) = self.alloc_secret_input(ty);
+        (self.secret(s), id)
     }
 
 
@@ -809,6 +829,12 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.as_base().new_secret_default(ty, default)
     }
 
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
+        self.as_base().new_secret_input(ty)
+    }
+
 
     /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
     /// running in prover mode), and return a `Wire` that carries that value.
@@ -841,6 +867,12 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         default: T,
     ) -> (Wire<'a>, SecretHandle<'a>) {
         self.as_base().new_secret_wire_default(ty, default)
+    }
+
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_wire_input(&self, ty: Ty<'a>) -> (Wire<'a>, SecretInputId) {
+        self.as_base().new_secret_wire_input(ty)
     }
 
 
