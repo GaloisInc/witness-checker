@@ -50,9 +50,15 @@ pub struct CircuitBase<'a> {
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
 
+    function_scope: RefCell<Option<FunctionScope<'a>>>,
+
     current_label: Cell<&'a str>,
     is_prover: bool,
     functions: RefCell<Vec<Function<'a>>>,
+}
+
+struct FunctionScope<'a> {
+    secrets: Vec<(SecretInputId, Ty<'a>)>,
 }
 
 impl<'a> CircuitBase<'a> {
@@ -66,6 +72,7 @@ impl<'a> CircuitBase<'a> {
             intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
+            function_scope: RefCell::new(None),
             current_label: Cell::new(""),
             is_prover,
             functions: RefCell::new(Vec::new()),
@@ -272,6 +279,16 @@ impl<'a> CircuitBase<'a> {
     }
 
 
+    fn alloc_secret(&self, ty: Ty<'a>, val: SecretValue<'a>) -> Secret<'a> {
+        if let Some(scope) = self.function_scope.borrow_mut().as_mut() {
+            let id = SecretInputId(scope.secrets.len());
+            scope.secrets.push((id, ty));
+            Secret(self.arena().alloc(SecretData::new(ty, SecretValue::FunctionInput(id))))
+        } else {
+            Secret(self.arena().alloc(SecretData::new(ty, val)))
+        }
+    }
+
     /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
     /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
     /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
@@ -290,7 +307,7 @@ impl<'a> CircuitBase<'a> {
     ) -> (Wire<'a>, SecretHandle<'a>) {
         let val = SecretValue::uninit(self.is_prover);
         let default = self.bits(ty, default);
-        let secret = Secret(self.arena().alloc(SecretData::new(ty, val)));
+        let secret = self.alloc_secret(ty, val);
         let handle = SecretHandle::new(secret, default);
         (self.secret(secret), handle)
     }
@@ -302,7 +319,7 @@ impl<'a> CircuitBase<'a> {
     fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
     where F: FnOnce() -> T {
         let val = SecretValue::init(self.is_prover, || self.bits(ty, mk_val()));
-        let secret = Secret(self.arena().alloc(SecretData::new(ty, val)));
+        let secret = self.alloc_secret(ty, val);
         self.secret(secret)
     }
 
@@ -310,7 +327,7 @@ impl<'a> CircuitBase<'a> {
     /// initialized later using `SecretData::set_from_lit`.
     fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
         let val = SecretValue::uninit(self.is_prover);
-        let secret = Secret(self.arena().alloc(SecretData::new(ty, val)));
+        let secret = self.alloc_secret(ty, val);
         self.secret(secret)
     }
 
@@ -333,6 +350,7 @@ impl<'a> CircuitBase<'a> {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
             ref intern_gadget_kind, ref intern_str, ref intern_bits,
+            ref function_scope,
             ref current_label,
             is_prover: _,
             functions: _,
@@ -353,6 +371,8 @@ impl<'a> CircuitBase<'a> {
 
         // Migrate `current_label` to the new arena.
         current_label.set(self.intern_str(current_label.get()));
+
+        assert!(function_scope.borrow().is_none(), "can't migrate inside define_function");
 
         old_arenas
     }
@@ -411,6 +431,59 @@ impl<'a, F> Circuit<'a, F> {
             base: CircuitBase::new(arenas, is_prover),
             filter: UnsafeCell::new(filter),
         }
+    }
+}
+
+impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
+    /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
+    /// returns a wire representing the output of the function.  The secondary output of type `T`
+    /// can be used to return a data structure describing the `SecretInputId`s used by this
+    /// function.
+    ///
+    /// Concretely, the `Circuit` passed to the callback is `self` and uses the same lifetime `'a`,
+    /// but we hide this fact from the caller so that `rustc` will report an error if wires from
+    /// outside the function are used inside the callback or vice versa.
+    //
+    // This function is defined on the concrete `Circuit` type instead of the generic `CircuitExt`
+    // trait because this lets it provide a more precise circuit type to the callback, which
+    // simplifies its usage with `typed::Builder`.  However, it should be easy to copy into
+    // `CircuitExt` if it's needed in the future.
+    pub fn define_function_ex<F2, T>(
+        &self,
+        name: &str,
+        arg_tys: &[Ty<'a>],
+        f: F2,
+    ) -> (Function<'a>, T)
+    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> (Wire<'b>, T) {
+        let function_scope = &self.base.function_scope;
+        let old_scope = mem::replace(&mut *function_scope.borrow_mut(), Some(FunctionScope {
+            secrets: Vec::new(),
+        }));
+
+        let arg_wires = arg_tys.iter().enumerate()
+            .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
+            .collect::<Vec<_>>();
+        let (result_wire, extra) = f(self, &arg_wires);
+
+        let new_scope = mem::replace(&mut *function_scope.borrow_mut(), old_scope).unwrap();
+        let func = Function(self.as_base().arena().alloc(FunctionDef {
+            name: self.as_base().intern_str(name),
+            arg_tys: self.ty_list(arg_tys),
+            secret_inputs: self.as_base().arena().alloc_slice_copy(&new_scope.secrets),
+            result_wire,
+        }));
+        self.as_base().functions.borrow_mut().push(func);
+        (func, extra)
+    }
+
+    pub fn define_function<F2>(&self, name: &str, arg_tys: &[Ty<'a>], f: F2) -> Function<'a>
+    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> Wire<'b> {
+        let (func, ()) = self.define_function_ex(
+            name,
+            arg_tys,
+            |c, args| (f(c, args), ()),
+        );
+        func
     }
 }
 
@@ -849,6 +922,16 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     where I: IntoIterator<Item = Wire<'a>> {
         let args = it.into_iter().collect::<Vec<_>>();
         self.gadget(kind, &args)
+    }
+
+    fn call(
+        &self,
+        func: Function<'a>,
+        args: &'a [Wire<'a>],
+        secrets: &[(SecretInputId, Secret<'a>)],
+    ) -> Wire<'a> {
+        let secrets = self.as_base().arena().alloc_slice_copy(secrets);
+        self.gate(GateKind::Call(func, args, secrets))
     }
 
 
@@ -1963,7 +2046,7 @@ pub enum SecretValue<'a> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct PackedSecretValue<'a> {
+pub struct PackedSecretValue<'a> {
     inner: (usize, usize),
     _marker: PhantomData<Bits<'a>>,
 }
@@ -1988,7 +2071,7 @@ impl<'a> SecretValue<'a> {
         }
     }
 
-    fn pack(self) -> PackedSecretValue<'a> {
+    pub fn pack(self) -> PackedSecretValue<'a> {
         let inner = match self {
             SecretValue::ProverInit(bits) => {
                 let ptr = bits.0.as_ptr() as usize;
@@ -2005,7 +2088,7 @@ impl<'a> SecretValue<'a> {
 }
 
 impl<'a> PackedSecretValue<'a> {
-    fn unpack(self) -> SecretValue<'a> {
+    pub fn unpack(self) -> SecretValue<'a> {
         unsafe {
             match self.inner {
                 (0, 0) => SecretValue::ProverUninit,
