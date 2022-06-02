@@ -1947,7 +1947,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Secret<'a> {
 /// that it uses, and the caller must provide a value for each `SecretInputId` when it makes the
 /// call.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
-pub struct SecretInputId(usize);
+pub struct SecretInputId(pub usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Migrate)]
 pub enum SecretValue<'a> {
