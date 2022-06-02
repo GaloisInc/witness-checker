@@ -528,11 +528,16 @@ fn eval_call<'a, C: CircuitTrait<'a> + ?Sized>(
 }
 
 pub fn eval_wire_public<'a, C: CircuitTrait<'a> + ?Sized>(c: &C, w: Wire<'a>) -> Option<Value> {
-    eval_gate_public(c, w.ty, w.kind)
+    let (bits, sec) = eval_wire(c, w).ok()?;
+    if sec {
+        return None;
+    }
+    Some(Value::from_bits(w.ty, bits))
 }
 
 pub fn eval_wire_secret<'a, C: CircuitTrait<'a> + ?Sized>(c: &C, w: Wire<'a>) -> Option<Value> {
-    eval_gate_secret(c, w.ty, w.kind)
+    let (bits, _sec) = eval_wire(c, w).ok()?;
+    Some(Value::from_bits(w.ty, bits))
 }
 
 
