@@ -4,13 +4,13 @@ use std::fmt::Write;
 use std::iter;
 use std::mem;
 use log::*;
-use crate::ir::migrate::{self, Migrate};
-use crate::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
-use crate::ir::typed::{TWire, TSecretHandle, Builder};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder};
+use zk_circuit_builder::routing::{RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
-use crate::routing::{RoutingBuilder, InputId, OutputId};
 use crate::util::PanicOnDrop;
 
 

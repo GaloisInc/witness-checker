@@ -2,13 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use serde::{de, Deserialize};
-use crate::eval::Evaluator;
-use crate::gadget::bit_pack;
-use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
-use crate::ir::typed::{
+use zk_circuit_builder::eval::Evaluator;
+use zk_circuit_builder::gadget::bit_pack;
+use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
+use zk_circuit_builder::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
-use crate::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::primitive_binary_impl;
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
@@ -600,6 +601,14 @@ impl<'a> FromEval<'a> for Label {
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
         let val = FromEval::from_eval(ev, a)?;
         Some(Label(val))
+    }
+}
+
+// Cast u64 to Label.
+impl<'a> Cast<'a, Label> for u64 {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        let ty = <Label as Flatten>::wire_type(bld.circuit());
+        bld.c.cast(x, ty)
     }
 }
 

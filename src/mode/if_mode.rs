@@ -1,7 +1,7 @@
-use crate::eval::Evaluator;
-use crate::ir::circuit::{CircuitTrait, Ty, Wire};
-use crate::ir::migrate::{self, Migrate};
-use crate::ir::typed::{Builder, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire};
+use zk_circuit_builder::eval::Evaluator;
+use zk_circuit_builder::ir::circuit::{CircuitTrait, Ty, Wire};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::typed::{Builder, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire};
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
 use std::cell::Cell;

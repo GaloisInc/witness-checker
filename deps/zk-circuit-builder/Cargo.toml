@@ -1,5 +1,5 @@
 [package]
-name = "cheesecloth"
+name = "zk-circuit-builder"
 version = "0.1.0"
 authors = ["Stuart Pernsteiner <spernsteiner@galois.com>"]
 edition = "2018"
@@ -7,43 +7,31 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
-bellman = ["zkinterface", "zkinterface_bellman", "ff"]
-sieve_ir = ["ff", "zki_sieve"]
+# default = []
+# bellman = ["zkinterface", "zkinterface_bellman", "ff"]
+# sieve_ir = ["ff", "zki_sieve"]
 
 [dependencies]
-cheesecloth-derive-migrate = { path = "derive-migrate" }
-
-zk-circuit-builder = { path = "deps/zk-circuit-builder" }
+cheesecloth-derive-migrate = { path = "../../derive-migrate" }
 
 zkinterface = { optional = true, version = "1.3.3" }
 zkinterface_bellman = { optional = true, version = "1.3.0" }
-zki_sieve = { optional = true, path = "deps/zkinterface-sieve/rust" }
+zki_sieve = { optional = true, path = "../zkinterface-sieve/rust" }
 
 # Use the crate ff_derive. The dependencies must be repeated to use in the macro derive(PrimeField).
 ff = { optional = true, version = "0.8.0", features = ["derive"] }
 
 # Note: This is an older version of arrayvec, compatible with older Rust
-arrayvec = "0.5.2"
 bitflags = "1.3.2"
-bitvec = "0.18"
-byteorder = "1"
-rand_core = "0.5"
-subtle = "2.2.1"
 
 bumpalo = "3.4"
-serde = { version = "1", features = ["derive"] }
-serde_cbor = "0.10"
-serde_json = "1"
-serde_yaml = "0.8"
 
-clap = "2.33"
 num-bigint = "0.3.0"
 num-traits = "0.2.12"
 
 log = "0.4"
-env_logger = "0.7"
 
 [dev-dependencies]
+env_logger = "0.7"
 tempfile = "3.1"
 goldenfile = "1.1"

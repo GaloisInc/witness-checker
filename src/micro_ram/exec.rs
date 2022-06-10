@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use log::info;
-use crate::eval::{self, CachingEvaluator};
-use crate::ir::migrate::{self, Migrate};
-use crate::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
-use crate::ir::typed::{Builder, TWire};
+use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
+use zk_circuit_builder::ir::typed::{Builder, TWire};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::known_mem::KnownMem;

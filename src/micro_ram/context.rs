@@ -2,10 +2,10 @@ use std::cell::RefCell;
 use std::fmt;
 use std::mem;
 
-use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::{CircuitTrait, CircuitExt};
-use crate::ir::migrate::{self, Migrate};
-use crate::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
+use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
 
 #[macro_export]
 macro_rules! wire_assert {

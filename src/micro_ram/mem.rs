@@ -9,10 +9,11 @@ use std::convert::TryFrom;
 use std::iter;
 use std::rc::Rc;
 use log::*;
-use crate::gadget::bit_pack;
-use crate::ir::circuit::CircuitExt;
-use crate::ir::migrate::handle::{MigrateHandle, Rooted};
-use crate::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
+use zk_circuit_builder::gadget::bit_pack;
+use zk_circuit_builder::ir::circuit::CircuitExt;
+use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
+use zk_circuit_builder::routing::sort;
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
@@ -20,9 +21,8 @@ use crate::micro_ram::types::{
 };
 use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
-use crate::routing::sort;
 
-use crate::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
 
 #[derive(Migrate)]
 pub struct Memory<'a> {
