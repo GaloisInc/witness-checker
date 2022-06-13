@@ -547,13 +547,17 @@ pub struct Label (
     pub u8,
 );
 pub const BOTTOM: Label = Label(3);
-pub const WORD_BOTTOM: WordLabel = [BOTTOM;WORD_BYTES];
+pub const WORD_BOTTOM: WordLabel = WordLabel([BOTTOM;WORD_BYTES]);
 pub const MAYBE_TAINTED: Label = Label(2);
-pub const WORD_MAYBE_TAINTED: WordLabel = [MAYBE_TAINTED;WORD_BYTES];
+pub const WORD_MAYBE_TAINTED: WordLabel = WordLabel([MAYBE_TAINTED;WORD_BYTES]);
 pub const LABEL_BITS: u8 = 2;
 
 /// Packed label representing 8 labels of the bytes of a word.
-pub type WordLabel = [Label; WORD_BYTES];
+#[derive(Copy, Clone, Debug, Deserialize, Migrate)]
+pub struct WordLabel ([Label; WORD_BYTES]);
+// #[derive(Copy, Clone, Migrate)]
+// pub struct WordLabelRepr<'a> (pub TWire<'a,[Label; WORD_BYTES]>);
+
 
 pub fn valid_label(l:u8) -> bool {
     l <= BOTTOM.0
@@ -607,8 +611,10 @@ impl<'a> FromEval<'a> for Label {
 // Cast u64 to Label.
 impl<'a> Cast<'a, Label> for u64 {
     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        let ty = <Label as Flatten>::wire_type(bld.circuit());
-        bld.c.cast(x, ty)
+        // TODO
+        unimplemented!{}
+        // let ty = <Label as Flatten>::wire_type(bld.circuit());
+        // bld.c.cast(x, ty)
     }
 }
 
@@ -668,6 +674,60 @@ impl<'a> typed::Eq<'a, WordLabel> for WordLabel {
             acc = bld.and(acc, bld.eq(a,b));
         }
         *acc
+    }
+}
+
+impl<'a> Repr<'a> for WordLabel {
+    // type Repr = TWire<'a,[Label; WORD_BYTES]>; // WordLabelRepr<'a>;
+    type Repr = <[Label; WORD_BYTES] as Repr<'a>>::Repr;
+}
+
+impl<'a> Lit<'a> for WordLabel {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        unimplemented!{}
+    }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, WordLabel> for WordLabel {
+    type Output = WordLabel;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: [TWire<'a, Label>; 8],
+        e: [TWire<'a, Label>; 8],
+    ) -> [TWire<'a, Label>; 8] {
+        unimplemented!{}
+    }
+}
+
+impl<'a> Secret<'a> for WordLabel {
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        unimplemented!{}
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        unimplemented!{}
+    }
+}
+
+impl<'a> Flatten<'a> for WordLabel {
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
+        unimplemented!{}
+    }
+
+    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        unimplemented!{}
+    }
+
+    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        unimplemented!{}
+    }
+}
+
+impl<'a> FromEval<'a> for WordLabel {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        unimplemented!{}
     }
 }
 

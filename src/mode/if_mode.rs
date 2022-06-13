@@ -247,6 +247,7 @@ impl<M: ModePred, T: Clone> Clone for IfMode<M, T> {
 }
 
 impl<M: ModePred, T: Copy> Copy for IfMode<M, T> {}
+// impl<'a, M: ModePred, A> Copy for IfMode<M, TWire<'a, A>> {}
 
 impl<M: ModePred, T: PartialEq> PartialEq for IfMode<M, T> {
     fn eq(&self, other: &IfMode<M, T>) -> bool {
@@ -321,6 +322,7 @@ impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> 
 
 impl<'a, M: ModePred, A: Repr<'a>> Repr<'a> for IfMode<M, A> {
     type Repr = IfMode<M, TWire<'a, A>>;
+    // type Repr = IfMode<M, A::Repr>;
 }
 
 impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
