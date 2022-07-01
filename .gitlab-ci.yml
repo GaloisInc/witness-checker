@@ -14,3 +14,4 @@ build-and-test:
   script:
     - cargo build
     - cargo test
+    - cd deps/zk-circuit-builder/ && cargo test
