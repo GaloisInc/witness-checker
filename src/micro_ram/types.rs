@@ -633,16 +633,16 @@ impl<'a> Lit<'a> for Label {
     }
 }
 
-impl<'a, C: Repr<'a> + Flatten<'a>> Mux<'a, C, Label> for Label {
+impl<'a> Mux<'a, bool, Label> for Label {
     type Output = Label;
 
     fn mux(
         bld: &Builder<'a>,
-        c: C::Repr,
+        c: Wire<'a>,
         t: Wire<'a>,
         e: Wire<'a>,
     ) -> Wire<'a> {
-        bld.circuit().mux(<C as Flatten>::to_wire(bld, TWire::new(c)), t, e)
+        bld.circuit().mux(c, t, e)
     }
 }
 
@@ -692,9 +692,10 @@ impl<'a> Lit<'a> for WordLabel {
     }
 }
 
-impl<'a, C: Repr<'a> + Flatten<'a>> Mux<'a, C, WordLabel> for WordLabel
+impl<'a, C: Repr<'a>> Mux<'a, C, WordLabel> for WordLabel
 where
     C::Repr: Clone,
+    Label: Mux<'a, C, Label, Output = Label>,
 {
     type Output = WordLabel;
 
@@ -927,7 +928,7 @@ impl<'a> Secret<'a> for MemPort {
     }
 }
 
-impl<'a, C: Repr<'a> + Flatten<'a>> Mux<'a, C, MemPort> for MemPort
+impl<'a, C: Repr<'a>> Mux<'a, C, MemPort> for MemPort
 where
     C::Repr: Clone,
     u16: Mux<'a, C, u16, Output = u16>,
