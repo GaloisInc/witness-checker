@@ -652,9 +652,9 @@ impl RangeSet {
 
 #[cfg(test)]
 mod test {
-    use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::{Circuit, Arenas, FilterNil};
-    use crate::ir::typed::{Builder, EvaluatorExt};
+    use zk_circuit_builder::eval::{self, CachingEvaluator};
+    use zk_circuit_builder::ir::circuit::{Circuit, Arenas, FilterNil};
+    use zk_circuit_builder::ir::typed::{Builder, EvaluatorExt};
     use super::*;
 
     #[test]
