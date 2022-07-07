@@ -145,29 +145,16 @@ name = "cheesecloth"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
- "bitflags",
- "bitvec",
- "bumpalo",
- "byteorder",
- "cheesecloth-derive-migrate",
  "clap",
  "env_logger",
- "ff",
  "goldenfile",
  "log",
- "num-bigint",
  "num-traits",
- "rand_core",
  "serde",
  "serde_cbor",
  "serde_json",
  "serde_yaml",
- "subtle",
- "tempfile",
  "zk-circuit-builder",
- "zki_sieve",
- "zkinterface",
- "zkinterface_bellman",
 ]
 
 [[package]]
