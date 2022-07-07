@@ -952,11 +952,19 @@ name = "zk-circuit-builder"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "bitvec",
  "bumpalo",
+ "byteorder",
  "cheesecloth-derive-migrate",
+ "ff",
  "log",
  "num-bigint",
  "num-traits",
+ "rand_core",
+ "subtle",
+ "zki_sieve",
+ "zkinterface",
+ "zkinterface_bellman",
 ]
 
 [[package]]

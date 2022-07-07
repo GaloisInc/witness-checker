@@ -6,10 +6,10 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-# [features]
-# default = []
-# bellman = ["zkinterface", "zkinterface_bellman", "ff"]
-# sieve_ir = ["ff", "zki_sieve"]
+[features]
+default = []
+bellman = ["zk-circuit-builder/bellman"]
+sieve_ir = ["zk-circuit-builder/sieve_ir"]
 
 [dependencies]
 cheesecloth-derive-migrate = { path = "derive-migrate" }
