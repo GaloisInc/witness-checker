@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::iter;
-use crate::gadget::arith::BuilderExt as _;
-use crate::eval::{self, CachingEvaluator};
-use crate::ir::migrate::{self, Migrate};
-use crate::ir::typed::{TWire, TSecretHandle, Builder, EvaluatorExt};
+use zk_circuit_builder::gadget::arith::BuilderExt as _;
+use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, EvaluatorExt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
 use crate::micro_ram::known_mem::KnownMem;

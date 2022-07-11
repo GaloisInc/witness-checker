@@ -1,4 +1,4 @@
-use crate::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
 
 #[derive(Debug, Migrate)]
 pub struct PanicOnDrop {

@@ -2,13 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use serde::{de, Deserialize};
-use crate::eval::Evaluator;
-use crate::gadget::bit_pack;
-use crate::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
-use crate::ir::typed::{
+use zk_circuit_builder::eval::Evaluator;
+use zk_circuit_builder::gadget::bit_pack;
+use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
+use zk_circuit_builder::ir::typed::{
     self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
-use crate::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::primitive_binary_impl;
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
@@ -546,13 +547,17 @@ pub struct Label (
     pub u8,
 );
 pub const BOTTOM: Label = Label(3);
-pub const WORD_BOTTOM: WordLabel = [BOTTOM;WORD_BYTES];
+pub const WORD_BOTTOM: WordLabel = WordLabel([BOTTOM;WORD_BYTES]);
 pub const MAYBE_TAINTED: Label = Label(2);
-pub const WORD_MAYBE_TAINTED: WordLabel = [MAYBE_TAINTED;WORD_BYTES];
+pub const WORD_MAYBE_TAINTED: WordLabel = WordLabel([MAYBE_TAINTED;WORD_BYTES]);
 pub const LABEL_BITS: u8 = 2;
 
 /// Packed label representing 8 labels of the bytes of a word.
-pub type WordLabel = [Label; WORD_BYTES];
+#[derive(Copy, Clone, Deserialize, Migrate)]
+pub struct WordLabel ([Label; WORD_BYTES]);
+// #[derive(Copy, Clone, Migrate)]
+// pub struct WordLabelRepr<'a> (pub TWire<'a,[Label; WORD_BYTES]>);
+
 
 pub fn valid_label(l:u8) -> bool {
     l <= BOTTOM.0
@@ -600,6 +605,14 @@ impl<'a> FromEval<'a> for Label {
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
         let val = FromEval::from_eval(ev, a)?;
         Some(Label(val))
+    }
+}
+
+// Cast u64 to Label.
+impl<'a> Cast<'a, Label> for u64 {
+    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        let ty = <Label as Flatten>::wire_type(bld.circuit());
+        bld.circuit().cast(x, ty)
     }
 }
 
@@ -651,6 +664,12 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
+impl fmt::Debug for WordLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl<'a> typed::Eq<'a, WordLabel> for WordLabel {
     type Output = bool;
     fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
@@ -659,6 +678,64 @@ impl<'a> typed::Eq<'a, WordLabel> for WordLabel {
             acc = bld.and(acc, bld.eq(a,b));
         }
         *acc
+    }
+}
+
+impl<'a> Repr<'a> for WordLabel {
+    // type Repr = TWire<'a,[Label; WORD_BYTES]>; // WordLabelRepr<'a>;
+    type Repr = <[Label; WORD_BYTES] as Repr<'a>>::Repr;
+}
+
+impl<'a> Lit<'a> for WordLabel {
+    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+        <[Label; WORD_BYTES]>::lit(bld, a.0)
+    }
+}
+
+impl<'a, C: Repr<'a>> Mux<'a, C, WordLabel> for WordLabel
+where
+    C::Repr: Clone,
+    Label: Mux<'a, C, Label, Output = Label>,
+{
+    type Output = WordLabel;
+
+    fn mux(
+        bld: &Builder<'a>,
+        c: C::Repr,
+        t: [TWire<'a, Label>; 8],
+        e: [TWire<'a, Label>; 8],
+    ) -> [TWire<'a, Label>; 8] {
+        <[Label; WORD_BYTES] as Mux<'a, C, [Label; WORD_BYTES]>>::mux(bld, c, t, e)
+    }
+}
+
+impl<'a> Secret<'a> for WordLabel {
+    fn secret(bld: &Builder<'a>) -> Self::Repr {
+        <[Label; WORD_BYTES]>::secret(bld)
+    }
+
+    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
+        <[Label; WORD_BYTES]>::set_from_lit(s, val, force)
+    }
+}
+
+impl<'a> Flatten<'a> for WordLabel {
+    fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
+        <[Label; WORD_BYTES]>::wire_type(c)
+    }
+
+    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+        <[Label; WORD_BYTES]>::to_wire(bld, TWire::new(w.repr))
+    }
+
+    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+        TWire::new(<[Label; WORD_BYTES]>::from_wire(bld, w).repr)
+    }
+}
+
+impl<'a> FromEval<'a> for WordLabel {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        Some(WordLabel(<[Label; WORD_BYTES]>::from_eval(ev, a)?))
     }
 }
 

@@ -3,12 +3,12 @@
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
 use log::*;
-use crate::ir::migrate::{self, Migrate};
-use crate::ir::migrate::handle::{MigrateHandle, Rooted};
-use crate::ir::typed::{TWire, TSecretHandle, Builder};
+use zk_circuit_builder::ir::migrate::{self, Migrate};
+use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
-use crate::routing::sort;
+use zk_circuit_builder::routing::sort;
 
 #[derive(Migrate)]
 pub struct Fetch<'a> {

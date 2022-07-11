@@ -1,10 +1,10 @@
 #![cfg(feature = "sieve_ir")]
 
-use cheesecloth::eval::{self, CachingEvaluator, Evaluator};
-use cheesecloth::ir::circuit::{
+use zk_circuit_builder::eval::{self, CachingEvaluator, Evaluator};
+use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };
-use cheesecloth::lower;
+use zk_circuit_builder::lower;
 use num_bigint::BigInt;
 use zki_sieve::FilesSink;
 
@@ -17,7 +17,7 @@ macro_rules! make_circuit {
 }
 
 fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
-    use cheesecloth::back::sieve_ir::{
+    use zk_circuit_builder::back::sieve_ir::{
         backend::{Backend, Scalar},
         ir_builder::IRBuilder,
     };

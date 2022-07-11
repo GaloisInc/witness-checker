@@ -4,11 +4,11 @@ use std::collections::hash_map::{HashMap, Entry};
 use std::mem;
 use std::num::Wrapping;
 use arrayvec::ArrayVec;
-use crate::eval::{self, CachingEvaluator};
-use crate::gadget::bit_pack;
-use crate::ir::circuit::{Wire, TyKind, CircuitExt, GateKind, UnOp, BinOp};
-use crate::ir::migrate::{self, Migrate, impl_migrate_trivial};
-use crate::ir::typed::{TWire, Builder, EvaluatorExt};
+use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::gadget::bit_pack;
+use zk_circuit_builder::ir::circuit::{Wire, TyKind, CircuitExt, GateKind, UnOp, BinOp};
+use zk_circuit_builder::ir::migrate::{self, Migrate, impl_migrate_trivial};
+use zk_circuit_builder::ir::typed::{TWire, Builder, EvaluatorExt};
 use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset, MemSegment};
 
 /// The known contents of memory at some point in the execution.  This is used to resolve some
@@ -652,9 +652,9 @@ impl RangeSet {
 
 #[cfg(test)]
 mod test {
-    use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::{Circuit, Arenas, FilterNil};
-    use crate::ir::typed::{Builder, EvaluatorExt};
+    use zk_circuit_builder::eval::{self, CachingEvaluator};
+    use zk_circuit_builder::ir::circuit::{Circuit, Arenas, FilterNil};
+    use zk_circuit_builder::ir::typed::{Builder, EvaluatorExt};
     use super::*;
 
     #[test]

@@ -1,6 +1,6 @@
 
-use crate::gadget::bit_pack;
-use crate::ir::typed::{Builder, TWire};
+use zk_circuit_builder::gadget::bit_pack;
+use zk_circuit_builder::ir::typed::{Builder, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
     types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, WORD_BOTTOM, WordLabel, RamInstr, TaintCalcIntermediate, BOTTOM, MAYBE_TAINTED, WORD_BYTES, WORD_MAYBE_TAINTED}

@@ -6,15 +6,16 @@ use clap::{App, Arg, ArgMatches};
 use env_logger;
 use num_traits::One;
 
-use cheesecloth::wire_assert;
-use cheesecloth::back;
-use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::gadget;
-use cheesecloth::ir::circuit::{
+use zk_circuit_builder::back;
+use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
+use zk_circuit_builder::gadget;
+use zk_circuit_builder::ir::circuit::{
     Circuit, Arenas, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
 };
-use cheesecloth::ir::typed::{Builder, TWire};
-use cheesecloth::lower;
+use zk_circuit_builder::ir::typed::{Builder, TWire};
+use zk_circuit_builder::lower;
+
+use cheesecloth::wire_assert;
 use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::exec::ExecBuilder;
 use cheesecloth::micro_ram::feature::Feature;
@@ -113,13 +114,13 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let is_prover = !args.is_present("verifier-mode");
 
     let arenas = Arenas::new();
-    let mcx = cheesecloth::ir::migrate::handle::MigrateContext::new();
+    let mcx = zk_circuit_builder::ir::migrate::handle::MigrateContext::new();
 
     let arg_test_gadget_eval = args.is_present("test-gadget-eval");
     let arg_zkif_out = args.is_present("zkif-out");
     let arg_sieve_out = args.is_present("sieve-out");
     let gadget_supported = move |g: GadgetKindRef| {
-        use cheesecloth::gadget::bit_pack::{ConcatBits, ExtractBits};
+        use zk_circuit_builder::gadget::bit_pack::{ConcatBits, ExtractBits};
         let mut ok = false;
         if arg_test_gadget_eval {
             return true;

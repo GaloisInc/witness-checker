@@ -1,11 +1,11 @@
 #![cfg(feature = "bellman")]
 
 use num_bigint::BigInt;
-use cheesecloth::eval::{self, Evaluator, CachingEvaluator};
-use cheesecloth::ir::circuit::{
+use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
+use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };
-use cheesecloth::lower;
+use zk_circuit_builder::lower;
 
 macro_rules! make_circuit {
     ($arenas:expr) => {{
@@ -16,7 +16,7 @@ macro_rules! make_circuit {
 }
 
 fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
-    use cheesecloth::back::zkif::backend::{Backend, Scalar};
+    use zk_circuit_builder::back::zkif::backend::{Backend, Scalar};
     use std::fs::remove_file;
     use zkinterface::Reader;
     use zkinterface_bellman::zkif_backend::validate;

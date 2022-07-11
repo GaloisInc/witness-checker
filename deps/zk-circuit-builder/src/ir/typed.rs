@@ -9,7 +9,6 @@ use num_traits::Zero;
 use crate::eval::Evaluator;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
 use crate::ir::migrate::{self, Migrate};
-use crate::micro_ram::types::{Label};
 
 
 pub struct Builder<'a> {
@@ -381,6 +380,7 @@ impl<'a> Builder<'a> {
 }
 
 
+#[macro_export]
 macro_rules! primitive_unary_impl {
     ($Op:ident :: $op:ident ($T:ty)) => {
         impl<'a> $Op<'a> for $T {
@@ -392,6 +392,7 @@ macro_rules! primitive_unary_impl {
     };
 }
 
+#[macro_export]
 macro_rules! primitive_binary_impl {
     ($Op:ident :: $op:ident ($T:ty, $U:ty) -> $R:ty) => {
         impl<'a> $Op<'a, $U> for $T {
@@ -557,14 +558,6 @@ integer_impls!(u8, U8);
 integer_impls!(u16, U16);
 integer_impls!(u32, U32);
 integer_impls!(u64, U64);
-
-// Cast u64 to Label.
-impl<'a> Cast<'a, Label> for u64 {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        let ty = <Label as Flatten>::wire_type(bld.circuit());
-        bld.c.cast(x, ty)
-    }
-}
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {
