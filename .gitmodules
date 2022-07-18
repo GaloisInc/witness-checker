@@ -1,3 +1,6 @@
 [submodule "deps/zkinterface-sieve"]
 	path = deps/zkinterface-sieve
 	url = ../zkinterface-sieve.git
+[submodule "deps/swanky"]
+	path = deps/swanky
+	url = ../../../crypto/swanky.git
