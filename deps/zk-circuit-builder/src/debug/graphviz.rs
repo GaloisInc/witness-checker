@@ -1,5 +1,5 @@
 use std::fmt::{self, Write};
-use crate::ir::circuit::{self, CircuitTrait, Wire, GateKind, Ty, TyKind};
+use crate::ir::circuit::{self, CircuitTrait, Field, Wire, GateKind, Ty, TyKind};
 use crate::eval::{self, Evaluator, CachingEvaluator, Value};
 
 fn write_val(s: &mut String, v: Value) -> Result<(), fmt::Error> {
@@ -22,6 +22,7 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
     match *ty {
         TyKind::Uint(sz) => { write!(s, "u{}", sz.bits())?; },
         TyKind::Int(sz) => { write!(s, "i{}", sz.bits())?; },
+        TyKind::GF(Field::F64b) => { write!(s, "f64")?; },
         TyKind::Bundle(tys) => {
             for (i, &ty) in tys.iter().enumerate() {
                 if i == 0 { write!(s, "[")?; } else { write!(s, ", ")?; }

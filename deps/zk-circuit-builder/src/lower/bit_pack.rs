@@ -30,5 +30,6 @@ fn flatten<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>, out: &mut Vec<Wire<'a>>) 
             }
         },
         TyKind::Int(_) | TyKind::Uint(_) => { out.push(w); },
+        TyKind::GF(_)  => unimplemented!{},
     }
 }

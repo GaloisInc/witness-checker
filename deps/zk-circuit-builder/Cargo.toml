@@ -14,6 +14,8 @@ sieve_ir = ["ff", "zki_sieve"]
 [dependencies]
 cheesecloth-derive-migrate = { path = "../../derive-migrate" }
 
+scuttlebutt = { path = "../swanky/scuttlebutt/" }
+
 zkinterface = { optional = true, version = "1.3.3" }
 zkinterface_bellman = { optional = true, version = "1.3.0" }
 zki_sieve = { optional = true, path = "../zkinterface-sieve/rust" }

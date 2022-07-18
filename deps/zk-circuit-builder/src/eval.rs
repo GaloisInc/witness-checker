@@ -26,6 +26,9 @@ impl Value {
             TyKind::Uint(_) => {
                 Value::Single(bits.to_bigint(ty))
             },
+            TyKind::GF(_) => {
+                unimplemented!{}
+            },
             TyKind::Bundle(tys) => {
                 let mut vals = Vec::with_capacity(tys.len());
                 let mut pos = 0;

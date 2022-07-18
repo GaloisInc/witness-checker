@@ -6,8 +6,9 @@ use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 use num_traits::Zero;
+use scuttlebutt::field::F64b;
 use crate::eval::Evaluator;
-use crate::ir::circuit::{CircuitTrait, CircuitExt, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
+use crate::ir::circuit::{CircuitTrait, CircuitExt, DynCircuit, Field, Wire, Ty, TyKind, CellResetGuard};
 use crate::ir::migrate::{self, Migrate};
 
 
@@ -558,6 +559,91 @@ integer_impls!(u8, U8);
 integer_impls!(u16, U16);
 integer_impls!(u32, U32);
 integer_impls!(u64, U64);
+
+macro_rules! field_impls {
+    ($T:ty, $K:ident) => {
+        impl<'a> Repr<'a> for $T {
+            type Repr = Wire<'a>;
+        }
+
+        impl<'a> Flatten<'a> for $T {
+            fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::GF(Field::$K)) }
+            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
+            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                assert!(*w.ty == TyKind::GF(Field::$K));
+                TWire::new(w)
+            }
+        }
+
+        impl<'a> Lit<'a> for $T {
+            fn lit(bld: &Builder<'a>, x: $T) -> Wire<'a> {
+                bld.c.lit(bld.c.ty(TyKind::GF(Field::$K)), x)
+            }
+        }
+
+        impl<'a> Secret<'a> for $T {
+            fn secret(bld: &Builder<'a>) -> Wire<'a> {
+                bld.c.new_secret_uninit(bld.c.ty(TyKind::GF(Field::$K)))
+            }
+
+            fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
+                s.kind.as_secret().set_from_lit(*val, force);
+            }
+        }
+
+        impl<'a> FromEval<'a> for $T {
+            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+                // let val = ev.eval_single_wire(a).ok()?;
+                // // Conversion should succeed, assuming `a` really carries a value of type `$T`.
+                // Some(<$T as TryFrom<_>>::try_from(val).unwrap())
+                unimplemented!{}
+            }
+        }
+
+        // primitive_unary_impl!(Neg::neg($T));
+        // primitive_unary_impl!(Not::not($T));
+        primitive_binary_impl!(Add::add($T, $T) -> $T);
+        primitive_binary_impl!(Sub::sub($T, $T) -> $T);
+        primitive_binary_impl!(Mul::mul($T, $T) -> $T);
+        primitive_binary_impl!(Div::div($T, $T) -> $T);
+        // primitive_binary_impl!(Mod::mod_($T, $T) -> $T);
+        // primitive_binary_impl!(And::and($T, $T) -> $T);
+        // primitive_binary_impl!(Or::or($T, $T) -> $T);
+        // primitive_binary_impl!(Xor::xor($T, $T) -> $T);
+        // primitive_binary_impl!(Shl::shl($T, u8) -> $T);
+        // primitive_binary_impl!(Shr::shr($T, u8) -> $T);
+        primitive_binary_impl!(Eq::eq($T, $T) -> bool);
+        primitive_binary_impl!(Ne::ne($T, $T) -> bool);
+        // primitive_binary_impl!(Lt::lt($T, $T) -> bool);
+        // primitive_binary_impl!(Le::le($T, $T) -> bool);
+        // primitive_binary_impl!(Gt::gt($T, $T) -> bool);
+        // primitive_binary_impl!(Ge::ge($T, $T) -> bool);
+
+        impl<'a> Mux<'a, bool> for $T {
+            type Output = $T;
+            fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+                bld.c.mux(c, t, e)
+            }
+        }
+
+        // impl<'a> Cast<'a, $T> for bool {
+        //     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        //         bld.c.cast(x, bld.c.ty(TyKind::GF(Field::$K)))
+        //     }
+        // }
+
+        // integer_cast_impl!($T, i8, I8);
+        // integer_cast_impl!($T, i16, I16);
+        // integer_cast_impl!($T, i32, I32);
+        // integer_cast_impl!($T, i64, I64);
+        // integer_cast_impl!($T, u8, U8);
+        // integer_cast_impl!($T, u16, U16);
+        // integer_cast_impl!($T, u32, U32);
+        // integer_cast_impl!($T, u64, U64);
+    };
+}
+
+field_impls!(F64b, F64b);
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {

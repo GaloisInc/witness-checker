@@ -25,6 +25,7 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
+use scuttlebutt::field::F64b;
 use crate::eval;
 use crate::ir::migrate::{self, Migrate};
 
@@ -1266,7 +1267,20 @@ pub struct IntSize(pub u16);
 pub enum TyKind<'a> {
     Int(IntSize),
     Uint(IntSize),
+    GF(Field),
     Bundle(&'a [Ty<'a>]),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+/// Finite fields.
+pub enum Field {
+    F64b,
+}
+
+impl AsBits for F64b {
+    fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
+        unimplemented!{}
+    }
 }
 
 impl IntSize {
@@ -1290,6 +1304,7 @@ impl TyKind<'_> {
         match *self {
             TyKind::Int(_) => true,
             TyKind::Uint(_) => true,
+            TyKind::GF(_) => unimplemented!{},
             TyKind::Bundle(_) => false,
         }
     }
@@ -1298,6 +1313,7 @@ impl TyKind<'_> {
         match *self {
             TyKind::Int(sz) => sz,
             TyKind::Uint(sz) => sz,
+            TyKind::GF(_) => unimplemented!{},
             TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
         }
     }
@@ -1320,6 +1336,7 @@ impl TyKind<'_> {
         match *self {
             TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
+            TyKind::GF(f) => c.ty(TyKind::GF(f)),
             TyKind::Bundle(tys) => {
                 c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
             },
@@ -1333,6 +1350,9 @@ impl TyKind<'_> {
             TyKind::Int(sz) |
             TyKind::Uint(sz) => {
                 (sz.bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
+            },
+            TyKind::GF(_) => {
+                unimplemented!{}
             },
             TyKind::Bundle(tys) => {
                 tys.iter().map(|ty| ty.digits()).sum()
@@ -1348,6 +1368,7 @@ impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
         match self {
             Int(sz) => Int(sz),
             Uint(sz) => Uint(sz),
+            GF64 => unimplemented!{},
             Bundle(tys) => {
                 let tys = tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
                 Bundle(v.new_circuit().intern_ty_list(&tys))

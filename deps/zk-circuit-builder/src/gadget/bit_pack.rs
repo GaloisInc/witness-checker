@@ -22,7 +22,7 @@ impl<'a> Iterator for BundleTys<'a> {
                 TyKind::Bundle(tys) => {
                     self.stk.extend(tys.iter().rev().cloned());
                 },
-                TyKind::Uint(_) | TyKind::Int(_) => return Some(ty),
+                TyKind::Uint(_) | TyKind::Int(_) | TyKind::GF(_) => return Some(ty),
             }
         }
         None
@@ -47,7 +47,7 @@ impl<'a> Iterator for BundleWires<'_, 'a> {
                     let c = self.c;
                     self.stk.extend((0 .. tys.len()).rev().map(|i| c.extract(w, i)));
                 },
-                TyKind::Uint(_) | TyKind::Int(_) => return Some(w),
+                TyKind::Uint(_) | TyKind::Int(_) | TyKind::GF(_) => return Some(w),
             }
         }
         None
@@ -154,6 +154,9 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
                     *pos = end;
                     c.cast(extract_bits(&c, inp, start, end), ty)
                 },
+                TyKind::GF(_) => {
+                    unimplemented!{}
+                }
                 TyKind::Bundle(tys) => {
                     c.pack_iter(tys.iter().map(|&ty| walk(c, inp, ty, pos)))
                 },
