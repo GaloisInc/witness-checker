@@ -128,6 +128,7 @@ fn const_foldable(gk: GateKind) -> bool {
         GateKind::Lit(..) => false,
         GateKind::Secret(..) => false,
         GateKind::Erased(..) => false,
+        GateKind::Argument(..) => false,
         GateKind::Unary(_, a) => a.is_lit(),
         GateKind::Binary(_, a, b) => a.is_lit() && b.is_lit(),
         GateKind::Shift(_, a, b) => a.is_lit() && b.is_lit(),
@@ -139,6 +140,7 @@ fn const_foldable(gk: GateKind) -> bool {
         // `Extract` can't be folded because its input can't be a `Lit`.
         GateKind::Extract(..) => false,
         GateKind::Gadget(_, ws) => ws.iter().all(|&w| w.is_lit()),
+        GateKind::Call(_, ws, ss) => ws.iter().all(|&w| w.is_lit()) && ss.len() == 0,
     }
 }
 

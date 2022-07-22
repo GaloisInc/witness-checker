@@ -142,6 +142,8 @@ impl<'a> Backend<'a> {
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
 
+            GateKind::Argument(_, _) => unimplemented!("Argument"),
+
             GateKind::Unary(op, arg) => {
                 let aw = self.wire(arg);
 
@@ -436,6 +438,8 @@ impl<'a> Backend<'a> {
                     unimplemented!("GADGET {}", gk.name());
                 }
             }
+
+            GateKind::Call(_, _, _) => unimplemented!("Call"),
         };
 
         self.representer.new_repr(repr)
@@ -490,8 +494,8 @@ fn test_zkif() -> Result<()> {
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let sec1 = c.new_secret_init(c.ty(TyKind::I64), || 12);
-    let sec2 = c.new_secret_init(c.ty(TyKind::I64), || 13);
+    let sec1 = c.new_secret_wire_init(c.ty(TyKind::I64), || 12);
+    let sec2 = c.new_secret_wire_init(c.ty(TyKind::I64), || 13);
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);

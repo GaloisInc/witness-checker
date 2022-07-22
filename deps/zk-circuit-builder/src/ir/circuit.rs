@@ -26,7 +26,7 @@ use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
 use crate::eval;
-use crate::ir::migrate::{self, Migrate};
+use crate::ir::migrate::{self, Migrate, Visitor as _};
 
 
 // CircuitBase layer
@@ -50,8 +50,15 @@ pub struct CircuitBase<'a> {
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
 
+    function_scope: RefCell<Option<FunctionScope<'a>>>,
+
     current_label: Cell<&'a str>,
     is_prover: bool,
+    functions: RefCell<Vec<Function<'a>>>,
+}
+
+struct FunctionScope<'a> {
+    secrets: Vec<(SecretInputId, Ty<'a>)>,
 }
 
 impl<'a> CircuitBase<'a> {
@@ -65,8 +72,10 @@ impl<'a> CircuitBase<'a> {
             intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
+            function_scope: RefCell::new(None),
             current_label: Cell::new(""),
             is_prover,
+            functions: RefCell::new(Vec::new()),
         };
         c.preload_common_types();
         c.preload_common_bits();
@@ -243,6 +252,17 @@ impl<'a> CircuitBase<'a> {
             _ => {},
         }
 
+        // Forbid using a single `Secret` in multiple gates.
+        match kind {
+            GateKind::Secret(s) => { s.set_used(); },
+            GateKind::Call(_, _, ss) => {
+                for &(_, s) in ss {
+                    s.set_used();
+                }
+            },
+            _ => {},
+        }
+
         let value = match kind {
             GateKind::Lit(bits, _) => GateValue::Public(bits),
             GateKind::Erased(e) => e.gate_value(),
@@ -270,11 +290,45 @@ impl<'a> CircuitBase<'a> {
     }
 
 
-    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
-    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
-    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
-    /// automatically.
-    fn new_secret(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
+    fn alloc_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
+        let mut scope = self.function_scope.borrow_mut();
+        let scope = scope.as_mut().expect("can't use alloc_secret_input outside function body");
+        let id = SecretInputId(scope.secrets.len());
+        scope.secrets.push((id, ty));
+        let s = Secret(self.arena().alloc(SecretData::new(ty, SecretValue::FunctionInput(id))));
+        (s, id)
+    }
+
+    fn alloc_secret(&self, ty: Ty<'a>, val: SecretValue<'a>) -> Secret<'a> {
+        assert!(
+            self.function_scope.borrow().is_none(),
+            "can't use alloc_secret inside a function body",
+        );
+        Secret(self.arena().alloc(SecretData::new(ty, val)))
+    }
+
+
+    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
+    /// running in prover mode), and return the resulting `Secret`.
+    ///
+    /// `mk_val` will not be called when running in prover mode.
+    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Secret<'a>
+    where F: FnOnce() -> T {
+        let val = SecretValue::init(self.is_prover, || self.bits(ty, mk_val()));
+        self.alloc_secret(ty, val)
+    }
+
+    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
+    /// initialized later using `SecretData::set_from_lit`.
+    fn new_secret_uninit(&self, ty: Ty<'a>) -> Secret<'a> {
+        let val = SecretValue::uninit(self.is_prover);
+        self.alloc_secret(ty, val)
+    }
+
+    /// Add a new secret value to the witness and return it.  The accompanying `SecretHandle` can
+    /// be used to assign a value to the secret after construction.  If the `SecretHandle` is
+    /// dropped without setting a value, the value will be set to zero automatically.
+    fn new_secret(&self, ty: Ty<'a>) -> (Secret<'a>, SecretHandle<'a>) {
         let default = self.intern_bits(&[]);
         self.new_secret_default(ty, default)
     }
@@ -285,36 +339,62 @@ impl<'a> CircuitBase<'a> {
         &self,
         ty: Ty<'a>,
         default: T,
-    ) -> (Wire<'a>, SecretHandle<'a>) {
-        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
+    ) -> (Secret<'a>, SecretHandle<'a>) {
+        let secret = self.new_secret_uninit(ty);
         let default = self.bits(ty, default);
-        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
         let handle = SecretHandle::new(secret, default);
-        (self.secret(secret), handle)
+        (secret, handle)
+    }
+
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
+        self.alloc_secret_input(ty)
+    }
+
+
+    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
+    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
+    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
+    /// automatically.
+    fn new_secret_wire(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
+        let (s, sh) = self.new_secret(ty);
+        (self.secret(s), sh)
+    }
+
+    /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
+    /// value to `default` instead of zero.
+    fn new_secret_wire_default<T: AsBits>(
+        &self,
+        ty: Ty<'a>,
+        default: T,
+    ) -> (Wire<'a>, SecretHandle<'a>) {
+        let (s, sh) = self.new_secret_default(ty, default);
+        (self.secret(s), sh)
     }
 
     /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
     /// running in prover mode), and return a `Wire` that carries that value.
     ///
     /// `mk_val` will not be called when running in prover mode.
-    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
+    fn new_secret_wire_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
     where F: FnOnce() -> T {
-        let val = if self.is_prover {
-            let bits = self.bits(ty, mk_val());
-            Some(SecretValue::with_value(bits))
-        } else {
-            None
-        };
-        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
-        self.secret(secret)
+        let s = self.new_secret_init(ty, mk_val);
+        self.secret(s)
     }
 
     /// Create a new uninitialized secret.  When running in prover mode, the secret must be
     /// initialized later using `SecretData::set_from_lit`.
-    fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        let val = if self.is_prover { Some(SecretValue::default()) } else { None };
-        let secret = Secret(self.arena().alloc(SecretData { ty, val }));
-        self.secret(secret)
+    fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
+        let s = self.new_secret_uninit(ty);
+        self.secret(s)
+    }
+
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_wire_input(&self, ty: Ty<'a>) -> (Wire<'a>, SecretInputId) {
+        let (s, id) = self.alloc_secret_input(ty);
+        (self.secret(s), id)
     }
 
 
@@ -336,8 +416,10 @@ impl<'a> CircuitBase<'a> {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
             ref intern_gadget_kind, ref intern_str, ref intern_bits,
+            ref function_scope,
             ref current_label,
             is_prover: _,
+            functions: _,
         } = *self;
 
         let old_arenas = arenas.take();
@@ -355,6 +437,8 @@ impl<'a> CircuitBase<'a> {
 
         // Migrate `current_label` to the new arena.
         current_label.set(self.intern_str(current_label.get()));
+
+        assert!(function_scope.borrow().is_none(), "can't migrate inside define_function");
 
         old_arenas
     }
@@ -413,6 +497,59 @@ impl<'a, F> Circuit<'a, F> {
             base: CircuitBase::new(arenas, is_prover),
             filter: UnsafeCell::new(filter),
         }
+    }
+}
+
+impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
+    /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
+    /// returns a wire representing the output of the function.  The secondary output of type `T`
+    /// can be used to return a data structure describing the `SecretInputId`s used by this
+    /// function.
+    ///
+    /// Concretely, the `Circuit` passed to the callback is `self` and uses the same lifetime `'a`,
+    /// but we hide this fact from the caller so that `rustc` will report an error if wires from
+    /// outside the function are used inside the callback or vice versa.
+    //
+    // This function is defined on the concrete `Circuit` type instead of the generic `CircuitExt`
+    // trait because this lets it provide a more precise circuit type to the callback, which
+    // simplifies its usage with `typed::Builder`.  However, it should be easy to copy into
+    // `CircuitExt` if it's needed in the future.
+    pub fn define_function_ex<F2, T>(
+        &self,
+        name: &str,
+        arg_tys: &[Ty<'a>],
+        f: F2,
+    ) -> (Function<'a>, T)
+    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> (Wire<'b>, T) {
+        let function_scope = &self.base.function_scope;
+        let old_scope = mem::replace(&mut *function_scope.borrow_mut(), Some(FunctionScope {
+            secrets: Vec::new(),
+        }));
+
+        let arg_wires = arg_tys.iter().enumerate()
+            .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
+            .collect::<Vec<_>>();
+        let (result_wire, extra) = f(self, &arg_wires);
+
+        let new_scope = mem::replace(&mut *function_scope.borrow_mut(), old_scope).unwrap();
+        let func = Function(self.as_base().arena().alloc(FunctionDef {
+            name: self.as_base().intern_str(name),
+            arg_tys: self.ty_list(arg_tys),
+            secret_inputs: self.as_base().arena().alloc_slice_copy(&new_scope.secrets),
+            result_wire,
+        }));
+        self.as_base().functions.borrow_mut().push(func);
+        (func, extra)
+    }
+
+    pub fn define_function<F2>(&self, name: &str, arg_tys: &[Ty<'a>], f: F2) -> Function<'a>
+    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> Wire<'b> {
+        let (func, ()) = self.define_function_ex(
+            name,
+            arg_tys,
+            |c, args| (f(c, args), ()),
+        );
+        func
     }
 }
 
@@ -659,37 +796,83 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
-    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
-    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
-    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
-    /// automatically.
-    fn new_secret(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
-        self.as_base().new_secret(ty)
-    }
-
-    /// Like `new_secret`, but dropping the `SecretHandle` without setting a value will set the
-    /// value to `default` instead of zero.
-    fn new_secret_default<T: AsBits>(
-        &self,
-        ty: Ty<'a>,
-        default: T,
-    ) -> (Wire<'a>, SecretHandle<'a>) {
-        self.as_base().new_secret_default(ty, default)
-    }
-
     /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
-    /// running in prover mode), and return a `Wire` that carries that value.
+    /// running in prover mode), and return a `Secret` that carries that value.
     ///
     /// `mk_val` will not be called when running in prover mode.
-    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
+    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Secret<'a>
     where F: FnOnce() -> T {
         self.as_base().new_secret_init(ty, mk_val)
     }
 
     /// Create a new uninitialized secret.  When running in prover mode, the secret must be
     /// initialized later using `SecretData::set_from_lit`.
-    fn new_secret_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
+    fn new_secret_uninit(&self, ty: Ty<'a>) -> Secret<'a> {
         self.as_base().new_secret_uninit(ty)
+    }
+
+    /// Add a new secret value to the witness, and return a `Secret` that carries that value.  The
+    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
+    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
+    /// automatically.
+    fn new_secret(&self, ty: Ty<'a>) -> (Secret<'a>, SecretHandle<'a>) {
+        self.as_base().new_secret(ty)
+    }
+
+    /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
+    /// value to `default` instead of zero.
+    fn new_secret_default<T: AsBits>(
+        &self,
+        ty: Ty<'a>,
+        default: T,
+    ) -> (Secret<'a>, SecretHandle<'a>) {
+        self.as_base().new_secret_default(ty, default)
+    }
+
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
+        self.as_base().new_secret_input(ty)
+    }
+
+
+    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
+    /// running in prover mode), and return a `Wire` that carries that value.
+    ///
+    /// `mk_val` will not be called when running in prover mode.
+    fn new_secret_wire_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
+    where F: FnOnce() -> T {
+        self.as_base().new_secret_wire_init(ty, mk_val)
+    }
+
+    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
+    /// initialized later using `SecretData::set_from_lit`.
+    fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
+        self.as_base().new_secret_wire_uninit(ty)
+    }
+
+    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
+    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
+    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
+    /// automatically.
+    fn new_secret_wire(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
+        self.as_base().new_secret_wire(ty)
+    }
+
+    /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
+    /// value to `default` instead of zero.
+    fn new_secret_wire_default<T: AsBits>(
+        &self,
+        ty: Ty<'a>,
+        default: T,
+    ) -> (Wire<'a>, SecretHandle<'a>) {
+        self.as_base().new_secret_wire_default(ty, default)
+    }
+
+    /// Add a new secret input to the current function.  Panics if called at top level (outside a
+    /// function definition).
+    fn new_secret_wire_input(&self, ty: Ty<'a>) -> (Wire<'a>, SecretInputId) {
+        self.as_base().new_secret_wire_input(ty)
     }
 
 
@@ -853,6 +1036,16 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gadget(kind, &args)
     }
 
+    fn call(
+        &self,
+        func: Function<'a>,
+        args: &'a [Wire<'a>],
+        secrets: &[(SecretInputId, Secret<'a>)],
+    ) -> Wire<'a> {
+        let secrets = self.as_base().arena().alloc_slice_copy(secrets);
+        self.gate(GateKind::Call(func, args, secrets))
+    }
+
 
     fn current_label(&self) -> &'a str {
         self.as_base().current_label()
@@ -877,6 +1070,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let old_arenas = self.as_base().pre_migrate();
         let mut v = MigrateVisitor::new(self.as_base());
 
+        let functions = mem::take(&mut *self.as_base().functions.borrow_mut()).into_iter()
+            .map(|f| v.visit(f))
+            .collect();
+        *self.as_base().functions.borrow_mut() = functions;
         self.migrate_filter(&mut v);
         let r = f(&mut v);
 
@@ -914,6 +1111,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
         let mut v = EraseVisitor::new(self.as_base());
 
+        // Don't erase inside `self.functions`.
         self.erase_filter(&mut v);
         let r = f(&mut v);
 
@@ -957,6 +1155,7 @@ pub struct MigrateVisitor<'a, 'b> {
     wire_map: HashMap<Wire<'a>, Wire<'b>>,
     secret_map: HashMap<Secret<'a>, Secret<'b>>,
     erased_map: HashMap<Erased<'a>, Erased<'b>>,
+    function_map: HashMap<Function<'a>, Function<'b>>,
 }
 
 impl<'a, 'b> MigrateVisitor<'a, 'b> {
@@ -969,6 +1168,7 @@ impl<'a, 'b> MigrateVisitor<'a, 'b> {
             wire_map: HashMap::new(),
             secret_map: HashMap::new(),
             erased_map: HashMap::new(),
+            function_map: HashMap::new(),
         }
     }
 }
@@ -1005,6 +1205,16 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
 
         let new = Erased(self.new_circuit.arena().alloc(self.visit((*e).clone())));
         self.erased_map.insert(e, new);
+        new
+    }
+
+    fn visit_function(&mut self, f: Function<'a>) -> Function<'b> {
+        if let Some(&new) = self.function_map.get(&f) {
+            return new;
+        }
+
+        let new = Function(self.new_circuit.arena().alloc(self.visit((*f).clone())));
+        self.function_map.insert(f, new);
         new
     }
 
@@ -1080,6 +1290,13 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
 
     fn visit_secret(&mut self, s: Secret<'a>) -> Secret<'a> { s }
     fn visit_erased(&mut self, e: Erased<'a>) -> Erased<'a> { e }
+
+    fn visit_function(&mut self, f: Function<'a>) -> Function<'a> {
+        // Currently, we don't erase any wires inside of function definitions.  Function bodies are
+        // always available.  If this turns out to be unnecessary. we could erase the function's
+        // result wires here.
+        f
+    }
 }
 
 impl<'a> EraseVisitor<'a> {
@@ -1171,7 +1388,8 @@ pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
     match w.kind {
         GateKind::Lit(_, _) |
         GateKind::Secret(_) |
-        GateKind::Erased(_) => WireDeps::zero(),
+        GateKind::Erased(_) |
+        GateKind::Argument(_, _) => WireDeps::zero(),
         GateKind::Unary(_, a) |
         GateKind::Cast(a, _) |
         GateKind::Extract(a, _) => WireDeps::one(a),
@@ -1180,7 +1398,8 @@ pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
         GateKind::Compare(_, a, b) => WireDeps::two(a, b),
         GateKind::Mux(c, t, e) => WireDeps::three(c, t, e),
         GateKind::Pack(ws) |
-        GateKind::Gadget(_, ws) => WireDeps::many(ws),
+        GateKind::Gadget(_, ws) |
+        GateKind::Call(_, ws, _) => WireDeps::many(ws),
     }
 }
 
@@ -1594,6 +1813,10 @@ pub enum GateKind<'a> {
     Secret(Secret<'a>),
     /// A gate that has been erased from the in-memory representation of the circuit.
     Erased(Erased<'a>),
+    /// A function argument.  This gate kind should only appear inside function bodies.  `Argument`
+    /// gates are created by the function-definition machinery; they should not be created
+    /// manually.
+    Argument(usize, Ty<'a>),
     /// Compute a unary operation.  All `UnOp`s have type `T -> T`.
     Unary(UnOp, Wire<'a>),
     /// Compute a binary operation.  All `BinOp`s have type `T -> T -> T`
@@ -1613,6 +1836,11 @@ pub enum GateKind<'a> {
     /// A custom gadget.
     // TODO: move fields to a struct (this variant is 5 words long)
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
+    /// A function call.  The wires are the arguments to the function.  Secret inputs to the
+    /// function are provided as a list of pairs, giving a value for each `SecretInputId` used in
+    /// the function.  (This would be a `HashMap`, but `Gate` is arena-allocated and thus never
+    /// gets dropped, so putting a `HashMap` here would leak memory.)
+    Call(Function<'a>, &'a [Wire<'a>], &'a [(SecretInputId, Secret<'a>)]),
 }
 
 impl<'a> Gate<'a> {
@@ -1627,6 +1855,7 @@ impl<'a> GateKind<'a> {
             GateKind::Lit(_, ty) => ty,
             GateKind::Secret(s) => s.ty,
             GateKind::Erased(e) => e.ty,
+            GateKind::Argument(_, ty) => ty,
             GateKind::Unary(_, w) => w.ty,
             GateKind::Binary(_, w, _) => w.ty,
             GateKind::Shift(_, w, _) => w.ty,
@@ -1642,6 +1871,7 @@ impl<'a> GateKind<'a> {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
                 k.typecheck(c.as_base(), &tys)
             },
+            GateKind::Call(f, _, _) => f.result_wire.ty,
         }
     }
 
@@ -1675,6 +1905,7 @@ impl<'a> GateKind<'a> {
             Lit(_, _) => "Lit",
             Secret(_) => "Secret",
             Erased(_) => "Erased",
+            Argument(_, _) => "Argument",
             Unary(op, _) => match op {
                 Not => "Not",
                 Neg => "Neg",
@@ -1703,6 +1934,7 @@ impl<'a> GateKind<'a> {
             Pack(_) => "Pack",
             Extract(_, _) => "Extract",
             Gadget(_, _) => "Gadget",
+            Call(_, _, _) => "Call",
         }
     }
 }
@@ -1749,6 +1981,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
             Lit(bits, ty) => Lit(v.visit(bits), v.visit(ty)),
             Secret(s) => Secret(v.visit(s)),
             Erased(e) => Erased(v.visit(e)),
+            Argument(idx, ty) => Argument(idx, v.visit(ty)),
             Unary(op, a) => Unary(op, v.visit(a)),
             Binary(op, a, b) => Binary(op, v.visit(a), v.visit(b)),
             Shift(op, a, b) => Shift(op, v.visit(a), v.visit(b)),
@@ -1765,6 +1998,14 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
                 let ws = v.new_circuit().intern_wire_list(&ws);
                 Gadget(gk, ws)
+            },
+            Call(f, ws, ss) => {
+                let f = v.visit(f);
+                let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+                let ws = v.new_circuit().intern_wire_list(&ws);
+                let ss = ss.iter().map(|&s| v.visit(s)).collect::<Vec<_>>();
+                let ss = v.new_circuit().arena().alloc_slice_copy(&ss);
+                Call(f, ws, ss)
             },
         }
     }
@@ -1871,7 +2112,19 @@ impl<'a> fmt::Debug for Wire<'a> {
 }
 
 declare_interned_pointer! {
-    /// A secret input value, part of the witness.
+    /// A slot in the witness, which contains a secret value.
+    ///
+    /// For maximum flexibility in constructing and optimizing abstract circuits, the full witness
+    /// is never represented explicitly.  Instead, individual `Secret`s can be created at any point
+    /// and used or discarded as needed.  During lowering to a concrete circuit, each `Secret` in
+    /// use within the circuit is added to the witness in an arbitrary order.
+    ///
+    /// With the addition of call gates, we consider each stack frame to have a separate witness.
+    /// Each `Secret` used in a function body refers to an element of the witness for the current
+    /// stack frame, identified by the `SecretInputId` stored in the `SecretValue::FunctionInput`.
+    /// The `FunctionDef` contains a list of `SecretInputId`s that must be given values at each
+    /// call, and `GateKind::Call` contains a list mapping `SecretInputId`s to `Secret`s in the
+    /// caller's scope.
     #[derive(Debug)]
     pub struct Secret<'a> => SecretData<'a>;
 }
@@ -1884,75 +2137,187 @@ impl<'a, 'b> Migrate<'a, 'b> for Secret<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Default, Migrate)]
-struct SecretValue<'a>(Cell<Option<Bits<'a>>>);
+/// The ID of a secret input to a function.  This is essentially used as an "argument name" when
+/// passing secret values to functions: the `FunctionDef` declares a type for each `SecretInputId`
+/// that it uses, and the caller must provide a value for each `SecretInputId` when it makes the
+/// call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
+pub struct SecretInputId(pub usize);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Migrate)]
+pub enum SecretValue<'a> {
+    /// The circuit is in prover mode, and the value is initialized.
+    ProverInit(Bits<'a>),
+    /// The circuit is in prover mode, and the value hasn't be initialized yet.
+    ProverUninit,
+    /// The circuit is in verifier mode, so the value will never be initialized.
+    VerifierUnknown,
+    /// This secret is inside a function, and its value is taken from one of the function's secret
+    /// inputs.
+    FunctionInput(SecretInputId),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PackedSecretValue<'a> {
+    inner: (usize, usize),
+    _marker: PhantomData<Bits<'a>>,
+}
 
 impl<'a> SecretValue<'a> {
-    pub fn with_value(val: Bits<'a>) -> SecretValue<'a> {
-        SecretValue(Cell::new(Some(val)))
-    }
-
-    pub fn set(&self, val: Bits<'a>) {
-        assert!(self.0.get().is_none(), "secret value has already been set");
-        self.0.set(Some(val));
-    }
-
-    pub fn set_default(&self, val: Bits<'a>) {
-        if self.0.get().is_none() {
-            self.0.set(Some(val));
+    /// Produce either `ProverUninit` or `VerifierUnknown`, depending on the value of `is_prover`.
+    pub fn uninit(is_prover: bool) -> SecretValue<'a> {
+        if is_prover {
+            SecretValue::ProverUninit
+        } else {
+            SecretValue::VerifierUnknown
         }
     }
 
-    pub fn get(&self) -> Bits<'a> {
-        match self.0.get() {
-            Some(x) => x,
-            None => panic!("tried to access uninitialized secret value"),
+    /// Produce either `ProverInit(mk_val())` or `VerifierUnknown`, depending on the value of
+    /// `is_prover`.
+    pub fn init(is_prover: bool, mk_val: impl FnOnce() -> Bits<'a>) -> SecretValue<'a> {
+        if is_prover {
+            SecretValue::ProverInit(mk_val())
+        } else {
+            SecretValue::VerifierUnknown
         }
     }
 
-    pub fn try_get(&self) -> Option<Bits<'a>> {
-        self.0.get()
-    }
-
-    pub fn is_set(&self) -> bool {
-        self.0.get().is_some()
+    pub fn pack(self) -> PackedSecretValue<'a> {
+        let inner = match self {
+            SecretValue::ProverInit(bits) => {
+                let ptr = bits.0.as_ptr() as usize;
+                assert!(ptr >= 2);
+                let len = bits.0.len();
+                (ptr, len)
+            },
+            SecretValue::ProverUninit => (0, 0),
+            SecretValue::VerifierUnknown => (0, 1),
+            SecretValue::FunctionInput(i) => (1, i.0),
+        };
+        PackedSecretValue { inner, _marker: PhantomData }
     }
 }
+
+impl<'a> PackedSecretValue<'a> {
+    pub fn unpack(self) -> SecretValue<'a> {
+        unsafe {
+            match self.inner {
+                (0, 0) => SecretValue::ProverUninit,
+                (0, 1) => SecretValue::VerifierUnknown,
+                (1, i) => SecretValue::FunctionInput(SecretInputId(i)),
+                (ptr, len) => {
+                    let bits = slice::from_raw_parts(ptr as *const _, len);
+                    SecretValue::ProverInit(Bits(bits))
+                }
+            }
+        }
+    }
+}
+
+impl<'a> fmt::Debug for PackedSecretValue<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&self.unpack(), f)
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for PackedSecretValue<'a> {
+    type Output = PackedSecretValue<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PackedSecretValue<'b> {
+        self.unpack().migrate(v).pack()
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug, Migrate)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
-    val: Option<SecretValue<'a>>,
+    val: Cell<PackedSecretValue<'a>>,
+    /// Indicates whether this `Secret` has been used to construct a gate.  Each `Secret` can only
+    /// be used in one place in the circuit.  This flag is `false` on construction and becomes
+    /// `true` at the first use; if it is used again after that, a panic occurs.  Note that
+    /// constructing a second gate from the same `Secret` will panic even if the first gate isn't
+    /// used anywhere.
+    used: Cell<bool>,
 }
 
 impl<'a> SecretData<'a> {
+    fn new(ty: Ty<'a>, val: SecretValue<'a>) -> SecretData<'a> {
+        SecretData {
+            ty,
+            val: Cell::new(val.pack()),
+            used: Cell::new(false),
+        }
+    }
+
+    pub fn secret_value(&self) -> SecretValue<'a> {
+        self.val.get().unpack()
+    }
+
+    pub fn set_used(&self) {
+        assert!(!self.used.get(), "this secret has already been used");
+        self.used.set(true);
+    }
+
     /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
     /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
     /// panic.
     pub fn val(&self) -> Option<Bits<'a>> {
-        self.val.as_ref().map(|sv| sv.get())
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(bits) => Some(bits),
+            SecretValue::ProverUninit =>
+                panic!("tried to access uninitialized secert value"),
+            SecretValue::VerifierUnknown => None,
+            SecretValue::FunctionInput(_) =>
+                panic!("tried to access value of abstract function input"),
+        }
     }
 
     /// Try to retrieve the value of this secret.  In verifier mode, this always returns `None`.
     /// In prover mode, this returns `Some(bits)` if the value has been initialized and `None`
     /// otherwise.
     pub fn try_val(&self) -> Option<Bits<'a>> {
-        self.val.as_ref().and_then(|sv| sv.try_get())
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(bits) => Some(bits),
+            SecretValue::ProverUninit => None,
+            SecretValue::VerifierUnknown => None,
+            SecretValue::FunctionInput(_) =>
+                panic!("tried to access value of abstract function input"),
+        }
     }
 
     pub fn has_val(&self) -> bool {
-        self.val.as_ref().map_or(false, |sv| sv.is_set())
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(_) => true,
+            SecretValue::ProverUninit => false,
+            SecretValue::VerifierUnknown => false,
+            SecretValue::FunctionInput(_) =>
+                panic!("tried to access value of abstract function input"),
+        }
     }
 
     pub fn set(&self, bits: Bits<'a>) {
-        let sv = self.val.as_ref()
-            .expect("can't provide secret values when running in verifier mode");
-        sv.set(bits);
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(_) =>
+                panic!("secret value has already been set"),
+            SecretValue::ProverUninit => {
+                self.val.set(SecretValue::ProverInit(bits).pack());
+            },
+            SecretValue::VerifierUnknown =>
+                panic!("can't provide secret values when running in verifier mode"),
+            SecretValue::FunctionInput(_) =>
+                panic!("can't provide secret value for abstract function input"),
+        }
     }
 
     pub fn set_default(&self, bits: Bits<'a>) {
-        if let Some(ref sv) = self.val {
-            sv.set_default(bits);
+        match self.val.get().unpack() {
+            SecretValue::ProverInit(_) => {},
+            SecretValue::ProverUninit => {
+                self.val.set(SecretValue::ProverInit(bits).pack());
+            },
+            SecretValue::VerifierUnknown => {},
+            SecretValue::FunctionInput(_) => {},
         }
     }
 
@@ -2209,6 +2574,50 @@ impl Eq for HashDynGadgetKind<'_> {}
 impl Hash for HashDynGadgetKind<'_> {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.0.hash_dyn(h)
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct FunctionDef<'a> {
+    pub name: &'a str,
+    /// The argument types of this function.  If the function body contains an `Argument(i)` gate,
+    /// the type of that gate is `arg_tys[i]`.
+    pub arg_tys: &'a [Ty<'a>],
+    /// The secret inputs required by this function.  Each `Call` to this function must provide a
+    /// `Secret` of the indicated `Ty` for each `SecretInputId` in this list.
+    pub secret_inputs: &'a [(SecretInputId, Ty<'a>)],
+    /// The output of the function body.  This will typically depend in some way on the function's
+    /// `Argument` gates.  For functions that need to return multiple values, this wire can have a
+    /// `Bundle` type.
+    pub result_wire: Wire<'a>,
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
+    type Output = FunctionDef<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> FunctionDef<'b> {
+        let arg_tys = self.arg_tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
+        let secret_inputs = self.secret_inputs.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
+        FunctionDef {
+            name: v.new_circuit().intern_str(self.name),
+            arg_tys: v.new_circuit().intern_ty_list(&arg_tys),
+            secret_inputs: v.new_circuit().arena().alloc_slice_copy(&secret_inputs),
+            result_wire: v.visit(self.result_wire),
+        }
+    }
+}
+
+declare_interned_pointer! {
+    #[derive(Debug)]
+    pub struct Function<'a> => FunctionDef<'a>;
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Function<'a> {
+    type Output = Function<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Function<'b> {
+        v.visit_function(self)
     }
 }
 
