@@ -8,6 +8,7 @@ edition = "2018"
 
 [features]
 default = []
+f128p = []
 bellman = ["zkinterface", "zkinterface_bellman", "ff"]
 sieve_ir = ["ff", "zki_sieve"]
 

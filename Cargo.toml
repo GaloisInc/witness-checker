@@ -12,7 +12,7 @@ bellman = ["zk-circuit-builder/bellman"]
 sieve_ir = ["zk-circuit-builder/sieve_ir"]
 
 [dependencies]
-zk-circuit-builder = { path = "deps/zk-circuit-builder" }
+zk-circuit-builder = { path = "deps/zk-circuit-builder", features = ["f128p"] }
 
 # Note: This is an older version of arrayvec, compatible with older Rust
 arrayvec = "0.5.2"
