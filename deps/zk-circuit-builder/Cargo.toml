@@ -7,7 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
+default = ["f128p"]
+f128p = []
 bellman = ["zkinterface", "zkinterface_bellman", "ff"]
 sieve_ir = ["ff", "zki_sieve"]
 
