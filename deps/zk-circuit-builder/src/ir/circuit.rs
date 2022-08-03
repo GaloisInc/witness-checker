@@ -25,7 +25,7 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use scuttlebutt::field::F64b;
+use scuttlebutt::field::{FiniteField, F64b};
 use crate::eval;
 use crate::ir::migrate::{self, Migrate};
 
@@ -652,7 +652,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
         let sz = match *ty {
             TyKind::Int(sz) | TyKind::Uint(sz) => sz,
-            _ => panic!("can't construct bit representation for non-integer type {:?}", ty),
+            TyKind::GF(f) => f.bit_size(),
+            _ => panic!("can't construct bit representation for non-primitive type {:?}", ty),
         };
         let val = val.as_bits(self.as_base(), sz);
         assert!(val.width() <= sz.bits());
@@ -1277,9 +1278,20 @@ pub enum Field {
     F64b,
 }
 
+impl Field {
+    pub fn bit_size(&self) -> IntSize {
+        match self {
+            Field::F64b => IntSize(64),
+        }
+    }
+}
+
 impl AsBits for F64b {
+    // TODO: Where do we set from_bits?
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
-        unimplemented!{}
+        // TODO: Use function Marc will implement in scuttlebutt.
+        let bytes = self.to_bytes();
+        u64::from_le_bytes(bytes.into()).as_bits(c, width)
     }
 }
 
@@ -1304,7 +1316,7 @@ impl TyKind<'_> {
         match *self {
             TyKind::Int(_) => true,
             TyKind::Uint(_) => true,
-            TyKind::GF(_) => unimplemented!{},
+            TyKind::GF(_) => false,
             TyKind::Bundle(_) => false,
         }
     }
@@ -1313,7 +1325,7 @@ impl TyKind<'_> {
         match *self {
             TyKind::Int(sz) => sz,
             TyKind::Uint(sz) => sz,
-            TyKind::GF(_) => unimplemented!{},
+            TyKind::GF(f) => f.bit_size(),
             TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
         }
     }
@@ -1351,8 +1363,9 @@ impl TyKind<'_> {
             TyKind::Uint(sz) => {
                 (sz.bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
             },
-            TyKind::GF(_) => {
-                unimplemented!{}
+            TyKind::GF(f) => {
+                // TODO: Is this right?
+                (f.bit_size().bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
             },
             TyKind::Bundle(tys) => {
                 tys.iter().map(|ty| ty.digits()).sum()
@@ -1368,7 +1381,7 @@ impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
         match self {
             Int(sz) => Int(sz),
             Uint(sz) => Uint(sz),
-            GF64 => unimplemented!{},
+            GF(f) => GF(f),
             Bundle(tys) => {
                 let tys = tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
                 Bundle(v.new_circuit().intern_ty_list(&tys))
@@ -2276,7 +2289,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Label<'a> {
 }
 
 
-/// An arbitrary-sized array of bits.  Used to represent integer values in the circuit and
+/// An arbitrary-sized array of bits.  Used to represent values in the circuit and
 /// evaluator.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Bits<'a>(pub &'a [u32]);
