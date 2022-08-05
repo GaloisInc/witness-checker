@@ -258,6 +258,28 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x % y }
 }
 
+fn are_ints(xs: &[Wire]) -> bool {
+    xs.iter().all(|x| {
+        match *x.ty {
+            TyKind::Int(_) => true,
+            TyKind::Uint(_) => true,
+            TyKind::GF(_) => false,
+            TyKind::Bundle(_) => false,
+        }
+    })
+}
+
+fn are_fields(xs: &[Wire]) -> bool {
+    xs.iter().all(|x| {
+        match *x.ty {
+            TyKind::Int(_) => false,
+            TyKind::Uint(_) => false,
+            TyKind::GF(_) => true,
+            TyKind::Bundle(_) => false,
+        }
+    })
+}
+
 pub fn eval_gate<'a>(
     c: &CircuitBase<'a>,
     ty: Ty<'a>,
@@ -274,28 +296,40 @@ pub fn eval_gate<'a>(
         GateKind::Erased(e) => convert_gate_value(e.gate_value())?,
 
         GateKind::Unary(op, a) => {
-            let (a_val, a_sec) = get_int_value(a)?;
-            let val = match op {
-                UnOp::Not => !a_val,
-                UnOp::Neg => -a_val,
-            };
-            (trunc(c, ty, val), a_sec)
+            if are_ints(&[a]) {
+                let (a_val, a_sec) = get_int_value(a)?;
+                let val = match op {
+                    UnOp::Not => !a_val,
+                    UnOp::Neg => -a_val,
+                };
+                (trunc(c, ty, val), a_sec)
+            } else if are_fields(&[a]) {
+                unimplemented!{}
+            } else {
+                panic!("Cannot apply unary operator {:?} on argument {:?}", op, a)
+            }
         },
 
         GateKind::Binary(op, a, b) => {
-            let (a_val, a_sec) = get_int_value(a)?;
-            let (b_val, b_sec) = get_int_value(b)?;
-            let val = match op {
-                BinOp::Add => a_val + b_val,
-                BinOp::Sub => a_val - b_val,
-                BinOp::Mul => a_val * b_val,
-                BinOp::Div => safe_div(a_val, b_val),
-                BinOp::Mod => safe_mod(a_val, b_val),
-                BinOp::And => a_val & b_val,
-                BinOp::Or => a_val | b_val,
-                BinOp::Xor => a_val ^ b_val,
-            };
-            (trunc(c, ty, val), a_sec || b_sec)
+            if are_ints(&[a, b]) {
+                let (a_val, a_sec) = get_int_value(a)?;
+                let (b_val, b_sec) = get_int_value(b)?;
+                let val = match op {
+                    BinOp::Add => a_val + b_val,
+                    BinOp::Sub => a_val - b_val,
+                    BinOp::Mul => a_val * b_val,
+                    BinOp::Div => safe_div(a_val, b_val),
+                    BinOp::Mod => safe_mod(a_val, b_val),
+                    BinOp::And => a_val & b_val,
+                    BinOp::Or => a_val | b_val,
+                    BinOp::Xor => a_val ^ b_val,
+                };
+                (trunc(c, ty, val), a_sec || b_sec)
+            } else if are_fields(&[a, b]) {
+                unimplemented!{}
+            } else {
+                panic!("Cannot apply binary operator {:?} on arguments {:?}, {:?}", op, a, b)
+            }
         },
 
         GateKind::Shift(op, a, b) => {
