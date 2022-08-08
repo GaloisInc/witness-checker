@@ -1312,6 +1312,15 @@ impl TyKind<'_> {
     pub const U64: TyKind<'static> = TyKind::Uint(IntSize(64));
     pub const BOOL: TyKind<'static> = TyKind::Uint(IntSize(1));
 
+    pub fn is_galois_field(&self) -> bool {
+        match *self {
+            TyKind::Int(_) => false,
+            TyKind::Uint(_) => false,
+            TyKind::GF(_) => true,
+            TyKind::Bundle(_) => false,
+        }
+    }
+
     pub fn is_integer(&self) -> bool {
         match *self {
             TyKind::Int(_) => true,
@@ -2349,6 +2358,10 @@ impl<'a> Bits<'a> {
             },
             _ => panic!("expected an integer type, but got {:?}", ty),
         }
+    }
+
+    pub fn to_galois_field(&self, ty: Ty) -> Box<dyn FiniteField> {
+        todo!{}
     }
 
     pub fn zero() -> Bits<'a> {

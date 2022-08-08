@@ -241,6 +241,11 @@ fn get_value<'a>(w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
     convert_gate_value(w.value.get())
 }
 
+fn get_galois_field_value<'a>(w: Wire<'a>) -> Result<(&impl FiniteField, bool), Error<'a>> {
+    let (bits, sec) = get_value(w)?;
+    Ok((bits.to_galois_field(w.ty), sec))
+}
+
 fn get_int_value<'a>(w: Wire<'a>) -> Result<(BigInt, bool), Error<'a>> {
     let (bits, sec) = get_value(w)?;
     Ok((bits.to_bigint(w.ty), sec))
@@ -256,28 +261,6 @@ fn safe_div(x: BigInt, y: BigInt) -> BigInt {
 
 fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x % y }
-}
-
-fn are_ints(xs: &[Wire]) -> bool {
-    xs.iter().all(|x| {
-        match *x.ty {
-            TyKind::Int(_) => true,
-            TyKind::Uint(_) => true,
-            TyKind::GF(_) => false,
-            TyKind::Bundle(_) => false,
-        }
-    })
-}
-
-fn are_fields(xs: &[Wire]) -> bool {
-    xs.iter().all(|x| {
-        match *x.ty {
-            TyKind::Int(_) => false,
-            TyKind::Uint(_) => false,
-            TyKind::GF(_) => true,
-            TyKind::Bundle(_) => false,
-        }
-    })
 }
 
 pub fn eval_gate<'a>(
@@ -296,14 +279,14 @@ pub fn eval_gate<'a>(
         GateKind::Erased(e) => convert_gate_value(e.gate_value())?,
 
         GateKind::Unary(op, a) => {
-            if are_ints(&[a]) {
+            if a.ty.is_integer() {
                 let (a_val, a_sec) = get_int_value(a)?;
                 let val = match op {
                     UnOp::Not => !a_val,
                     UnOp::Neg => -a_val,
                 };
                 (trunc(c, ty, val), a_sec)
-            } else if are_fields(&[a]) {
+            } else if a.ty.is_galois_field() {
                 unimplemented!{}
             } else {
                 panic!("Cannot apply unary operator {:?} on argument {:?}", op, a)
@@ -311,7 +294,7 @@ pub fn eval_gate<'a>(
         },
 
         GateKind::Binary(op, a, b) => {
-            if are_ints(&[a, b]) {
+            if a.ty.is_integer() {
                 let (a_val, a_sec) = get_int_value(a)?;
                 let (b_val, b_sec) = get_int_value(b)?;
                 let val = match op {
@@ -325,7 +308,9 @@ pub fn eval_gate<'a>(
                     BinOp::Xor => a_val ^ b_val,
                 };
                 (trunc(c, ty, val), a_sec || b_sec)
-            } else if are_fields(&[a, b]) {
+            } else if a.ty.is_galois_field() {
+                let (a_val, a_sec) = get_galois_field_value(a)?;
+                let (b_val, b_sec) = get_galois_field_value(b)?;
                 unimplemented!{}
             } else {
                 panic!("Cannot apply binary operator {:?} on arguments {:?}, {:?}", op, a, b)
@@ -333,46 +318,66 @@ pub fn eval_gate<'a>(
         },
 
         GateKind::Shift(op, a, b) => {
-            let (a_val, a_sec) = get_int_value(a)?;
-            let (b_val, b_sec) = get_int_value(b)?;
-            let b_val = u16::try_from(b_val).map_err(|_| Error::Other)?;
-            let val = match op {
-                ShiftOp::Shl => a_val << b_val,
-                ShiftOp::Shr => a_val >> b_val,
-            };
-            (trunc(c, ty, val), a_sec || b_sec)
+            if a.ty.is_integer() {
+                let (a_val, a_sec) = get_int_value(a)?;
+                let (b_val, b_sec) = get_int_value(b)?;
+                let b_val = u16::try_from(b_val).map_err(|_| Error::Other)?;
+                let val = match op {
+                    ShiftOp::Shl => a_val << b_val,
+                    ShiftOp::Shr => a_val >> b_val,
+                };
+                (trunc(c, ty, val), a_sec || b_sec)
+            } else {
+                panic!("Cannot apply shift operator {:?} on arguments {:?}, {:?}", op, a, b)
+            }
         },
 
         GateKind::Compare(op, a, b) => {
-            let (a_val, a_sec) = get_int_value(a)?;
-            let (b_val, b_sec) = get_int_value(b)?;
-            let val: bool = match op {
-                CmpOp::Eq => a_val == b_val,
-                CmpOp::Ne => a_val != b_val,
-                CmpOp::Lt => a_val < b_val,
-                CmpOp::Le => a_val <= b_val,
-                CmpOp::Gt => a_val > b_val,
-                CmpOp::Ge => a_val >= b_val,
-            };
-            (trunc(c, ty, val), a_sec || b_sec)
+            if a.ty.is_integer() {
+                let (a_val, a_sec) = get_int_value(a)?;
+                let (b_val, b_sec) = get_int_value(b)?;
+                let val: bool = match op {
+                    CmpOp::Eq => a_val == b_val,
+                    CmpOp::Ne => a_val != b_val,
+                    CmpOp::Lt => a_val < b_val,
+                    CmpOp::Le => a_val <= b_val,
+                    CmpOp::Gt => a_val > b_val,
+                    CmpOp::Ge => a_val >= b_val,
+                };
+                (trunc(c, ty, val), a_sec || b_sec)
+            } else if a.ty.is_galois_field() {
+                unimplemented!{}
+            } else {
+                panic!("Cannot apply comparison operator {:?} on arguments {:?}, {:?}", op, a, b)
+            }
         },
 
         GateKind::Mux(c, x, y) => {
-            let (c_val, c_sec) = get_int_value(c)?;
-            // Secrecy: If the condition is public, then the result is only as secret as the chosen
-            // input (`x` or `y`).  If the condition is secret, then the result is always secret.
-            if !c_val.is_zero() {
-                let (x_bits, x_sec) = get_value(x)?;
-                (x_bits, x_sec || c_sec)
+            if c.ty.is_integer() {
+                let (c_val, c_sec) = get_int_value(c)?;
+                // Secrecy: If the condition is public, then the result is only as secret as the chosen
+                // input (`x` or `y`).  If the condition is secret, then the result is always secret.
+                if !c_val.is_zero() {
+                    let (x_bits, x_sec) = get_value(x)?;
+                    (x_bits, x_sec || c_sec)
+                } else {
+                    let (y_bits, y_sec) = get_value(y)?;
+                    (y_bits, y_sec || c_sec)
+                }
+            } else if c.ty.is_galois_field() {
+                unimplemented!{}
             } else {
-                let (y_bits, y_sec) = get_value(y)?;
-                (y_bits, y_sec || c_sec)
+                panic!("Cannot apply mux operator on arguments {:?}, {:?}, {:?}", c, x, y)
             }
         },
 
         GateKind::Cast(a, _) => {
-            let (a_val, a_sec) = get_int_value(a)?;
-            (trunc(c, ty, a_val), a_sec)
+            if a.ty.is_integer() && ty.is_integer() {
+                let (a_val, a_sec) = get_int_value(a)?;
+                (trunc(c, ty, a_val), a_sec)
+            } else {
+                panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
+            }
         },
 
         GateKind::Pack(ws) => {
