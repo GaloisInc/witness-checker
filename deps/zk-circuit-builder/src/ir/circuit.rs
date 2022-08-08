@@ -1295,6 +1295,25 @@ impl AsBits for F64b {
     }
 }
 
+pub trait FromBits {
+    fn from_bits<'a>(b:Bits<'a>) -> Self;
+}
+
+impl FromBits for F64b {
+    fn from_bits<'a>(b:Bits<'a>) -> Self {
+        if b.0.len() != 2 {
+            panic!("Bits {:?} must be of length 2 to convert to F64b.", b.0)
+        }
+
+        // TODO: Use function Marc will implement in scuttlebutt.
+        let lo = b.0[0] as u64;
+        let hi = b.0[1] as u64;
+
+        let x = (hi << 32) | lo;
+        Self::from_bytes(&x.to_le_bytes().into()).expect("Deserialization failed.")
+    }
+}
+
 impl IntSize {
     pub fn bits(self) -> u16 {
         self.0
@@ -1312,12 +1331,12 @@ impl TyKind<'_> {
     pub const U64: TyKind<'static> = TyKind::Uint(IntSize(64));
     pub const BOOL: TyKind<'static> = TyKind::Uint(IntSize(1));
 
-    pub fn is_galois_field(&self) -> bool {
+    pub fn get_galois_field(&self) -> Option<Field> {
         match *self {
-            TyKind::Int(_) => false,
-            TyKind::Uint(_) => false,
-            TyKind::GF(_) => true,
-            TyKind::Bundle(_) => false,
+            TyKind::Int(_) => None,
+            TyKind::Uint(_) => None,
+            TyKind::GF(f) => Some(f),
+            TyKind::Bundle(_) => None,
         }
     }
 
@@ -2358,10 +2377,6 @@ impl<'a> Bits<'a> {
             },
             _ => panic!("expected an integer type, but got {:?}", ty),
         }
-    }
-
-    pub fn to_galois_field(&self, ty: Ty) -> Box<dyn FiniteField> {
-        todo!{}
     }
 
     pub fn zero() -> Bits<'a> {

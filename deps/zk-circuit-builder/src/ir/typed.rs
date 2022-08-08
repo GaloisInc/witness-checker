@@ -600,12 +600,12 @@ macro_rules! field_impls {
             }
         }
 
-        // primitive_unary_impl!(Neg::neg($T));
+        primitive_unary_impl!(Neg::neg($T));
         // primitive_unary_impl!(Not::not($T));
         primitive_binary_impl!(Add::add($T, $T) -> $T);
         primitive_binary_impl!(Sub::sub($T, $T) -> $T);
         primitive_binary_impl!(Mul::mul($T, $T) -> $T);
-        primitive_binary_impl!(Div::div($T, $T) -> $T);
+        // primitive_binary_impl!(Div::div($T, $T) -> $T);
         // primitive_binary_impl!(Mod::mod_($T, $T) -> $T);
         // primitive_binary_impl!(And::and($T, $T) -> $T);
         // primitive_binary_impl!(Or::or($T, $T) -> $T);
