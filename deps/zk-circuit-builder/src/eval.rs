@@ -242,11 +242,6 @@ fn get_value<'a>(w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
     convert_gate_value(w.value.get())
 }
 
-fn get_galois_field_value<'a, T:FiniteField + FromBits>(w: Wire<'a>) -> Result<(T, bool), Error<'a>> {
-    let (bits, sec) = get_value(w)?;
-    Ok((T::from_bits(bits), sec))
-}
-
 fn get_int_value<'a>(w: Wire<'a>) -> Result<(BigInt, bool), Error<'a>> {
     let (bits, sec) = get_value(w)?;
     Ok((bits.to_bigint(w.ty), sec))
@@ -264,55 +259,152 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x % y }
 }
 
-pub fn eval_unop_galois_field<'a, T:FiniteField + AsBits>(
+pub fn eval_unop_integer<'a>(
     c: &CircuitBase<'a>,
     op: UnOp,
-    (a_val, a_sec): (T, bool),
-    ty: Ty,
-) -> (Bits<'a>, bool) {
+    a_bits: Bits<'a>,
+    ty: Ty<'a>,
+) -> Bits<'a> {
+    let a_val = a_bits.to_bigint(ty);
     let val = match op {
-        UnOp::Not => todo!(), // !a_val,
+        UnOp::Not => !a_val,
         UnOp::Neg => -a_val,
     };
-    (val.as_bits(c, ty.integer_size()), a_sec)
+    trunc(c, ty, val)
 }
 
-pub fn eval_binop_galois_field<'a, T:FiniteField + AsBits>(
+
+pub fn eval_unop_galois_field<'a>(
+    c: &CircuitBase<'a>,
+    op: UnOp,
+    a_bits: Bits<'a>,
+    field: Field,
+) -> Bits<'a> {
+    fn helper<'a, T:FiniteField + FromBits + AsBits>(
+        c: &CircuitBase<'a>,
+        op: UnOp,
+        a_bits: Bits<'a>,
+        field: Field,
+    ) -> Bits<'a> {
+        let a_val = T::from_bits(a_bits);
+        let val = match op {
+            UnOp::Not => panic!("Unsupported operation {:?}", op), // !a_val,
+            UnOp::Neg => -a_val,
+        };
+        val.as_bits(c, field.bit_size())
+    }
+
+    match field {
+        Field::F64b => helper::<F64b>(c, op, a_bits, field),
+    }
+}
+
+pub fn eval_binop_integer<'a>(
     c: &CircuitBase<'a>,
     op: BinOp,
-    (a_val, a_sec): (T, bool),
-    (b_val, b_sec): (T, bool),
-    ty: Ty,
-) -> (Bits<'a>, bool) {
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    ty: Ty<'a>,
+) -> Bits<'a> {
+    let a_val = a_bits.to_bigint(ty);
+    let b_val = b_bits.to_bigint(ty);
     let val = match op {
         BinOp::Add => a_val + b_val,
         BinOp::Sub => a_val - b_val,
         BinOp::Mul => a_val * b_val,
-        BinOp::Div => todo!(), // safe_div(a_val, b_val),
-        BinOp::Mod => todo!(), // safe_mod(a_val, b_val),
-        BinOp::And => todo!(), // a_val & b_val,
-        BinOp::Or  => todo!(), // a_val | b_val,
-        BinOp::Xor => todo!(), // a_val ^ b_val,
+        BinOp::Div => safe_div(a_val, b_val),
+        BinOp::Mod => safe_mod(a_val, b_val),
+        BinOp::And => a_val & b_val,
+        BinOp::Or => a_val | b_val,
+        BinOp::Xor => a_val ^ b_val,
     };
-    (val.as_bits(c, ty.integer_size()), a_sec || b_sec)
+    trunc(c, ty, val)
 }
 
-pub fn eval_comp_galois_field<'a, T:FiniteField + AsBits>(
+pub fn eval_binop_galois_field<'a>(
+    c: &CircuitBase<'a>,
+    op: BinOp,
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    field: Field,
+) -> Bits<'a> {
+    fn helper<'a, T:FiniteField + AsBits + FromBits>(
+        c: &CircuitBase<'a>,
+        op: BinOp,
+        a_bits: Bits<'a>,
+        b_bits: Bits<'a>,
+        field: Field,
+    ) -> Bits<'a> {
+        let a_val = T::from_bits(a_bits);
+        let b_val = T::from_bits(b_bits);
+        let val = match op {
+            BinOp::Add => a_val + b_val,
+            BinOp::Sub => a_val - b_val,
+            BinOp::Mul => a_val * b_val,
+            BinOp::Div => panic!("Unsupported operation {:?}", op), // safe_div(a_val, b_val),
+            BinOp::Mod => panic!("Unsupported operation {:?}", op), // safe_mod(a_val, b_val),
+            BinOp::And => panic!("Unsupported operation {:?}", op), // a_val & b_val,
+            BinOp::Or  => panic!("Unsupported operation {:?}", op), // a_val | b_val,
+            BinOp::Xor => panic!("Unsupported operation {:?}", op), // a_val ^ b_val,
+        };
+        val.as_bits(c, field.bit_size())
+    }
+
+    match field {
+        Field::F64b => helper::<F64b>(c, op, a_bits, b_bits, field),
+    }
+}
+
+pub fn eval_cmp_integer<'a>(
     c: &CircuitBase<'a>,
     op: CmpOp,
-    (a_val, a_sec): (T, bool),
-    (b_val, b_sec): (T, bool),
-    ty: Ty,
-) -> (Bits<'a>, bool) {
-    let val = match op {
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    ty: Ty<'a>,
+) -> Bits<'a> {
+    let a_val = a_bits.to_bigint(ty);
+    let b_val = b_bits.to_bigint(ty);
+    let val: bool = match op {
         CmpOp::Eq => a_val == b_val,
         CmpOp::Ne => a_val != b_val,
-        CmpOp::Lt => todo!(), // a_val < b_val,
-        CmpOp::Le => todo!(), // a_val <= b_val,
-        CmpOp::Gt => todo!(), // a_val > b_val,
-        CmpOp::Ge => todo!(), // a_val >= b_val,
+        CmpOp::Lt => a_val <  b_val,
+        CmpOp::Le => a_val <= b_val,
+        CmpOp::Gt => a_val >  b_val,
+        CmpOp::Ge => a_val >= b_val,
     };
-    (val.as_bits(c, ty.integer_size()), a_sec || b_sec)
+    trunc(c, ty, val)
+}
+
+pub fn eval_cmp_galois_field<'a>(
+    c: &CircuitBase<'a>,
+    op: CmpOp,
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    field: Field,
+) -> Bits<'a> {
+    fn helper<'a, T:FiniteField + AsBits + FromBits>(
+        c: &CircuitBase<'a>,
+        op: CmpOp,
+        a_bits: Bits<'a>,
+        b_bits: Bits<'a>,
+        field: Field,
+    ) -> Bits<'a> {
+        let a_val = T::from_bits(a_bits);
+        let b_val = T::from_bits(b_bits);
+        let val = match op {
+            CmpOp::Eq => a_val == b_val,
+            CmpOp::Ne => a_val != b_val,
+            CmpOp::Lt => panic!("Unsupported operation {:?}", op), // a_val < b_val,
+            CmpOp::Le => panic!("Unsupported operation {:?}", op), // a_val <= b_val,
+            CmpOp::Gt => panic!("Unsupported operation {:?}", op), // a_val > b_val,
+            CmpOp::Ge => panic!("Unsupported operation {:?}", op), // a_val >= b_val,
+        };
+        val.as_bits(c, field.bit_size())
+    }
+
+    match field {
+        Field::F64b => helper::<F64b>(c, op, a_bits, b_bits, field),
+    }
 }
 
 pub fn eval_gate<'a>(
@@ -331,53 +423,28 @@ pub fn eval_gate<'a>(
         GateKind::Erased(e) => convert_gate_value(e.gate_value())?,
 
         GateKind::Unary(op, a) => {
-            if a.ty.is_integer() {
-                let (a_val, a_sec) = get_int_value(a)?;
-                let val = match op {
-                    UnOp::Not => !a_val,
-                    UnOp::Neg => -a_val,
-                };
-                (trunc(c, ty, val), a_sec)
+            let (a_bits, a_sec) = get_value(a)?;
+            let result_bits = if a.ty.is_integer() {
+                eval_unop_integer(c, op, a_bits, a.ty)
             } else if let Some(f) = a.ty.get_galois_field() {
-                match f {
-                    Field::F64b => {
-                        let a_val = get_galois_field_value::<F64b>(a)?;
-                        eval_unop_galois_field(c, op, a_val, ty)
-                    }
-                }
+                eval_unop_galois_field(c, op, a_bits, f)
             } else {
                 panic!("Cannot apply unary operator {:?} on argument {:?}", op, a)
-            }
+            };
+            (result_bits, a_sec)
         },
 
         GateKind::Binary(op, a, b) => {
-            if a.ty.is_integer() {
-                let (a_val, a_sec) = get_int_value(a)?;
-                let (b_val, b_sec) = get_int_value(b)?;
-                let val = match op {
-                    BinOp::Add => a_val + b_val,
-                    BinOp::Sub => a_val - b_val,
-                    BinOp::Mul => a_val * b_val,
-                    BinOp::Div => safe_div(a_val, b_val),
-                    BinOp::Mod => safe_mod(a_val, b_val),
-                    BinOp::And => a_val & b_val,
-                    BinOp::Or => a_val | b_val,
-                    BinOp::Xor => a_val ^ b_val,
-                };
-                (trunc(c, ty, val), a_sec || b_sec)
+            let (a_bits, a_sec) = get_value(a)?;
+            let (b_bits, b_sec) = get_value(b)?;
+            let result_bits = if a.ty.is_integer() {
+                eval_binop_integer(c, op, a_bits, b_bits, ty)
             } else if let Some(f) = a.ty.get_galois_field() {
-                // TODO: For now, this assumes both arguments and the return type are equal. We may
-                // want to explicitly check this..
-                match f {
-                    Field::F64b => {
-                        let a_val = get_galois_field_value::<F64b>(a)?;
-                        let b_val = get_galois_field_value::<F64b>(b)?;
-                        eval_binop_galois_field(c, op, a_val, b_val, ty)
-                    }
-                }
+                eval_binop_galois_field(c, op, a_bits, b_bits, f)
             } else {
                 panic!("Cannot apply binary operator {:?} on arguments {:?}, {:?}", op, a, b)
-            }
+            };
+            (result_bits, a_sec || b_sec)
         },
 
         GateKind::Shift(op, a, b) => {
@@ -396,29 +463,16 @@ pub fn eval_gate<'a>(
         },
 
         GateKind::Compare(op, a, b) => {
-            if a.ty.is_integer() {
-                let (a_val, a_sec) = get_int_value(a)?;
-                let (b_val, b_sec) = get_int_value(b)?;
-                let val: bool = match op {
-                    CmpOp::Eq => a_val == b_val,
-                    CmpOp::Ne => a_val != b_val,
-                    CmpOp::Lt => a_val < b_val,
-                    CmpOp::Le => a_val <= b_val,
-                    CmpOp::Gt => a_val > b_val,
-                    CmpOp::Ge => a_val >= b_val,
-                };
-                (trunc(c, ty, val), a_sec || b_sec)
+            let (a_bits, a_sec) = get_value(a)?;
+            let (b_bits, b_sec) = get_value(b)?;
+            let result_bits = if a.ty.is_integer() {
+                eval_cmp_integer(c, op, a_bits, b_bits, ty)
             } else if let Some(f) = a.ty.get_galois_field() {
-                match f {
-                    Field::F64b => {
-                        let a_val = get_galois_field_value::<F64b>(a)?;
-                        let b_val = get_galois_field_value::<F64b>(b)?;
-                        eval_comp_galois_field(c, op, a_val, b_val, ty)
-                    }
-                }
+                eval_cmp_galois_field(c, op, a_bits, b_bits, f)
             } else {
                 panic!("Cannot apply comparison operator {:?} on arguments {:?}, {:?}", op, a, b)
-            }
+            };
+            (result_bits, a_sec || b_sec)
         },
 
         GateKind::Mux(c, x, y) => {
@@ -433,8 +487,6 @@ pub fn eval_gate<'a>(
                     let (y_bits, y_sec) = get_value(y)?;
                     (y_bits, y_sec || c_sec)
                 }
-            } else if let Some(f) = c.ty.get_galois_field() {
-                unimplemented!{}
             } else {
                 panic!("Cannot apply mux operator on arguments {:?}, {:?}, {:?}", c, x, y)
             }

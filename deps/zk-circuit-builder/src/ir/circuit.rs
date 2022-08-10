@@ -1287,7 +1287,6 @@ impl Field {
 }
 
 impl AsBits for F64b {
-    // TODO: Where do we set from_bits?
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
         // TODO: Use function Marc will implement in scuttlebutt.
         let bytes = self.to_bytes();
@@ -1392,7 +1391,6 @@ impl TyKind<'_> {
                 (sz.bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
             },
             TyKind::GF(f) => {
-                // TODO: Is this right?
                 (f.bit_size().bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
             },
             TyKind::Bundle(tys) => {

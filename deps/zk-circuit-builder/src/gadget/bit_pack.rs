@@ -22,7 +22,8 @@ impl<'a> Iterator for BundleTys<'a> {
                 TyKind::Bundle(tys) => {
                     self.stk.extend(tys.iter().rev().cloned());
                 },
-                TyKind::Uint(_) | TyKind::Int(_) | TyKind::GF(_) => return Some(ty),
+                TyKind::Uint(_) | TyKind::Int(_) => return Some(ty),
+                TyKind::GF(f)  => panic!("Bitvector operations are not currently supported for field {:?}", f),
             }
         }
         None
