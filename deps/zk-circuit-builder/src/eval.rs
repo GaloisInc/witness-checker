@@ -6,7 +6,7 @@ use scuttlebutt::field::{FiniteField, F64b};
 use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
-    self, CircuitBase, CircuitTrait, Field, FromBits, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
+    self, CircuitBase, CircuitTrait, CircuitExt, Field, FromBits, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
     ShiftOp, CmpOp, GateValue,
 };
 
@@ -263,10 +263,9 @@ pub fn eval_unop_integer<'a>(
     c: &CircuitBase<'a>,
     op: UnOp,
     a_bits: Bits<'a>,
-    a_ty: Ty<'a>,
     ty: Ty<'a>,
 ) -> Bits<'a> {
-    let a_val = a_bits.to_bigint(a_ty);
+    let a_val = a_bits.to_bigint(ty);
     let val = match op {
         UnOp::Not => !a_val,
         UnOp::Neg => -a_val,
@@ -304,13 +303,11 @@ pub fn eval_binop_integer<'a>(
     c: &CircuitBase<'a>,
     op: BinOp,
     a_bits: Bits<'a>,
-    a_ty: Ty<'a>,
     b_bits: Bits<'a>,
-    b_ty: Ty<'a>,
     ty: Ty<'a>,
 ) -> Bits<'a> {
-    let a_val = a_bits.to_bigint(a_ty);
-    let b_val = b_bits.to_bigint(b_ty);
+    let a_val = a_bits.to_bigint(ty);
+    let b_val = b_bits.to_bigint(ty);
     let val = match op {
         BinOp::Add => a_val + b_val,
         BinOp::Sub => a_val - b_val,
@@ -362,13 +359,11 @@ pub fn eval_cmp_integer<'a>(
     c: &CircuitBase<'a>,
     op: CmpOp,
     a_bits: Bits<'a>,
-    a_ty: Ty<'a>,
     b_bits: Bits<'a>,
-    b_ty: Ty<'a>,
-    ty: Ty<'a>,
+    arg_ty: Ty<'a>,
 ) -> Bits<'a> {
-    let a_val = a_bits.to_bigint(a_ty);
-    let b_val = b_bits.to_bigint(b_ty);
+    let a_val = a_bits.to_bigint(arg_ty);
+    let b_val = b_bits.to_bigint(arg_ty);
     let val: bool = match op {
         CmpOp::Eq => a_val == b_val,
         CmpOp::Ne => a_val != b_val,
@@ -377,7 +372,7 @@ pub fn eval_cmp_integer<'a>(
         CmpOp::Gt => a_val >  b_val,
         CmpOp::Ge => a_val >= b_val,
     };
-    trunc(c, ty, val)
+    trunc(c, c.ty(TyKind::BOOL), val)
 }
 
 pub fn eval_cmp_galois_field<'a>(
@@ -430,7 +425,7 @@ pub fn eval_gate<'a>(
         GateKind::Unary(op, a) => {
             let (a_bits, a_sec) = get_value(a)?;
             let result_bits = if a.ty.is_integer() {
-                eval_unop_integer(c, op, a_bits, a.ty, ty)
+                eval_unop_integer(c, op, a_bits, ty)
             } else if let Some(f) = a.ty.get_galois_field() {
                 eval_unop_galois_field(c, op, a_bits, f)
             } else {
@@ -443,7 +438,7 @@ pub fn eval_gate<'a>(
             let (a_bits, a_sec) = get_value(a)?;
             let (b_bits, b_sec) = get_value(b)?;
             let result_bits = if a.ty.is_integer() {
-                eval_binop_integer(c, op, a_bits, a.ty, b_bits, b.ty, ty)
+                eval_binop_integer(c, op, a_bits, b_bits, ty)
             } else if let Some(f) = a.ty.get_galois_field() {
                 eval_binop_galois_field(c, op, a_bits, b_bits, f)
             } else {
@@ -471,7 +466,7 @@ pub fn eval_gate<'a>(
             let (a_bits, a_sec) = get_value(a)?;
             let (b_bits, b_sec) = get_value(b)?;
             let result_bits = if a.ty.is_integer() {
-                eval_cmp_integer(c, op, a_bits, a.ty, b_bits, b.ty, ty)
+                eval_cmp_integer(c, op, a_bits, b_bits, a.ty)
             } else if let Some(f) = a.ty.get_galois_field() {
                 eval_cmp_galois_field(c, op, a_bits, b_bits, f)
             } else {
