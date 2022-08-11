@@ -372,7 +372,7 @@ pub fn eval_cmp_integer<'a>(
         CmpOp::Gt => a_val >  b_val,
         CmpOp::Ge => a_val >= b_val,
     };
-    trunc(c, c.ty(TyKind::BOOL), val)
+    trunc(c, Ty::bool(), val)
 }
 
 pub fn eval_cmp_galois_field<'a>(
