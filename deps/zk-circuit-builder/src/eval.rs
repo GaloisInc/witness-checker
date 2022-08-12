@@ -387,11 +387,10 @@ pub fn eval_cmp_galois_field<'a>(
         op: CmpOp,
         a_bits: Bits<'a>,
         b_bits: Bits<'a>,
-        field: Field,
     ) -> Bits<'a> {
         let a_val = T::from_bits(a_bits);
         let b_val = T::from_bits(b_bits);
-        let val = match op {
+        let val: bool = match op {
             CmpOp::Eq => a_val == b_val,
             CmpOp::Ne => a_val != b_val,
             CmpOp::Lt => panic!("Unsupported operation {:?}", op), // a_val < b_val,
@@ -399,11 +398,11 @@ pub fn eval_cmp_galois_field<'a>(
             CmpOp::Gt => panic!("Unsupported operation {:?}", op), // a_val > b_val,
             CmpOp::Ge => panic!("Unsupported operation {:?}", op), // a_val >= b_val,
         };
-        val.as_bits(c, field.bit_size())
+        trunc(c, Ty::bool(), val)
     }
 
     match field {
-        Field::F64b => helper::<F64b>(c, op, a_bits, b_bits, field),
+        Field::F64b => helper::<F64b>(c, op, a_bits, b_bits),
     }
 }
 

@@ -49,41 +49,48 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     // dir.close().unwrap();
 }
 
-fn inverse<'a, F>(x:F)
-  where
-    F:FiniteField,
-    F:typed::Eq<'a, Output = bool>,
-    F:typed::Lit<'a>,
-    F:typed::Mul<'a, Output = F>,
-    F:typed::Repr<'a, Repr = Wire<'a>>,
-{
+// fn inverse<'a,F>(x:F)
+//   where
+//     F:FiniteField,
+//     F:typed::Eq<'a, Output = bool>,
+//     F:typed::Lit<'a>,
+//     F:typed::Mul<'a, Output = F>,
+//     F:typed::Repr<'a, Repr = Wire<'a>>,
+// {
+//     let arenas = Arenas::new();
+//     let c = make_circuit!(&arenas);
+//     // let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+//     // let c = Circuit::new(&arenas, true, cf);
+//     // let c = &c as &DynCircuit;
+//     let b = Builder::new(&c);
+// 
+// 
+//     let inv = b.lit(x.inverse());
+//     let x = b.lit(x);
+//     // let w = b.eq(x, b.lit(F::ONE));
+//     let w = b.eq(b.mul(x, inv), b.lit(F::ONE));
+// 
+//     finish(&c, *w);
+// }
+
+#[test]
+fn inverse_f64b() {
     let arenas = Arenas::new();
     let c = make_circuit!(&arenas);
-    // let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-    // let c = Circuit::new(&arenas, true, cf);
-    // let c = &c as &DynCircuit;
+    // // let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
+    // // let c = Circuit::new(&arenas, true, cf);
+    // // let c = &c as &DynCircuit;
     let b = Builder::new(&c);
 
+    let x = F64b::from(1234 as u64); // F64b::ONE;
 
     let inv = b.lit(x.inverse());
     let x = b.lit(x);
     // let w = b.eq(x, b.lit(F::ONE));
-    let w = b.eq(b.mul(x, inv), b.lit(F::ONE));
+    let w = b.eq(b.mul(x, inv), b.lit(F64b::ONE));
 
     finish(&c, *w);
-}
 
-#[test]
-fn inverse_f64b() {
-    // let arenas = Arenas::new();
-    // let c = make_circuit!(&arenas);
-    // // let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-    // // let c = Circuit::new(&arenas, true, cf);
-    // // let c = &c as &DynCircuit;
-    // let b = Builder::new(&c);
-
-
-    let x = F64b::ZERO;
-    inverse(x);
+    // inverse::<F64b>();
 }
 
