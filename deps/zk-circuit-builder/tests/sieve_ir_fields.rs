@@ -51,7 +51,7 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
 }
 
 fn inverse<F>(x:F)
-  where
+where
     F:FiniteField,
     F:for<'a> typed::Eq<'a, Output = bool>,
     F:for<'a> typed::Lit<'a>,
@@ -60,15 +60,11 @@ fn inverse<F>(x:F)
 {
     let arenas = Arenas::new();
     let c = make_circuit!(&arenas);
-    // let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-    // let c = Circuit::new(&arenas, true, cf);
-    // let c = &c as &DynCircuit;
     let b = Builder::new(&c);
 
 
     let inv = b.lit(x.inverse());
     let x = b.lit(x);
-    // let w = b.eq(x, b.lit(F::ONE));
     let w = b.eq(b.mul(x, inv), b.lit(F::ONE));
 
     finish(&c, *w);
