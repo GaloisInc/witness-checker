@@ -2,11 +2,11 @@ use std::convert::TryFrom;
 use std::iter;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
-use scuttlebutt::field::{FiniteField, F64b};
+use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
-    self, CircuitBase, CircuitTrait, CircuitExt, Field, FromBits, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
+    self, CircuitBase, CircuitTrait, Field, FromBits, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
     ShiftOp, CmpOp, GateValue,
 };
 
@@ -295,6 +295,10 @@ pub fn eval_unop_galois_field<'a>(
     }
 
     match field {
+        Field::F40b => helper::<Gf40>(c, op, a_bits, field),
+        Field::F45b => helper::<Gf45>(c, op, a_bits, field),
+        Field::F56b => helper::<F56b>(c, op, a_bits, field),
+        Field::F63b => helper::<F63b>(c, op, a_bits, field),
         Field::F64b => helper::<F64b>(c, op, a_bits, field),
     }
 }
@@ -351,6 +355,10 @@ pub fn eval_binop_galois_field<'a>(
     }
 
     match field {
+        Field::F40b => helper::<Gf40>(c, op, a_bits, b_bits, field),
+        Field::F45b => helper::<Gf45>(c, op, a_bits, b_bits, field),
+        Field::F56b => helper::<F56b>(c, op, a_bits, b_bits, field),
+        Field::F63b => helper::<F63b>(c, op, a_bits, b_bits, field),
         Field::F64b => helper::<F64b>(c, op, a_bits, b_bits, field),
     }
 }
@@ -402,6 +410,10 @@ pub fn eval_cmp_galois_field<'a>(
     }
 
     match field {
+        Field::F40b => helper::<Gf40>(c, op, a_bits, b_bits),
+        Field::F45b => helper::<Gf45>(c, op, a_bits, b_bits),
+        Field::F56b => helper::<F56b>(c, op, a_bits, b_bits),
+        Field::F63b => helper::<F63b>(c, op, a_bits, b_bits),
         Field::F64b => helper::<F64b>(c, op, a_bits, b_bits),
     }
 }

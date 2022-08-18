@@ -1346,6 +1346,7 @@ dependencies = [
  "cheesecloth-derive-migrate",
  "env_logger",
  "ff",
+ "generic-array",
  "log",
  "num-bigint",
  "num-traits",

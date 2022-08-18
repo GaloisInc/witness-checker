@@ -35,6 +35,8 @@ bumpalo = "3.4"
 num-bigint = "0.3.0"
 num-traits = "0.2.12"
 
+generic-array = "*"
+
 log = "0.4"
 
 [dev-dependencies]

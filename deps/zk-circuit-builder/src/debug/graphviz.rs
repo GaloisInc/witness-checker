@@ -22,6 +22,10 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
     match *ty {
         TyKind::Uint(sz) => { write!(s, "u{}", sz.bits())?; },
         TyKind::Int(sz) => { write!(s, "i{}", sz.bits())?; },
+        TyKind::GF(Field::F40b) => { write!(s, "gf40b")?; },
+        TyKind::GF(Field::F45b) => { write!(s, "gf45b")?; },
+        TyKind::GF(Field::F56b) => { write!(s, "gf56b")?; },
+        TyKind::GF(Field::F63b) => { write!(s, "gf63b")?; },
         TyKind::GF(Field::F64b) => { write!(s, "gf64b")?; },
         TyKind::Bundle(tys) => {
             for (i, &ty) in tys.iter().enumerate() {

@@ -25,7 +25,6 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use scuttlebutt::field::{FiniteField, F64b};
 use crate::eval;
 use crate::ir::migrate::{self, Migrate};
 
@@ -1275,42 +1274,28 @@ pub enum TyKind<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 /// Finite fields.
 pub enum Field {
+    // Small binary fields.
+    F40b,
+    F45b,
+    F56b,
+    F63b,
     F64b,
 }
 
 impl Field {
     pub fn bit_size(&self) -> IntSize {
         match self {
+            Field::F40b => IntSize(64), // Small binary fields are u64s in scuttlebutt.
+            Field::F45b => IntSize(64),
+            Field::F56b => IntSize(64),
+            Field::F63b => IntSize(64),
             Field::F64b => IntSize(64),
         }
     }
 }
 
-impl AsBits for F64b {
-    fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
-        // TODO: Use function Marc will implement in scuttlebutt.
-        let bytes = self.to_bytes();
-        u64::from_le_bytes(bytes.into()).as_bits(c, width)
-    }
-}
-
 pub trait FromBits {
     fn from_bits<'a>(b:Bits<'a>) -> Self;
-}
-
-impl FromBits for F64b {
-    fn from_bits<'a>(b:Bits<'a>) -> Self {
-        if b.0.len() != 2 {
-            panic!("Bits {:?} must be of length 2 to convert to F64b.", b.0)
-        }
-
-        // TODO: Use function Marc will implement in scuttlebutt.
-        let lo = b.0[0] as u64;
-        let hi = b.0[1] as u64;
-
-        let x = (hi << 32) | lo;
-        Self::from_bytes(&x.to_le_bytes().into()).expect("Deserialization failed.")
-    }
 }
 
 impl IntSize {
