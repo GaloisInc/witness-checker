@@ -17,7 +17,24 @@ mod scalar_f128p {
     pub struct QuarkScalar([u64; 3]);
 }
 
+// f384p field scalar declaration. To use this scalar type and prime
+// value, enable the "f384p" Cargo feature.
+#[cfg(feature = "f384p")]
+mod scalar_f384p {
+    use ff::PrimeField;
+
+    // The finite field over the prime
+    // $`P = 2^{384} - 2^{128} - 2^{96} + 2^{32} - 1
+    //     = 39402006196394479212279040100143613805079739270465446667948293404245721771496870329047266088258938001861606973112319
+    #[derive(PrimeField)]
+    #[PrimeFieldModulus = "39402006196394479212279040100143613805079739270465446667948293404245721771496870329047266088258938001861606973112319"]
+    #[PrimeFieldGenerator = "19"]
+    #[PrimeFieldReprEndianness = "little"]
+    pub struct QuarkScalar([u64; 7]);
+}
+
 #[cfg(feature = "f128p")] pub use self::scalar_f128p::QuarkScalar;
+#[cfg(feature = "f384p")] pub use self::scalar_f384p::QuarkScalar;
 
 /// Convert bellman Fr to zkInterface little-endian bytes.
 pub fn write_scalar<Scalar: PrimeField>(fr: &Scalar, writer: &mut impl Write) {
