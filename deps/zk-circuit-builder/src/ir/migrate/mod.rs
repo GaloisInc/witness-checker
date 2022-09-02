@@ -5,7 +5,7 @@ use std::mem::MaybeUninit;
 use std::panic::{self, AssertUnwindSafe};
 use std::process;
 use std::ptr;
-use crate::ir::circuit::{CircuitBase, Wire, Secret, Erased};
+use crate::ir::circuit::{CircuitBase, Wire, Secret, Erased, Function};
 use crate::ir::typed::{TWire, Repr};
 
 pub use cheesecloth_derive_migrate::{Migrate, impl_migrate_trivial};
@@ -29,6 +29,7 @@ pub trait Visitor<'a, 'b> {
     fn visit_wire(&mut self, w: Wire<'a>) -> Wire<'b>;
     fn visit_secret(&mut self, s: Secret<'a>) -> Secret<'b>;
     fn visit_erased(&mut self, e: Erased<'a>) -> Erased<'b>;
+    fn visit_function(&mut self, f: Function<'a>) -> Function<'b>;
 
     /// A "weak reference" version of `visit_wire`.  The visitor may return `None` on any call.
     /// For example, a garbage-collecting visitor might return `None` for old wires that have no

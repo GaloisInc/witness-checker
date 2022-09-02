@@ -1374,6 +1374,7 @@ dependencies = [
  "byteorder",
  "cheesecloth-derive-migrate",
  "ff",
+ "generic-array",
  "log",
  "num-bigint",
  "num-traits",

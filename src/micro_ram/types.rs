@@ -649,7 +649,7 @@ impl<'a> Mux<'a, bool, Label> for Label {
 impl<'a> Secret<'a> for Label {
     fn secret(bld: &Builder<'a>) -> Self::Repr {
         let ty = <Label as Flatten>::wire_type(bld.circuit());
-        bld.circuit().new_secret_uninit(ty)
+        bld.circuit().new_secret_wire_uninit(ty)
     }
 
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {

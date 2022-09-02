@@ -427,7 +427,7 @@ impl<'a> Lit<'a> for bool {
 
 impl<'a> Secret<'a> for bool {
     fn secret(bld: &Builder<'a>) -> Wire<'a> {
-        bld.c.new_secret_uninit(bld.c.ty(TyKind::BOOL))
+        bld.c.new_secret_wire_uninit(bld.c.ty(TyKind::BOOL))
     }
 
     fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
@@ -493,7 +493,7 @@ macro_rules! integer_impls {
 
         impl<'a> Secret<'a> for $T {
             fn secret(bld: &Builder<'a>) -> Wire<'a> {
-                bld.c.new_secret_uninit(bld.c.ty(TyKind::$K))
+                bld.c.new_secret_wire_uninit(bld.c.ty(TyKind::$K))
             }
 
             fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {

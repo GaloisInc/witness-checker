@@ -149,7 +149,7 @@ pub fn extend_to_64<'a>(
             GateKind::Secret(s) => {
                 let new_ty = extend_integer_ty(c, s.ty);
                 let new_val = s.val().map(|x| maybe_sign_extend(x.as_u64().unwrap(), s.ty));
-                return c.new_secret_init(new_ty, || new_val.unwrap());
+                return c.new_secret_wire_init(new_ty, || new_val.unwrap());
             }
             GateKind::Cast(w, ty) => {
                 return normalize_64(c, w, ty);
@@ -204,9 +204,10 @@ pub fn int_to_uint<'a>(
                 return c.lit(new_ty, x);
             }
             GateKind::Secret(s) => {
-                return c.new_secret_init(new_ty, || s.val().unwrap());
+                return c.new_secret_wire_init(new_ty, || s.val().unwrap());
             }
             GateKind::Erased(_e) => panic!("can't change type of erased gate {:?}", gk),
+            GateKind::Argument(_, _) => panic!("changing type of Argument gate is NYI"),
             GateKind::Unary(_op, _a) => {}
             GateKind::Binary(op, a, b) => match op {
                 // Note `Mul` returns only the lower half of the output, which is unaffected by
@@ -260,6 +261,7 @@ pub fn int_to_uint<'a>(
             // (Gadgets whose output type matches an input should work fine, as all inputs have
             // already been changed to `Uint`.)
             GateKind::Gadget(_, _) => {}
+            GateKind::Call(_, _, _) => panic!("changing type of Call gate is NYI"),
         }
     }
 
