@@ -1013,6 +1013,7 @@ checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
 [[package]]
 name = "scuttlebutt"
 version = "0.4.0"
+source = "git+https://gitlab-ext.galois.com/crypto/swanky?rev=4340fa5449f88eb93afae717476a4c345f7e44d6#4340fa5449f88eb93afae717476a4c345f7e44d6"
 dependencies = [
  "bytemuck",
  "generic-array",
@@ -1283,6 +1284,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "vectoreyes"
 version = "0.1.0"
+source = "git+https://gitlab-ext.galois.com/crypto/swanky?rev=4340fa5449f88eb93afae717476a4c345f7e44d6#4340fa5449f88eb93afae717476a4c345f7e44d6"
 dependencies = [
  "aes",
  "bytemuck",

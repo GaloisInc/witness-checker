@@ -16,7 +16,7 @@ sieve_ir = ["ff", "zki_sieve"]
 [dependencies]
 cheesecloth-derive-migrate = { path = "../../derive-migrate" }
 
-scuttlebutt = { path = "../swanky/scuttlebutt/" }
+scuttlebutt = { git = "https://gitlab-ext.galois.com/crypto/swanky", rev = "4340fa5449f88eb93afae717476a4c345f7e44d6" }
 
 zkinterface = { optional = true, version = "1.3.3" }
 zkinterface_bellman = { optional = true, version = "1.3.0" }
