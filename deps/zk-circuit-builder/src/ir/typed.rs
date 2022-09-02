@@ -647,7 +647,7 @@ macro_rules! field_impls {
 
         impl<'a> Secret<'a> for $T {
             fn secret(bld: &Builder<'a>) -> Wire<'a> {
-                bld.c.new_secret_uninit(bld.c.ty(TyKind::GF(Field::$K)))
+                bld.c.new_secret_wire_uninit(bld.c.ty(TyKind::GF(Field::$K)))
             }
 
             fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
