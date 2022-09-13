@@ -13,6 +13,8 @@ stages:
 build-and-test:
   stage: build
   script:
+    - git config --global credential.helper store
+    - echo "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-ext.galois.com" > ~/.git-credentials
     - cargo build
     - cargo test
     - cd deps/zk-circuit-builder/ && cargo test --features bellman,sieve_ir
