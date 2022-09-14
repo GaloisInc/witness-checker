@@ -575,11 +575,7 @@ where
     for (i, chunk) in a.chunks(4).enumerate() {
         let bytes = chunk.try_into().unwrap_or({
             let mut s: [u8;4] = [0;4];
-
-            // TODO: How do we copy the whole slice at once?
-            for (j, b) in chunk.iter().enumerate() {
-                s[j] = *b;
-            }
+            s[..chunk.len()].copy_from_slice(chunk);
 
             s
         });
@@ -589,6 +585,7 @@ where
 }
 
 /// Convert `ceil(N/4)` u32s to `N` bytes.
+/// Assumes that any remaining bytes in the last chunk of `a` are zero and are ignored.
 fn u32_to_u8<N>(a: &GenericArray<u32,Quot<Sum<N,U3>,U4>>) -> GenericArray<u8,N>
 where
     N: ArrayLength<u8>,
@@ -602,23 +599,10 @@ where
     for x32 in a {
         let bs = x32.to_le_bytes();
 
-        // TODO: How do we copy the whole slice at once?
-        res[pos] = bs[0]; pos += 1;
-        if pos < res.len() {
-            res[pos] = bs[1]; pos += 1;
-        } else {
-            break;
-        }
-        if pos < res.len() {
-            res[pos] = bs[2]; pos += 1;
-        } else {
-            break;
-        }
-        if pos < res.len() {
-            res[pos] = bs[3]; pos += 1;
-        } else {
-            break;
-        }
+        let remaining = res.len() - pos;
+        let n = cmp::min(remaining, bs.len());
+        res[pos .. pos + n].copy_from_slice(&bs[..n]);
+        pos += n;
     }
 
     res
@@ -655,33 +639,12 @@ macro_rules! field_impls {
             }
         }
 
-        // impl<'a> FromEval<'a> for $T {
-        //     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        //         // let val = ev.eval_single_wire(a).ok()?;
-        //         // // Conversion should succeed, assuming `a` really carries a value of type `$T`.
-        //         // Some(<$T as TryFrom<_>>::try_from(val).unwrap())
-        //         unimplemented!{}
-        //     }
-        // }
-
         primitive_unary_impl!(Neg::neg($T));
-        // primitive_unary_impl!(Not::not($T));
         primitive_binary_impl!(Add::add($T, $T) -> $T);
         primitive_binary_impl!(Sub::sub($T, $T) -> $T);
         primitive_binary_impl!(Mul::mul($T, $T) -> $T);
-        // primitive_binary_impl!(Div::div($T, $T) -> $T);
-        // primitive_binary_impl!(Mod::mod_($T, $T) -> $T);
-        // primitive_binary_impl!(And::and($T, $T) -> $T);
-        // primitive_binary_impl!(Or::or($T, $T) -> $T);
-        // primitive_binary_impl!(Xor::xor($T, $T) -> $T);
-        // primitive_binary_impl!(Shl::shl($T, u8) -> $T);
-        // primitive_binary_impl!(Shr::shr($T, u8) -> $T);
         primitive_binary_impl!(Eq::eq($T, $T) -> bool);
         primitive_binary_impl!(Ne::ne($T, $T) -> bool);
-        // primitive_binary_impl!(Lt::lt($T, $T) -> bool);
-        // primitive_binary_impl!(Le::le($T, $T) -> bool);
-        // primitive_binary_impl!(Gt::gt($T, $T) -> bool);
-        // primitive_binary_impl!(Ge::ge($T, $T) -> bool);
 
         impl<'a> Mux<'a, bool> for $T {
             type Output = $T;
@@ -689,21 +652,6 @@ macro_rules! field_impls {
                 bld.c.mux(c, t, e)
             }
         }
-
-        // impl<'a> Cast<'a, $T> for bool {
-        //     fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-        //         bld.c.cast(x, bld.c.ty(TyKind::GF(Field::$K)))
-        //     }
-        // }
-
-        // integer_cast_impl!($T, i8, I8);
-        // integer_cast_impl!($T, i16, I16);
-        // integer_cast_impl!($T, i32, I32);
-        // integer_cast_impl!($T, i64, I64);
-        // integer_cast_impl!($T, u8, U8);
-        // integer_cast_impl!($T, u16, U16);
-        // integer_cast_impl!($T, u32, U32);
-        // integer_cast_impl!($T, u64, U64);
 
         impl AsBits for $T {
             fn as_bits<'a>(&self, c: &CircuitBase<'a>, _width: IntSize) -> Bits<'a> {

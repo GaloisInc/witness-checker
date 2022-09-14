@@ -399,10 +399,10 @@ pub fn eval_binop_galois_field<'a>(
             BinOp::Add => a_val + b_val,
             BinOp::Sub => a_val - b_val,
             BinOp::Mul => a_val * b_val,
-            BinOp::Div => panic!("Unsupported operation {:?}", op), // safe_div(a_val, b_val),
-            BinOp::Mod => panic!("Unsupported operation {:?}", op), // safe_mod(a_val, b_val),
-            BinOp::And => panic!("Unsupported operation {:?}", op), // a_val & b_val,
-            BinOp::Or  => panic!("Unsupported operation {:?}", op), // a_val | b_val,
+            BinOp::Div | // safe_div(a_val, b_val),
+            BinOp::Mod | // safe_mod(a_val, b_val),
+            BinOp::And | // a_val & b_val,
+            BinOp::Or  | // a_val | b_val,
             BinOp::Xor => panic!("Unsupported operation {:?}", op), // a_val ^ b_val,
         };
         val.as_bits(c, field.bit_size())

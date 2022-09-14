@@ -155,8 +155,8 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
                     *pos = end;
                     c.cast(extract_bits(&c, inp, start, end), ty)
                 },
-                TyKind::GF(_) => {
-                    unimplemented!{}
+                TyKind::GF(f) => {
+                    panic!("Decompose is not currently supported for field {:?}", f);
                 }
                 TyKind::Bundle(tys) => {
                     c.pack_iter(tys.iter().map(|&ty| walk(c, inp, ty, pos)))
