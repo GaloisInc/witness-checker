@@ -28,8 +28,8 @@ impl Value {
             TyKind::Uint(_) => {
                 Value::Single(bits.to_bigint(ty))
             },
-            TyKind::GF(_) => {
-                unimplemented!{}
+            TyKind::GF(f) => {
+                panic!("Values are not currently supported for GF({:?})", f)
             },
             TyKind::Bundle(tys) => {
                 let mut vals = Vec::with_capacity(tys.len());
