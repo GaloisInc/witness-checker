@@ -226,6 +226,7 @@ type CalcIntermediateTypes = (
     IfMode<AnyTainted, Label>,
     IfMode<AnyTainted, WordLabel>,
     IfMode<AnyTainted, ByteOffset>,
+    u64,
 );
 
 type CalcStepArgs = (RamInstr, MemPort, u64, RamState);
@@ -275,7 +276,7 @@ fn calc_step<'a>(
         ci,
         asserts_ok, found_bug,
     ) = result.repr;
-    let (x, y, result, label_x, label_y_joined, label_result, addr_offset) = ci.repr;
+    let (x, y, result, label_x, label_y_joined, label_result, addr_offset, mem_op_addr) = ci.repr;
     let ci = CalcIntermediate {
         x, y, result,
         tainted: IfMode::new(|pf| TaintCalcIntermediate {
@@ -285,6 +286,7 @@ fn calc_step<'a>(
             addr_offset: addr_offset.unwrap(&pf),
         }),
         mem_port_unused: false,
+        mem_op_addr,
     };
     wire_assert!(cx, b, asserts_ok, "assert failed in step {}", idx);
     wire_bug_if!(cx, b, found_bug, "found bug in step {}", idx);
@@ -337,6 +339,7 @@ pub fn define_calc_step_function<'a>(
                     TWire::new(ci.tainted.as_ref().map(|t| t.label_y_joined.clone())),
                     TWire::new(ci.tainted.as_ref().map(|t| t.label_result.clone())),
                     TWire::new(ci.tainted.as_ref().map(|t| t.addr_offset.clone())),
+                    ci.mem_op_addr,
                 )),
                 TWire::new(c.all_true(asserts.iter().map(|tw| tw.repr))),
                 TWire::new(c.any_true(bugs.iter().map(|tw| tw.repr))),
@@ -396,6 +399,24 @@ fn calc_step_inner<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
+    let y_mem_addr: TWire<u64>;
+    let y_jump_addr: TWire<u64>;
+
+    #[cfg(feature = "privilege-levels")] {
+        // Masks for jump and load/store addresses.  All bits are one except for the high bit, which
+        // matches the high bit of the PC.  Note that code addresses can't exceed 2^32, even though
+        // the PC's type is `u64`.
+        let jump_addr_mask_32 = b.or(b.cast::<u64, u32>(s1.pc), b.lit(0x7fff_ffff_u32));
+        let jump_addr_mask: TWire<u64> = b.cast(jump_addr_mask_32);
+        let mem_addr_mask = b.or(b.lit(0xffff_ffff_u64), b.shl(jump_addr_mask, b.lit(32_u8)));
+        y_jump_addr = b.and(y, jump_addr_mask);
+        y_mem_addr = b.and(y, mem_addr_mask);
+    }
+    #[cfg(not(feature = "privilege-levels"))] {
+        y_jump_addr = y;
+        y_mem_addr = y;
+    }
+
     // This flag is set if the `MemPort` is publicly known to be unused.  `Load*` ops may set this
     // if `opcode` is known; otherwise, all non-memory ops set this below.
     let mut mem_port_unused = false;
@@ -438,25 +459,24 @@ fn calc_step_inner<'a>(
 
     case!(Opcode::Jmp, {
         dest = b.lit(REG_PC);
-        y
+        y_jump_addr
     });
     // TODO: Double check. Is this `x`?
     // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
     case!(Opcode::Cjmp, {
         dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
-        y
+        y_jump_addr
     });
     case!(Opcode::Cnjmp, {
         dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
-        y
+        y_jump_addr
     });
 
     // Load1, Load2, Load4, Load8
     for w in MemOpWidth::iter() {
         case!(w.load_opcode(), {
-            let addr = y;
             let known_value = if opcode == Some(w.load_opcode()) {
-                kmem.load(b, ev, addr, w)
+                kmem.load(b, ev, y_mem_addr, w)
             } else {
                 None
             };
@@ -473,7 +493,7 @@ fn calc_step_inner<'a>(
         case!(w.store_opcode(), {
             dest = b.lit(REG_NONE);
             if opcode == Some(w.store_opcode()) {
-                let (addr, value) = (y, x);
+                let (addr, value) = (y_mem_addr, x);
                 kmem.store(b, ev, addr, value, w);
             }
             b.lit(0)
@@ -482,7 +502,7 @@ fn calc_step_inner<'a>(
     case!(Opcode::Poison8, {
         dest = b.lit(REG_NONE);
         if opcode == Some(Opcode::Poison8) {
-            let (addr, value) = (y, x);
+            let (addr, value) = (y_mem_addr, x);
             kmem.poison(b, ev, addr, value, MemOpWidth::W8);
         }
         b.lit(0)
@@ -571,6 +591,7 @@ fn calc_step_inner<'a>(
         x, y, result,
         tainted: tainted_im,
         mem_port_unused,
+        mem_op_addr: y_mem_addr,
     };
     (TWire::new(s2), im)
 }
@@ -647,6 +668,7 @@ fn check_step<'a>(
             TWire::new(calc_im.tainted.as_ref().map(|t| t.label_y_joined.clone())),
             TWire::new(calc_im.tainted.as_ref().map(|t| t.label_result.clone())),
             TWire::new(calc_im.tainted.as_ref().map(|t| t.addr_offset.clone())),
+            calc_im.mem_op_addr,
         )),
     ));
     let (args_wires, args_sizes) = typed::to_wire_list(&args_typed);
@@ -672,7 +694,9 @@ pub fn define_check_step_function<'a>(
         where C: CircuitTrait<'b> {
             let args = typed::from_wire_list::<CheckStepArgs>(c.as_base(), &args_wires, &[]);
             let (cycle, live, instr, mem_port, ci) = args.repr;
-            let (x, y, result, label_x, label_y_joined, label_result, addr_offset) = ci.repr;
+            let (
+                x, y, result, label_x, label_y_joined, label_result, addr_offset, mem_op_addr,
+            ) = ci.repr;
             let ci = CalcIntermediate {
                 x, y, result,
                 tainted: IfMode::new(|pf| TaintCalcIntermediate {
@@ -682,6 +706,7 @@ pub fn define_check_step_function<'a>(
                     addr_offset: addr_offset.unwrap(&pf),
                 }),
                 mem_port_unused: false,
+                mem_op_addr,
             };
 
             let cx = Context::new(c);
@@ -734,7 +759,6 @@ fn check_step_inner<'a>(
     let _g = b.scoped_label("check_step");
 
     let x = calc_im.x;
-    let y = calc_im.y;
 
     if !calc_im.mem_port_unused {
         // If the instruction is a store, load, or poison, we need additional checks to make sure
@@ -747,7 +771,7 @@ fn check_step_inner<'a>(
         let is_store_like = b.or(is_store, is_poison);
         let is_mem = b.or(is_load, is_store_like);
 
-        let addr = y;
+        let addr = calc_im.mem_op_addr;
 
         // TODO: we could avoid most of the `live` checks if public-pc segments set appropriate
         // defaults when constructing their MemPorts (so the checks automatically pass on non-live
