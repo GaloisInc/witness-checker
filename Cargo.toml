@@ -12,6 +12,8 @@ bellman = ["zk-circuit-builder/bellman"]
 sieve_ir = ["zk-circuit-builder/sieve_ir"]
 gf_scuttlebutt = ["zk-circuit-builder/gf_scuttlebutt"]
 
+privilege-levels = []
+
 [dependencies]
 zk-circuit-builder = { path = "deps/zk-circuit-builder", default-features = false, features = ["f128p"] }
 

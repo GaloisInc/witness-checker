@@ -1856,11 +1856,13 @@ pub struct TaintCalcIntermediate<'a> {
 }
 
 pub struct CalcIntermediate<'a> {
-    pub x: TWire<'a,u64>,
-    pub y: TWire<'a,u64>,
-    pub result: TWire<'a,u64>,
+    pub x: TWire<'a, u64>,
+    pub y: TWire<'a, u64>,
+    pub result: TWire<'a, u64>,
     pub tainted: IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
     /// If set, then this step is publicly known not to use any `MemPort`.
     pub mem_port_unused: bool,
+    /// If a memory operation occurred during this step, this field gives its address.
+    pub mem_op_addr: TWire<'a, u64>,
 }
 
