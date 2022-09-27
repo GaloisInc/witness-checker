@@ -503,6 +503,7 @@ impl Opcode {
 }
 
 
+pub const MEM_PORT_FINAL_CYCLE: u32 = !0 - 2;
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 

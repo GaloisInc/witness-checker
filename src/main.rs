@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::iter;
+use std::num::ParseIntError;
 use std::path::Path;
 use std::ptr;
 use std::str::FromStr;
@@ -73,6 +74,11 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("expect-zero")
              .long("expect-zero")
              .help("check that r0 == 0 in the final state"))
+        .arg(Arg::with_name("expect-write")
+             .long("expect-write")
+             .takes_value(true)
+             .value_name("ADDR")
+             .help("check that the program writes the value 1 to ADDR before terminating"))
         .arg(Arg::with_name("stats")
              .long("stats")
              .help("print info about the size of the circuit"))
@@ -138,6 +144,17 @@ fn check_first<'a>(
     tainted::check_first(cx, b, &s.tainted_regs);
 }
 
+fn parse_address(s: &str) -> Result<u64, ParseIntError> {
+    if s.starts_with("0x") {
+        u64::from_str_radix(&s[2..], 16)
+    } else if s.starts_with("0o") {
+        u64::from_str_radix(&s[2..], 8)
+    } else if s.starts_with("0b") {
+        u64::from_str_radix(&s[2..], 2)
+    } else {
+        u64::from_str_radix(s, 10)
+    }
+}
 
 fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let is_prover = !args.is_present("verifier-mode");
@@ -304,13 +321,16 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
 
         let expect_zero = args.is_present("expect-zero");
+        let expect_write = args.value_of("expect-write").map(|s| {
+            parse_address(s).expect("failed to parse --expect-write address")
+        });
         let debug_segment_graph_path = args.value_of("debug-segment-graph")
             .map(|s| s.to_owned());
 
         // Get a `&'static str` version of `name` from the witness.
         let (new_cx, new_equiv_segments) = ExecBuilder::build(
             b, &mcx, cx, &exec, name, equiv_segments, init_state,
-            check_steps, expect_zero, debug_segment_graph_path);
+            check_steps, expect_zero, expect_write, debug_segment_graph_path);
         cx = new_cx;
         equiv_segments = new_equiv_segments;
     }

@@ -19,9 +19,13 @@ use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 pub struct ExecBuilder<'a> {
     init_state: RamState,
     check_steps: usize,
+    /// If set, then the trace is valid only if the final value of `r0` is 0.
     expect_zero: bool,
     calc_step_func: Function<'a>,
     check_step_func: Function<'a>,
+    /// If set, then the trace is valid only if the program writes a 1 to this address before
+    /// terminating.
+    expect_write: Option<u64>,
     debug_segment_graph_path: Option<String>,
 
     equiv_segments: EquivSegments<'a>,
@@ -29,7 +33,8 @@ pub struct ExecBuilder<'a> {
     fetch: Fetch<'a>,
     seg_graph_builder: SegGraphBuilder<'a>,
     /// Map from segment index to the index of the trace chunk that uses that segment, along with
-    /// the initial cycle of that chunk.
+    /// the initial cycle of that chunk.  This is used in `add_segment` to initialize the secrets
+    /// for the new segment (if that segment is actually used in the trace).
     seg_user_map: HashMap<usize, (usize, u32)>,
 
     // These fields come last because they contain caches keyed on `Wire`s.  On migration, only
@@ -49,6 +54,7 @@ impl<'a> ExecBuilder<'a> {
         init_state: RamState,
         check_steps: usize,
         expect_zero: bool,
+        expect_write: Option<u64>,
         debug_segment_graph_path: Option<String>,
     ) -> (Context<'a>, EquivSegments<'a>) {
         let mut mh = MigrateHandle::new(mcx);
@@ -56,7 +62,7 @@ impl<'a> ExecBuilder<'a> {
 
         let mut eb = mh.root(ExecBuilder::new(
             b, cx, exec, equiv_segments, init_state,
-            check_steps, expect_zero, debug_segment_graph_path,
+            check_steps, expect_zero, expect_write, debug_segment_graph_path,
             move |w| &w.execs[exec_name],
         ));
         eb.open(mh).init(b, exec, exec_name);
@@ -72,6 +78,7 @@ impl<'a> ExecBuilder<'a> {
         init_state: RamState,
         check_steps: usize,
         expect_zero: bool,
+        expect_write: Option<u64>,
         debug_segment_graph_path: Option<String>,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> ExecBuilder<'a> {
@@ -81,6 +88,7 @@ impl<'a> ExecBuilder<'a> {
             expect_zero,
             calc_step_func: trace::define_calc_step_function(b, exec.params.num_regs),
             check_step_func: trace::define_check_step_function(b),
+            expect_write,
             debug_segment_graph_path,
 
             equiv_segments,
@@ -100,6 +108,7 @@ impl<'a> ExecBuilder<'a> {
             std::fs::write(out_path, self.seg_graph_builder.dump()).unwrap();
         }
 
+        // Set up initial KnownMem
         let mut kmem = KnownMem::with_default(b.lit(0));
         for (i, seg) in exec.init_mem.iter().enumerate() {
             let values = self.mem.init_segment(
@@ -113,6 +122,7 @@ impl<'a> ExecBuilder<'a> {
         }
         self.seg_graph_builder.set_cpu_init_mem(kmem);
 
+        // Populate `seg_user_map`.
         let mut cycle = 0;
         for (i, chunk) in exec.trace.iter().enumerate() {
             if let Some(c) = chunk.debug.as_ref().and_then(|d| d.cycle) {
@@ -123,6 +133,16 @@ impl<'a> ExecBuilder<'a> {
             assert!(old.is_none());
 
             cycle += chunk.states.len() as u32;
+        }
+
+        // Add extra `MemPort`s to enforce `expect_write`.
+        if let Some(addr) = self.expect_write {
+            // We write a 0 before execution begins, and try to read back a 1 after the program
+            // terminates.  This succeeds only if the program overwrites the 0 with a 1 during its
+            // execution.  We can't simply leave the memory uninitialized because reads from
+            // uninitialized memory are allowed (and the value produced is unconstrained).
+            self.mem.add_initial_write(b, addr, 0);
+            self.mem.add_final_read(b, addr, 1);
         }
     }
 
@@ -158,6 +178,7 @@ impl<'a> ExecBuilder<'a> {
         idx: usize,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
+        // Build the circuit for this segment.
         let mut segment_builder = SegmentBuilder {
             cx: &self.cx,
             b: b,
@@ -181,6 +202,8 @@ impl<'a> ExecBuilder<'a> {
         self.seg_graph_builder.set_final(idx, seg.final_state().clone());
         self.seg_graph_builder.set_final_mem(idx, kmem);
 
+        // If this segment is actually used in the trace, find the relevant trace chunk and use its
+        // data to initialize the segment's secrets.
         if let Some(&(chunk_idx, cycle)) = self.seg_user_map.get(&idx) {
             let chunk = &exec.trace[chunk_idx];
             let debug_prev_state = chunk.debug.as_ref().and_then(|d| d.prev_state.as_ref());
@@ -193,6 +216,9 @@ impl<'a> ExecBuilder<'a> {
             };
             seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
 
+            // FIXME: this leaks information, namely, the identity of the last used segment.  We
+            // should either forbid mixing `--expect-zero` with public PC, or otherwise ensure that
+            // this is only used for testing.
             if chunk_idx == exec.trace.len() - 1 {
                 check_last(&self.cx, b, seg.final_state(), self.expect_zero);
             }

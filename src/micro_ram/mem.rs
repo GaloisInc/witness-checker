@@ -20,8 +20,8 @@ use zk_circuit_builder::routing::sort::{self, CompareLt};
 use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
-    MemoryEquivalence, MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BOTTOM, WORD_BYTES,
-    CompareMemPort,
+    MemoryEquivalence, MEM_PORT_FINAL_CYCLE, MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE,
+    WORD_BOTTOM, WORD_BYTES, CompareMemPort,
 };
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness, SegmentWitness};
 use crate::mode::if_mode::IfMode;
@@ -216,6 +216,45 @@ impl<'a> Memory<'a> {
         self.ports.extend(cp.ports.iter().map(|smp| smp.mp));
         self.unused.0.borrow_mut().extend(iter::repeat(false).take(cp.ports.len()));
         cp
+    }
+
+    /// Add a write of `value` to `addr` during initialization.
+    pub fn add_initial_write(
+        &mut self,
+        b: &impl Builder<'a>,
+        addr: u64,
+        value: u64,
+    ) {
+        let mp = b.lit(MemPort {
+            cycle: MEM_PORT_PRELOAD_CYCLE,
+            addr,
+            value,
+            op: MemOpKind::Write,
+            width: MemOpWidth::WORD,
+            tainted: IfMode::new(|_pf| WORD_BOTTOM),
+        });
+        self.ports.push(mp);
+        self.unused.0.borrow_mut().push(false);
+    }
+
+    /// Add a read of `value` from `addr` on the last possible cycle.  This asserts that the
+    /// program writes `value` to `addr` at some point before it terminates.
+    pub fn add_final_read(
+        &mut self,
+        b: &impl Builder<'a>,
+        addr: u64,
+        value: u64,
+    ) {
+        let mp = b.lit(MemPort {
+            cycle: MEM_PORT_FINAL_CYCLE,
+            addr,
+            value,
+            op: MemOpKind::Read,
+            width: MemOpWidth::WORD,
+            tainted: IfMode::new(|_pf| WORD_BOTTOM),
+        });
+        self.ports.push(mp);
+        self.unused.0.borrow_mut().push(false);
     }
 
     /// Assert that this set of memory operations is internally consistent.
