@@ -44,6 +44,10 @@ define_features! {
 
     /// Multiple executions are provided. Also adds names to memory segments.
     MultiExec = "multi-exec",
+
+    /// If present, the `program` is split into multiple code segments, similar to the way
+    /// `init_mem` is broken into segments.
+    CodeSegments = "code-segments",
 }
 
 
@@ -88,6 +92,8 @@ define_versions! {
     (0,1,5,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound },
     // 0.1.6.0 adds multiple executions and named memory segments. 
     (0,1,6,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound},
+    // 0.1.7.0 adds code segments and `params.commitment`.
+    (0,1,7,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {

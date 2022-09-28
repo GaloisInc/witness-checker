@@ -1,6 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
+use std::convert::TryFrom;
+use std::ops::Index;
+use crate::micro_ram::fetch::PADDING_INSTR;
+use crate::micro_ram::trace::InstrLookup;
 use crate::micro_ram::types::{
-    MultiExec, ExecBody, Segment, Advice, RamInstr, RamState, MemPort, MEM_PORT_UNUSED_CYCLE,
+    MultiExec, ExecBody, Segment, Advice, RamInstr, RamState, MemPort, CodeSegment,
+    MEM_PORT_UNUSED_CYCLE,
 };
 
 
@@ -29,6 +34,7 @@ pub struct ExecWitness {
     pub segments: Vec<SegmentWitness>,
     /// Data values for initial memory segments.
     pub init_mem_values: Vec<Vec<u64>>,
+    pub init_fetch_instrs: Vec<Vec<RamInstr>>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,7 +69,15 @@ impl ExecWitness {
                 data.resize(ms.len as usize, 0);
                 data
             }).collect(),
+            init_fetch_instrs: e.program.iter().map(|cs| {
+                let mut instrs = cs.instrs.clone();
+                assert!(instrs.len() <= cs.len as usize);
+                instrs.resize(cs.len as usize, PADDING_INSTR);
+                instrs
+            }).collect(),
         };
+
+        let instrs = InstrLookup::new(&e.program);
 
         let mut pc = 0;
         let mut cycle = 0;
@@ -110,10 +124,7 @@ impl ExecWitness {
                     }
                 }
 
-                let instr = e.program.get(pc as usize).cloned().unwrap_or_else(|| {
-                    panic!("program executed out of bounds (pc = 0x{:x}) on cycle {}", pc, cycle);
-                });
-                seg_w.fetches.push((pc, instr));
+                seg_w.fetches.push((pc, instrs[pc]));
 
                 pc = post_state.pc;
                 cycle += 1;

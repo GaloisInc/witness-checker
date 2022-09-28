@@ -5,8 +5,8 @@ use std::mem;
 use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
-    VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
-    Segment, SegmentConstraint, Commitment,
+    VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr,
+    Advice, TraceChunk, Segment, SegmentConstraint, Commitment, CodeSegment,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -144,7 +144,20 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
             }
 
             match &k as &str {
-                "program" => { ex.program = map.next_value()?; },
+                "program" => {
+                    if has_feature(Feature::CodeSegments) {
+                        ex.program = map.next_value()?;
+                    } else {
+                        let instrs: Vec<_> = map.next_value()?;
+                        ex.program = vec![CodeSegment {
+                            name: "_program".into(),
+                            start: 0,
+                            len: instrs.len() as u64,
+                            secret: false,
+                            instrs,
+                        }];
+                    }
+                },
                 "init_mem" => { ex.init_mem = map.next_value()?; },
                 "params" => { ex.params = map.next_value()?; },
                 "segments" if has_feature(Feature::PublicPc) => {

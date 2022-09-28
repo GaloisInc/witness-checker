@@ -34,7 +34,7 @@ pub struct RamInstr {
 }
 
 impl RamInstr {
-    pub fn new(
+    pub const fn new(
         opcode: Opcode,
         dest: u32,
         op1: u32,
@@ -1622,7 +1622,7 @@ impl MultiExec {
 
 #[derive(Clone, Debug)]
 pub struct ExecBody {
-    pub program: Vec<RamInstr>,
+    pub program: Vec<CodeSegment>,
     pub init_mem: Vec<MemSegment>,
     pub params: Params,
     pub segments: Vec<Segment>,
@@ -1667,6 +1667,42 @@ impl ExecBody {
                 return Err(format!(
                     "wrong number of states in trace: expected {}, but got {}",
                     expect_trace_len, self.trace[0].states.len(),
+                ));
+            }
+        }
+
+        for (i, ms) in self.init_mem.iter().enumerate() {
+            if ms.data.len() as u64 > ms.len {
+                return Err(format!(
+                    "`init_mem[{}]` data length {} is too long for len field {}",
+                    i, ms.data.len(), ms.len,
+                ));
+            }
+            if ms.start.checked_add(ms.len).is_none() {
+                return Err(format!(
+                    "`init_mem[{}]` `start + len` overflowed (start = {}, len = {})",
+                    i, ms.start, ms.len,
+                ));
+            }
+        }
+
+        for (i, cs) in self.program.iter().enumerate() {
+            if cs.instrs.len() as u64 > cs.len {
+                return Err(format!(
+                    "`program[{}]` instrs length {} is too long for len field {}",
+                    i, cs.instrs.len(), cs.len,
+                ));
+            }
+            if !cs.secret && cs.instrs.len() as u64 != cs.len {
+                return Err(format!(
+                    "`program[{}]` (public segment) instrs length {} should match len field {}",
+                    i, cs.instrs.len(), cs.len,
+                ));
+            }
+            if cs.start.checked_add(cs.len).is_none() {
+                return Err(format!(
+                    "`program[{}]` `start + len` overflowed (start = {}, len = {})",
+                    i, cs.start, cs.len,
                 ));
             }
         }
@@ -1733,6 +1769,17 @@ impl ExecBody {
 }
 
 pub type MemoryEquivalence = Vec<(String, String)>;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CodeSegment {
+    pub name: String,
+    pub start: u64,
+    pub len: u64,
+    #[serde(default)]
+    pub secret: bool,
+    #[serde(default)]
+    pub instrs: Vec<RamInstr>,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MemSegment {

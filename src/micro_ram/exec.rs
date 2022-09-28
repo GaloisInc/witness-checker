@@ -11,7 +11,7 @@ use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{Memory, EquivSegments};
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
-use crate::micro_ram::trace::{self, SegmentBuilder};
+use crate::micro_ram::trace::{self, SegmentBuilder, InstrLookup};
 use crate::micro_ram::types::{Commitment, ExecBody, RamState};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 
@@ -94,7 +94,7 @@ impl<'a> ExecBuilder<'a> {
 
             equiv_segments,
             mem: Memory::new(),
-            fetch: Fetch::new(b, &exec.program),
+            fetch: Fetch::new(b, &exec.program, project_witness),
             seg_graph_builder: SegGraphBuilder::new(
                 b, &exec.segments, &exec.params, init_state, &exec.trace, project_witness),
             seg_user_map: HashMap::new(),
@@ -183,10 +183,11 @@ impl<'a> ExecBuilder<'a> {
         exec: &ExecBody,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
+        let instr_lookup = InstrLookup::new(&exec.program);
         for item in this.open(mh).seg_graph_builder.get_order() {
             match item {
                 SegGraphItem::Segment(idx) =>
-                    this.open(mh).add_segment(b, exec, idx, project_witness),
+                    this.open(mh).add_segment(b, exec, &instr_lookup, idx, project_witness),
                 SegGraphItem::Network => {
                     unsafe { mh.erase_and_migrate(b.circuit()) };
                     info!("seg_graph_builder.build_network");
@@ -205,6 +206,7 @@ impl<'a> ExecBuilder<'a> {
         &mut self,
         b: &impl Builder<'a>,
         exec: &ExecBody,
+        instr_lookup: &InstrLookup,
         idx: usize,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
@@ -218,7 +220,7 @@ impl<'a> ExecBuilder<'a> {
             mem: &mut self.mem,
             fetch: &mut self.fetch,
             params: &exec.params,
-            prog: &exec.program,
+            prog: instr_lookup,
             check_steps: self.check_steps,
         };
 
