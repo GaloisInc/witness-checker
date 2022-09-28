@@ -1,5 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
+use std::convert::TryFrom;
 use std::iter;
+use std::ops::Index;
 use zk_circuit_builder::gadget::arith::BuilderExt as _;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::circuit::{
@@ -15,13 +17,12 @@ use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{self, Memory, extract_bytes_at_offset, extract_low_bytes};
 use crate::micro_ram::types::{
     self, CalcIntermediate, TaintCalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort,
-    Opcode, MemOpKind, MemOpWidth, Advice, WordLabel, Label, ByteOffset, REG_NONE, REG_PC,
-    MEM_PORT_UNUSED_CYCLE
+    Opcode, MemOpKind, MemOpWidth, Advice, CodeSegment, WordLabel, Label, ByteOffset, REG_NONE,
+    REG_PC, MEM_PORT_UNUSED_CYCLE
 };
 use crate::micro_ram::witness::{MultiExecWitness, SegmentWitness};
 use crate::mode::if_mode::{IfMode, AnyTainted, is_mode};
 use crate::mode::tainted;
-
 
 
 #[derive(Migrate)]
@@ -44,7 +45,7 @@ pub struct SegmentBuilder<'a, 'b, B> {
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
-    pub prog: &'b [RamInstr],
+    pub prog: &'b InstrLookup<'b>,
     pub check_steps: usize,
 }
 
@@ -69,7 +70,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             mem_ports = self.mem.add_cycles_irregular(
                 cx, b,
                 s.len,
-                (0 .. s.len).filter(|i| prog[init_pc as usize + i].opcode().is_mem()),
+                (0 .. s.len).filter(|&i| prog[init_pc + i as u64].opcode().is_mem()),
                 project_witness,
             );
             fetch_ports = None;
@@ -104,7 +105,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             let mut instr;
             if let Some(init_pc) = s.init_pc() {
                 let pc = init_pc + i as u64;
-                let instr_val = self.prog[pc as usize];
+                let instr_val = self.prog[pc];
                 instr = b.lit(instr_val);
             } else {
                 let fp = fetch_ports.as_ref().unwrap().get(i);
@@ -840,4 +841,38 @@ fn check_step_inner<'a>(
     }
 
     tainted::check_step(cx, b, seg_idx, idx, instr, calc_im);
+}
+
+
+pub struct InstrLookup<'b> {
+    /// Maps start address to segment.
+    index: BTreeMap<u64, &'b CodeSegment>,
+    /// Default `RamInstr` to use for unallocated space.
+    padding: RamInstr,
+}
+
+impl<'b> InstrLookup<'b> {
+    pub fn new(prog: &'b [CodeSegment]) -> InstrLookup<'b> {
+        InstrLookup {
+            index: prog.iter().map(|cs| (cs.start, cs)).collect(),
+            padding: fetch::PADDING_INSTR,
+        }
+    }
+}
+
+impl Index<u64> for InstrLookup<'_> {
+    type Output = RamInstr;
+
+    fn index(&self, idx: u64) -> &RamInstr {
+        let (&start, cs) = match self.index.range(..= idx).next_back() {
+            Some(x) => x,
+            None => return &self.padding,
+        };
+        debug_assert!(start <= idx);
+        let i = usize::try_from(idx - start).unwrap();
+        if i >= cs.instrs.len() {
+            return &self.padding;
+        }
+        &cs.instrs[i]
+    }
 }

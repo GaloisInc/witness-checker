@@ -2,6 +2,7 @@
 //!
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
+use std::convert::TryFrom;
 use log::*;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::circuit::CircuitTrait;
@@ -10,37 +11,63 @@ use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
 use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, EvaluatorExt};
 use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{
-    FetchPort, FetchPortRepr, PackedFetchPort, RamInstr, CompareFetchPort,
+    FetchPort, FetchPortRepr, PackedFetchPort, RamInstr, Opcode, CodeSegment, CompareFetchPort,
 };
-use crate::micro_ram::witness::{MultiExecWitness, SegmentWitness};
+use crate::micro_ram::witness::{MultiExecWitness, ExecWitness, SegmentWitness};
 use zk_circuit_builder::routing::sort::{self, CompareLe};
 
 #[derive(Migrate)]
 pub struct Fetch<'a> {
     ports: Vec<TWire<'a, FetchPort>>,
-    /// Default value for secret `instr`s in uninitialized `FetchPort`s.
-    default_instr: RamInstr,
+    /// Default `addr` and `instr` values to use for uninitialized `FetchPort`s.  This corresponds
+    /// to an actual instruction somewhere in the program, which means uninitialized `FetchPort`s
+    /// will be valid under the normal rules, and no special checks for unused `FetchPort`s are
+    /// necessary.
+    default_addr_and_instr: (u64, RamInstr),
 }
 
-impl<'a> Fetch<'a> {
-    pub fn new(b: &impl Builder<'a>, prog: &[RamInstr]) -> Fetch<'a> {
-        let mut ports = Vec::with_capacity(prog.len());
+pub const PADDING_INSTR: RamInstr = RamInstr::new(Opcode::Answer, 0, 0, 0, true);
 
-        for (i, instr) in prog.iter().enumerate() {
-            let fp = b.lit(FetchPort {
-                addr: i as u64,
-                instr: instr.clone(),
-                write: true,
-            });
-            ports.push(fp);
+impl<'a> Fetch<'a> {
+    pub fn new(
+        b: &impl Builder<'a>,
+        prog: &[CodeSegment],
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) -> Fetch<'a> {
+        let num_ports = prog.iter().map(|cs| cs.len as usize).sum();
+        let mut ports = Vec::with_capacity(num_ports);
+
+        let mut first_public_instr = None;
+        for (seg_idx, cs) in prog.iter().enumerate() {
+            for i in 0 .. cs.len {
+                let addr = cs.start + i;
+                let instr: TWire<RamInstr> = if cs.secret {
+                    b.secret_lazy(move |w: &MultiExecWitness| {
+                        let w: &ExecWitness = project_witness(w);
+                        w.init_fetch_instrs[seg_idx][usize::try_from(i).unwrap()]
+                    })
+                } else {
+                    let instr = cs.instrs.get(i as usize).cloned()
+                        .unwrap_or(PADDING_INSTR);
+                    if first_public_instr.is_none() {
+                        first_public_instr = Some((addr, instr));
+                    }
+                    b.lit(instr)
+                };
+
+                let fp = TWire::new(FetchPortRepr {
+                    addr: b.lit(addr),
+                    instr,
+                    write: b.lit(true),
+                });
+                ports.push(fp);
+            }
         }
 
         Fetch {
             ports,
-            // Set the default `RamInstr` to the correct `RamInstr` for the default address (0).
-            // This means uninitialized `FetchPort`s will be valid under the normal rules, and no
-            // special checks for unused `FetchPort`s are necessary.
-            default_instr: prog[0].clone(),
+            default_addr_and_instr: first_public_instr
+                .expect("program must contain at least one public instruction"),
         }
     }
 
@@ -54,7 +81,7 @@ impl<'a> Fetch<'a> {
             ports: Vec::with_capacity(len),
         };
 
-        let default_instr = self.default_instr;
+        let (default_addr, default_instr) = self.default_addr_and_instr;
 
         for i in 0 .. len {
             let addr = b.secret_lazy(move |w: &MultiExecWitness| {
@@ -62,7 +89,7 @@ impl<'a> Fetch<'a> {
                 if w.live() {
                     w.fetches[i].0
                 } else {
-                    0
+                    default_addr
                 }
             });
             let instr = b.secret_lazy(move |w: &MultiExecWitness| {
@@ -92,7 +119,7 @@ impl<'a> Fetch<'a> {
         b: &impl Builder<'a>,
     ) {
         let (mut ports,) = {
-            let Fetch { ports, default_instr: _ } = self;
+            let Fetch { ports, default_addr_and_instr: _ } = self;
             (mh.root(ports),)
         };
 
