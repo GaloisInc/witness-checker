@@ -1759,6 +1759,8 @@ pub struct Params {
     pub trace_len: Option<usize>,
     #[serde(alias = "sparcity", default)]
     pub sparsity: Sparsity,
+    #[serde(default)]
+    pub commitment: Option<Commitment>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1777,6 +1779,11 @@ impl Default for Sparsity {
             mem_op: 1,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Commitment {
+    Sha256([u32; 8]),
 }
 
 #[derive(Clone, Debug)]
