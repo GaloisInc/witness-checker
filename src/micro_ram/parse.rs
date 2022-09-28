@@ -6,7 +6,7 @@ use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
     VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
-    Segment, SegmentConstraint,
+    Segment, SegmentConstraint, Commitment,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -269,6 +269,48 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
     }
 }
 
+
+impl<'de> Deserialize<'de> for Commitment {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let i = s.find(':').ok_or_else(|| de::Error::invalid_value(
+            de::Unexpected::Str(&s),
+            &"a commitment of the form KIND:DATA",
+        ))?;
+
+        let kind = &s[..i];
+        let data = &s[i + 1 ..];
+
+        match kind {
+            "sha256" => {
+                if data.len() != 64 {
+                    return Err(de::Error::invalid_length(
+                        data.len(),
+                        &"sha256:DATA, where DATA is a 64-digit hex string",
+                    ));
+                }
+                let mut hash = [0_u32; 8];
+                for i in 0..8 {
+                    let chunk = &data[i * 8 .. (i + 1) * 8];
+                    hash[i] = u32::from_str_radix(chunk, 16).map_err(|_| {
+                        de::Error::invalid_value(
+                            de::Unexpected::Str(chunk),
+                            &"hex digits",
+                        )
+                    })?;
+                }
+                Ok(Commitment::Sha256(hash))
+            },
+
+            _ => {
+                return Err(de::Error::unknown_variant(
+                    kind,
+                    &["sha256"],
+                ));
+            },
+        }
+    }
+}
 
 impl<'de> Deserialize<'de> for Segment {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {

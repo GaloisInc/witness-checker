@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use log::info;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::hash::sha256::Sha256;
 use zk_circuit_builder::ir::circuit::Function;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
@@ -11,7 +12,7 @@ use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{Memory, EquivSegments};
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use crate::micro_ram::trace::{self, SegmentBuilder};
-use crate::micro_ram::types::{ExecBody, RamState};
+use crate::micro_ram::types::{Commitment, ExecBody, RamState};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 
 
@@ -110,6 +111,7 @@ impl<'a> ExecBuilder<'a> {
 
         // Set up initial KnownMem
         let mut kmem = KnownMem::with_default(b.lit(0));
+        let mut seg_values = Vec::with_capacity(exec.init_mem.len());
         for (i, seg) in exec.init_mem.iter().enumerate() {
             let values = self.mem.init_segment(
                 b,
@@ -119,8 +121,10 @@ impl<'a> ExecBuilder<'a> {
                 move |w| &w.execs[exec_name],
             );
             kmem.init_segment(seg, &values);
+            seg_values.push(values);
         }
         self.seg_graph_builder.set_cpu_init_mem(kmem);
+        debug_assert_eq!(seg_values.len(), exec.init_mem.len());
 
         // Populate `seg_user_map`.
         let mut cycle = 0;
@@ -143,6 +147,32 @@ impl<'a> ExecBuilder<'a> {
             // uninitialized memory are allowed (and the value produced is unconstrained).
             self.mem.add_initial_write(b, addr, 0);
             self.mem.add_final_read(b, addr, 1);
+        }
+
+        // Add hash check for the `commitment`.
+        if let Some(commitment) = exec.params.commitment {
+            let _g = b.scoped_label("check commitment");
+            match commitment {
+                Commitment::Sha256(expect_hash) => {
+                    let mut h = Sha256::new(b);
+
+                    for (seg, values) in exec.init_mem.iter().zip(seg_values.iter()) {
+                        if !seg.secret {
+                            continue;
+                        }
+                        for &w in values {
+                            h.push(b, w);
+                        }
+                    }
+
+                    let actual_hash = h.finish(b);
+                    wire_assert!(
+                        cx = &self.cx, b, b.eq(actual_hash, b.lit(expect_hash)),
+                        "bad commitment: actual hash is {:?}, but expected {:?}",
+                        cx.eval(actual_hash), expect_hash,
+                    );
+                },
+            }
         }
     }
 
