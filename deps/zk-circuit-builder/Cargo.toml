@@ -50,6 +50,8 @@ generic-array = "*"
 
 log = "0.4"
 
+arrayvec = "0.5.2"
+
 [dev-dependencies]
 env_logger = "0.7"
 tempfile = "3.1"
