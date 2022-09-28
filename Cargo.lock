@@ -1430,6 +1430,7 @@ dependencies = [
 name = "zk-circuit-builder"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.5.2",
  "bitflags",
  "bitvec 0.18.4",
  "bumpalo",
