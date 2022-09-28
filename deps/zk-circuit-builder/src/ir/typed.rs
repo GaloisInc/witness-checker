@@ -1614,6 +1614,40 @@ macro_rules! array_impls {
                 }
             }
 
+            impl<'a, A: Eq<'a, A, Output = bool>> Eq<'a, [A; $n]> for [A; $n]
+            where A::Repr: Clone {
+                type Output = bool;
+
+                fn eq(
+                    bld: &impl Builder<'a>,
+                    a: [TWire<'a, A>; $n],
+                    b: [TWire<'a, A>; $n],
+                ) -> Wire<'a> {
+                    let mut acc = bld.lit(true);
+                    for (ai, bi) in a.iter().zip(b.iter()) {
+                        acc = bld.and(acc, bld.eq(ai.clone(), bi.clone()));
+                    }
+                    acc.repr
+                }
+            }
+
+            impl<'a, A: Ne<'a, A, Output = bool>> Ne<'a, [A; $n]> for [A; $n]
+            where A::Repr: Clone {
+                type Output = bool;
+
+                fn ne(
+                    bld: &impl Builder<'a>,
+                    a: [TWire<'a, A>; $n],
+                    b: [TWire<'a, A>; $n],
+                ) -> Wire<'a> {
+                    let mut acc = bld.lit(false);
+                    for (ai, bi) in a.iter().zip(b.iter()) {
+                        acc = bld.or(acc, bld.ne(ai.clone(), bi.clone()));
+                    }
+                    acc.repr
+                }
+            }
+
             impl<'a, C, A, B> Mux<'a, C, [B; $n]> for [A; $n]
             where
                 C: Repr<'a>,
