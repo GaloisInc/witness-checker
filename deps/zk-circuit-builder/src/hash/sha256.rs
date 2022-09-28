@@ -1,6 +1,8 @@
+use std::cmp;
 use arrayvec::ArrayVec;
 use crate::gadget::bit_pack;
-use crate::ir::typed::{Builder, BuilderExt, TWire};
+use crate::ir::circuit::{CircuitExt, Ty};
+use crate::ir::typed::{Builder, BuilderExt, TWire, Flatten};
 
 pub struct Sha256<'a> {
     state: [TWire<'a, u32>; 8],
@@ -200,6 +202,24 @@ impl<'a> Sha256<'a> {
         // Append the original message length in bits as a 64-bit integer.
         for &byte in (msg_len as u64 * 8).to_be_bytes().iter() {
             self.push_byte(b, b.lit(byte));
+        }
+    }
+
+
+    /// Push an arbitrary value.  This converts `x` to bits via `bit_pack::concat_bits`, pads it
+    /// out to a multiple of 8, and pushes the resulting bytes.
+    pub fn push<T: Flatten<'a>>(&mut self, bld: &impl Builder<'a>, x: TWire<'a, T>) {
+        let w = bit_pack::concat_bits(bld, x);
+        let bit_width = w.ty.integer_size().bits();
+
+        for start in (0 .. bit_width).step_by(8) {
+            let len = cmp::min(8, bit_width - start);
+            let end = start + len;
+            let mut byte_wire = bit_pack::extract_bits(bld.circuit(), w, start, end);
+            if len < 8 {
+                byte_wire = bld.circuit().cast(byte_wire, Ty::uint(8));
+            }
+            self.push_byte(bld, TWire::new(byte_wire));
         }
     }
 }
