@@ -217,6 +217,7 @@ dependencies = [
  "arrayvec 0.5.2",
  "clap",
  "env_logger",
+ "getrandom 0.2.8",
  "goldenfile",
  "log",
  "num-bigint",
@@ -225,6 +226,7 @@ dependencies = [
  "serde_cbor",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "zk-circuit-builder",
 ]
 

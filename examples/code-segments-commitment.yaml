@@ -38,25 +38,17 @@
       secret: true
       data: [10, 34, 0, 40, 0, 0, 0, 0]
 
+    - start: 10
+      len: 2
+      name: __commitment_randomness__
+      read_only: true
+      secret: true
+      data: [3527509101496044622, 3489791681105834099]
+
   params:
     num_regs: 4
     trace_len: 29
-    # The hash is computed as follows:
-    #   from hashlib import sha256
-    #   import struct
-    #   instrs = [
-    #     # (opcode, dest, op1, op2, imm)
-    #     # Note this doesn't match the order used in the yaml file.
-    #     (30, 0, 0, 1, 0),
-    #     (4, 2, 2, 0, 0),
-    #     (4, 1, 1, 8, 1),
-    #     (13, 3, 0, 0, 1),
-    #     (22, 0, 3, 2, 1),
-    #   ]
-    #   code = b''.join(struct.pack('<BBBQB', *i) for i in instrs)
-    #   mem = b''.join(struct.pack('<Q', x) for x in [10, 34, 0, 40, 0, 0, 0, 0])
-    #   print(sha256(code + mem).hexdigest())
-    commitment: sha256:b3d9c0d56ce47969b7aa6a4e3bdf2e88e282e0651f5b4be8e7732b42173bc3aa
+    commitment: sha256:9211c2078043a9ab4c9128fcc2359c72796c767da9486f7af601756415d4b3dd
 
   trace:
     - [0, [ 0,  0,   0, 0]]
