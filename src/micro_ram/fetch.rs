@@ -19,6 +19,7 @@ use zk_circuit_builder::routing::sort::{self, CompareLe};
 #[derive(Migrate)]
 pub struct Fetch<'a> {
     ports: Vec<TWire<'a, FetchPort>>,
+    all_instrs: Vec<Vec<TWire<'a, RamInstr>>>,
     /// Default `addr` and `instr` values to use for uninitialized `FetchPort`s.  This corresponds
     /// to an actual instruction somewhere in the program, which means uninitialized `FetchPort`s
     /// will be valid under the normal rules, and no special checks for unused `FetchPort`s are
@@ -36,9 +37,11 @@ impl<'a> Fetch<'a> {
     ) -> Fetch<'a> {
         let num_ports = prog.iter().map(|cs| cs.len as usize).sum();
         let mut ports = Vec::with_capacity(num_ports);
+        let mut all_instrs = Vec::with_capacity(prog.len());
 
         let mut first_public_instr = None;
         for (seg_idx, cs) in prog.iter().enumerate() {
+            let mut seg_instrs = Vec::with_capacity(cs.len as usize);
             for i in 0 .. cs.len {
                 let addr = cs.start + i;
                 let instr: TWire<RamInstr> = if cs.secret {
@@ -61,14 +64,22 @@ impl<'a> Fetch<'a> {
                     write: b.lit(true),
                 });
                 ports.push(fp);
+                seg_instrs.push(instr);
             }
+            all_instrs.push(seg_instrs);
         }
 
         Fetch {
             ports,
+            all_instrs,
             default_addr_and_instr: first_public_instr
                 .expect("program must contain at least one public instruction"),
         }
+    }
+
+    /// Get a `TWire<RamInstr>` for each instruction of each code segment.
+    pub fn all_instrs(&self) -> &[Vec<TWire<'a, RamInstr>>] {
+        &self.all_instrs
     }
 
     pub fn add_cycles<'b>(
@@ -119,7 +130,7 @@ impl<'a> Fetch<'a> {
         b: &impl Builder<'a>,
     ) {
         let (mut ports,) = {
-            let Fetch { ports, default_addr_and_instr: _ } = self;
+            let Fetch { ports, all_instrs: _, default_addr_and_instr: _ } = self;
             (mh.root(ports),)
         };
 
