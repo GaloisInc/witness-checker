@@ -160,7 +160,6 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 }
 
 
-
 #[derive(Clone, Debug, Deserialize, Migrate, FromWireList, ToWireList, LazySecret)]
 pub struct RamState {
     pub pc: u64,

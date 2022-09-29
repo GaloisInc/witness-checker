@@ -12,7 +12,7 @@ use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{Memory, EquivSegments};
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use crate::micro_ram::trace::{self, SegmentBuilder, InstrLookup};
-use crate::micro_ram::types::{Commitment, ExecBody, RamState};
+use crate::micro_ram::types::{Commitment, ExecBody, RamState, RamInstrRepr};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 
 
@@ -155,6 +155,20 @@ impl<'a> ExecBuilder<'a> {
             match commitment {
                 Commitment::Sha256(expect_hash) => {
                     let mut h = Sha256::new(b);
+
+                    for (cs, instrs) in exec.program.iter().zip(self.fetch.all_instrs().iter()) {
+                        if !cs.secret {
+                            continue;
+                        }
+                        for instr in instrs {
+                            let RamInstrRepr { opcode, dest, op1, op2, imm } = instr.repr;
+                            h.push(b, opcode);
+                            h.push(b, dest);
+                            h.push(b, op1);
+                            h.push(b, op2);
+                            h.push(b, imm);
+                        }
+                    }
 
                     for (seg, values) in exec.init_mem.iter().zip(seg_values.iter()) {
                         if !seg.secret {
