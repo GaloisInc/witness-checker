@@ -1,15 +1,17 @@
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Read;
 use std::iter;
 use std::path::Path;
+use std::slice;
 use cheesecloth::micro_ram::feature::{self, Version, Feature};
 use cheesecloth::micro_ram::fetch;
 use cheesecloth::micro_ram::parse;
 use cheesecloth::micro_ram::types::{ExecBody, RamInstr};
 use cheesecloth::mode::if_mode::{Mode, with_mode};
-use clap::{App, Arg, ArgMatches};
+use clap::{App, AppSettings, SubCommand, Arg, ArgMatches};
 use getrandom;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -17,24 +19,45 @@ use sha2::{Sha256, Digest};
 
 
 fn parse_args() -> ArgMatches<'static> {
-    App::new("add_commitment")
-        .about("add a commitment to a MicroRAM CBOR file")
-        .arg(Arg::with_name("trace")
-             .takes_value(true)
-             .value_name("TRACE.CBOR")
-             .help("MicroRAM execution trace")
-             .required(true))
-        .arg(Arg::with_name("output")
-             .short("o")
-             .long("output")
-             .takes_value(true)
-             .value_name("OUT.CBOR")
-             .help("where to write the new trace including the commitment"))
-        .arg(Arg::with_name("verifier-commitment")
-             .long("verifier-commitment")
-             .takes_value(true)
-             .value_name("COMMITMENT")
-             .help("run in verifier mode, setting params.commitment to COMMITMENT"))
+    App::new("commitment_tool")
+        .about("manipulate commitments to secret programs")
+        .setting(AppSettings::SubcommandRequiredElseHelp)
+        .subcommand(SubCommand::with_name("calc")
+            .about("calculate the commitment and related data for a CBOR file")
+            .arg(Arg::with_name("trace")
+                 .takes_value(true)
+                 .value_name("TRACE.CBOR")
+                 .help("MicroRAM execution trace")
+                 .required(true))
+            .arg(Arg::with_name("keep-randomness")
+                 .long("keep-randomness")
+                 .help("keep the existing __commitment_randomness__ values \
+                       instead of generating new ones"))
+        )
+        .subcommand(SubCommand::with_name("update-cbor")
+            .about("update a CBOR file by adding a commitment")
+            .arg(Arg::with_name("trace")
+                 .takes_value(true)
+                 .value_name("TRACE.CBOR")
+                 .help("MicroRAM execution trace")
+                 .required(true))
+            .arg(Arg::with_name("output")
+                 .short("o")
+                 .long("output")
+                 .takes_value(true)
+                 .value_name("OUT.CBOR")
+                 .help("where to write the new trace including the commitment"))
+            .arg(Arg::with_name("set-commitment")
+                 .long("set-commitment")
+                 .takes_value(true)
+                 .value_name("COMMITMENT")
+                 .help("set the value of params.commitment"))
+            .arg(Arg::with_name("set-randomness")
+                 .long("set-randomness")
+                 .takes_value(true)
+                 .value_name("HEX")
+                 .help("set the values of any __commitment_randomness__ memory segments"))
+        )
         .get_matches()
 }
 
@@ -226,6 +249,165 @@ fn run_verifier<V: Value>(
     Ok(())
 }
 
+fn parse_file<V: Value>(path: &Path) -> Result<V, String> {
+    let f = File::open(path).map_err(|e| e.to_string())?;
+    V::from_reader(f)
+}
+
+fn check_version<V: Value>(v: &V) -> Result<HashSet<Feature>, String> {
+    let version = v.get_index(0).ok_or("missing version")?.parse::<Version>()?;
+    let mut features = v.get_index(1).ok_or("missing features")?.parse::<HashSet<Feature>>()?;
+    let version_features = feature::lookup_version(version)
+        .unwrap_or_else(|| panic!("unknown version {:?}", version));
+    features.extend(version_features);
+
+    if features.contains(&Feature::MultiExec) {
+        return Err("multi-exec feature is not supported by this tool".into());
+    }
+
+    Ok(features)
+}
+
+fn get_exec<V: Value>(v: &V) -> Result<(ExecBody, &V), String> {
+    let features = check_version(v)?;
+    let v_exec = v.get_index(2).ok_or("missing execution")?;
+    let mut exec = parse::with_features(features, || v_exec.parse::<ExecBody>())?;
+    Ok((exec, v_exec))
+}
+
+fn get_exec_mut<V: Value>(v: &mut V) -> Result<(ExecBody, &mut V), String> {
+    let features = check_version(v)?;
+    let v_exec = v.get_index_mut(2).ok_or("missing execution")?;
+    let mut exec = parse::with_features(features, || v_exec.parse::<ExecBody>())?;
+    Ok((exec, v_exec))
+}
+
+const RANDOMNESS_NAME: &str = "__commitment_randomness__";
+
+/// Count the total number of words in all `__commitment_randomness__` memory segments.
+fn count_randomness_words(exec: &ExecBody) -> usize {
+    let mut sum = 0;
+    for ms in &exec.init_mem {
+        if !ms.name.contains(RANDOMNESS_NAME) {
+            continue;
+        }
+        if !ms.secret {
+            eprintln!("warning: skipping non-secret segment {:?}", ms.name);
+            continue;
+        }
+        if ms.uncommitted {
+            eprintln!("warning: skipping non-secret segment {:?}", ms.name);
+            continue;
+        }
+        sum += ms.len as usize;
+    }
+    sum
+}
+
+/// Count the total number of steps in all secret and public PC segments.
+fn count_steps(exec: &ExecBody) -> usize {
+    let mut sum = 0;
+    for seg in &exec.segments {
+        sum += seg.len;
+    }
+    sum
+}
+
+fn gather_randomness(exec: &ExecBody) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+
+    for ms in &exec.init_mem {
+        if !ms.name.contains(RANDOMNESS_NAME) {
+            continue;
+        }
+        if !ms.secret || ms.uncommitted {
+            continue;
+        }
+
+        let words = ms.data.iter().cloned()
+            .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()));
+        for word in words {
+            bytes.extend_from_slice(&u64::to_le_bytes(word));
+        }
+    }
+
+    Ok(bytes)
+}
+
+fn calc_commitment(
+    exec: &ExecBody,
+    randomness: Option<impl IntoIterator<Item = u64>>,
+) -> Result<[u8; 32], String> {
+    let mut randomness = randomness.map(|it| it.into_iter());
+
+    let mut h = Sha256::new();
+
+    let mut code_count = 0;
+    for cs in &exec.program {
+        if !cs.secret || cs.uncommitted {
+            continue;
+        }
+        let instrs = cs.instrs.iter().cloned()
+            .chain(iter::repeat(fetch::PADDING_INSTR).take(cs.len as usize - cs.instrs.len()));
+        for instr in instrs {
+            let RamInstr { opcode, dest, op1, op2, imm } = instr;
+            h.update(&u8::to_le_bytes(opcode));
+            h.update(&u8::to_le_bytes(dest));
+            h.update(&u8::to_le_bytes(op1));
+            h.update(&u64::to_le_bytes(op2));
+            h.update(&u8::to_le_bytes(imm as u8));
+        }
+        code_count += 1;
+    }
+    eprintln!("hashed {} secret code segments", code_count);
+
+    let mut mem_count = 0;
+    for ms in &exec.init_mem {
+        if !ms.secret || ms.uncommitted {
+            continue;
+        }
+
+        // Special case: if this is a `__commitment_randomness__` segment, and a randomness
+        // iterator is available, use the words it provides instead of the ones actually present in
+        // `ms.data`.
+        if ms.name.contains(RANDOMNESS_NAME) {
+            if let Some(ref mut it) = randomness {
+                for _ in 0 .. ms.len {
+                    let word = it.next()
+                        .ok_or("ran out of randomness")?;
+                    h.update(&u64::to_le_bytes(word));
+                }
+                continue;
+            }
+        }
+
+        let words = ms.data.iter().cloned()
+            .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()));
+        for word in words {
+            h.update(&u64::to_le_bytes(word));
+        }
+        mem_count += 1;
+    }
+    eprintln!("hashed {} secret memory segments", mem_count);
+
+    let hash = h.finalize();
+
+    let mut hash_arr = [0_u8; 32];
+    hash_arr.copy_from_slice(&hash);
+    Ok(hash_arr)
+}
+
+fn calc_rng_seed(commitment: &[u8; 32], steps: usize) -> [u8; 32] {
+    let mut hash = *commitment;
+    for _ in 0 .. steps {
+        let mut h = Sha256::new();
+        h.update(&hash);
+        hash.copy_from_slice(&h.finalize());
+    }
+    hash
+}
+
+/*
 fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> {
     let f = File::open(in_path).map_err(|e| e.to_string())?;
     let mut v = V::from_reader(f)?;
@@ -290,6 +472,7 @@ fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> 
 
     let mut h = Sha256::new();
 
+    let mut code_count = 0;
     for cs in &exec.program {
         if !cs.secret || cs.uncommitted {
             continue;
@@ -304,8 +487,11 @@ fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> 
             h.update(&u64::to_le_bytes(op2));
             h.update(&u8::to_le_bytes(imm as u8));
         }
+        code_count += 1;
     }
+    eprintln!("hashed {} secret code segments", code_count);
 
+    let mut mem_count = 0;
     for ms in &exec.init_mem {
         if !ms.secret || ms.uncommitted {
             continue;
@@ -315,7 +501,9 @@ fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> 
         for word in words {
             h.update(&u64::to_le_bytes(word));
         }
+        mem_count += 1;
     }
+    eprintln!("hashed {} secret memory segments", mem_count);
 
     let hash = h.finalize();
 
@@ -342,6 +530,8 @@ fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> 
 
     Ok(())
 }
+*/
+
 
 enum Format {
     Yaml,
@@ -360,9 +550,124 @@ impl Format {
     }
 }
 
+
+fn to_hex_string(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        write!(s, "{:02x}", b).unwrap();
+    }
+    s
+}
+
+fn to_byte_array_string(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 5);
+    s.push_str("[");
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if i % 16 == 0 {
+            s.push_str("\n    ");
+        } else {
+            s.push_str(" ");
+        }
+        write!(s, "{},", b).unwrap();
+    }
+
+    s.push_str("\n]");
+    s
+}
+
+fn to_word_array_string(words: impl IntoIterator<Item = u64>) -> String {
+    let mut s = String::new();
+    s.push_str("[");
+
+    for (i, w) in words.into_iter().enumerate() {
+        if i % 8 == 0 {
+            s.push_str("\n    ");
+        } else {
+            s.push_str(" ");
+        }
+        write!(s, "{},", w).unwrap();
+    }
+
+    s.push_str("\n]");
+    s
+}
+
+fn iter_words<'a>(bytes: &'a [u8]) -> impl Iterator<Item = u64> + 'a {
+    (0 .. bytes.len()).step_by(8).map(move |i| {
+        let slice = &bytes[i .. i + 8];
+        let arr = <[u8; 8]>::try_from(slice).unwrap();
+        u64::from_le_bytes(arr)
+    })
+}
+
+fn run_calc(args: &ArgMatches) -> Result<(), String> {
+    let in_path = Path::new(args.value_of_os("trace")
+        .ok_or("cbor path is required")?);
+    let exec = match Format::from_path(in_path) {
+        Format::Yaml => get_exec(&parse_file::<serde_yaml::Value>(in_path)?)?.0,
+        Format::Cbor => get_exec(&parse_file::<serde_cbor::Value>(in_path)?)?.0,
+        Format::Json => todo!("json support"),
+    };
+
+    // Sample randomness.
+    let randomness_len = count_randomness_words(&exec);
+    let randomness = if args.is_present("keep-randomness") {
+        gather_randomness(&exec)?
+    } else {
+        let mut bytes = vec![0_u8; randomness_len * 8];
+        getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
+        bytes
+    };
+    assert_eq!(randomness.len(), randomness_len * 8);
+
+    // Compute commitment.
+    let commitment = calc_commitment(&exec, Some(iter_words(&randomness)))?;
+
+    // Compute RNG seed.
+    let steps = count_steps(&exec);
+    let seed = calc_rng_seed(&commitment, steps);
+
+    // Print output
+    println!("randomness hex = {}", to_hex_string(&randomness));
+    println!("randomness bytes = {}", to_byte_array_string(&randomness));
+    println!("randomness words = {}", to_word_array_string(iter_words(&randomness)));
+    println!("commitment = sha256:{}", to_hex_string(&commitment));
+    println!("steps = {}", steps);
+    println!("seed hex = {}", to_hex_string(&seed));
+    println!("seed bytes = {}", to_byte_array_string(&seed));
+
+    Ok(())
+}
+
+
+fn run_update_cbor(args: &ArgMatches) -> Result<(), String> {
+    let in_path = Path::new(args.value_of_os("trace")
+        .ok_or("cbor path is required")?);
+    match Format::from_path(in_path) {
+        Format::Yaml => run_update_cbor_typed::<serde_yaml::Value>(args, in_path),
+        Format::Cbor => run_update_cbor_typed::<serde_cbor::Value>(args, in_path),
+        Format::Json => todo!("json support"),
+    }
+}
+
+fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+
 fn real_main() -> Result<(), String> {
     let args = parse_args();
 
+    let (cmd, opt_sub_args) = args.subcommand();
+    let sub_args = opt_sub_args.ok_or("missing subcommand")?;
+    match cmd {
+        "calc" => run_calc(sub_args),
+        "update-cbor" => run_update_cbor(sub_args),
+        _ => unreachable!("bad command {:?}", cmd),
+    }
+
+    /*
     let in_path = Path::new(args.value_of_os("trace")
         .ok_or("cbor path is required")?);
     let out_path = args.value_of_os("output").map(Path::new);
@@ -384,6 +689,7 @@ fn real_main() -> Result<(), String> {
     }
 
     Ok(())
+    */
 }
 
 fn main() -> Result<(), String> {
