@@ -109,11 +109,40 @@ impl<'de> Visitor<'de> for VersionedMultiExecVisitor {
 
 impl<'de> Deserialize<'de> for ExecBody {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_struct(
+        let mut exec = d.deserialize_struct(
             "ExecBody",
             &["program", "init_mem", "params", "trace", "advice"],
             ExecBodyVisitor,
-        )
+        )?;
+
+        if !has_feature(Feature::PublicPc) {
+            // Adjust non-public-pc traces to fit the public-pc format.  In non-public-PC mode, the
+            // prover can provide an initial state, with some restrictions.
+            assert!(exec.segments.len() == 0);
+            assert!(exec.trace.len() == 1);
+            let chunk = &exec.trace[0];
+
+            let new_segment = Segment {
+                constraints: vec![],
+                len: exec.params.trace_len.unwrap() - 1,
+                successors: vec![],
+                enter_from_network: false,
+                exit_to_network: false,
+            };
+
+            let provided_init_state = Some(chunk.states[0].clone());
+            let new_chunk = TraceChunk {
+                segment: 0,
+                states: chunk.states[1..].to_owned(),
+                debug: None,
+            };
+
+            exec.segments = vec![new_segment];
+            exec.trace = vec![new_chunk];
+            exec.provided_init_state = provided_init_state;
+        }
+
+        Ok(exec)
     }
 }
 
@@ -133,6 +162,7 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
             segments: Vec::new(),
             trace: Vec::new(),
             advice: HashMap::new(),
+            provided_init_state: None,
         };
 
         let mut seen = HashSet::new();
@@ -186,6 +216,7 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                 "labels" => {
                     let _: HashMap<String, usize> = map.next_value()?;
                 },
+                // Note: `provided_init_state` can't be set in the CBOR file.
                 _ => return Err(serde::de::Error::custom(format_args!(
                     "unknown key {:?}", k,
                 ))),
