@@ -92,7 +92,8 @@ define_versions! {
     (0,1,5,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound },
     // 0.1.6.0 adds multiple executions and named memory segments. 
     (0,1,6,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound},
-    // 0.1.7.0 adds code segments and `params.commitment`.
+    // 0.1.7.0 adds code segments, `params.commitment`, and `uncommitted` flag for code/memory
+    // segments.
     (0,1,7,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
 }
 

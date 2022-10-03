@@ -157,7 +157,7 @@ impl<'a> ExecBuilder<'a> {
                     let mut h = Sha256::new(b);
 
                     for (cs, instrs) in exec.program.iter().zip(self.fetch.all_instrs().iter()) {
-                        if !cs.secret {
+                        if !cs.secret || cs.uncommitted {
                             continue;
                         }
                         for instr in instrs {
@@ -171,7 +171,7 @@ impl<'a> ExecBuilder<'a> {
                     }
 
                     for (seg, values) in exec.init_mem.iter().zip(seg_values.iter()) {
-                        if !seg.secret {
+                        if !seg.secret || seg.uncommitted {
                             continue;
                         }
                         for &w in values {

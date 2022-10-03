@@ -154,6 +154,7 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                             start: 0,
                             len: instrs.len() as u64,
                             secret: false,
+                            uncommitted: false,
                             instrs,
                         }];
                     }
