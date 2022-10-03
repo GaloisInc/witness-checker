@@ -1777,6 +1777,8 @@ pub struct CodeSegment {
     #[serde(default)]
     pub secret: bool,
     #[serde(default)]
+    pub uncommitted: bool,
+    #[serde(default)]
     pub instrs: Vec<RamInstr>,
 }
 
@@ -1786,6 +1788,8 @@ pub struct MemSegment {
     pub len: u64,
     pub read_only: bool,
     pub secret: bool,
+    #[serde(default)]
+    pub uncommitted: bool,
     /// Whether the segment is used to initialize the heap. Defaults to `false` if field is
     /// missing.
     #[serde(default="bool::default")]

@@ -291,7 +291,7 @@ fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> 
     let mut h = Sha256::new();
 
     for cs in &exec.program {
-        if !cs.secret {
+        if !cs.secret || cs.uncommitted {
             continue;
         }
         let instrs = cs.instrs.iter().cloned()
@@ -307,7 +307,7 @@ fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> 
     }
 
     for ms in &exec.init_mem {
-        if !ms.secret {
+        if !ms.secret || ms.uncommitted {
             continue;
         }
         let words = ms.data.iter().cloned()
