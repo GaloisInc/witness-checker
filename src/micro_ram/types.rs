@@ -1600,7 +1600,7 @@ impl VersionedMultiExec {
         self.features.contains(&feature)
     }
     pub fn validate(&self) -> Result<(), String> {
-        self.inner.validate(&self.features)
+        self.inner.validate()
     }
 }
 
@@ -1611,9 +1611,9 @@ pub struct MultiExec {
 }
 
 impl MultiExec {
-    pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         for (_, exec) in self.execs.iter() { 
-            exec.validate(features).unwrap();
+            exec.validate().unwrap();
         }
         Ok(())
     }
@@ -1627,6 +1627,8 @@ pub struct ExecBody {
     pub segments: Vec<Segment>,
     pub trace: Vec<TraceChunk>,
     pub advice: HashMap<u64, Vec<Advice>>,
+
+    pub provided_init_state: Option<RamState>,
 }
 
 impl ExecBody {
@@ -1640,35 +1642,8 @@ impl ExecBody {
         RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
     }
 
-    pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         let params = &self.params;
-        if !features.contains(&Feature::PublicPc) {
-            if self.segments.len() != 0 {
-                return Err(format!(
-                    "expected no segment definitions in non-public-pc trace, but got {}",
-                    self.segments.len(),
-                ));
-            }
-
-            if self.trace.len() != 1 {
-                return Err(format!(
-                    "expected exactly one trace chunk in non-public-pc trace, but got {}",
-                    self.trace.len(),
-                ));
-            }
-
-            if self.params.trace_len.is_none() {
-                return Err(format!("non-public-pc trace must have `params.trace_len` set"));
-            }
-
-            let expect_trace_len = self.params.trace_len.unwrap();
-            if self.trace[0].states.len() != expect_trace_len {
-                return Err(format!(
-                    "wrong number of states in trace: expected {}, but got {}",
-                    expect_trace_len, self.trace[0].states.len(),
-                ));
-            }
-        }
 
         for (i, ms) in self.init_mem.iter().enumerate() {
             if ms.data.len() as u64 > ms.len {
@@ -1718,28 +1693,19 @@ impl ExecBody {
         }
 
         for (i, chunk) in self.trace.iter().enumerate() {
-            if !features.contains(&Feature::PublicPc) {
-                if chunk.segment != 0 {
-                    return Err(format!(
-                        "`trace[{}]` references segment {} in non-public-pc mode",
-                        i, chunk.segment,
-                    ));
-                }
-            } else {
-                if chunk.segment >= self.segments.len() {
-                    return Err(format!(
-                        "`trace[{}]` references undefined segment {} (len = {})",
-                        i, chunk.segment, self.segments.len(),
-                    ));
-                }
+            if chunk.segment >= self.segments.len() {
+                return Err(format!(
+                    "`trace[{}]` references undefined segment {} (len = {})",
+                    i, chunk.segment, self.segments.len(),
+                ));
+            }
 
-                let expect_len = self.segments[chunk.segment].len;
-                if chunk.states.len() != expect_len {
-                    return Err(format!(
-                        "`trace[{}]` for segment {} should have {} states, but has {}",
-                        i, chunk.segment, expect_len, chunk.states.len(),
-                    ));
-                }
+            let expect_len = self.segments[chunk.segment].len;
+            if chunk.states.len() != expect_len {
+                return Err(format!(
+                    "`trace[{}]` for segment {} should have {} states, but has {}",
+                    i, chunk.segment, expect_len, chunk.states.len(),
+                ));
             }
 
             for (j, state) in chunk.states.iter().enumerate() {

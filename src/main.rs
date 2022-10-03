@@ -174,37 +174,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // Check that --mode leak-tainted is provided iff the feature is present.
     assert!(is_mode::<AnyTainted>() == multi_exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
-    // Adjust non-public-pc traces to fit the public-pc format.
-    // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
-    let mut provided_init_state = None;
-    if !multi_exec.has_feature(Feature::PublicPc) {
-        for (_name,exec) in multi_exec.inner.execs.iter_mut(){
-            assert!(exec.segments.len() == 0);
-            assert!(exec.trace.len() == 1);
-            let chunk = &exec.trace[0];
-            
-            let new_segment = Segment {
-                constraints: vec![],
-                len: exec.params.trace_len.unwrap() - 1,
-                successors: vec![],
-                enter_from_network: false,
-                exit_to_network: false,
-            };
-            
-            provided_init_state = Some(chunk.states[0].clone());
-            let new_chunk = TraceChunk {
-                segment: 0,
-                states: chunk.states[1..].to_owned(),
-                debug: None,
-            };
-            
-            exec.segments = vec![new_segment];
-            exec.trace = vec![new_chunk];
-            
-        }
-    }
-
-    let multi_exec_witness = MultiExecWitness::from_raw(&multi_exec.inner, &provided_init_state);
+    let multi_exec_witness = MultiExecWitness::from_raw(&multi_exec.inner);
 
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
 
@@ -311,8 +281,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // for equivalent mem segments. 
     for (name,exec) in multi_exec.inner.execs.iter(){
         // Generate IR code to check the trace.
-        let init_state = provided_init_state.clone().unwrap_or_else(|| exec.initial_state());
-        if provided_init_state.is_some() {
+        let init_state = exec.provided_init_state.clone().unwrap_or_else(|| exec.initial_state());
+        if exec.provided_init_state.is_some() {
             let init_state_wire = b.lit(init_state.clone());
             check_first(&cx, b, &init_state_wire);
         }

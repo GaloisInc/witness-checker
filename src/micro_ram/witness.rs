@@ -46,18 +46,17 @@ pub struct MultiExecWitness {
 impl MultiExecWitness {
     pub fn from_raw(
         me: &MultiExec,
-        provided_initial_state: &Option<RamState>,
     ) -> MultiExecWitness {
         MultiExecWitness {
             execs: me.execs.iter().map(|(k, v)| {
-                (k.clone(), ExecWitness::from_raw(v, provided_initial_state))
+                (k.clone(), ExecWitness::from_raw(v))
             }).collect(),
         }
     }
 }
 
 impl ExecWitness {
-    pub fn from_raw(e: &ExecBody, provided_initial_state: &Option<RamState>) -> ExecWitness {
+    pub fn from_raw(e: &ExecBody) -> ExecWitness {
         let default_init_state = RamState::default_with_regs(e.params.num_regs);
         let mut w = ExecWitness {
             segments: e.segments.iter().map(|s| {
@@ -81,7 +80,7 @@ impl ExecWitness {
 
         let mut pc = 0;
         let mut cycle = 0;
-        let mut prev_state = provided_initial_state.clone().unwrap_or_else(|| e.initial_state());
+        let mut prev_state = e.provided_init_state.clone().unwrap_or_else(|| e.initial_state());
         let mut prev_seg_idx: Option<usize> = None;
         for tc in &e.trace {
             let seg_idx = tc.segment;
