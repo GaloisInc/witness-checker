@@ -45,6 +45,13 @@
       secret: true
       data: [3527509101496044622, 3489791681105834099]
 
+    - start: 12
+      len: 4
+      name: __rng_seed__
+      read_only: true
+      secret: false
+      data: [560540402654483474, 17678942474316496213, 15612412211625534583, 5737659424184341381]
+
   params:
     num_regs: 4
     trace_len: 29

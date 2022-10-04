@@ -4,12 +4,13 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Read;
 use std::iter;
+use std::mem;
 use std::path::Path;
 use std::slice;
 use cheesecloth::micro_ram::feature::{self, Version, Feature};
 use cheesecloth::micro_ram::fetch;
 use cheesecloth::micro_ram::parse;
-use cheesecloth::micro_ram::types::{ExecBody, RamInstr};
+use cheesecloth::micro_ram::types::{ExecBody, RamInstr, Commitment};
 use cheesecloth::mode::if_mode::{Mode, with_mode};
 use clap::{App, AppSettings, SubCommand, Arg, ArgMatches};
 use getrandom;
@@ -334,6 +335,35 @@ fn gather_randomness(exec: &ExecBody) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+const RNG_SEED_NAME: &str = "__rng_seed__";
+
+fn find_rng_seed(exec: &ExecBody) -> Result<Option<Vec<u8>>, String> {
+    let mut seed = None;
+
+    for ms in &exec.init_mem {
+        if !ms.name.contains(RNG_SEED_NAME) {
+            continue;
+        }
+        if ms.secret {
+            eprintln!("warning: rng seed {:?} should not be secret", ms.secret);
+        }
+
+        if seed.is_some() {
+            return Err("found multiple __rng_seed__ memory segments".into());
+        }
+
+        let mut bytes = Vec::with_capacity(ms.len as usize * 8);
+        let words = ms.data.iter().cloned()
+            .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()));
+        for word in words {
+            bytes.extend_from_slice(&u64::to_le_bytes(word));
+        }
+        seed = Some(bytes);
+    }
+
+    Ok(seed)
+}
+
 fn calc_commitment(
     exec: &ExecBody,
     randomness: Option<impl IntoIterator<Item = u64>>,
@@ -392,6 +422,12 @@ fn calc_commitment(
 
     let hash = h.finalize();
 
+    if let Some(ref mut it) = randomness {
+        if it.next().is_some() {
+            return Err("got too much randomness".into());
+        }
+    }
+
     let mut hash_arr = [0_u8; 32];
     hash_arr.copy_from_slice(&hash);
     Ok(hash_arr)
@@ -405,6 +441,52 @@ fn calc_rng_seed(commitment: &[u8; 32], steps: usize) -> [u8; 32] {
         hash.copy_from_slice(&h.finalize());
     }
     hash
+}
+
+fn set_randomness_value<V: Value>(
+    v_exec: &mut V,
+    parsed_exec: &ExecBody,
+    randomness: impl IntoIterator<Item = u64>,
+) -> Result<(), String> {
+    let mut it = randomness.into_iter();
+
+    // Find `__commitment_randomness__` memory segment(s) and fill them with random data.
+    for (i, parsed_ms) in parsed_exec.init_mem.iter().enumerate() {
+        if !parsed_ms.name.contains("__commitment_randomness__") {
+            continue;
+        }
+        if !parsed_ms.secret {
+            eprintln!("warning: skipping non-secret segment {:?}", parsed_ms.name);
+            continue;
+        }
+
+        let mut words = Vec::with_capacity(parsed_ms.len as usize);
+        for _ in 0 .. parsed_ms.len {
+            let word = it.next()
+                .ok_or("ran out of randomness")?;
+            words.push(word);
+        }
+        eprintln!("set init_mem[{}] ({:?}) data = {:?}", i, parsed_ms.name, words);
+
+        let init_mem = v_exec.get_key_mut("init_mem").unwrap();
+        let ms = init_mem.get_index_mut(i).unwrap();
+        let data = V::new_array(words.into_iter().map(V::new_u64).collect());
+        ms.insert_key("data", data);
+    }
+
+    Ok(())
+}
+
+fn set_commitment_value<V: Value>(exec: &mut V, commitment: String) -> Result<(), String> {
+    if let Some(params) = exec.get_key_mut("params") {
+        params.insert_key("commitment", V::new_string(commitment));
+    } else {
+        let mut m = V::new_map();
+        m.insert_key("commitment", V::new_string(commitment));
+        exec.insert_key("params", m);
+    }
+
+    Ok(())
 }
 
 /*
@@ -559,6 +641,22 @@ fn to_hex_string(bytes: &[u8]) -> String {
     s
 }
 
+fn parse_hex_string(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err("bad input length (odd number of hex digits)".into());
+    }
+
+    let mut bytes = Vec::with_capacity(s.len() / 2);
+    for i in (0 .. s.len()).step_by(2) {
+        let byte_hex = s.get(i .. i + 2)
+            .ok_or("invalid unicode characters in hex string")?;
+        let byte = u8::from_str_radix(byte_hex, 16)
+            .map_err(|e| format!("error parsing hex byte {:?}: {}", byte_hex, e))?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
 fn to_byte_array_string(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 5);
     s.push_str("[");
@@ -601,6 +699,17 @@ fn iter_words<'a>(bytes: &'a [u8]) -> impl Iterator<Item = u64> + 'a {
     })
 }
 
+fn sha256_bytes_to_words(x: [u8; 32]) -> [u32; 8] {
+    let mut out = [0; 8];
+    for i in 0 .. 8 {
+        let mut buf = [0_u8; 4];
+        buf.copy_from_slice(&x[i * 4 .. (i + 1) * 4]);
+        out[i] = u32::from_be_bytes(buf);
+    }
+    out
+}
+
+
 fn run_calc(args: &ArgMatches) -> Result<(), String> {
     let in_path = Path::new(args.value_of_os("trace")
         .ok_or("cbor path is required")?);
@@ -634,8 +743,9 @@ fn run_calc(args: &ArgMatches) -> Result<(), String> {
     println!("randomness words = {}", to_word_array_string(iter_words(&randomness)));
     println!("commitment = sha256:{}", to_hex_string(&commitment));
     println!("steps = {}", steps);
-    println!("seed hex = {}", to_hex_string(&seed));
-    println!("seed bytes = {}", to_byte_array_string(&seed));
+    println!("rng seed hex = {}", to_hex_string(&seed));
+    println!("rng seed bytes = {}", to_byte_array_string(&seed));
+    println!("rng seed words = {}", to_word_array_string(iter_words(&seed)));
 
     Ok(())
 }
@@ -652,6 +762,53 @@ fn run_update_cbor(args: &ArgMatches) -> Result<(), String> {
 }
 
 fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> {
+    let mut v = parse_file::<V>(in_path)?;
+    let (exec, v_exec) = get_exec_mut(&mut v)?;
+
+    let randomness: Vec<u8>;
+    if let Some(randomness_str) = args.value_of("set-randomness") {
+        randomness = parse_hex_string(randomness_str)
+            .map_err(|e| format!("error parsing --set-randomness argument: {}", e))?;
+        set_randomness_value(v_exec, &exec, iter_words(&randomness))?;
+    } else {
+        randomness = gather_randomness(&exec)?;
+    }
+
+    let commitment: Commitment;
+    if let Some(commitment_str) = args.value_of("set-commitment") {
+        let commitment_value = V::new_string(commitment_str.to_owned());
+        commitment = commitment_value.parse::<Commitment>().map_err(|e| e.to_string())?;
+        set_commitment_value(v_exec, commitment_str.to_owned())?;
+    } else {
+        commitment = exec.params.commitment
+            .ok_or("expected input file to contain params.commitment")?;
+    }
+
+    let expect_commitment_bytes = calc_commitment(&exec, Some(iter_words(&randomness)))?;
+    let expect_commitment = Commitment::Sha256(sha256_bytes_to_words(expect_commitment_bytes));
+    if commitment != expect_commitment {
+        return Err(format!("invalid commitment: expected {:?}, but got {:?}",
+            expect_commitment, commitment));
+    } else {
+        println!("commitment OK");
+    }
+
+    let steps = count_steps(&exec);
+    let expect_seed = calc_rng_seed(&expect_commitment_bytes, steps);
+    if let Some(seed) = find_rng_seed(&exec)? {
+        if &seed as &[_] != &expect_seed {
+            return Err(format!("invalid rng seed: expected {:?}, but got {:?}",
+                expect_seed, seed));
+        }
+        println!("rng seed OK");
+    } else {
+        println!("rng seed OK (not present)");
+    }
+
+    if let Some(out_path) = args.value_of_os("output") {
+        write_output(Path::new(out_path), &v)?;
+    }
+
     Ok(())
 }
 
