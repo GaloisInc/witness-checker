@@ -220,10 +220,10 @@ impl<'a> GadgetKind<'a> for WideMulSplit {
 
 /// Perform double-word multiplication (for example, a `32 x 32 -> 64` bit multiply).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub struct WideMul2;
-impl_gadget_kind_support!(WideMul2);
+pub struct WideMul;
+impl_gadget_kind_support!(WideMul);
 
-impl<'a> GadgetKind<'a> for WideMul2 {
+impl<'a> GadgetKind<'a> for WideMul {
     fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
         c.intern_gadget_kind(self.clone())
     }
@@ -476,8 +476,8 @@ mod test {
             let c1 = Circuit::new(arenas1, true, FilterNil);
             let c2 = Circuit::new(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
 
-            let gk1 = c1.intern_gadget_kind(WideMul2);
-            let gk2 = c2.intern_gadget_kind(WideMul2);
+            let gk1 = c1.intern_gadget_kind(WideMul);
+            let gk2 = c2.intern_gadget_kind(WideMul);
 
             for a_val in 0 .. 16 {
                 let a1 = c1.lit(c1.ty(a_ty), a_val);
@@ -538,7 +538,7 @@ mod test {
             let c2 = Circuit::new(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
 
             let gk1 = c1.intern_gadget_kind(WideMulSplit);
-            let gk1_unsplit = c1.intern_gadget_kind(WideMul2);
+            let gk1_unsplit = c1.intern_gadget_kind(WideMul);
             let gk2 = c2.intern_gadget_kind(WideMulSplit);
 
             for a_val in 0 .. 16 {
