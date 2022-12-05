@@ -2593,6 +2593,10 @@ impl<'a> GadgetKindRef<'a> {
     pub fn cast<T: GadgetKind<'a>>(self) -> Option<&'a T> {
         unsafe { downcast_gadget_kind(self.0) }
     }
+
+    pub fn is<T: GadgetKind<'a>>(self) -> bool {
+        self.cast::<T>().is_some()
+    }
 }
 
 impl<'a> fmt::Debug for GadgetKindRef<'a> {

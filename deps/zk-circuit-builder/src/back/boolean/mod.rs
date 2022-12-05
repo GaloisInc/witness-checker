@@ -7,6 +7,7 @@ use std::slice;
 use num_bigint::BigUint;
 use num_traits::Zero;
 use crate::eval;
+use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, Ty,
@@ -60,6 +61,8 @@ pub trait Sink {
     fn add(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     fn sub(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     fn mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
+    /// Multiply two `n`-bit inputs to produce a `2n`-bit product.
+    fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId;
 
     fn assert_zero(&mut self, n: u64, a: WireId);
@@ -460,6 +463,14 @@ impl<'w, S: Sink> Backend<'w, S> {
                     let w = ws[0];
                     let val = self.wire_map[&w];
                     self.sink.copy(expire, n, val + g.start as u64)
+                } else if gk.is::<WideMul>() {
+                    debug_assert!(ws.len() == 2);
+                    debug_assert_eq!(ws[0].ty, ws[1].ty);
+                    let m = type_bits(ws[0].ty);
+                    debug_assert_eq!(m * 2, n);
+                    let a = self.wire_map[&ws[0]];
+                    let b = self.wire_map[&ws[1]];
+                    self.sink.wide_mul(expire, m, a, b)
                 } else {
                     unimplemented!("Gadget({})", gk.name());
                 }
@@ -650,6 +661,13 @@ mod test {
             self.init(expire, n, |_, i| out_uint.bit(i),
                 format_args!("mul({}, {})", a, b))
         }
+        fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            let a_uint = self.get_uint(n, a);
+            let b_uint = self.get_uint(n, b);
+            let out_uint = a_uint * b_uint;
+            self.init(expire, 2 * n, |_, i| out_uint.bit(i),
+                format_args!("wide_mul({}, {})", a, b))
+        }
         fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             let a_uint = self.get_uint(n, a);
             let out_uint = (a_uint ^ ((BigUint::from(1_u64) << n) - 1_u64)) + 1_u64;
@@ -829,6 +847,14 @@ mod test {
     }
 
     #[test]
+    fn wide_mul_1() {
+        test_gate([1, 1], |c, [a, b]| {
+            let gk = c.intern_gadget_kind(WideMul);
+            c.gadget(gk, &[a, b])
+        });
+    }
+
+    #[test]
     fn div_1() {
         test_gate([1, 1], |c, [a, b]| c.div(a, b));
     }
@@ -943,6 +969,14 @@ mod test {
     #[test]
     fn mul_3() {
         test_gate([3, 3], |c, [a, b]| c.mul(a, b));
+    }
+
+    #[test]
+    fn wide_mul_3() {
+        test_gate([3, 3], |c, [a, b]| {
+            let gk = c.intern_gadget_kind(WideMul);
+            c.gadget(gk, &[a, b])
+        });
     }
 
     #[test]
