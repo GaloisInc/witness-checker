@@ -267,7 +267,7 @@ fn safe_div(x: BigInt, y: BigInt) -> BigInt {
 }
 
 fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
-    if y.is_zero() { 0.into() } else { x % y }
+    if y.is_zero() { x } else { x % y }
 }
 
 trait EvalContext<'a> {
