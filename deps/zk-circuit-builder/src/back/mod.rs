@@ -245,6 +245,9 @@ pub fn new_sieve_ir_v2<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> 
 }
 
 
+pub mod boolean;
+
+
 pub fn new_dummy<'a>() -> Box<dyn Backend<'a> + 'a> {
     Box::new(())
 }

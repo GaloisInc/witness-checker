@@ -2156,6 +2156,21 @@ impl<'a> fmt::Debug for Wire<'a> {
     }
 }
 
+pub struct DebugDepth<T>(pub usize, pub T);
+
+impl<T: fmt::Debug> fmt::Debug for DebugDepth<T> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        WIRE_DEBUG_DEPTH.with(|depth_cell| {
+            let depth = depth_cell.get();
+            depth_cell.set(self.0);
+            let r = write!(fmt, "{:?}", self.1);
+            depth_cell.set(depth);
+            r
+        })
+    }
+}
+
+
 declare_interned_pointer! {
     /// A slot in the witness, which contains a secret value.
     ///
@@ -2769,6 +2784,13 @@ impl<'a> Bits<'a> {
             },
             _ => panic!("expected an integer type, but got {:?}", ty),
         }
+    }
+
+    pub fn get(&self, i: usize) -> bool {
+        let idx = i / Self::DIGIT_BITS;
+        let off = i % Self::DIGIT_BITS;
+        let digit = self.0.get(idx).cloned().unwrap_or(0);
+        (digit >> off) & 1 != 0
     }
 
     pub fn zero() -> Bits<'a> {
