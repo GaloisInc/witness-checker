@@ -15,6 +15,9 @@ use crate::ir::circuit::{
 };
 
 
+mod arith;
+
+
 pub type WireId = u64;
 
 fn type_bits(ty: Ty) -> u64 {
@@ -694,6 +697,63 @@ mod test {
         }
     }
 
+
+    #[derive(Default)]
+    struct TestArithSink(TestSink);
+
+    impl Sink for TestArithSink {
+        fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
+            self.0.lit(expire, n, bits)
+        }
+        fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
+            self.0.private(expire, n, value)
+        }
+        fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
+            self.0.copy(expire, n, a)
+        }
+        fn concat_chunks(&mut self, expire: Time, entries: &[(Source, u64)]) -> WireId {
+            self.0.concat_chunks(expire, entries)
+        }
+
+        fn and(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.0.and(expire, n, a, b)
+        }
+        fn or(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.0.or(expire, n, a, b)
+        }
+        fn xor(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.0.xor(expire, n, a, b)
+        }
+        fn not(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
+            self.0.not(expire, n, a)
+        }
+
+        fn add(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            arith::add(&mut self.0, expire, n, a, b)
+        }
+        fn sub(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            arith::sub(&mut self.0, expire, n, a, b)
+        }
+        fn mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.0.mul(expire, n, a, b)
+        }
+        fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.0.wide_mul(expire, n, a, b)
+        }
+        fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
+            self.0.neg(expire, n, a)
+        }
+
+        fn assert_zero(&mut self, n: u64, a: WireId) {
+            self.0.assert_zero(n, a);
+        }
+
+        fn free_expired(&mut self, now: Time) {
+            self.0.free_expired(now);
+        }
+    }
+
+
     fn test_gate_common<'a, const N: usize>(
         c: &Circuit<'a, impl CircuitFilter<'a> + 'a>,
         input_bits: [i16; N],
@@ -734,6 +794,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let mut backend = Backend::new(&c, TestSink::default());
+        let mut arith_backend = Backend::new(&c, TestArithSink::default());
 
         /*
         #[cfg(feature = "sieve_ir")]
@@ -747,6 +808,7 @@ mod test {
 
         test_gate_common(&c, input_bits, f, |w| {
             backend.enforce_true(w);
+            arith_backend.enforce_true(w);
             /*
             #[cfg(feature = "sieve_ir")]
             sieve_ir_backend.enforce_true(w);
