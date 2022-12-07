@@ -541,6 +541,10 @@ mod test {
         m: HashMap<WireId, bool>,
         next: WireId,
         expire_map: BTreeMap<Time, Vec<WireId>>,
+        count_and: u64,
+        count_or: u64,
+        count_xor: u64,
+        count_not: u64,
     }
 
     impl TestSink {
@@ -627,18 +631,22 @@ mod test {
         }
 
         fn and(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.count_and += n;
             self.init(expire, n, |slf, i| slf.get(a + i) & slf.get(b + i),
                 format_args!("and({}, {})", a, b))
         }
         fn or(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.count_or += n;
             self.init(expire, n, |slf, i| slf.get(a + i) | slf.get(b + i),
                 format_args!("or({}, {})", a, b))
         }
         fn xor(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            self.count_xor += n;
             self.init(expire, n, |slf, i| slf.get(a + i) ^ slf.get(b + i),
                 format_args!("xor({}, {})", a, b))
         }
         fn not(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
+            self.count_not += n;
             self.init(expire, n, |slf, i| !slf.get(a + i),
                 format_args!("not({})", a))
         }
@@ -738,7 +746,7 @@ mod test {
             arith::mul_simple(self, expire, n, a, b)
         }
         fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            arith::wide_mul_simple(self, expire, n, a, b)
+            arith::wide_mul(self, expire, n, a, b)
         }
         fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             arith::neg(self, expire, n, a)
@@ -1090,5 +1098,36 @@ mod test {
     fn ge_3() {
         test_gate([3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
         test_gate([-3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
+    }
+
+
+    #[test]
+    fn wide_mul_karatsuba_performance() {
+        let mut sink = TestArithSink::default();
+
+        let mut at_least_one_improved = false;
+        for &n in &[4, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 28, 32, 48, 64] {
+            sink.0 = TestSink::default();
+            let a = sink.private(TEMP, n, Some(Bits::zero()));
+            let b = sink.private(TEMP, n, Some(Bits::zero()));
+            let _ = sink.wide_mul(TEMP, n, a, b);
+            let count_with = sink.0.count_and;
+
+            sink.0 = TestSink::default();
+            let a = sink.private(TEMP, n, Some(Bits::zero()));
+            let b = sink.private(TEMP, n, Some(Bits::zero()));
+            let _ = arith::wide_mul_simple(&mut sink, TEMP, n, a, b);
+            let count_without = sink.0.count_and;
+
+            assert!(count_with <= count_without,
+                "for n = {}, simple mul used {} and gates, but karatsuba used {} and gates",
+                n, count_without, count_with);
+
+            if count_with < count_without {
+                at_least_one_improved = true;
+            }
+        }
+
+        assert!(at_least_one_improved);
     }
 }
