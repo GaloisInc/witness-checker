@@ -54,3 +54,124 @@ pub fn sub(
     let c0 = sink.lit(TEMP, 1, Bits::one());
     add_common(sink, expire, n, a, b_inv, c0)
 }
+
+
+/// `Nx1 -> N` bit multiply.  Input `a` is `n` bits wide, and `b` is 1 bit wide.  The result is the
+/// product `a * b`.
+///
+/// This is equivalent to `mux(b, a, 0)`.
+fn mul_1(
+    sink: &mut impl Sink,
+    expire: Time,
+    n: u64,
+    a: WireId,
+    b: WireId,
+) -> WireId {
+    let b_ext = sink.concat_chunks(TEMP, &[(Source::RepWire(b), n)]);
+    sink.and(expire, n, a, b_ext)
+}
+
+pub fn mul_simple(
+    sink: &mut impl Sink,
+    expire: Time,
+    n: u64,
+    a: WireId,
+    b: WireId,
+) -> WireId {
+    //      1111
+    //    x 1111
+    //    ------
+    //      1111  <- acc[0], equal to row0 but extended to n+1 bits
+    //      111   <- row1, shifted
+    //      -----    Note acc[0] gets zero-extended by 1 for this addition (denoted by leading _)
+    //      110 1 <- acc[1] + low_bits[0]
+    //      11    <- row2, shifted
+    //      -----
+    //      10 01 <- acc[2] + low_bits[0..2]
+    //      1
+    //      -----
+    //      0 001 <- acc[3] + low_bits[0..3]
+
+    debug_assert!(n > 0);
+    let mut acc = mul_1(sink, TEMP, n, a, b);
+
+    let mut concat_parts = Vec::with_capacity(n as usize);
+    for i in 1 .. n {
+        let m = n - i;
+        let row = mul_1(sink, TEMP, m, a, b + i);
+        // We are computing the following addition:
+        //       AAAAA   acc (m+1 bits)
+        //    +  RRRR    row (m bits)
+        //    --------
+        //       BBBBA   new acc (m bits) plus low bit passed through (1 bit)
+        //
+        // Note that `row` is shifted past the low bit of `acc`, so the low bit is passed through
+        // unmodified.  Also note that `acc` shrinks (`m` decreases) with each iteration.
+        concat_parts.push((Source::Wires(acc), 1));
+
+        acc = sink.add(TEMP, m, acc + 1, row);
+    }
+
+    // After the last iteration, `acc` is only one bit wide.
+    concat_parts.push((Source::Wires(acc), 1));
+    let out = sink.concat_chunks(expire, &concat_parts);
+    out
+}
+
+pub fn wide_mul_simple(
+    sink: &mut impl Sink,
+    expire: Time,
+    n: u64,
+    a: WireId,
+    b: WireId,
+) -> WireId {
+    //      1111
+    //    x 1111
+    //    ------
+    //    _01111  <- acc[0], equal to row0 but extended to n+1 bits
+    //    01111   <- row1, shifted
+    //    -------    Note acc[0] gets zero-extended by 1 for this addition (denoted by leading _)
+    //   _10110 1 <- acc[1] + low_bits[0]
+    //   01111    <- row2, shifted
+    //   --------
+    //  _11010 01 <- acc[2] + low_bits[0..2]
+    //  01111
+    //  ---------
+    //  11100 001 <- acc[3] + low_bits[0..3]
+
+    debug_assert!(n > 0);
+    let row0 = mul_1(sink, TEMP, n, a, b);
+    let mut acc = sink.concat_chunks(TEMP, &[
+        (Source::Wires(row0), n),
+        (Source::Zero, 1),
+    ]);
+
+    let mut concat_parts = Vec::with_capacity(n as usize);
+    for i in 1 .. n {
+        let row = mul_1(sink, TEMP, n, a, b + i);
+        // We are computing the following addition:
+        //       AAAAA   acc (n+1 bits)
+        //    +  RRRR    row (n bits)
+        //    --------
+        //      BBBBBA   new acc (n+1 bits) plus low bit passed through (1 bit)
+        //
+        // Note that `row` is shifted past the low bit of `acc`, so the low bit is passed through
+        // unmodified.  Also note that the output is potentially `n + 1` bits wide, so we must
+        // zero-extend both `row` and the `n` high bits of `acc` before adding.
+        concat_parts.push((Source::Wires(acc), 1));
+
+        let acc_ext = sink.concat_chunks(TEMP, &[
+            (Source::Wires(acc + 1), n),
+            (Source::Zero, 1),
+        ]);
+        let row_ext = sink.concat_chunks(TEMP, &[
+            (Source::Wires(row), n),
+            (Source::Zero, 1),
+        ]);
+        acc = sink.add(TEMP, n + 1, acc_ext, row_ext);
+    }
+
+    concat_parts.push((Source::Wires(acc), n + 1));
+    let out = sink.concat_chunks(expire, &concat_parts);
+    out
+}

@@ -729,16 +729,16 @@ mod test {
         }
 
         fn add(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            arith::add(&mut self.0, expire, n, a, b)
+            arith::add(self, expire, n, a, b)
         }
         fn sub(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            arith::sub(&mut self.0, expire, n, a, b)
+            arith::sub(self, expire, n, a, b)
         }
         fn mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            self.0.mul(expire, n, a, b)
+            arith::mul_simple(self, expire, n, a, b)
         }
         fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            self.0.wide_mul(expire, n, a, b)
+            arith::wide_mul_simple(self, expire, n, a, b)
         }
         fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             self.0.neg(expire, n, a)
