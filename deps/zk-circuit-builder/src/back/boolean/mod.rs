@@ -741,7 +741,7 @@ mod test {
             arith::wide_mul_simple(self, expire, n, a, b)
         }
         fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
-            self.0.neg(expire, n, a)
+            arith::neg(self, expire, n, a)
         }
 
         fn assert_zero(&mut self, n: u64, a: WireId) {

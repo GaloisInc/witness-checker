@@ -56,6 +56,50 @@ pub fn sub(
 }
 
 
+/// Add `n`-bit input `a` to 1-bit input `b`, producing an `n`-bit result.
+fn add_1(
+    sink: &mut impl Sink,
+    expire: Time,
+    n: u64,
+    a: WireId,
+    b: WireId,
+) -> WireId {
+    // This is like `add_common` where `b` is always zero and `c0` is the 1-bit input `b`.
+    let a_xor_b = a;
+    // `a_and_b` is all zeros.
+    let c0 = b;
+
+    // Populate carries
+    let mut carries = Vec::with_capacity(n as usize);
+    let mut concat_parts = Vec::with_capacity(n as usize);
+    carries.push(c0);
+    concat_parts.push((Source::Wires(c0), 1));
+
+    for i in 0 .. n - 1 {
+        let c_in = *carries.last().unwrap();
+        // `and1 = a_and_b + i` is always zero.
+        let and2 = sink.and(TEMP, 1, a_xor_b + i, c_in);
+        let c_out = and2;
+        carries.push(c_out);
+        concat_parts.push((Source::Wires(c_out), 1));
+    }
+
+    let c = sink.concat_chunks(TEMP, &concat_parts);
+    sink.xor(expire, n, a_xor_b, c)
+}
+
+pub fn neg(
+    sink: &mut impl Sink,
+    expire: Time,
+    n: u64,
+    a: WireId,
+) -> WireId {
+    let a_inv = sink.not(TEMP, n, a);
+    let b = sink.lit(TEMP, 1, Bits::one());
+    add_1(sink, expire, n, a_inv, b)
+}
+
+
 /// `Nx1 -> N` bit multiply.  Input `a` is `n` bits wide, and `b` is 1 bit wide.  The result is the
 /// product `a * b`.
 ///
