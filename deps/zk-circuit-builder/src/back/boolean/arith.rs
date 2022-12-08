@@ -218,7 +218,6 @@ pub fn wide_mul_simple(
     //  01111
     //  ---------
     //  11100 001 <- acc[3] + low_bits[0..3]
-    eprintln!("n = {}, a = {}, b = {}", n, a, b);
 
     debug_assert!(n > 0);
     let row0 = mul_1(sink, TEMP, n, a, b);
@@ -258,9 +257,7 @@ pub fn wide_mul_karatsuba(
     a: WireId,
     b: WireId,
 ) -> WireId {
-    if n <= 1 {
-        return sink.and(expire, n, a, b);
-    }
+    assert!(n >= 4);
 
     // https://en.wikipedia.org/wiki/Karatsuba_algorithm
     // We use the variable names from that writeup, with inputs `x` and `y` rather than `a` and
@@ -314,11 +311,111 @@ pub fn wide_mul_karatsuba(
         sink.add(TEMP, 2 * m, a_ext, z2)
     };
 
-    sink.concat_chunks(expire, &[
+    use log::trace;
+    trace!("x = {}", x);
+    trace!("y = {}", y);
+    trace!("x0 = {}", x0);
+    trace!("x1 = {}", x1);
+    trace!("y0 = {}", y0);
+    trace!("y1 = {}", y1);
+    trace!("x0x1 = {}", x0x1);
+    trace!("y0y1 = {}", y0y1);
+    trace!("z1_product = {}", z1_product);
+    trace!("z0z2_ext = {}", z0z2_ext);
+    trace!("z0 = {}", z0);
+    trace!("z1 = {}", z1);
+    trace!("z2 = {}", z2);
+    trace!("low = {}", low);
+    trace!("mid = {}", mid);
+    trace!("high = {}", high);
+
+    let out = sink.concat_chunks(expire, &[
         (Source::Wires(low), m),
         (Source::Wires(mid), m),
         (Source::Wires(high), 2 * m),
-    ])
+    ]);
+    trace!("out = {}", out);
+    out
+}
+
+pub fn mul_karatsuba(
+    sink: &mut impl Sink,
+    expire: Time,
+    n: u64,
+    a: WireId,
+    b: WireId,
+) -> WireId {
+    assert!(n >= 4);
+
+    // This is structured similarly to `wide_mul_karatsuba`, but since we only require `n` bits of
+    // the output instead of `2 * n` bits, we can omit `z2` and use the simpler formula for `z1`:
+    //
+    //      z1 = x1 * y0 + x0 * y1
+    //
+    // This still uses only 3 recursive multiplies, but saves some additions.
+
+    // We still use the variable names from the "Karatsuba algorithm" Wikipedia page, with inputs
+    // `x` and `y` rather than `a` and `b`, even though we aren't actually using the actual
+    // Karatsuba algorithm.
+    let x = a;
+    let y = b;
+
+    let m = (n + 1) / 2;
+
+    let x0 = x;
+    let y0 = y;
+    let (x1, y1) = if n % 2 == 0 {
+        (x + m, y + m)
+    } else {
+        // Zero-extend from `m - 1` bits to `m` bits.
+        (
+            zero_extend(sink, TEMP, m - 1, x + m, m),
+            zero_extend(sink, TEMP, m - 1, y + m, m),
+        )
+    };
+
+    let z0 = sink.wide_mul(TEMP, m, x0, y0);
+
+    // Since the final sum uses only the lowest `m` bits of `z1`, we can truncate here to save
+    // adds.
+    let x0y1 = sink.mul(TEMP, m, x0, y1);
+    let x1y0 = sink.mul(TEMP, m, x1, y0);
+    let z1 = sink.add(TEMP, m, x0y1, x1y0);
+
+    // Low `m` bits of output are the lowest `m` bits of `z0`.
+    let low = z0;
+
+    // Middle `m` bits are the sum of `z0 >> m` and `z1`.
+    let mid = sink.add(TEMP, m, z0 + m, z1);
+
+    use log::trace;
+    trace!("x = {}", x);
+    trace!("y = {}", y);
+    trace!("x0 = {}", x0);
+    trace!("x1 = {}", x1);
+    trace!("y0 = {}", y0);
+    trace!("y1 = {}", y1);
+    trace!("x0y1 = {}", x0y1);
+    trace!("x1y0 = {}", x1y0);
+    trace!("z0 = {}", z0);
+    trace!("z1 = {}", z1);
+    trace!("low = {}", low);
+    trace!("mid = {}", mid);
+
+    let out = sink.concat_chunks(expire, &[
+        (Source::Wires(low), m),
+        (Source::Wires(mid), m),
+    ]);
+    trace!("out = {}", out);
+    out
+}
+
+
+fn wide_mul_use_karatsuba(n: u64) -> bool {
+    match n {
+        18 | 20 | 22 => true,
+        _ => n >= 24,
+    }
 }
 
 pub fn wide_mul(
@@ -328,17 +425,157 @@ pub fn wide_mul(
     a: WireId,
     b: WireId,
 ) -> WireId {
-    // Empirically, the Karatsuba multiplier uses fewer AND gates than the simple multiplier when
-    // `n` is 18, 20, 22, or 24+.
-    //
-    // To find the right values of `n` to accept here, first, modify the test
-    // `wide_mul_karatsuba_performance` (in `boolean/mod.rs`) to check all values of `n` in the
-    // range `1 ..= 64`.  Then, adjust the condition here until it accepts as many values of `n` as
-    // possible without causing the test to fail.
-    if n < 18 || (n < 24 && n % 2 == 1) {
+    if !wide_mul_use_karatsuba(n) {
         wide_mul_simple(sink, expire, n, a, b)
     } else {
         wide_mul_karatsuba(sink, expire, n, a, b)
     }
 }
 
+fn mul_use_karatsuba(n: u64) -> bool {
+    match n {
+        44 | 48 | 52 | 56 |
+        58 | 59 | 60 |
+        62 | 63 | 64 |
+        66 | 67 | 68 => true,
+        _ => n >= 70,
+    }
+}
+
+pub fn mul(
+    sink: &mut impl Sink,
+    expire: Time,
+    n: u64,
+    a: WireId,
+    b: WireId,
+) -> WireId {
+    if !mul_use_karatsuba(n) {
+        mul_simple(sink, expire, n, a, b)
+    } else {
+        mul_karatsuba(sink, expire, n, a, b)
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use num_bigint::BigUint;
+    use crate::ir::circuit::Bits;
+    use crate::back::boolean::{Time, WireId, TEMP, Source, Sink};
+    use crate::back::boolean::arith;
+    use crate::back::boolean::test::{TestSink, TestArithSink};
+
+    /// Compute which sizes of multipliers are better done with the Karatsuba algorithm rather than
+    /// the simple algorithm, then check that the `mul_use_karatsuba` functions implement the right
+    /// check.
+    #[test]
+    fn karatsuba_performance() {
+        let mut sink = TestArithSink::default();
+
+        const MAX: u64 = 64;
+        let a = sink.private(TEMP, MAX, Some(Bits::zero()));
+        let b = sink.private(TEMP, MAX, Some(Bits::zero()));
+
+        // The Karatsuba algorithm is not usable for `n < 4` (it would recurse infinitely).
+        for n in 4 ..= MAX {
+            // Test wide_mul
+            let before = sink.inner.count_and;
+            let _ = arith::wide_mul_karatsuba(&mut sink, TEMP, n, a, b);
+            let count_karatsuba = sink.inner.count_and - before;
+
+            let before = sink.inner.count_and;
+            let _ = arith::wide_mul_simple(&mut sink, TEMP, n, a, b);
+            let count_simple = sink.inner.count_and - before;
+
+            eprintln!("wide_mul({}): use {} ({} vs {})",
+                n, if count_karatsuba < count_simple { "karatsuba" } else { "simple" },
+                count_karatsuba, count_simple);
+
+            if count_karatsuba < count_simple {
+                // On future iterations, use the Karatsuba algorithm for any recursive calls of
+                // size `n`.
+                sink.use_karatsuba_sizes_wide.insert(n);
+            }
+
+            // Test mul
+            let before = sink.inner.count_and;
+            let _ = arith::mul_karatsuba(&mut sink, TEMP, n, a, b);
+            let count_karatsuba = sink.inner.count_and - before;
+
+            let before = sink.inner.count_and;
+            let _ = arith::mul_simple(&mut sink, TEMP, n, a, b);
+            let count_simple = sink.inner.count_and - before;
+
+            if count_karatsuba < count_simple {
+                sink.use_karatsuba_sizes.insert(n);
+            }
+
+            eprintln!("mul({}): use {} ({} vs {})",
+                n, if count_karatsuba < count_simple { "karatsuba" } else { "simple" },
+                count_karatsuba, count_simple);
+        }
+
+        let mut ok = true;
+        for n in 4 ..= MAX {
+            let expect = sink.use_karatsuba_sizes_wide.contains(&n);
+            let actual = super::wide_mul_use_karatsuba(n);
+            if expect != actual {
+                eprintln!("expected wide_mul_use_karatsuba({}) = {}, but got {}",
+                    n, expect, actual);
+                ok = false;
+            }
+
+            let expect = sink.use_karatsuba_sizes.contains(&n);
+            let actual = super::mul_use_karatsuba(n);
+            if expect != actual {
+                eprintln!("expected mul_use_karatsuba({}) = {}, but got {}",
+                    n, expect, actual);
+                ok = false;
+            }
+        }
+
+        assert!(ok);
+    }
+
+
+    #[test]
+    fn mul_karatsuba() {
+        // We use `TestSink` so that recursive `mul`/`wide_mul` calls use the `BigInt`-based
+        // multiplier.  This lets us test each size of Karatsuba multiplier in isolation.
+        let mut sink = TestSink::default();
+
+        for n in 4 ..= 5 {
+            let mask = BigUint::from((1_u32 << n) - 1);
+            for a_val in 0 .. 1 << n {
+                let a = sink.lit(TEMP, n, Bits(&[a_val]));
+                for b_val in 0 .. 1 << n {
+                    let b = sink.lit(TEMP, n, Bits(&[b_val]));
+                    let out = arith::mul_karatsuba(&mut sink, TEMP, n, a, b);
+                    let out_val = sink.get_uint(n, out);
+                    assert_eq!((BigUint::from(a_val) * BigUint::from(b_val)) & &mask, out_val,
+                        "with n = {}, a_val = {}, b_val = {}", n, a_val, b_val);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wide_mul_karatsuba() {
+        // We use `TestSink` so that recursive `mul`/`wide_mul` calls use the `BigInt`-based
+        // multiplier.  This lets us test each size of Karatsuba multiplier in isolation.
+        let mut sink = TestSink::default();
+
+        for n in 4 ..= 5 {
+            for a_val in 0 .. 1 << n {
+                let a = sink.lit(TEMP, n, Bits(&[a_val]));
+                for b_val in 0 .. 1 << n {
+                    let b = sink.lit(TEMP, n, Bits(&[b_val]));
+                    let out = arith::wide_mul_karatsuba(&mut sink, TEMP, n, a, b);
+                    let out_val = sink.get_uint(2 * n, out);
+                    assert_eq!((BigUint::from(a_val) * BigUint::from(b_val)), out_val,
+                        "with n = {}, a_val = {}, b_val = {}", n, a_val, b_val);
+                }
+            }
+        }
+    }
+}

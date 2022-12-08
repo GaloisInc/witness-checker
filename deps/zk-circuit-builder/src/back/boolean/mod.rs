@@ -4,6 +4,7 @@ use std::convert::TryFrom;
 use std::iter::{self, FromIterator};
 use std::mem;
 use std::slice;
+use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
 use crate::eval;
@@ -150,7 +151,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         // Convert each gate.
         for (i, (&w, &j)) in order.iter().zip(last_use.iter()).enumerate() {
             let wire_id = self.convert_wire(j as Time, w);
-            eprintln!("converted: {} = {:?}", wire_id, crate::ir::circuit::DebugDepth(0, &w.kind));
+            trace!("converted: {} = {:?}", wire_id, crate::ir::circuit::DebugDepth(0, &w.kind));
             self.wire_map.insert(w, wire_id);
 
             // If we just finished a cleanup block, remove all wires in that block from `wire_map`.
@@ -231,11 +232,6 @@ impl<'w, S: Sink> Backend<'w, S> {
                             },
                             _ => (None, None),
                         };
-
-                        eprintln!("a = {:?}", a_val);
-                        eprintln!("b = {:?}", b_val);
-                        eprintln!("quot = {:?}", quot_bits);
-                        eprintln!("rem = {:?}", rem_bits);
 
                         // Add witness variables for quotient and remainder.
                         let (quot_expire, rem_expire) = match op {
@@ -336,7 +332,6 @@ impl<'w, S: Sink> Backend<'w, S> {
                     TyKind::Uint(_) => false,
                     _ => unimplemented!("Compare of {:?}", aw.ty),
                 };
-                eprintln!("signed? {}", is_signed);
                 match (op, is_signed) {
                     (CmpOp::Eq, _) |
                     // In unsigned arithmetic, `a <= 0` = `a == 0`
@@ -529,7 +524,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
         IntSize,
@@ -537,23 +532,23 @@ mod test {
     use super::*;
 
     #[derive(Default)]
-    struct TestSink {
-        m: HashMap<WireId, bool>,
-        next: WireId,
-        expire_map: BTreeMap<Time, Vec<WireId>>,
-        count_and: u64,
-        count_or: u64,
-        count_xor: u64,
-        count_not: u64,
+    pub struct TestSink {
+        pub m: HashMap<WireId, bool>,
+        pub next: WireId,
+        pub expire_map: BTreeMap<Time, Vec<WireId>>,
+        pub count_and: u64,
+        pub count_or: u64,
+        pub count_xor: u64,
+        pub count_not: u64,
     }
 
     impl TestSink {
-        fn get(&self, w: WireId) -> bool {
+        pub fn get(&self, w: WireId) -> bool {
             self.m.get(&w).cloned()
                 .unwrap_or_else(|| panic!("accessed wire {} before definition", w))
         }
 
-        fn get_uint(&self, n: u64, w: WireId) -> BigUint {
+        pub fn get_uint(&self, n: u64, w: WireId) -> BigUint {
             let bits = (0 .. n).map(|i| self.get(w + i) as u8).collect::<Vec<_>>();
             BigUint::from_radix_le(&bits, 2).unwrap()
         }
@@ -589,7 +584,7 @@ mod test {
             let w = self.alloc(expire, n);
             for i in 0 .. n {
                 let val = f(self, i);
-                eprintln!("{} = {}[{}] = {}", w + i, desc, i, val);
+                trace!("{} = {}[{}] = {}", w + i, desc, i, val);
                 self.set(w + i, val);
             }
             w
@@ -621,7 +616,7 @@ mod test {
                         Source::Wires(w2) => self.get(w2 + i),
                         Source::RepWire(w2) => self.get(w2),
                     };
-                    eprintln!("{} = chunks[{}] = {:?}[{}] = {}",
+                    trace!("{} = chunks[{}] = {:?}[{}] = {}",
                         w + off + i, off + i, src, i, val);
                     self.set(w + off + i, val);
                 }
@@ -688,7 +683,7 @@ mod test {
 
         fn assert_zero(&mut self, n: u64, a: WireId) {
             for i in 0 .. n {
-                eprintln!("assert_zero({}) = {}", a + i, self.get(a + i));
+                trace!("assert_zero({}) = {}", a + i, self.get(a + i));
                 assert!(!self.get(a + i));
             }
         }
@@ -697,7 +692,7 @@ mod test {
             let keys = self.expire_map.range(..= now).map(|(&k, _)| k).collect::<Vec<_>>();
             for k in keys {
                 for w in self.expire_map.remove(&k).unwrap() {
-                    eprintln!("expired: {}", w);
+                    trace!("expired: {}", w);
                     let old = self.m.remove(&w);
                     assert!(old.is_some());
                 }
@@ -707,33 +702,39 @@ mod test {
 
 
     #[derive(Default)]
-    struct TestArithSink(TestSink);
+    pub struct TestArithSink {
+        pub inner: TestSink,
+        // For testing, it's useful to be able to override which input sizes use Karatsuba
+        // mul/wide_mul vs the simple version.
+        pub use_karatsuba_sizes: HashSet<u64>,
+        pub use_karatsuba_sizes_wide: HashSet<u64>,
+    }
 
     impl Sink for TestArithSink {
         fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
-            self.0.lit(expire, n, bits)
+            self.inner.lit(expire, n, bits)
         }
         fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
-            self.0.private(expire, n, value)
+            self.inner.private(expire, n, value)
         }
         fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
-            self.0.copy(expire, n, a)
+            self.inner.copy(expire, n, a)
         }
         fn concat_chunks(&mut self, expire: Time, entries: &[(Source, u64)]) -> WireId {
-            self.0.concat_chunks(expire, entries)
+            self.inner.concat_chunks(expire, entries)
         }
 
         fn and(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            self.0.and(expire, n, a, b)
+            self.inner.and(expire, n, a, b)
         }
         fn or(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            self.0.or(expire, n, a, b)
+            self.inner.or(expire, n, a, b)
         }
         fn xor(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            self.0.xor(expire, n, a, b)
+            self.inner.xor(expire, n, a, b)
         }
         fn not(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
-            self.0.not(expire, n, a)
+            self.inner.not(expire, n, a)
         }
 
         fn add(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
@@ -743,21 +744,29 @@ mod test {
             arith::sub(self, expire, n, a, b)
         }
         fn mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            arith::mul_simple(self, expire, n, a, b)
+            if self.use_karatsuba_sizes.contains(&n) {
+                arith::mul_karatsuba(self, expire, n, a, b)
+            } else {
+                arith::mul_simple(self, expire, n, a, b)
+            }
         }
         fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            arith::wide_mul(self, expire, n, a, b)
+            if self.use_karatsuba_sizes_wide.contains(&n) {
+                arith::wide_mul_karatsuba(self, expire, n, a, b)
+            } else {
+                arith::wide_mul_simple(self, expire, n, a, b)
+            }
         }
         fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             arith::neg(self, expire, n, a)
         }
 
         fn assert_zero(&mut self, n: u64, a: WireId) {
-            self.0.assert_zero(n, a);
+            self.inner.assert_zero(n, a);
         }
 
         fn free_expired(&mut self, now: Time) {
-            self.0.free_expired(now);
+            self.inner.free_expired(now);
         }
     }
 
@@ -795,14 +804,15 @@ mod test {
         }
     }
 
-    fn test_gate<const N: usize>(
+    fn test_gate_with_arith_sink<const N: usize>(
+        arith_sink: TestArithSink,
         input_bits: [i16; N],
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
     ) {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let mut backend = Backend::new(&c, TestSink::default());
-        let mut arith_backend = Backend::new(&c, TestArithSink::default());
+        let mut arith_backend = Backend::new(&c, arith_sink);
 
         /*
         #[cfg(feature = "sieve_ir")]
@@ -841,6 +851,13 @@ mod test {
             assert_eq!(evaluator.get_violations(), Vec::<String>::new());
         }
         */
+    }
+
+    fn test_gate<const N: usize>(
+        input_bits: [i16; N],
+        mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
+    ) {
+        test_gate_with_arith_sink(TestArithSink::default(), input_bits, f)
     }
 
 
@@ -1098,36 +1115,5 @@ mod test {
     fn ge_3() {
         test_gate([3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
         test_gate([-3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
-    }
-
-
-    #[test]
-    fn wide_mul_karatsuba_performance() {
-        let mut sink = TestArithSink::default();
-
-        let mut at_least_one_improved = false;
-        for &n in &[4, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 28, 32, 48, 64] {
-            sink.0 = TestSink::default();
-            let a = sink.private(TEMP, n, Some(Bits::zero()));
-            let b = sink.private(TEMP, n, Some(Bits::zero()));
-            let _ = sink.wide_mul(TEMP, n, a, b);
-            let count_with = sink.0.count_and;
-
-            sink.0 = TestSink::default();
-            let a = sink.private(TEMP, n, Some(Bits::zero()));
-            let b = sink.private(TEMP, n, Some(Bits::zero()));
-            let _ = arith::wide_mul_simple(&mut sink, TEMP, n, a, b);
-            let count_without = sink.0.count_and;
-
-            assert!(count_with <= count_without,
-                "for n = {}, simple mul used {} and gates, but karatsuba used {} and gates",
-                n, count_without, count_with);
-
-            if count_with < count_without {
-                at_least_one_improved = true;
-            }
-        }
-
-        assert!(at_least_one_improved);
     }
 }
