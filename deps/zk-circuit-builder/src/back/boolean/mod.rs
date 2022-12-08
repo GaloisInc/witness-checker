@@ -835,11 +835,36 @@ mod test {
             use zki_sieve_v3::Source;
             use zki_sieve_v3::consumers::evaluator::{Evaluator, PlaintextBackend};
             use zki_sieve_v3::consumers::validator::Validator;
+            use zki_sieve_v3::structs::function::FunctionBody;
+            use zki_sieve_v3::structs::directives::Directive;
+            use zki_sieve_v3::structs::message::Message;
             let sink = sieve_ir_backend.finish().finish();
             let source: Source = sink.into();
             let mut validator = Validator::new_as_prover();
             for msg in source.iter_messages() {
-                validator.ingest_message(&msg.unwrap());
+                let msg = msg.unwrap();
+                if let Message::Relation(ref r) = msg {
+                    for d in &r.directives {
+                        match *d {
+                            Directive::Function(ref f) => {
+                                eprintln!("function {} : {:?} -> {:?}",
+                                    f.name, f.input_count, f.output_count);
+                                match f.body {
+                                    FunctionBody::Gates(ref gs) => {
+                                        for g in gs {
+                                            eprintln!("  {:?}", g);
+                                        }
+                                    },
+                                    FunctionBody::PluginBody(ref p) => {
+                                        eprintln!("  plugin {:?}", p);
+                                    },
+                                }
+                            },
+                            Directive::Gate(ref g) => { eprintln!("{:?}", g); },
+                        }
+                    }
+                }
+                validator.ingest_message(&msg);
             }
             assert_eq!(validator.get_violations(), Vec::<String>::new());
             let mut backend = PlaintextBackend::default();
