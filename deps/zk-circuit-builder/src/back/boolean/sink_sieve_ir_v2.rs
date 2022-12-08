@@ -175,6 +175,18 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
         }
     }
 
+    fn and_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
+        for i in 0 .. n {
+            self.gates.push(Gate::Mul(0, out + i, a + i, b + i));
+        }
+    }
+
+    fn xor_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
+        for i in 0 .. n {
+            self.gates.push(Gate::Add(0, out + i, a + i, b + i));
+        }
+    }
+
     fn not_into(&mut self, out: WireId, n: u64, a: WireId) {
         for i in 0 .. n {
             self.gates.push(Gate::AddConstant(0, out + i, a + i, vec![1]));
@@ -205,17 +217,13 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
         let (output_count, input_count) = match desc {
             FunctionDesc::Copy(n) => {
                 let [out, a] = sub_sink.alloc.preallocate([n, n]);
-                for i in 0 .. n {
-                    sub_sink.gates.push(Gate::Copy(0, out + i, a + i));
-                }
+                sub_sink.copy_into(out, n, a);
                 (vec![n], vec![n])
             },
 
             FunctionDesc::And(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
-                for i in 0 .. n {
-                    sub_sink.gates.push(Gate::Mul(0, out + i, a + i, b + i));
-                }
+                sub_sink.and_into(out, n, a, b);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::Or(n) => {
@@ -228,9 +236,7 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
             },
             FunctionDesc::Xor(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
-                for i in 0 .. n {
-                    sub_sink.gates.push(Gate::Add(0, out + i, a + i, b + i));
-                }
+                sub_sink.xor_into(out, n, a, b);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::Not(n) => {
