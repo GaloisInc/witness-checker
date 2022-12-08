@@ -17,6 +17,8 @@ use crate::ir::circuit::{
 
 
 mod arith;
+#[cfg(feature = "sieve_ir")]
+mod sink_sieve_ir_v2;
 
 
 pub type WireId = u64;
@@ -814,7 +816,6 @@ mod test {
         let mut backend = Backend::new(&c, TestSink::default());
         let mut arith_backend = Backend::new(&c, arith_sink);
 
-        /*
         #[cfg(feature = "sieve_ir")]
         let mut sieve_ir_backend = {
             use zki_sieve_v3::producers::sink::MemorySink;
@@ -822,18 +823,15 @@ mod test {
             let sink = sink_sieve_ir_v2::SieveIrV2Sink::new(sink);
             Backend::new(&c, sink)
         };
-        */
 
         test_gate_common(&c, input_bits, f, |w| {
             backend.enforce_true(w);
             arith_backend.enforce_true(w);
-            /*
+
             #[cfg(feature = "sieve_ir")]
             sieve_ir_backend.enforce_true(w);
-            */
         });
 
-        /*
         #[cfg(feature = "sieve_ir")]
         {
             use zki_sieve_v3::Source;
@@ -850,7 +848,6 @@ mod test {
             let evaluator = Evaluator::from_messages(source.iter_messages(), &mut backend);
             assert_eq!(evaluator.get_violations(), Vec::<String>::new());
         }
-        */
     }
 
     fn test_gate<const N: usize>(
