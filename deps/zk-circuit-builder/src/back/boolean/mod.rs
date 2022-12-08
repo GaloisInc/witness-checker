@@ -18,7 +18,7 @@ use crate::ir::circuit::{
 
 mod arith;
 #[cfg(feature = "sieve_ir")]
-mod sink_sieve_ir_v2;
+pub mod sink_sieve_ir_v2;
 
 
 pub type WireId = u64;
@@ -94,7 +94,6 @@ pub trait Sink {
 
 
 pub struct Backend<'w, S> {
-    circuit: &'w CircuitBase<'w>,
     sink: S,
     /// Maps each high-level `Wire` to the `WireId` of the first bit in its representation.  The
     /// number of bits in the representation can be computed from the wire type.
@@ -102,9 +101,8 @@ pub struct Backend<'w, S> {
 }
 
 impl<'w, S: Sink> Backend<'w, S> {
-    pub fn new(circuit: &'w impl CircuitTrait<'w>, sink: S) -> Backend<'w, S> {
+    pub fn new(sink: S) -> Backend<'w, S> {
         Backend {
-            circuit: circuit.as_base(),
             sink,
             wire_map: BTreeMap::new(),
         }
@@ -113,7 +111,7 @@ impl<'w, S: Sink> Backend<'w, S> {
     /// Populate `wire_map` with entries for all the wires in `wires`.  Temporary intermediate
     /// values will not be kept in `wire_map`.  The caller is responsible for removing the entries
     /// from `wire_map`, if desired.
-    fn convert_wires(&mut self, wires: &[Wire<'w>]) -> Vec<WireId> {
+    fn convert_wires(&mut self, c: &impl CircuitTrait<'w>, wires: &[Wire<'w>]) -> Vec<WireId> {
         let order = circuit::walk_wires_filtered(
             wires.iter().cloned(),
             |w| !self.wire_map.contains_key(&w),
@@ -152,7 +150,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 
         // Convert each gate.
         for (i, (&w, &j)) in order.iter().zip(last_use.iter()).enumerate() {
-            let wire_id = self.convert_wire(j as Time, w);
+            let wire_id = self.convert_wire(c, j as Time, w);
             trace!("converted: {} = {:?}", wire_id, crate::ir::circuit::DebugDepth(0, &w.kind));
             self.wire_map.insert(w, wire_id);
 
@@ -177,7 +175,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         wires.iter().cloned().map(|w| self.wire_map[&w]).collect::<Vec<_>>()
     }
 
-    fn convert_wire(&mut self, expire: Time, w: Wire<'w>) -> WireId {
+    fn convert_wire(&mut self, c: &impl CircuitTrait<'w>, expire: Time, w: Wire<'w>) -> WireId {
         let n = type_bits(w.ty);
         match w.kind {
             GateKind::Lit(val, ty) => {
@@ -216,8 +214,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                         }
 
                         let sz = aw.ty.integer_size();
-                        let a_val = eval::eval_wire_secret(self.circuit, aw);
-                        let b_val = eval::eval_wire_secret(self.circuit, bw);
+                        let a_val = eval::eval_wire_secret(c, aw);
+                        let b_val = eval::eval_wire_secret(c, bw);
                         let (quot_bits, rem_bits) = match (a_val.as_ref(), b_val.as_ref()) {
                             (Some(a_val), Some(b_val)) => {
                                 let a_uint = a_val.as_single().unwrap();
@@ -228,8 +226,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                                     (Zero::zero(), a_uint.clone())
                                 };
                                 (
-                                    Some(quot_uint.as_bits(self.circuit, sz)),
-                                    Some(rem_uint.as_bits(self.circuit, sz)),
+                                    Some(quot_uint.as_bits(c.as_base(), sz)),
+                                    Some(rem_uint.as_bits(c.as_base(), sz)),
                                 )
                             },
                             _ => (None, None),
@@ -481,11 +479,12 @@ impl<'w, S: Sink> Backend<'w, S> {
     }
 
     pub fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+        use crate::ir::migrate::Visitor as _;
         // Each entry `(old, new)` in `v.erased()` indicates that wire `old` was replaced with the
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_map[new]` as well.
         let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter().cloned().unzip();
-        let old_reprs = self.convert_wires(&old_wires);
+        let old_reprs = self.convert_wires(v.new_circuit(), &old_wires);
         for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
             assert!(!self.wire_map.contains_key(&new_wire));
             self.wire_map.insert(new_wire, old_repr);
@@ -510,15 +509,14 @@ impl<'w, S: Sink> Backend<'w, S> {
         }
     }
 
-    pub fn enforce_true(&mut self, w: Wire<'w>) {
-        let wire_ids = self.convert_wires(&[w]);
+    pub fn enforce_true(&mut self, c: &impl CircuitTrait<'w>, w: Wire<'w>) {
+        let wire_ids = self.convert_wires(c, &[w]);
         let w = wire_ids[0];
         let w_inv = self.sink.not(TEMP, 1, w);
         self.sink.assert_zero(1, w_inv);
     }
 
     pub fn finish(self) -> S {
-        // TODO: free all remaining WireAlloc pages?
         self.sink
     }
 }
@@ -813,23 +811,23 @@ mod test {
     ) {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let mut backend = Backend::new(&c, TestSink::default());
-        let mut arith_backend = Backend::new(&c, arith_sink);
+        let mut backend = Backend::new(TestSink::default());
+        let mut arith_backend = Backend::new(arith_sink);
 
         #[cfg(feature = "sieve_ir")]
         let mut sieve_ir_backend = {
             use zki_sieve_v3::producers::sink::MemorySink;
             let sink = MemorySink::default();
             let sink = sink_sieve_ir_v2::SieveIrV2Sink::new(sink);
-            Backend::new(&c, sink)
+            Backend::new(sink)
         };
 
         test_gate_common(&c, input_bits, f, |w| {
-            backend.enforce_true(w);
-            arith_backend.enforce_true(w);
+            backend.enforce_true(&c, w);
+            arith_backend.enforce_true(&c, w);
 
             #[cfg(feature = "sieve_ir")]
-            sieve_ir_backend.enforce_true(w);
+            sieve_ir_backend.enforce_true(&c, w);
         });
 
         #[cfg(feature = "sieve_ir")]
