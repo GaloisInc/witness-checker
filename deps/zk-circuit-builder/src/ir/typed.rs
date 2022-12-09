@@ -1160,3 +1160,10 @@ impl<'a, E: Evaluator<'a>> EvaluatorExt<'a> for E {
         T::from_eval(self, w.repr)
     }
 }
+
+
+impl<'a> FromEval<'a> for F64b {
+    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+        todo!()
+    }
+}
