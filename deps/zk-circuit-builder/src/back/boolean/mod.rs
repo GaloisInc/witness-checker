@@ -19,6 +19,7 @@ use crate::ir::circuit::{
 mod arith;
 #[cfg(feature = "sieve_ir")]
 pub mod sink_sieve_ir_v2;
+mod wire_alloc;
 
 
 pub type WireId = u64;
