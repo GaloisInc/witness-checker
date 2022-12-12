@@ -10,13 +10,15 @@ use crate::ir::circuit::{
     ShiftOp, CmpOp, GateValue,
 };
 
-use self::Value::Single;
+use self::Value::SingleField;
+use self::Value::SingleInteger;
 
 #[derive(Clone, PartialEq, Eq, Debug, Migrate)]
 pub enum Value {
     /// The value of an integer-typed wire, in arbitrary precision.  For `Uint` wires, this is in
     /// the range `0 .. 2^N`; for `Int`, it's in the range `-2^(N-1) .. 2^(N-1)`.
-    Single(BigInt),
+    SingleInteger(BigInt),
+    SingleField(Vec<u32>),
     Bundle(Vec<Value>),
 }
 
@@ -25,10 +27,10 @@ impl Value {
         match *ty {
             TyKind::Int(_) |
             TyKind::Uint(_) => {
-                Value::Single(bits.to_bigint(ty))
+                Value::SingleInteger(bits.to_bigint(ty))
             },
             TyKind::GF(_) => {
-                unimplemented!{}
+                Value::SingleField(bits.0.into())
             },
             TyKind::Bundle(tys) => {
                 let mut vals = Vec::with_capacity(tys.len());
@@ -47,10 +49,13 @@ impl Value {
 
     pub fn to_bits<'a>(&self, c: &CircuitBase<'a>, ty: Ty<'a>) -> Bits<'a> {
         match (self, *ty) {
-            (&Value::Single(ref v), TyKind::Int(sz)) |
-            (&Value::Single(ref v), TyKind::Uint(sz)) => {
+            (&Value::SingleInteger(ref v), TyKind::Int(sz)) |
+            (&Value::SingleInteger(ref v), TyKind::Uint(sz)) => {
                 v.as_bits(c, sz)
             },
+            (&Value::SingleField(ref v), TyKind::GF(field)) => {
+                c.intern_bits(v)
+            }
             (&Value::Bundle(ref vs), TyKind::Bundle(tys)) => {
                 assert_eq!(vs.len(), tys.len());
                 let mut digits = Vec::with_capacity(ty.digits());
@@ -74,7 +79,7 @@ impl Value {
                 } else {
                     i
                 };
-                Single(i)
+                SingleInteger(i)
             },
             TyKind::Int(sz) => {
                 let out_of_range =
@@ -87,7 +92,7 @@ impl Value {
                 } else {
                     i
                 };
-                Single(i)
+                SingleInteger(i)
             },
             _ => panic!("can't construct a Bundle from a single integer"),
         }
@@ -95,14 +100,14 @@ impl Value {
 
     pub fn as_single(&self) -> Option<&BigInt> {
         match *self {
-            Value::Single(ref x) => Some(x),
+            Value::SingleInteger(ref x) => Some(x),
             _ => None,
         }
     }
 
     pub fn unwrap_single(self) -> Option<BigInt> {
         match self {
-            Value::Single(x) => Some(x),
+            Value::SingleInteger(x) => Some(x),
             _ => None,
         }
     }
@@ -118,9 +123,16 @@ impl Value {
 pub trait Evaluator<'a>: SecretEvaluator<'a> {
     fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a>;
 
-    fn eval_single_wire(&mut self, w: Wire<'a>) -> Result<BigInt, Error<'a>> {
+    fn eval_single_integer_wire(&mut self, w: Wire<'a>) -> Result<BigInt, Error<'a>> {
         match self.eval_wire(w)? {
-            Single(x) => Ok(x),
+            SingleInteger(x) => Ok(x),
+            _ => Err(Error::Other),
+        }
+    }
+
+    fn eval_single_field_wire(&mut self, w: Wire<'a>) -> Result<Vec<u32>, Error<'a>> {
+        match self.eval_wire(w)? {
+            SingleField(x) => Ok(x),
             _ => Err(Error::Other),
         }
     }

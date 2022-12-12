@@ -206,7 +206,7 @@ impl<'a> GadgetKind<'a> for WideMul {
         let a = args[0].as_ref()?.as_single().unwrap();
         let b = args[1].as_ref()?.as_single().unwrap();
         let product = a * b;
-        let low = Value::Single(&product & ((BigInt::from(1) << sz.bits()) - 1));
+        let low = Value::SingleInteger(&product & ((BigInt::from(1) << sz.bits()) - 1));
         let high = Value::trunc(arg_tys[0], product >> sz.bits());
         Ok(Value::Bundle(vec![low, high]))
     }

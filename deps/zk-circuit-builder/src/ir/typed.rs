@@ -437,7 +437,7 @@ impl<'a> Secret<'a> for bool {
 
 impl<'a> FromEval<'a> for bool {
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = ev.eval_single_wire(a).ok()?;
+        let val = ev.eval_single_integer_wire(a).ok()?;
         Some(!val.is_zero())
     }
 }
@@ -503,7 +503,7 @@ macro_rules! integer_impls {
 
         impl<'a> FromEval<'a> for $T {
             fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-                let val = ev.eval_single_wire(a).ok()?;
+                let val = ev.eval_single_integer_wire(a).ok()?;
                 // Conversion should succeed, assuming `a` really carries a value of type `$T`.
                 Some(<$T as TryFrom<_>>::try_from(val).unwrap())
             }
@@ -655,14 +655,13 @@ macro_rules! field_impls {
             }
         }
 
-        // impl<'a> FromEval<'a> for $T {
-        //     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        //         // let val = ev.eval_single_wire(a).ok()?;
-        //         // // Conversion should succeed, assuming `a` really carries a value of type `$T`.
-        //         // Some(<$T as TryFrom<_>>::try_from(val).unwrap())
-        //         unimplemented!{}
-        //     }
-        // }
+        impl<'a> FromEval<'a> for $T {
+            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+                let val = ev.eval_single_field_wire(a).ok()?;
+                // Conversion should succeed, assuming `a` really carries a value of type `$T`.
+                Some(<$T>::from_bits(Bits(&val)))
+            }
+        }
 
         primitive_unary_impl!(Neg::neg($T));
         // primitive_unary_impl!(Not::not($T));
@@ -1161,9 +1160,3 @@ impl<'a, E: Evaluator<'a>> EvaluatorExt<'a> for E {
     }
 }
 
-
-impl<'a> FromEval<'a> for F64b {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        todo!()
-    }
-}

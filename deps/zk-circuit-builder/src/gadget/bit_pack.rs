@@ -100,7 +100,7 @@ impl<'a> GadgetKind<'a> for ConcatBits {
         }
         assert!(acc.sign() != Sign::Minus);
         assert!(acc.bits() <= acc_width as u64);
-        Ok(Value::Single(acc))
+        Ok(Value::SingleInteger(acc))
     }
 }
 
@@ -227,7 +227,7 @@ impl<'a> GadgetKind<'a> for ExtractBits {
     fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let val = args[0].as_ref()?.as_single().unwrap();
         let mask = (BigInt::from(1) << (self.end - self.start)) - 1;
-        Ok(Value::Single((val >> self.start) & mask))
+        Ok(Value::SingleInteger((val >> self.start) & mask))
     }
 }
 
