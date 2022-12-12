@@ -4,8 +4,11 @@ use crate::eval::{self, Evaluator, CachingEvaluator, Value};
 
 fn write_val(s: &mut String, v: Value) -> Result<(), fmt::Error> {
     match v {
-        Value::Single(i) => {
+        Value::SingleInteger(i) => {
             write!(s, "0x{:x}", i)?;
+        },
+        Value::SingleField(f) => {
+            write!(s, "{:?}", f)?;
         },
         Value::Bundle(vs) => {
             for (i, v) in vs.into_iter().enumerate() {
