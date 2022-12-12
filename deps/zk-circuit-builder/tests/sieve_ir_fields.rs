@@ -27,7 +27,7 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     // Make sure the circuit is valid.
     let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
     let val = ev.eval_wire(w).ok();
-    assert_eq!(val, Some(eval::Value::Single(BigInt::from(1))));
+    assert_eq!(val, Some(eval::Value::SingleInteger(BigInt::from(1))));
 
     // TODO
     // // Convert to zkif and validate
