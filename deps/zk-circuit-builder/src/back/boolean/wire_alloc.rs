@@ -149,35 +149,38 @@ impl WireBucket {
         }
     }
 
-    pub fn alloc(
+    fn prepare_alloc(
         &mut self,
-        expire: Time,
         n: u64,
         next_alloc_pos: usize,
-    ) -> (WireId, Option<(AllocPage, FreePage)>) {
-        self.expire = cmp::max(self.expire, expire);
-
+    ) -> Option<(AllocPage, FreePage)> {
         if n <= self.page_end - self.next {
-            let w = self.next;
-            self.next += n;
-            return (w, None);
+            return None;
         }
 
         let (alloc, free) = self.flush(next_alloc_pos);
         if n <= PAGE_SIZE {
-            let w = self.next;
-            self.next += n;
-            return (w, Some((alloc, free)));
+            return Some((alloc, free));
         }
 
         // `n > PAGE_SIZE`.  Try to extend the new page to length `n`.
         assert!(n <= self.end - self.next);
         debug_assert!(self.next == self.page_start);
         self.page_end = self.page_start + n;
+        Some((alloc, free))
+    }
 
+    pub fn alloc(
+        &mut self,
+        expire: Time,
+        n: u64,
+        next_alloc_pos: usize,
+    ) -> (WireId, Option<(AllocPage, FreePage)>) {
+        let alloc_free = self.prepare_alloc(n, next_alloc_pos);
         let w = self.next;
         self.next += n;
-        return (w, Some((alloc, free)));
+        self.expire = cmp::max(self.expire, expire);
+        (w, alloc_free)
     }
 
     pub fn flush(&mut self, next_alloc_pos: usize) -> (AllocPage, FreePage) {
@@ -202,6 +205,7 @@ impl WireBucket {
 
 /// Indicates that the page `start .. end` should be allocated before gate `i` of the main output
 /// buffer.
+#[derive(Debug)]
 pub struct AllocPage {
     pub pos: usize,
     pub start: WireId,
@@ -209,6 +213,7 @@ pub struct AllocPage {
 }
 
 /// Indicates that the page `start .. end` should be freed at time `expire`.
+#[derive(Debug)]
 pub struct FreePage {
     pub expire: Time,
     pub start: WireId,
