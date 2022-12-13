@@ -48,6 +48,11 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output SIEVE IR v2 (IR0+) circuit representation in this directory"))
+        .arg(Arg::with_name("boolean-sieve-ir-out")
+             .long("boolean-sieve-ir-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output boolean SIEVE IR v1 (IR1) circuit representation in this directory"))
         .arg(Arg::with_name("boolean-sieve-ir-v2-out")
              .long("boolean-sieve-ir-v2-out")
              .takes_value(true)
@@ -151,6 +156,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         args.is_present("zkif-out") ||
             args.is_present("sieve-ir-out") ||
             args.is_present("sieve-ir-v2-out") ||
+            args.is_present("boolean-sieve-ir-out") ||
             args.is_present("boolean-sieve-ir-v2-out"),
         lower::int::compare_to_greater_or_equal_to_zero);
     let cf = cf.add_pass(lower::int::non_constant_shift);
@@ -219,6 +225,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         } else if let Some(workspace) = args.value_of("sieve-ir-v2-out") {
             let dedup = args.is_present("sieve-ir-dedup");
             back::new_sieve_ir_v2(workspace, dedup)
+        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-out") {
+            back::new_boolean_sieve_ir(workspace)
         } else if let Some(workspace) = args.value_of("boolean-sieve-ir-v2-out") {
             back::new_boolean_sieve_ir_v2(workspace)
         } else if let Some(dest) = args.value_of_os("zkif-out") {

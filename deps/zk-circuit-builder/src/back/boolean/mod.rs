@@ -18,7 +18,7 @@ use crate::ir::circuit::{
 
 mod arith;
 #[cfg(feature = "sieve_ir")]
-pub mod sink_sieve_ir_v2;
+pub mod sink_sieve_ir_function;
 mod wire_alloc;
 
 
@@ -817,9 +817,16 @@ mod test {
 
         #[cfg(feature = "sieve_ir")]
         let mut sieve_ir_backend = {
+            use zki_sieve::producers::sink::MemorySink;
+            let sink = MemorySink::default();
+            let sink = sink_sieve_ir_function::SieveIrV1Sink::new(sink);
+            Backend::new(sink)
+        };
+        #[cfg(feature = "sieve_ir")]
+        let mut sieve_ir_v2_backend = {
             use zki_sieve_v3::producers::sink::MemorySink;
             let sink = MemorySink::default();
-            let sink = sink_sieve_ir_v2::SieveIrV2Sink::new(sink);
+            let sink = sink_sieve_ir_function::SieveIrV2Sink::new(sink);
             Backend::new(sink)
         };
 
@@ -833,13 +840,31 @@ mod test {
 
         #[cfg(feature = "sieve_ir")]
         {
+            use zki_sieve::Source;
+            use zki_sieve::consumers::evaluator::{Evaluator, PlaintextBackend};
+            use zki_sieve::consumers::validator::Validator;
+            use zki_sieve::structs::message::Message;
+            let sink = sieve_ir_backend.finish().finish();
+            let source: Source = sink.into();
+            let mut validator = Validator::new_as_prover();
+            for msg in source.iter_messages() {
+                validator.ingest_message(&msg.unwrap());
+            }
+            assert_eq!(validator.get_violations(), Vec::<String>::new());
+            let mut backend = PlaintextBackend::default();
+            let evaluator = Evaluator::from_messages(source.iter_messages(), &mut backend);
+            assert_eq!(evaluator.get_violations(), Vec::<String>::new());
+        }
+
+        #[cfg(feature = "sieve_ir")]
+        {
             use zki_sieve_v3::Source;
             use zki_sieve_v3::consumers::evaluator::{Evaluator, PlaintextBackend};
             use zki_sieve_v3::consumers::validator::Validator;
             use zki_sieve_v3::structs::function::FunctionBody;
             use zki_sieve_v3::structs::directives::Directive;
             use zki_sieve_v3::structs::message::Message;
-            let sink = sieve_ir_backend.finish().finish();
+            let sink = sieve_ir_v2_backend.finish().finish();
             let source: Source = sink.into();
             let mut validator = Validator::new_as_prover();
             for msg in source.iter_messages() {

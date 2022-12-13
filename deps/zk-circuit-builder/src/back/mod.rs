@@ -262,11 +262,76 @@ pub fn new_sieve_ir_v2<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> 
 
 pub mod boolean;
 
+pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
+    #[cfg(feature = "sieve_ir")]
+    {
+        use self::boolean::Backend;
+        use self::boolean::sink_sieve_ir_function::SieveIrV1Sink;
+        use zki_sieve::{
+            cli::{cli, Options, StructOpt},
+            FilesSink,
+        };
+
+        struct BackendWrapper<'w> {
+            backend: Backend<'w, SieveIrV1Sink<FilesSink>>,
+            workspace: String,
+        }
+
+
+        let sink = FilesSink::new_clean(&workspace).unwrap();
+        sink.print_filenames();
+        let bool_sink = SieveIrV1Sink::new(sink);
+        let backend = Backend::new(bool_sink);
+        return Box::new(BackendWrapper {
+            backend,
+            workspace: workspace.to_owned(),
+        });
+
+
+        unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+                self.backend.post_erase(v);
+            }
+
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+                self.backend.post_migrate(v);
+            }
+
+            fn finish(
+                mut self: Box<Self>,
+                c: &CircuitBase<'w>,
+                accepted: Wire<'w>,
+                validate: bool,
+            ) {
+                let workspace = self.workspace.clone();
+
+                self.backend.enforce_true(c, accepted);
+                let bool_sink = self.backend.finish();
+                let sink = bool_sink.finish();
+
+                eprintln!();
+
+                // Validate the circuit and witness.
+                if validate {
+                    eprintln!("\nValidating SIEVE IR files...");
+                    cli(&Options::from_iter(&["zki_sieve", "validate", &workspace])).unwrap();
+                    cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
+                }
+                cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+        }
+    }
+    #[cfg(not(feature = "sieve_ir"))]
+    {
+        panic!("SIEVE IR output is not supported - build with `--features sieve_ir`");
+    }
+}
+
 pub fn new_boolean_sieve_ir_v2<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
         use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_v2::SieveIrV2Sink;
+        use self::boolean::sink_sieve_ir_function::SieveIrV2Sink;
         use zki_sieve_v3::{
             cli::{cli, Options, StructOpt},
             FilesSink,

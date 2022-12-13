@@ -3,30 +3,66 @@ use std::collections::{HashMap, BinaryHeap};
 use std::convert::TryFrom;
 use std::io;
 use std::iter;
+use std::marker::PhantomData;
 use std::mem;
+use zki_sieve;
+use zki_sieve_v3;
 use crate::ir::circuit::Bits;
-use zki_sieve_v3::{self, Gate};
-use zki_sieve_v3::structs::IR_VERSION;
-use zki_sieve_v3::structs::count::Count;
-use zki_sieve_v3::structs::directives::Directive;
-use zki_sieve_v3::structs::function::{Function, FunctionBody};
-use zki_sieve_v3::structs::private_inputs::PrivateInputs;
-use zki_sieve_v3::structs::public_inputs::PublicInputs;
-use zki_sieve_v3::structs::relation::Relation;
-use zki_sieve_v3::structs::types::Type;
-use zki_sieve_v3::structs::wirerange::WireRange;
 use super::{Sink, WireId, Time, TEMP, Source};
 use super::arith;
 use super::wire_alloc::WireAlloc;
 
 
-pub struct SieveIrV2Sink<S> {
+mod v1;
+pub use self::v1::SieveIrV1;
+
+mod v2;
+pub use self::v2::SieveIrV2;
+
+pub trait SieveIrFormat {
+    type Gate;
+    type Function;
+    type Relation;
+    type PublicInputs;
+    type PrivateInputs;
+
+    fn gate_constant(out: WireId, val: Vec<u8>) -> Self::Gate;
+    fn gate_private(out: WireId) -> Self::Gate;
+    fn gate_copy(out: WireId, a: WireId) -> Self::Gate;
+    fn gate_and(out: WireId, a: WireId, b: WireId) -> Self::Gate;
+    fn gate_xor(out: WireId, a: WireId, b: WireId) -> Self::Gate;
+    fn gate_not(out: WireId, a: WireId) -> Self::Gate;
+    fn gate_new(start: WireId, end: WireId) -> Self::Gate;
+    fn gate_delete(start: WireId, end: WireId) -> Self::Gate;
+    fn gate_call(
+        name: String,
+        outs: impl IntoIterator<Item = (WireId, WireId)>,
+        ins: impl IntoIterator<Item = (WireId, WireId)>,
+    ) -> Self::Gate;
+    fn gate_assert_zero(w: WireId) -> Self::Gate;
+
+    fn new_function(
+        name: String,
+        outs: impl IntoIterator<Item = u64>,
+        ins: impl IntoIterator<Item = u64>,
+        gates: Vec<Self::Gate>,
+    ) -> Self::Function;
+
+    fn relation_gate_count_approx(r: &Self::Relation) -> usize;
+    fn visit_relation(
+        r: Self::Relation,
+        visit_gate: impl FnMut(Self::Gate),
+        visit_function: impl FnMut(Self::Function),
+    );
+}
+
+pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     sink: S,
     alloc: WireAlloc,
-    gates: Vec<Gate>,
+    gates: Vec<IR::Gate>,
     private_bits: Vec<bool>,
     /// Functions in `zki_sieve_v3` representation.  This vector is drained on `flush()`.
-    functions: Vec<Function>,
+    functions: Vec<IR::Function>,
     /// Info about function names and signatures.  This vector persists across `flush()`; it always
     /// contains all functions that have been declared so far.
     func_info: Vec<FunctionInfo>,
@@ -34,7 +70,11 @@ pub struct SieveIrV2Sink<S> {
     /// Whether we've emitted a relation message yet.  The first relation message must contain some
     /// additional data.
     emitted_relation: bool,
+    _marker: PhantomData<IR>,
 }
+
+pub type SieveIrV1Sink<S> = SieveIrFunctionSink<S, v1::SieveIrV1>;
+pub type SieveIrV2Sink<S> = SieveIrFunctionSink<S, SieveIrV2>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum FunctionDesc {
@@ -72,9 +112,14 @@ impl FunctionInfo {
 
 const GATE_PAGE_SIZE: usize = 64 * 1024;
 
-impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
-    pub fn new(sink: S) -> SieveIrV2Sink<S> {
-        SieveIrV2Sink {
+pub trait Dispatch {
+    fn flush(&mut self, free_all_pages: bool);
+}
+
+impl<S, IR: SieveIrFormat> SieveIrFunctionSink<S, IR>
+where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
+    pub fn new(sink: S) -> SieveIrFunctionSink<S, IR> {
+        SieveIrFunctionSink {
             sink,
             alloc: WireAlloc::new(vec![
                 0,          // 0 (temporaries)
@@ -91,6 +136,7 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
             func_info: Vec::new(),
             func_map: HashMap::new(),
             emitted_relation: false,
+            _marker: PhantomData,
         }
     }
 
@@ -103,94 +149,39 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
         self.alloc.alloc(expire, n, self.gates.len())
     }
 
-    fn flush(&mut self, free_all_pages: bool) {
-        use zki_sieve_v3::Sink;
-
-        let allocs = self.alloc.flush();
-
-        if free_all_pages {
-            for free in self.alloc.take_frees() {
-                if free.start != free.end {
-                    self.gates.push(Gate::Delete(0, free.start, free.end - 1));
-                }
-            }
-        }
-
-        let mut directives = Vec::with_capacity(
-            self.functions.len() + self.gates.len() + allocs.len());
-        directives.extend(mem::take(&mut self.functions).into_iter().map(Directive::Function));
-        let mut iter = mem::take(&mut self.gates).into_iter();
-        let mut prev = 0;
-        for alloc in allocs {
-            let n = alloc.pos - prev;
-            directives.extend(iter.by_ref().take(n).map(|g| Directive::Gate(g)));
-            prev = alloc.pos;
-
-            if alloc.start != alloc.end {
-                directives.push(Directive::Gate(Gate::New(0, alloc.start, alloc.end - 1)));
-            }
-        }
-        directives.extend(iter.map(|g| Directive::Gate(g)));
-
-        // Build and emit the messages
-        let mut r = Relation {
-            version: IR_VERSION.to_string(),
-            plugins: Vec::new(),
-            types: Vec::new(),
-            conversions: Vec::new(),
-            directives,
-        };
-        if !self.emitted_relation {
-            r.types = vec![Type::Field(vec![2])];
-        }
-        self.sink.push_relation_message(&r).unwrap();
-        self.emitted_relation = true;
-
-        if self.private_bits.len() > 0 {
-            let inputs = mem::take(&mut self.private_bits).into_iter()
-                .map(|b| vec![b as u8]).collect();
-            let mut p = PrivateInputs {
-                version: IR_VERSION.to_string(),
-                type_value: Type::Field(vec![2]),
-                inputs,
-            };
-            self.sink.push_private_inputs_message(&p).unwrap();
-        }
-    }
-
     fn lit_zero_into(&mut self, out: WireId, n: u64) {
         for i in 0 .. n {
-            self.gates.push(Gate::Constant(0, out + i, vec![0]));
+            self.gates.push(IR::gate_constant(out + i, vec![0]));
         }
     }
 
     fn lit_one_into(&mut self, out: WireId, n: u64) {
         for i in 0 .. n {
-            self.gates.push(Gate::Constant(0, out + i, vec![1]));
+            self.gates.push(IR::gate_constant(out + i, vec![1]));
         }
     }
 
     fn copy_into(&mut self, out: WireId, n: u64, a: WireId) {
         for i in 0 .. n {
-            self.gates.push(Gate::Copy(0, out + i, a + i));
+            self.gates.push(IR::gate_copy(out + i, a + i));
         }
     }
 
     fn and_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
         for i in 0 .. n {
-            self.gates.push(Gate::Mul(0, out + i, a + i, b + i));
+            self.gates.push(IR::gate_and(out + i, a + i, b + i));
         }
     }
 
     fn xor_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
         for i in 0 .. n {
-            self.gates.push(Gate::Add(0, out + i, a + i, b + i));
+            self.gates.push(IR::gate_xor(out + i, a + i, b + i));
         }
     }
 
     fn not_into(&mut self, out: WireId, n: u64, a: WireId) {
         for i in 0 .. n {
-            self.gates.push(Gate::AddConstant(0, out + i, a + i, vec![1]));
+            self.gates.push(IR::gate_not(out + i, a + i));
         }
     }
 
@@ -202,7 +193,7 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
             return s.to_owned();
         }
 
-        let mut sub_sink = SieveIrV2Sink {
+        let mut sub_sink = SieveIrFunctionSink::<_, IR> {
             sink: VecSink::default(),
             alloc: WireAlloc::new(vec![]),
             gates: Vec::new(),
@@ -213,6 +204,7 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
             func_info: mem::take(&mut self.func_info),
             func_map: mem::take(&mut self.func_map),
             emitted_relation: false,
+            _marker: PhantomData,
         };
 
         let (output_count, input_count) = match desc {
@@ -301,24 +293,22 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
         assert_eq!(zki_sink.private_inputs.len(), 0);
         assert_eq!(zki_sink.public_inputs.len(), 0);
         let mut gates = Vec::with_capacity(
-            zki_sink.relations.iter().map(|r| r.directives.len()).sum());
+            zki_sink.relations.iter().map(IR::relation_gate_count_approx).sum());
+        let functions = &mut self.functions;
         for r in zki_sink.relations {
-            debug_assert_eq!(r.plugins, Vec::<String>::new());
-            debug_assert_eq!(r.types, vec![Type::Field(vec![2])]);
-            for d in r.directives {
-                match d {
-                    Directive::Gate(g) => gates.push(g),
-                    Directive::Function(f) => self.functions.push(f),
-                }
-            }
+            IR::visit_relation(
+                r,
+                |g| gates.push(g),
+                |f| functions.push(f),
+            );
         }
-        let mut f = Function {
-            name: name.clone(),
-            output_count: output_count.into_iter().map(|n| Count::new(0, n)).collect(),
-            input_count: input_count.into_iter().map(|n| Count::new(0, n)).collect(),
-            body: FunctionBody::Gates(gates),
-        };
-        self.functions.push(f);
+
+        self.functions.push(IR::new_function(
+            name.clone(),
+            output_count,
+            input_count,
+            gates,
+        ));
 
         idx
     }
@@ -340,37 +330,37 @@ impl<S: zki_sieve_v3::Sink> SieveIrV2Sink<S> {
         let info = &self.func_info[idx];
 
         debug_assert_eq!(args.len(), info.inputs().len());
-        let mut inputs = Vec::with_capacity(info.inputs().len());
-        for (&n, &w) in info.inputs().iter().zip(args.iter()) {
-            inputs.push(WireRange::new(w, w + n - 1));
-        }
-
-        let mut outputs = Vec::with_capacity(info.outputs().len());
         let mut next_out = out;
-        for &n in info.outputs() {
-            outputs.push(WireRange::new(next_out, next_out + n - 1));
-            next_out += n;
-        }
-
-        self.gates.push(Gate::Call(info.name.clone(), outputs, inputs));
+        self.gates.push(IR::gate_call(
+            info.name.clone(),
+            info.outputs().iter().map(|&n| {
+                let w = next_out;
+                next_out += n;
+                (w, w + n - 1)
+            }),
+            info.inputs().iter().zip(args.iter()).map(|(&n, &w)| {
+                (w, w + n - 1)
+            }),
+        ));
 
         out
     }
 }
 
-impl<S: zki_sieve_v3::Sink> Sink for SieveIrV2Sink<S> {
+impl<S, IR: SieveIrFormat> Sink for SieveIrFunctionSink<S, IR>
+where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
         let w = self.alloc_wires(expire, n);
         for i in 0 .. n {
             let bit = bits.get(i as usize);
-            self.gates.push(Gate::Constant(0, w + i, vec![bit as u8]));
+            self.gates.push(IR::gate_constant(w + i, vec![bit as u8]));
         }
         w
     }
     fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
         let w = self.alloc_wires(expire, n);
         for i in 0 .. n {
-            self.gates.push(Gate::Private(0, w + i));
+            self.gates.push(IR::gate_private(w + i));
             if let Some(v) = value.as_ref() {
                 self.private_bits.push(v.get(i as usize));
             }
@@ -399,7 +389,7 @@ impl<S: zki_sieve_v3::Sink> Sink for SieveIrV2Sink<S> {
                 },
                 Source::RepWire(a) => {
                     for i in 0 .. n {
-                        self.gates.push(Gate::Copy(0, w + pos + i, a));
+                        self.gates.push(IR::gate_copy(w + pos + i, a));
                     }
                 },
             }
@@ -439,14 +429,14 @@ impl<S: zki_sieve_v3::Sink> Sink for SieveIrV2Sink<S> {
 
     fn assert_zero(&mut self, n: u64, a: WireId) {
         for i in 0 .. n {
-            self.gates.push(Gate::AssertZero(0, a + i));
+            self.gates.push(IR::gate_assert_zero(a + i));
         }
     }
 
     fn free_expired(&mut self, now: Time) {
         for free in self.alloc.advance(now) {
             if free.start != free.end {
-                self.gates.push(Gate::Delete(0, free.start, free.end - 1));
+                self.gates.push(IR::gate_delete(free.start, free.end - 1));
             }
         }
 
@@ -457,53 +447,134 @@ impl<S: zki_sieve_v3::Sink> Sink for SieveIrV2Sink<S> {
 }
 
 
-#[derive(Clone, Debug, Default)]
-struct VecSink {
-    public_inputs: Vec<zki_sieve_v3::PublicInputs>,
-    private_inputs: Vec<zki_sieve_v3::PrivateInputs>,
-    relations: Vec<zki_sieve_v3::Relation>,
+#[derive(Clone, Debug)]
+pub struct VecSink<IR: SieveIrFormat> {
+    public_inputs: Vec<IR::PublicInputs>,
+    private_inputs: Vec<IR::PrivateInputs>,
+    relations: Vec<IR::Relation>,
 }
 
-impl zki_sieve_v3::Sink for VecSink {
-    type Write = Vec<u8>;
+impl<IR: SieveIrFormat> Default for VecSink<IR> {
+    fn default() -> VecSink<IR> {
+        VecSink {
+            public_inputs: Vec::new(),
+            private_inputs: Vec::new(),
+            relations: Vec::new(),
+        }
+    }
+}
 
-    fn get_public_inputs_writer(
-        &mut self,
-        type_value: Type,
-    ) -> zki_sieve_v3::Result<&mut Self::Write> {
-        unimplemented!()
-    }
-    fn get_private_inputs_writer(
-        &mut self,
-        type_value: Type,
-    ) -> zki_sieve_v3::Result<&mut Self::Write> {
-        unimplemented!()
-    }
-    fn get_relation_writer(&mut self) -> &mut Self::Write {
-        unimplemented!()
-    }
 
-    fn push_public_inputs_message(
-        &mut self,
-        public_inputs: &PublicInputs,
-    ) -> zki_sieve_v3::Result<()> {
-        self.public_inputs.push(public_inputs.clone());
-        Ok(())
-    }
+impl<S: zki_sieve::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV1> {
+    fn flush(&mut self, free_all_pages: bool) {
+        use zki_sieve::Sink;
+        use zki_sieve_v3::structs::IR_VERSION;
+        use zki_sieve::structs::gates::Gate;
+        use zki_sieve::structs::header::Header;
+        use zki_sieve::structs::relation::{Relation, BOOL, FUNCTION};
+        use zki_sieve::structs::witness::Witness;
 
-    fn push_private_inputs_message(
-        &mut self,
-        private_inputs: &PrivateInputs,
-    ) -> zki_sieve_v3::Result<()> {
-        self.private_inputs.push(private_inputs.clone());
-        Ok(())
-    }
+        // There are no `@new` gates in IR0/IR1, so we don't need to process `AllocPage`s.
+        let _ = self.alloc.flush();
 
-    fn push_relation_message(
-        &mut self,
-        relation: &Relation,
-    ) -> zki_sieve_v3::Result<()> {
-        self.relations.push(relation.clone());
-        Ok(())
+        if free_all_pages {
+            for free in self.alloc.take_frees() {
+                if free.start != free.end {
+                    self.gates.push(Gate::Free(free.start, Some(free.end - 1)));
+                }
+            }
+        }
+
+        let functions = mem::take(&mut self.functions);
+        let gates = mem::take(&mut self.gates);
+
+        // Build and emit the messages
+        let header = Header {
+            version: IR_VERSION.to_string(),
+            field_characteristic: vec![2],
+            field_degree: 1,
+        };
+        let r = Relation {
+            header: header.clone(),
+            gate_mask: BOOL,
+            feat_mask: FUNCTION,
+            functions,
+            gates,
+        };
+        self.sink.push_relation_message(&r).unwrap();
+        self.emitted_relation = true;
+
+        if self.private_bits.len() > 0 {
+            let short_witness = mem::take(&mut self.private_bits).into_iter()
+                .map(|b| vec![b as u8]).collect();
+            let w = Witness {
+                header,
+                short_witness,
+            };
+            self.sink.push_witness_message(&w).unwrap();
+        }
+    }
+}
+
+impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
+    fn flush(&mut self, free_all_pages: bool) {
+        use zki_sieve_v3::Sink;
+        use zki_sieve_v3::structs::IR_VERSION;
+        use zki_sieve_v3::structs::directives::Directive;
+        use zki_sieve_v3::structs::gates::Gate;
+        use zki_sieve_v3::structs::private_inputs::PrivateInputs;
+        use zki_sieve_v3::structs::relation::Relation;
+        use zki_sieve_v3::structs::types::Type;
+
+        let allocs = self.alloc.flush();
+
+        if free_all_pages {
+            for free in self.alloc.take_frees() {
+                if free.start != free.end {
+                    self.gates.push(Gate::Delete(0, free.start, free.end - 1));
+                }
+            }
+        }
+
+        let mut directives = Vec::with_capacity(
+            self.functions.len() + self.gates.len() + allocs.len());
+        directives.extend(mem::take(&mut self.functions).into_iter().map(Directive::Function));
+        let mut iter = mem::take(&mut self.gates).into_iter();
+        let mut prev = 0;
+        for alloc in allocs {
+            let n = alloc.pos - prev;
+            directives.extend(iter.by_ref().take(n).map(|g| Directive::Gate(g)));
+            prev = alloc.pos;
+
+            if alloc.start != alloc.end {
+                directives.push(Directive::Gate(Gate::New(0, alloc.start, alloc.end - 1)));
+            }
+        }
+        directives.extend(iter.map(|g| Directive::Gate(g)));
+
+        // Build and emit the messages
+        let mut r = Relation {
+            version: IR_VERSION.to_string(),
+            plugins: Vec::new(),
+            types: Vec::new(),
+            conversions: Vec::new(),
+            directives,
+        };
+        if !self.emitted_relation {
+            r.types = vec![Type::Field(vec![2])];
+        }
+        self.sink.push_relation_message(&r).unwrap();
+        self.emitted_relation = true;
+
+        if self.private_bits.len() > 0 {
+            let inputs = mem::take(&mut self.private_bits).into_iter()
+                .map(|b| vec![b as u8]).collect();
+            let mut p = PrivateInputs {
+                version: IR_VERSION.to_string(),
+                type_value: Type::Field(vec![2]),
+                inputs,
+            };
+            self.sink.push_private_inputs_message(&p).unwrap();
+        }
     }
 }
