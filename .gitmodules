@@ -3,4 +3,4 @@
 	url = ../zkinterface-sieve.git
 [submodule "deps/zkinterface-sieve-v3"]
 	path = deps/zkinterface-sieve-v3
-	url = https://gitlab-ext.galois.com/fromager/cheesecloth/zkinterface-sieve.git
+	url = ../zkinterface-sieve.git
