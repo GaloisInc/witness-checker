@@ -291,8 +291,9 @@ impl<'w, S: Sink> Backend<'w, S> {
 
                         // Assert: a == quot * b + rem
                         {
-                            let quot_times_b = self.sink.mul(TEMP, n, quot, b);
-                            let quot_times_b_plus_rem = self.sink.add(TEMP, n, quot_times_b, rem);
+                            let quot_times_b = self.sink.mul_no_wrap(TEMP, n, quot, b);
+                            let quot_times_b_plus_rem =
+                                self.sink.add_no_wrap(TEMP, n, quot_times_b, rem);
                             let eq_bits_inv = self.sink.xor(TEMP, n, a, quot_times_b_plus_rem);
                             dbg!(eq_bits_inv);
                             self.sink.assert_zero(n, eq_bits_inv);
