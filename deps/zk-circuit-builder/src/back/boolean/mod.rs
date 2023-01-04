@@ -50,6 +50,18 @@ pub enum Source {
     RepWire(WireId),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum AssertNoWrap {
+    No,
+    Yes,
+}
+
+impl AssertNoWrap {
+    fn as_bool(self) -> bool {
+        self == Self::Yes
+    }
+}
+
 pub trait Sink {
     fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId;
     /// Obtain `n` private/witness inputs, storing them in the `n` wires starting at `out`.  In
@@ -66,8 +78,12 @@ pub trait Sink {
     fn not(&mut self, expire: Time, n: u64, a: WireId) -> WireId;
 
     fn add(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
+    /// Add two `n`-bit inputs to produce an `n`-bit output, and assert that the addition does not
+    /// wrap around (when inputs are interpreted as unsigned).
+    fn add_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     fn sub(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     fn mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
+    fn mul_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     /// Multiply two `n`-bit inputs to produce a `2n`-bit product.
     fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId;
@@ -90,6 +106,36 @@ pub trait Sink {
             acc = self.and(TEMP, 1, acc, a + i);
         }
         self.and(expire, 1, acc, a + n - 1)
+    }
+
+    fn add_maybe_no_wrap(
+        &mut self,
+        expire: Time,
+        n: u64,
+        a: WireId,
+        b: WireId,
+        assert_no_wrap: AssertNoWrap,
+    ) -> WireId {
+        if assert_no_wrap.as_bool() {
+            self.add_no_wrap(expire, n, a, b)
+        } else {
+            self.add(expire, n, a, b)
+        }
+    }
+
+    fn mul_maybe_no_wrap(
+        &mut self,
+        expire: Time,
+        n: u64,
+        a: WireId,
+        b: WireId,
+        assert_no_wrap: AssertNoWrap,
+    ) -> WireId {
+        if assert_no_wrap.as_bool() {
+            self.mul_no_wrap(expire, n, a, b)
+        } else {
+            self.mul(expire, n, a, b)
+        }
     }
 }
 
@@ -575,7 +621,7 @@ mod test {
             assert!(old.is_none());
         }
 
-        fn init(
+        pub fn init(
             &mut self,
             expire: Time,
             n: u64,
@@ -654,6 +700,16 @@ mod test {
             self.init(expire, n, |_, i| out_uint.bit(i),
                 format_args!("add({}, {})", a, b))
         }
+        fn add_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            let a_uint = self.get_uint(n, a);
+            let b_uint = self.get_uint(n, b);
+            let out_uint = a_uint + b_uint;
+            let out = self.init(expire, n + 1, |_, i| out_uint.bit(i),
+                format_args!("add_no_wrap({}, {})", a, b));
+            // The highest (carry out) bit must be zero.
+            self.assert_zero(1, out + n);
+            out
+        }
         fn sub(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
             let a_uint = self.get_uint(n, a);
             let b_uint = self.get_uint(n, b);
@@ -667,6 +723,16 @@ mod test {
             let out_uint = a_uint * b_uint;
             self.init(expire, n, |_, i| out_uint.bit(i),
                 format_args!("mul({}, {})", a, b))
+        }
+        fn mul_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            let a_uint = self.get_uint(n, a);
+            let b_uint = self.get_uint(n, b);
+            let out_uint = a_uint * b_uint;
+            let out = self.init(expire, 2 * n, |_, i| out_uint.bit(i),
+                format_args!("mul_no_wrap({}, {})", a, b));
+            // The high bits must all be zero.
+            self.assert_zero(n, out + n);
+            out
         }
         fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
             let a_uint = self.get_uint(n, a);
@@ -739,16 +805,26 @@ mod test {
         }
 
         fn add(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
-            arith::add(self, expire, n, a, b)
+            arith::add(self, expire, n, a, b, AssertNoWrap::No)
+        }
+        fn add_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            arith::add(self, expire, n, a, b, AssertNoWrap::Yes)
         }
         fn sub(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
             arith::sub(self, expire, n, a, b)
         }
         fn mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
             if self.use_karatsuba_sizes.contains(&n) {
-                arith::mul_karatsuba(self, expire, n, a, b)
+                arith::mul_karatsuba(self, expire, n, a, b, AssertNoWrap::No)
             } else {
-                arith::mul_simple(self, expire, n, a, b)
+                arith::mul_simple(self, expire, n, a, b, AssertNoWrap::No)
+            }
+        }
+        fn mul_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+            if self.use_karatsuba_sizes.contains(&n) {
+                arith::mul_karatsuba(self, expire, n, a, b, AssertNoWrap::Yes)
+            } else {
+                arith::mul_simple(self, expire, n, a, b, AssertNoWrap::Yes)
             }
         }
         fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {

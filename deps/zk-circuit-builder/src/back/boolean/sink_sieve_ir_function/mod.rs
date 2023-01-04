@@ -8,7 +8,7 @@ use std::mem;
 use zki_sieve;
 use zki_sieve_v3;
 use crate::ir::circuit::Bits;
-use super::{Sink, WireId, Time, TEMP, Source};
+use super::{Sink, WireId, Time, TEMP, Source, AssertNoWrap};
 use super::arith;
 use super::wire_alloc::WireAlloc;
 
@@ -84,8 +84,10 @@ enum FunctionDesc {
     Xor(u64),
     Not(u64),
     Add(u64),
+    AddNoWrap(u64),
     Sub(u64),
     Mul(u64),
+    MulNoWrap(u64),
     WideMul(u64),
     Neg(u64),
 }
@@ -240,7 +242,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
             FunctionDesc::Add(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
-                let ab = arith::add(&mut sub_sink, TEMP, n, a, b);
+                let ab = arith::add(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::No);
+                sub_sink.copy_into(out, n, ab);
+                (vec![n], vec![n, n])
+            },
+            FunctionDesc::AddNoWrap(n) => {
+                let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
+                let ab = arith::add(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::Yes);
                 sub_sink.copy_into(out, n, ab);
                 (vec![n], vec![n, n])
             },
@@ -252,7 +260,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             },
             FunctionDesc::Mul(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
-                let ab = arith::mul(&mut sub_sink, TEMP, n, a, b);
+                let ab = arith::mul(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::No);
+                sub_sink.copy_into(out, n, ab);
+                (vec![n], vec![n, n])
+            },
+            FunctionDesc::MulNoWrap(n) => {
+                let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
+                let ab = arith::mul(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::Yes);
                 sub_sink.copy_into(out, n, ab);
                 (vec![n], vec![n, n])
             },
@@ -414,11 +428,17 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn add(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
         self.emit_call(expire, FunctionDesc::Add(n), &[a, b])
     }
+    fn add_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+        self.emit_call(expire, FunctionDesc::AddNoWrap(n), &[a, b])
+    }
     fn sub(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
         self.emit_call(expire, FunctionDesc::Sub(n), &[a, b])
     }
     fn mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
         self.emit_call(expire, FunctionDesc::Mul(n), &[a, b])
+    }
+    fn mul_no_wrap(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
+        self.emit_call(expire, FunctionDesc::MulNoWrap(n), &[a, b])
     }
     fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId {
         self.emit_call(expire, FunctionDesc::WideMul(n), &[a, b])
