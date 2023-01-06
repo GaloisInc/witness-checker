@@ -48,6 +48,16 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output SIEVE IR v2 (IR0+) circuit representation in this directory"))
+        .arg(Arg::with_name("boolean-sieve-ir-out")
+             .long("boolean-sieve-ir-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output boolean SIEVE IR v1 (IR1) circuit representation in this directory"))
+        .arg(Arg::with_name("boolean-sieve-ir-v2-out")
+             .long("boolean-sieve-ir-v2-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output boolean SIEVE IR v2 (IR0+) circuit representation in this directory"))
         .arg(Arg::with_name("validate-only")
              .long("validate-only")
              .help("check only that the trace is valid; don't require it to demonstrate a bug"))
@@ -145,7 +155,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = cf.add_opt_pass(
         args.is_present("zkif-out") ||
             args.is_present("sieve-ir-out") ||
-            args.is_present("sieve-ir-v2-out"),
+            args.is_present("sieve-ir-v2-out") ||
+            args.is_present("boolean-sieve-ir-out") ||
+            args.is_present("boolean-sieve-ir-v2-out"),
         lower::int::compare_to_greater_or_equal_to_zero);
     let cf = cf.add_pass(lower::int::non_constant_shift);
     let cf = lower::const_fold::ConstFold(cf);
@@ -213,6 +225,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         } else if let Some(workspace) = args.value_of("sieve-ir-v2-out") {
             let dedup = args.is_present("sieve-ir-dedup");
             back::new_sieve_ir_v2(workspace, dedup)
+        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-out") {
+            back::new_boolean_sieve_ir(workspace)
+        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-v2-out") {
+            back::new_boolean_sieve_ir_v2(workspace)
         } else if let Some(dest) = args.value_of_os("zkif-out") {
             back::new_zkif(dest)
         } else if args.is_present("stats") {
@@ -305,7 +321,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     drop(mcx_backend_guard);
     let accepted = flags[0];
     let validate = !args.is_present("skip-backend-validation");
-    backend.finish(accepted, validate);
+    backend.finish(c.as_base(), accepted, validate);
 
     // Unused in some configurations.
     let _ = num_asserts;

@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
@@ -38,6 +39,7 @@ impl Value {
                 let mut pos = 0;
                 for &ty in tys {
                     let end = pos + ty.digits();
+                    let end = cmp::min(end, bits.0.len());
                     let field_bits = Bits(&bits.0[pos .. end]);
                     vals.push(Value::from_bits(ty, field_bits));
                     pos = end;
@@ -63,6 +65,10 @@ impl Value {
                 for (v, &ty) in vs.iter().zip(tys.iter()) {
                     let bits = v.to_bits(c, ty);
                     digits.extend_from_slice(&bits.0);
+                    // Pad with zeros if `bits` is short.
+                    for _ in bits.0.len() .. ty.digits() {
+                        digits.push(0);
+                    }
                 }
                 c.intern_bits(&digits)
             },
@@ -584,6 +590,10 @@ fn eval_gate_inner<'a>(
             for &w in ws {
                 let (w_bits, w_sec) = ecx.get_value(w)?;
                 digits.extend_from_slice(w_bits.0);
+                // Pad with zeros if `bits` is short.
+                for _ in w_bits.0.len() .. w.ty.digits() {
+                    digits.push(0);
+                }
                 sec |= w_sec;
             }
             let bits = c.intern_bits(&digits);
@@ -597,8 +607,9 @@ fn eval_gate_inner<'a>(
                 _ => panic!("expected Extract input to have Bundle type"),
             };
             let pos = tys[..i].iter().map(|ty| ty.digits()).sum();
-            let len = tys[i].digits();
-            let bits = c.intern_bits(&w_bits.0[pos .. pos + len]);
+            let end = pos + tys[i].digits();
+            let end = cmp::min(end, w_bits.0.len());
+            let bits = c.intern_bits(&w_bits.0[pos .. end]);
             (bits, w_sec)
         },
 
