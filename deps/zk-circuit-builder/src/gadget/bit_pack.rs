@@ -23,6 +23,7 @@ impl<'a> Iterator for BundleTys<'a> {
                     self.stk.extend(tys.iter().rev().cloned());
                 },
                 TyKind::Uint(_) | TyKind::Int(_) => return Some(ty),
+                TyKind::GF(f)  => panic!("Bitvector operations are not currently supported for field {:?}", f),
             }
         }
         None
@@ -47,7 +48,7 @@ impl<'a> Iterator for BundleWires<'_, 'a> {
                     let c = self.c;
                     self.stk.extend((0 .. tys.len()).rev().map(|i| c.extract(w, i)));
                 },
-                TyKind::Uint(_) | TyKind::Int(_) => return Some(w),
+                TyKind::Uint(_) | TyKind::Int(_) | TyKind::GF(_) => return Some(w),
             }
         }
         None
@@ -99,7 +100,7 @@ impl<'a> GadgetKind<'a> for ConcatBits {
         }
         assert!(acc.sign() != Sign::Minus);
         assert!(acc.bits() <= acc_width as u64);
-        Ok(Value::Single(acc))
+        Ok(Value::SingleInteger(acc))
     }
 }
 
@@ -154,6 +155,9 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
                     *pos = end;
                     c.cast(extract_bits(&c, inp, start, end), ty)
                 },
+                TyKind::GF(f) => {
+                    panic!("Decompose is not currently supported for field {:?}", f);
+                }
                 TyKind::Bundle(tys) => {
                     c.pack_iter(tys.iter().map(|&ty| walk(c, inp, ty, pos)))
                 },
@@ -223,7 +227,7 @@ impl<'a> GadgetKind<'a> for ExtractBits {
     fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let val = args[0].as_ref()?.as_single().unwrap();
         let mask = (BigInt::from(1) << (self.end - self.start)) - 1;
-        Ok(Value::Single((val >> self.start) & mask))
+        Ok(Value::SingleInteger((val >> self.start) & mask))
     }
 }
 

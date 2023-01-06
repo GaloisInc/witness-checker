@@ -1,15 +1,17 @@
 use std::cmp;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use std::ptr;
+use generic_array::{ArrayLength, GenericArray};
+use generic_array::typenum::{Sum, Quot, U3, U4};
 use num_traits::Zero;
+use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::eval::Evaluator;
-use crate::ir::circuit::{CircuitTrait, CircuitExt, DynCircuit, Wire, Ty, TyKind, CellResetGuard};
+use crate::ir::circuit::{AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize, Wire, Ty, TyKind, CellResetGuard};
 use crate::ir::migrate::{self, Migrate};
-
 
 pub struct Builder<'a> {
     c: &'a DynCircuit<'a>,
@@ -435,7 +437,7 @@ impl<'a> Secret<'a> for bool {
 
 impl<'a> FromEval<'a> for bool {
     fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = ev.eval_single_wire(a).ok()?;
+        let val = ev.eval_single_integer_wire(a).ok()?;
         Some(!val.is_zero())
     }
 }
@@ -501,7 +503,7 @@ macro_rules! integer_impls {
 
         impl<'a> FromEval<'a> for $T {
             fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-                let val = ev.eval_single_wire(a).ok()?;
+                let val = ev.eval_single_integer_wire(a).ok()?;
                 // Conversion should succeed, assuming `a` really carries a value of type `$T`.
                 Some(<$T as TryFrom<_>>::try_from(val).unwrap())
             }
@@ -558,6 +560,130 @@ integer_impls!(u8, U8);
 integer_impls!(u16, U16);
 integer_impls!(u32, U32);
 integer_impls!(u64, U64);
+
+/// Convert `N` bytes to `ceil(N/4)` u32s.
+/// ceil(N/4) = (N+3)/4
+fn u8_to_u32<N>(a: GenericArray<u8,N>) -> GenericArray<u32,Quot<Sum<N,U3>,U4>>
+where
+    N: ArrayLength<u8>,
+    N: std::ops::Add<U3>,
+    Sum<N,U3>: std::ops::Div<U4>,
+    Quot<Sum<N,U3>,U4>: ArrayLength<u32>,
+{
+    let mut res = GenericArray::default();
+
+    for (i, chunk) in a.chunks(4).enumerate() {
+        let bytes = chunk.try_into().unwrap_or({
+            let mut s: [u8;4] = [0;4];
+            s[..chunk.len()].copy_from_slice(chunk);
+
+            s
+        });
+        res[i] = u32::from_le_bytes(bytes);
+    }
+    res
+}
+
+/// Convert `ceil(N/4)` u32s to `N` bytes.
+/// Assumes that any remaining bytes in the last chunk of `a` are zero and are ignored.
+fn u32_to_u8<N>(a: &GenericArray<u32,Quot<Sum<N,U3>,U4>>) -> GenericArray<u8,N>
+where
+    N: ArrayLength<u8>,
+    N: std::ops::Add<U3>,
+    Sum<N,U3>: std::ops::Div<U4>,
+    Quot<Sum<N,U3>,U4>: ArrayLength<u32>,
+{
+    let mut res = GenericArray::default();
+    let mut pos = 0;
+
+    for x32 in a {
+        let bs = x32.to_le_bytes();
+
+        let remaining = res.len() - pos;
+        let n = cmp::min(remaining, bs.len());
+        res[pos .. pos + n].copy_from_slice(&bs[..n]);
+        pos += n;
+    }
+
+    res
+}
+
+macro_rules! field_impls {
+    ($T:ty, $K:ident) => {
+        impl<'a> Repr<'a> for $T {
+            type Repr = Wire<'a>;
+        }
+
+        impl<'a> Flatten<'a> for $T {
+            fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::GF(Field::$K)) }
+            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
+            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                assert!(*w.ty == TyKind::GF(Field::$K));
+                TWire::new(w)
+            }
+        }
+
+        impl<'a> Lit<'a> for $T {
+            fn lit(bld: &Builder<'a>, x: $T) -> Wire<'a> {
+                bld.c.lit(bld.c.ty(TyKind::GF(Field::$K)), x)
+            }
+        }
+
+        impl<'a> Secret<'a> for $T {
+            fn secret(bld: &Builder<'a>) -> Wire<'a> {
+                bld.c.new_secret_wire_uninit(bld.c.ty(TyKind::GF(Field::$K)))
+            }
+
+            fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
+                s.kind.as_secret().set_from_lit(*val, force);
+            }
+        }
+
+        impl<'a> FromEval<'a> for $T {
+            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+                let val = ev.eval_single_field_wire(a).ok()?;
+                // Conversion should succeed, assuming `a` really carries a value of type `$T`.
+                Some(<$T>::from_bits(Bits(&val)))
+            }
+        }
+
+        primitive_unary_impl!(Neg::neg($T));
+        primitive_binary_impl!(Add::add($T, $T) -> $T);
+        primitive_binary_impl!(Sub::sub($T, $T) -> $T);
+        primitive_binary_impl!(Mul::mul($T, $T) -> $T);
+        primitive_binary_impl!(Eq::eq($T, $T) -> bool);
+        primitive_binary_impl!(Ne::ne($T, $T) -> bool);
+
+        impl<'a> Mux<'a, bool> for $T {
+            type Output = $T;
+            fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+                bld.c.mux(c, t, e)
+            }
+        }
+
+        impl AsBits for $T {
+            fn as_bits<'a>(&self, c: &CircuitBase<'a>, _width: IntSize) -> Bits<'a> {
+                let bytes = self.to_bytes();
+                c.intern_bits(&u8_to_u32(bytes))
+            }
+        }
+
+        impl FromBits for $T {
+            fn from_bits<'a>(b:Bits<'a>) -> Self {
+                let b = b.0.try_into().expect("Error deserializing field from bits. Invalid length.");
+                let arr = u32_to_u8::<<$T as FiniteField>::ByteReprLen>(b);
+                Self::from_bytes(&arr)
+                    .expect("Error deserializing field from bits")
+            }
+        }
+    };
+}
+
+field_impls!(Gf40, F40b);
+field_impls!(Gf45, F45b);
+field_impls!(F56b, F56b);
+field_impls!(F63b, F63b);
+field_impls!(F64b, F64b);
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {
@@ -990,3 +1116,4 @@ impl<'a, E: Evaluator<'a>> EvaluatorExt<'a> for E {
         T::from_eval(self, w.repr)
     }
 }
+

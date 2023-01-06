@@ -1,10 +1,11 @@
-image: rust:1.50
+image: rust:1.63
 
 default:
   tags: [docker]
 
 variables:
   GIT_SUBMODULE_STRATEGY: recursive
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 stages:
   - build
@@ -12,6 +13,8 @@ stages:
 build-and-test:
   stage: build
   script:
+    - git config --global credential.helper store
+    - echo "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-ext.galois.com" > ~/.git-credentials
     - cargo build
     - cargo test
     - cd deps/zk-circuit-builder/ && cargo test --features bellman,sieve_ir

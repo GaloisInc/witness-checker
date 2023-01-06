@@ -1,23 +1,25 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use std::marker::PhantomData;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
+use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
 
 use crate::ir::circuit::{
-    self, CircuitBase, CircuitTrait, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
+    self, CircuitBase, CircuitTrait, Field, FromBits, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
     ShiftOp, CmpOp, GateValue, Function, SecretValue, SecretInputId,
 };
 
-use self::Value::Single;
+use self::Value::SingleField;
+use self::Value::SingleInteger;
 
 #[derive(Clone, PartialEq, Eq, Debug, Migrate)]
 pub enum Value {
     /// The value of an integer-typed wire, in arbitrary precision.  For `Uint` wires, this is in
     /// the range `0 .. 2^N`; for `Int`, it's in the range `-2^(N-1) .. 2^(N-1)`.
-    Single(BigInt),
+    SingleInteger(BigInt),
+    SingleField(Vec<u32>),
     Bundle(Vec<Value>),
 }
 
@@ -26,7 +28,10 @@ impl Value {
         match *ty {
             TyKind::Int(_) |
             TyKind::Uint(_) => {
-                Value::Single(bits.to_bigint(ty))
+                Value::SingleInteger(bits.to_bigint(ty))
+            },
+            TyKind::GF(_) => {
+                Value::SingleField(bits.0.into())
             },
             TyKind::Bundle(tys) => {
                 let mut vals = Vec::with_capacity(tys.len());
@@ -45,10 +50,13 @@ impl Value {
 
     pub fn to_bits<'a>(&self, c: &CircuitBase<'a>, ty: Ty<'a>) -> Bits<'a> {
         match (self, *ty) {
-            (&Value::Single(ref v), TyKind::Int(sz)) |
-            (&Value::Single(ref v), TyKind::Uint(sz)) => {
+            (&Value::SingleInteger(ref v), TyKind::Int(sz)) |
+            (&Value::SingleInteger(ref v), TyKind::Uint(sz)) => {
                 v.as_bits(c, sz)
             },
+            (&Value::SingleField(ref v), TyKind::GF(field)) => {
+                c.intern_bits(v)
+            }
             (&Value::Bundle(ref vs), TyKind::Bundle(tys)) => {
                 assert_eq!(vs.len(), tys.len());
                 let mut digits = Vec::with_capacity(ty.digits());
@@ -72,7 +80,7 @@ impl Value {
                 } else {
                     i
                 };
-                Single(i)
+                SingleInteger(i)
             },
             TyKind::Int(sz) => {
                 let out_of_range =
@@ -85,7 +93,7 @@ impl Value {
                 } else {
                     i
                 };
-                Single(i)
+                SingleInteger(i)
             },
             _ => panic!("can't construct a Bundle from a single integer"),
         }
@@ -93,14 +101,14 @@ impl Value {
 
     pub fn as_single(&self) -> Option<&BigInt> {
         match *self {
-            Value::Single(ref x) => Some(x),
+            Value::SingleInteger(ref x) => Some(x),
             _ => None,
         }
     }
 
     pub fn unwrap_single(self) -> Option<BigInt> {
         match self {
-            Value::Single(x) => Some(x),
+            Value::SingleInteger(x) => Some(x),
             _ => None,
         }
     }
@@ -116,9 +124,16 @@ impl Value {
 pub trait Evaluator<'a>: SecretEvaluator<'a> {
     fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a>;
 
-    fn eval_single_wire(&mut self, w: Wire<'a>) -> Result<BigInt, Error<'a>> {
+    fn eval_single_integer_wire(&mut self, w: Wire<'a>) -> Result<BigInt, Error<'a>> {
         match self.eval_wire(w)? {
-            Single(x) => Ok(x),
+            SingleInteger(x) => Ok(x),
+            _ => Err(Error::Other),
+        }
+    }
+
+    fn eval_single_field_wire(&mut self, w: Wire<'a>) -> Result<Vec<u32>, Error<'a>> {
+        match self.eval_wire(w)? {
+            SingleField(x) => Ok(x),
             _ => Err(Error::Other),
         }
     }
@@ -255,7 +270,6 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x % y }
 }
 
-
 trait EvalContext<'a> {
     /// Get the value of `w` as `Bits` and a flag indicating whether the value is derived from
     /// secrets.
@@ -311,6 +325,164 @@ impl<'a> EvalContext<'a> for FunctionContext<'a> {
     }
 }
 
+pub fn eval_unop_integer<'a>(
+    c: &CircuitBase<'a>,
+    op: UnOp,
+    a_bits: Bits<'a>,
+    ty: Ty<'a>,
+) -> Bits<'a> {
+    let a_val = a_bits.to_bigint(ty);
+    let val = match op {
+        UnOp::Not => !a_val,
+        UnOp::Neg => -a_val,
+    };
+    trunc(c, ty, val)
+}
+
+
+pub fn eval_unop_galois_field<'a>(
+    c: &CircuitBase<'a>,
+    op: UnOp,
+    a_bits: Bits<'a>,
+    field: Field,
+) -> Bits<'a> {
+    fn helper<'a, T:FiniteField + FromBits + AsBits>(
+        c: &CircuitBase<'a>,
+        op: UnOp,
+        a_bits: Bits<'a>,
+        field: Field,
+    ) -> Bits<'a> {
+        let a_val = T::from_bits(a_bits);
+        let val = match op {
+            UnOp::Not => panic!("Unsupported operation {:?}", op), // !a_val,
+            UnOp::Neg => -a_val,
+        };
+        val.as_bits(c, field.bit_size())
+    }
+
+    match field {
+        Field::F40b => helper::<Gf40>(c, op, a_bits, field),
+        Field::F45b => helper::<Gf45>(c, op, a_bits, field),
+        Field::F56b => helper::<F56b>(c, op, a_bits, field),
+        Field::F63b => helper::<F63b>(c, op, a_bits, field),
+        Field::F64b => helper::<F64b>(c, op, a_bits, field),
+    }
+}
+
+pub fn eval_binop_integer<'a>(
+    c: &CircuitBase<'a>,
+    op: BinOp,
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    ty: Ty<'a>,
+) -> Bits<'a> {
+    let a_val = a_bits.to_bigint(ty);
+    let b_val = b_bits.to_bigint(ty);
+    let val = match op {
+        BinOp::Add => a_val + b_val,
+        BinOp::Sub => a_val - b_val,
+        BinOp::Mul => a_val * b_val,
+        BinOp::Div => safe_div(a_val, b_val),
+        BinOp::Mod => safe_mod(a_val, b_val),
+        BinOp::And => a_val & b_val,
+        BinOp::Or => a_val | b_val,
+        BinOp::Xor => a_val ^ b_val,
+    };
+    trunc(c, ty, val)
+}
+
+pub fn eval_binop_galois_field<'a>(
+    c: &CircuitBase<'a>,
+    op: BinOp,
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    field: Field,
+) -> Bits<'a> {
+    fn helper<'a, T:FiniteField + AsBits + FromBits>(
+        c: &CircuitBase<'a>,
+        op: BinOp,
+        a_bits: Bits<'a>,
+        b_bits: Bits<'a>,
+        field: Field,
+    ) -> Bits<'a> {
+        let a_val = T::from_bits(a_bits);
+        let b_val = T::from_bits(b_bits);
+        let val = match op {
+            BinOp::Add => a_val + b_val,
+            BinOp::Sub => a_val - b_val,
+            BinOp::Mul => a_val * b_val,
+            BinOp::Div | // safe_div(a_val, b_val),
+            BinOp::Mod | // safe_mod(a_val, b_val),
+            BinOp::And | // a_val & b_val,
+            BinOp::Or  | // a_val | b_val,
+            BinOp::Xor => panic!("Unsupported operation {:?}", op), // a_val ^ b_val,
+        };
+        val.as_bits(c, field.bit_size())
+    }
+
+    match field {
+        Field::F40b => helper::<Gf40>(c, op, a_bits, b_bits, field),
+        Field::F45b => helper::<Gf45>(c, op, a_bits, b_bits, field),
+        Field::F56b => helper::<F56b>(c, op, a_bits, b_bits, field),
+        Field::F63b => helper::<F63b>(c, op, a_bits, b_bits, field),
+        Field::F64b => helper::<F64b>(c, op, a_bits, b_bits, field),
+    }
+}
+
+pub fn eval_cmp_integer<'a>(
+    c: &CircuitBase<'a>,
+    op: CmpOp,
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    arg_ty: Ty<'a>,
+) -> Bits<'a> {
+    let a_val = a_bits.to_bigint(arg_ty);
+    let b_val = b_bits.to_bigint(arg_ty);
+    let val: bool = match op {
+        CmpOp::Eq => a_val == b_val,
+        CmpOp::Ne => a_val != b_val,
+        CmpOp::Lt => a_val <  b_val,
+        CmpOp::Le => a_val <= b_val,
+        CmpOp::Gt => a_val >  b_val,
+        CmpOp::Ge => a_val >= b_val,
+    };
+    trunc(c, Ty::bool(), val)
+}
+
+pub fn eval_cmp_galois_field<'a>(
+    c: &CircuitBase<'a>,
+    op: CmpOp,
+    a_bits: Bits<'a>,
+    b_bits: Bits<'a>,
+    field: Field,
+) -> Bits<'a> {
+    fn helper<'a, T:FiniteField + AsBits + FromBits>(
+        c: &CircuitBase<'a>,
+        op: CmpOp,
+        a_bits: Bits<'a>,
+        b_bits: Bits<'a>,
+    ) -> Bits<'a> {
+        let a_val = T::from_bits(a_bits);
+        let b_val = T::from_bits(b_bits);
+        let val: bool = match op {
+            CmpOp::Eq => a_val == b_val,
+            CmpOp::Ne => a_val != b_val,
+            CmpOp::Lt => panic!("Unsupported operation {:?}", op), // a_val < b_val,
+            CmpOp::Le => panic!("Unsupported operation {:?}", op), // a_val <= b_val,
+            CmpOp::Gt => panic!("Unsupported operation {:?}", op), // a_val > b_val,
+            CmpOp::Ge => panic!("Unsupported operation {:?}", op), // a_val >= b_val,
+        };
+        trunc(c, Ty::bool(), val)
+    }
+
+    match field {
+        Field::F40b => helper::<Gf40>(c, op, a_bits, b_bits),
+        Field::F45b => helper::<Gf45>(c, op, a_bits, b_bits),
+        Field::F56b => helper::<F56b>(c, op, a_bits, b_bits),
+        Field::F63b => helper::<F63b>(c, op, a_bits, b_bits),
+        Field::F64b => helper::<F64b>(c, op, a_bits, b_bits),
+    }
+}
 
 fn eval_gate_inner<'a>(
     c: &CircuitBase<'a>,
@@ -328,71 +500,82 @@ fn eval_gate_inner<'a>(
         GateKind::Argument(i, _) => ecx.eval_argument(i)?,
 
         GateKind::Unary(op, a) => {
-            let (a_val, a_sec) = get_int_value(ecx, a)?;
-            let val = match op {
-                UnOp::Not => !a_val,
-                UnOp::Neg => -a_val,
+            let (a_bits, a_sec) = ecx.get_value(a)?;
+            let result_bits = if a.ty.is_integer() {
+                eval_unop_integer(c, op, a_bits, ty)
+            } else if let Some(f) = a.ty.get_galois_field() {
+                eval_unop_galois_field(c, op, a_bits, f)
+            } else {
+                panic!("Cannot apply unary operator {:?} on argument {:?}", op, a)
             };
-            (trunc(c, ty, val), a_sec)
+            (result_bits, a_sec)
         },
 
         GateKind::Binary(op, a, b) => {
-            let (a_val, a_sec) = get_int_value(ecx, a)?;
-            let (b_val, b_sec) = get_int_value(ecx, b)?;
-            let val = match op {
-                BinOp::Add => a_val + b_val,
-                BinOp::Sub => a_val - b_val,
-                BinOp::Mul => a_val * b_val,
-                BinOp::Div => safe_div(a_val, b_val),
-                BinOp::Mod => safe_mod(a_val, b_val),
-                BinOp::And => a_val & b_val,
-                BinOp::Or => a_val | b_val,
-                BinOp::Xor => a_val ^ b_val,
+            let (a_bits, a_sec) = ecx.get_value(a)?;
+            let (b_bits, b_sec) = ecx.get_value(b)?;
+            let result_bits = if a.ty.is_integer() {
+                eval_binop_integer(c, op, a_bits, b_bits, ty)
+            } else if let Some(f) = a.ty.get_galois_field() {
+                eval_binop_galois_field(c, op, a_bits, b_bits, f)
+            } else {
+                panic!("Cannot apply binary operator {:?} on arguments {:?}, {:?}", op, a, b)
             };
-            (trunc(c, ty, val), a_sec || b_sec)
+            (result_bits, a_sec || b_sec)
         },
 
         GateKind::Shift(op, a, b) => {
-            let (a_val, a_sec) = get_int_value(ecx, a)?;
-            let (b_val, b_sec) = get_int_value(ecx, b)?;
-            let b_val = u16::try_from(b_val).map_err(|_| Error::Other)?;
-            let val = match op {
-                ShiftOp::Shl => a_val << b_val,
-                ShiftOp::Shr => a_val >> b_val,
-            };
-            (trunc(c, ty, val), a_sec || b_sec)
+            if a.ty.is_integer() {
+                let (a_val, a_sec) = get_int_value(ecx, a)?;
+                let (b_val, b_sec) = get_int_value(ecx, b)?;
+                let b_val = u16::try_from(b_val).map_err(|_| Error::Other)?;
+                let val = match op {
+                    ShiftOp::Shl => a_val << b_val,
+                    ShiftOp::Shr => a_val >> b_val,
+                };
+                (trunc(c, ty, val), a_sec || b_sec)
+            } else {
+                panic!("Cannot apply shift operator {:?} on arguments {:?}, {:?}", op, a, b)
+            }
         },
 
         GateKind::Compare(op, a, b) => {
-            let (a_val, a_sec) = get_int_value(ecx, a)?;
-            let (b_val, b_sec) = get_int_value(ecx, b)?;
-            let val: bool = match op {
-                CmpOp::Eq => a_val == b_val,
-                CmpOp::Ne => a_val != b_val,
-                CmpOp::Lt => a_val < b_val,
-                CmpOp::Le => a_val <= b_val,
-                CmpOp::Gt => a_val > b_val,
-                CmpOp::Ge => a_val >= b_val,
+            let (a_bits, a_sec) = ecx.get_value(a)?;
+            let (b_bits, b_sec) = ecx.get_value(b)?;
+            let result_bits = if a.ty.is_integer() {
+                eval_cmp_integer(c, op, a_bits, b_bits, a.ty)
+            } else if let Some(f) = a.ty.get_galois_field() {
+                eval_cmp_galois_field(c, op, a_bits, b_bits, f)
+            } else {
+                panic!("Cannot apply comparison operator {:?} on arguments {:?}, {:?}", op, a, b)
             };
-            (trunc(c, ty, val), a_sec || b_sec)
+            (result_bits, a_sec || b_sec)
         },
 
         GateKind::Mux(c, x, y) => {
-            let (c_val, c_sec) = get_int_value(ecx, c)?;
-            // Secrecy: If the condition is public, then the result is only as secret as the chosen
-            // input (`x` or `y`).  If the condition is secret, then the result is always secret.
-            if !c_val.is_zero() {
-                let (x_bits, x_sec) = ecx.get_value(x)?;
-                (x_bits, x_sec || c_sec)
+            if c.ty.is_integer() {
+                let (c_val, c_sec) = get_int_value(ecx, c)?;
+                // Secrecy: If the condition is public, then the result is only as secret as the chosen
+                // input (`x` or `y`).  If the condition is secret, then the result is always secret.
+                if !c_val.is_zero() {
+                    let (x_bits, x_sec) = ecx.get_value(x)?;
+                    (x_bits, x_sec || c_sec)
+                } else {
+                    let (y_bits, y_sec) = ecx.get_value(y)?;
+                    (y_bits, y_sec || c_sec)
+                }
             } else {
-                let (y_bits, y_sec) = ecx.get_value(y)?;
-                (y_bits, y_sec || c_sec)
+                panic!("Cannot apply mux operator on arguments {:?}, {:?}, {:?}", c, x, y)
             }
         },
 
         GateKind::Cast(a, _) => {
-            let (a_val, a_sec) = get_int_value(ecx, a)?;
-            (trunc(c, ty, a_val), a_sec)
+            if a.ty.is_integer() && ty.is_integer() {
+                let (a_val, a_sec) = get_int_value(ecx, a)?;
+                (trunc(c, ty, a_val), a_sec)
+            } else {
+                panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
+            }
         },
 
         GateKind::Pack(ws) => {

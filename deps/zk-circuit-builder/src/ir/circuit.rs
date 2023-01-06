@@ -788,7 +788,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     fn bits<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
         let sz = match *ty {
             TyKind::Int(sz) | TyKind::Uint(sz) => sz,
-            _ => panic!("can't construct bit representation for non-integer type {:?}", ty),
+            TyKind::GF(f) => f.bit_size(),
+            _ => panic!("can't construct bit representation for non-primitive type {:?}", ty),
         };
         let val = val.as_bits(self.as_base(), sz);
         assert!(val.width() <= sz.bits());
@@ -1485,7 +1486,35 @@ pub struct IntSize(pub u16);
 pub enum TyKind<'a> {
     Int(IntSize),
     Uint(IntSize),
+    GF(Field),
     Bundle(&'a [Ty<'a>]),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+/// Finite fields.
+pub enum Field {
+    // Small binary fields.
+    F40b,
+    F45b,
+    F56b,
+    F63b,
+    F64b,
+}
+
+impl Field {
+    pub fn bit_size(&self) -> IntSize {
+        match self {
+            Field::F40b => IntSize(64), // Small binary fields are u64s in scuttlebutt.
+            Field::F45b => IntSize(64),
+            Field::F56b => IntSize(64),
+            Field::F63b => IntSize(64),
+            Field::F64b => IntSize(64),
+        }
+    }
+}
+
+pub trait FromBits {
+    fn from_bits<'a>(b:Bits<'a>) -> Self;
 }
 
 impl IntSize {
@@ -1505,10 +1534,20 @@ impl TyKind<'_> {
     pub const U64: TyKind<'static> = TyKind::Uint(IntSize(64));
     pub const BOOL: TyKind<'static> = TyKind::Uint(IntSize(1));
 
+    pub fn get_galois_field(&self) -> Option<Field> {
+        match *self {
+            TyKind::Int(_) => None,
+            TyKind::Uint(_) => None,
+            TyKind::GF(f) => Some(f),
+            TyKind::Bundle(_) => None,
+        }
+    }
+
     pub fn is_integer(&self) -> bool {
         match *self {
             TyKind::Int(_) => true,
             TyKind::Uint(_) => true,
+            TyKind::GF(_) => false,
             TyKind::Bundle(_) => false,
         }
     }
@@ -1517,6 +1556,7 @@ impl TyKind<'_> {
         match *self {
             TyKind::Int(sz) => sz,
             TyKind::Uint(sz) => sz,
+            TyKind::GF(f) => f.bit_size(),
             TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
         }
     }
@@ -1539,6 +1579,7 @@ impl TyKind<'_> {
         match *self {
             TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
+            TyKind::GF(f) => c.ty(TyKind::GF(f)),
             TyKind::Bundle(tys) => {
                 c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
             },
@@ -1552,6 +1593,9 @@ impl TyKind<'_> {
             TyKind::Int(sz) |
             TyKind::Uint(sz) => {
                 (sz.bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
+            },
+            TyKind::GF(f) => {
+                (f.bit_size().bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
             },
             TyKind::Bundle(tys) => {
                 tys.iter().map(|ty| ty.digits()).sum()
@@ -1567,6 +1611,7 @@ impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
         match self {
             Int(sz) => Int(sz),
             Uint(sz) => Uint(sz),
+            GF(f) => GF(f),
             Bundle(tys) => {
                 let tys = tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
                 Bundle(v.new_circuit().intern_ty_list(&tys))
@@ -2664,7 +2709,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Label<'a> {
 }
 
 
-/// An arbitrary-sized array of bits.  Used to represent integer values in the circuit and
+/// An arbitrary-sized array of bits.  Used to represent values in the circuit and
 /// evaluator.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Bits<'a>(pub &'a [u32]);

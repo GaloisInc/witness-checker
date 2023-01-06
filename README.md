@@ -24,3 +24,6 @@ To save the circuit in ZKIF format:
 
 This will produce zkInterface files in the `zkif/` directory, which you can
 later evaluate using `mac-n-cheese` or a similar tool.
+
+You may need to add `CARGO_NET_GIT_FETCH_WITH_CLI=true` to `cargo` commands to
+clone dependencies.
