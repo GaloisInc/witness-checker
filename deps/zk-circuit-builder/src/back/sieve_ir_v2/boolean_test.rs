@@ -1,14 +1,14 @@
 use super::boolean::{AllocatedBit, Boolean};
 
-use zki_sieve::producers::sink::MemorySink;
-use zki_sieve::{
+use zki_sieve_v3::producers::sink::MemorySink;
+use zki_sieve_v3::{
     consumers::evaluator::{Evaluator, PlaintextBackend},
     Source,
 };
-use zki_sieve::{Result, Sink};
+use zki_sieve_v3::{Result, Sink};
 
-use crate::back::sieve_ir::field::QuarkScalar;
-use crate::back::sieve_ir::ir_builder::{IRBuilder, IRBuilderT};
+use crate::back::sieve_ir_v2::field::QuarkScalar;
+use crate::back::sieve_ir_v2::ir_builder::{IRBuilder, IRBuilderT};
 
 use ff::{Field, PrimeField};
 use num_bigint::BigUint;
@@ -111,8 +111,8 @@ fn test_bit_allocated_bit() {
 
     let evaluator = evaluate(builder);
 
-    assert_eq!(evaluator.get(v.get_wire().wire()).unwrap(), &one_);
-    assert_eq!(evaluator.get(w.get_wire().wire()).unwrap(), &zero_);
+    assert_eq!(evaluator.get(0, v.get_wire().wire()).unwrap(), &one_);
+    assert_eq!(evaluator.get(0, w.get_wire().wire()).unwrap(), &zero_);
 }
 
 #[test]
@@ -129,16 +129,16 @@ fn test_bit_xor() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire().wire()).unwrap(),
+                evaluator.get(0, a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire().wire()).unwrap(),
+                evaluator.get(0, b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire().wire()).unwrap(),
+                evaluator.get(0, c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -165,16 +165,16 @@ fn test_bit_and() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire().wire()).unwrap(),
+                evaluator.get(0, a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire().wire()).unwrap(),
+                evaluator.get(0, b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire().wire()).unwrap(),
+                evaluator.get(0, c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -201,16 +201,16 @@ fn test_bit_and_not() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire().wire()).unwrap(),
+                evaluator.get(0, a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire().wire()).unwrap(),
+                evaluator.get(0, b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire().wire()).unwrap(),
+                evaluator.get(0, c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -237,16 +237,16 @@ fn test_bit_nor() {
 
             let evaluator = evaluate(builder);
             assert_eq!(
-                evaluator.get(a.get_wire().wire()).unwrap(),
+                evaluator.get(0, a.get_wire().wire()).unwrap(),
                 if *a_val { &one_ } else { &zero_ }
             );
             assert_eq!(
-                evaluator.get(b.get_wire().wire()).unwrap(),
+                evaluator.get(0, b.get_wire().wire()).unwrap(),
                 if *b_val { &one_ } else { &zero_ }
             );
 
             assert_eq!(
-                evaluator.get(c.get_wire().wire()).unwrap(),
+                evaluator.get(0, c.get_wire().wire()).unwrap(),
                 if c.get_value().unwrap() {
                     &one_
                 } else {
@@ -502,11 +502,11 @@ fn test_boolean_xor() {
                 (OperandType::AllocatedTrue, OperandType::True, Boolean::Not(_)) => {}
                 (OperandType::AllocatedTrue, OperandType::False, Boolean::Is(_)) => {}
                 (OperandType::AllocatedTrue, OperandType::AllocatedTrue, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (OperandType::AllocatedTrue, OperandType::AllocatedFalse, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
                 (
@@ -527,11 +527,11 @@ fn test_boolean_xor() {
                 (OperandType::AllocatedFalse, OperandType::True, Boolean::Not(_)) => {}
                 (OperandType::AllocatedFalse, OperandType::False, Boolean::Is(_)) => {}
                 (OperandType::AllocatedFalse, OperandType::AllocatedTrue, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
                 (OperandType::AllocatedFalse, OperandType::AllocatedFalse, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -570,7 +570,7 @@ fn test_boolean_xor() {
                     OperandType::NegatedAllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -578,7 +578,7 @@ fn test_boolean_xor() {
                     OperandType::NegatedAllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
 
@@ -603,7 +603,7 @@ fn test_boolean_xor() {
                     OperandType::NegatedAllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
                 (
@@ -611,7 +611,7 @@ fn test_boolean_xor() {
                     OperandType::NegatedAllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
 
@@ -691,11 +691,11 @@ fn test_boolean_and() {
                 (OperandType::AllocatedTrue, OperandType::True, Boolean::Is(_)) => {}
                 (OperandType::AllocatedTrue, OperandType::False, Boolean::Constant(false)) => {}
                 (OperandType::AllocatedTrue, OperandType::AllocatedTrue, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
                 (OperandType::AllocatedTrue, OperandType::AllocatedFalse, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -703,7 +703,7 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -711,18 +711,18 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
 
                 (OperandType::AllocatedFalse, OperandType::True, Boolean::Is(_)) => {}
                 (OperandType::AllocatedFalse, OperandType::False, Boolean::Constant(false)) => {}
                 (OperandType::AllocatedFalse, OperandType::AllocatedTrue, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (OperandType::AllocatedFalse, OperandType::AllocatedFalse, Boolean::Is(ref v)) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -730,7 +730,7 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -738,7 +738,7 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
 
@@ -753,7 +753,7 @@ fn test_boolean_and() {
                     OperandType::AllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -761,7 +761,7 @@ fn test_boolean_and() {
                     OperandType::AllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -769,7 +769,7 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -777,7 +777,7 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
 
@@ -792,7 +792,7 @@ fn test_boolean_and() {
                     OperandType::AllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
                 (
@@ -800,7 +800,7 @@ fn test_boolean_and() {
                     OperandType::AllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -808,7 +808,7 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedTrue,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &zero_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &zero_);
                     assert_eq!(v.get_value(), Some(false));
                 }
                 (
@@ -816,7 +816,7 @@ fn test_boolean_and() {
                     OperandType::NegatedAllocatedFalse,
                     Boolean::Is(ref v),
                 ) => {
-                    assert_eq!(evaluator.get(c_wire).unwrap(), &one_);
+                    assert_eq!(evaluator.get(0, c_wire).unwrap(), &one_);
                     assert_eq!(v.get_value(), Some(true));
                 }
 

@@ -172,6 +172,79 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
 }
 
 
+#[cfg(feature = "sieve_ir")]
+pub mod sieve_ir_v2;
+
+pub fn new_sieve_ir_v2<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + 'a> {
+    #[cfg(feature = "sieve_ir")]
+    {
+        use self::sieve_ir_v2::{
+            backend::{Backend, Scalar},
+            ir_builder::IRBuilder,
+        };
+        use zki_sieve_v3::{
+            cli::{cli, Options, StructOpt},
+            FilesSink,
+        };
+
+        struct BackendWrapper<'w> {
+            backend: Backend<'w, IRBuilder<FilesSink>>,
+            workspace: String,
+        }
+
+
+        let sink = FilesSink::new_clean(&workspace).unwrap();
+        sink.print_filenames();
+        let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+        // ir_builder.enable_profiler();
+        if !dedup {
+            ir_builder.disable_dedup();
+        }
+
+        let backend = Backend::new(ir_builder);
+        return Box::new(BackendWrapper {
+            backend,
+            workspace: workspace.to_owned(),
+        });
+
+
+        unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+                self.backend.post_erase(v);
+            }
+
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+                self.backend.post_migrate(v);
+            }
+
+            fn finish(mut self: Box<Self>, accepted: Wire<'w>, validate: bool) {
+                let workspace = self.workspace.clone();
+
+                self.backend.enforce_true(accepted);
+                let ir_builder = self.backend.finish();
+
+                eprintln!();
+                ir_builder.prof.as_ref().map(|p| p.print_report());
+                ir_builder.dedup.as_ref().map(|p| p.print_report());
+                ir_builder.finish();
+
+                // Validate the circuit and witness.
+                if validate {
+                    eprintln!("\nValidating SIEVE IR files...");
+                    cli(&Options::from_iter(&["zki_sieve", "validate", &workspace])).unwrap();
+                    cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
+                }
+                cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+        }
+    }
+    #[cfg(not(feature = "sieve_ir"))]
+    {
+        panic!("SIEVE IR output is not supported - build with `--features sieve_ir`");
+    }
+}
+
+
 pub fn new_dummy<'a>() -> Box<dyn Backend<'a> + 'a> {
     Box::new(())
 }

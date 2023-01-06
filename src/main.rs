@@ -43,6 +43,11 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output SIEVE IR circuit representation in this directory"))
+        .arg(Arg::with_name("sieve-ir-v2-out")
+             .long("sieve-ir-v2-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output SIEVE IR v2 (IR0+) circuit representation in this directory"))
         .arg(Arg::with_name("validate-only")
              .long("validate-only")
              .help("check only that the trace is valid; don't require it to demonstrate a bug"))
@@ -137,7 +142,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = cf.add_pass(lower::bool_::not_to_xor);
     let cf = cf.add_pass(lower::bool_::compare_to_logic);
     let cf = cf.add_pass(lower::bool_::mux);
-    let cf = cf.add_opt_pass(args.is_present("zkif-out") || args.is_present("sieve-ir-out"),
+    let cf = cf.add_opt_pass(
+        args.is_present("zkif-out") ||
+            args.is_present("sieve-ir-out") ||
+            args.is_present("sieve-ir-v2-out"),
         lower::int::compare_to_greater_or_equal_to_zero);
     let cf = cf.add_pass(lower::int::non_constant_shift);
     let cf = lower::const_fold::ConstFold(cf);
@@ -202,6 +210,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         if let Some(workspace) = args.value_of("sieve-ir-out") {
             let dedup = args.is_present("sieve-ir-dedup");
             back::new_sieve_ir(workspace, dedup)
+        } else if let Some(workspace) = args.value_of("sieve-ir-v2-out") {
+            let dedup = args.is_present("sieve-ir-dedup");
+            back::new_sieve_ir_v2(workspace, dedup)
         } else if let Some(dest) = args.value_of_os("zkif-out") {
             back::new_zkif(dest)
         } else if args.is_present("stats") {
