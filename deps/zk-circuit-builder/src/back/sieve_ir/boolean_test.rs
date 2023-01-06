@@ -50,15 +50,6 @@ pub fn u64_into_boolean_vec_le(
     Ok(bits)
 }
 
-pub fn _field_into_boolean_vec_le<Scalar: PrimeField, S: Sink + 'static>(
-    builder: &mut IRBuilder<S>,
-    value: Option<Scalar>,
-) -> Result<Vec<Boolean>> {
-    let v = field_into_allocated_bits_le::<Scalar, S>(builder, value)?;
-
-    Ok(v.into_iter().map(Boolean::from).collect())
-}
-
 pub fn field_into_allocated_bits_le<Scalar: PrimeField, S: Sink + 'static>(
     builder: &mut IRBuilder<S>,
     value: Option<Scalar>,
