@@ -99,7 +99,7 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
     }
     #[cfg(not(feature = "bellman"))]
     {
-        panic!("zkinterface output is not supported - build with `--features bellman`");
+        panic!("zkinterface output is not enabled - build with `--features bellman`");
     }
 }
 
@@ -177,7 +177,7 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
     }
     #[cfg(not(feature = "sieve_ir"))]
     {
-        panic!("SIEVE IR output is not supported - build with `--features sieve_ir`");
+        panic!("SIEVE IR output is not enabled - build with `--features sieve_ir`");
     }
 }
 
@@ -255,7 +255,7 @@ pub fn new_sieve_ir_v2<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> 
     }
     #[cfg(not(feature = "sieve_ir"))]
     {
-        panic!("SIEVE IR0+ output is not supported - build with `--features sieve_ir`");
+        panic!("SIEVE IR0+ output is not enabled - build with `--features sieve_ir`");
     }
 }
 
@@ -323,7 +323,7 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
     }
     #[cfg(not(feature = "sieve_ir"))]
     {
-        panic!("SIEVE IR output is not supported - build with `--features sieve_ir`");
+        panic!("SIEVE IR output is not enabled - build with `--features sieve_ir`");
     }
 }
 
@@ -388,7 +388,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a>
     }
     #[cfg(not(feature = "sieve_ir"))]
     {
-        panic!("SIEVE IR0+ output is not supported - build with `--features sieve_ir`");
+        panic!("SIEVE IR0+ output is not enabled - build with `--features sieve_ir`");
     }
 }
 
