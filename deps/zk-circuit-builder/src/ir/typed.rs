@@ -8,6 +8,7 @@ use std::ptr;
 use generic_array::{ArrayLength, GenericArray};
 use generic_array::typenum::{Sum, Quot, U3, U4};
 use num_traits::Zero;
+#[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::eval::Evaluator;
 use crate::ir::circuit::{AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize, Wire, Ty, TyKind, CellResetGuard};
@@ -679,10 +680,15 @@ macro_rules! field_impls {
     };
 }
 
+#[cfg(feature = "gf_scuttlebutt")]
 field_impls!(Gf40, F40b);
+#[cfg(feature = "gf_scuttlebutt")]
 field_impls!(Gf45, F45b);
+#[cfg(feature = "gf_scuttlebutt")]
 field_impls!(F56b, F56b);
+#[cfg(feature = "gf_scuttlebutt")]
 field_impls!(F63b, F63b);
+#[cfg(feature = "gf_scuttlebutt")]
 field_impls!(F64b, F64b);
 
 macro_rules! tuple_impl {

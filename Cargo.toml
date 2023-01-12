@@ -10,6 +10,7 @@ edition = "2018"
 default = []
 bellman = ["zk-circuit-builder/bellman"]
 sieve_ir = ["zk-circuit-builder/sieve_ir"]
+gf_scuttlebutt = ["zk-circuit-builder/scuttlebutt"]
 
 [dependencies]
 zk-circuit-builder = { path = "deps/zk-circuit-builder", default-features = false, features = ["f128p"] }
