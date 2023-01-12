@@ -15,6 +15,6 @@ build-and-test:
   script:
     - git config --global credential.helper store
     - echo "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-ext.galois.com" > ~/.git-credentials
-    - cargo build
-    - cargo test
-    - cd deps/zk-circuit-builder/ && cargo test --features bellman,sieve_ir
+    - cargo build --features bellman,sieve_ir,gf_scuttlebutt
+    - cargo test --features bellman,sieve_ir,gf_scuttlebutt
+    - cd deps/zk-circuit-builder/ && cargo test --features bellman,sieve_ir,gf_scuttlebutt

@@ -1494,20 +1494,30 @@ pub enum TyKind<'a> {
 /// Finite fields.
 pub enum Field {
     // Small binary fields.
+    #[cfg(feature = "gf_scuttlebutt")]
     F40b,
+    #[cfg(feature = "gf_scuttlebutt")]
     F45b,
+    #[cfg(feature = "gf_scuttlebutt")]
     F56b,
+    #[cfg(feature = "gf_scuttlebutt")]
     F63b,
+    #[cfg(feature = "gf_scuttlebutt")]
     F64b,
 }
 
 impl Field {
     pub fn bit_size(&self) -> IntSize {
-        match self {
+        match *self {
+            #[cfg(feature = "gf_scuttlebutt")]
             Field::F40b => IntSize(64), // Small binary fields are u64s in scuttlebutt.
+            #[cfg(feature = "gf_scuttlebutt")]
             Field::F45b => IntSize(64),
+            #[cfg(feature = "gf_scuttlebutt")]
             Field::F56b => IntSize(64),
+            #[cfg(feature = "gf_scuttlebutt")]
             Field::F63b => IntSize(64),
+            #[cfg(feature = "gf_scuttlebutt")]
             Field::F64b => IntSize(64),
         }
     }
