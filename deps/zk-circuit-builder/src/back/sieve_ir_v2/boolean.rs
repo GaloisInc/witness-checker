@@ -30,7 +30,10 @@ impl AllocatedBit {
         let wire = b.new_witness(field_value);
 
         // (x - 1) * x == 0
-        let wire_1 = b.addc(&wire, b.neg_one());
+
+        // This `sub1` may underflow if `wire` is 0, but this is harmless as we only care whether
+        // `wire_1` is zero or nonzero.
+        let wire_1 = b.sub1(&wire);
         let prod = b.mul(&wire, &wire_1);
         b.assert_zero(&prod);
 
@@ -72,6 +75,8 @@ impl AllocatedBit {
         //  1 | 0 |  1  |     1
         //  1 | 1 |  0  |     0
 
+        // This `sub` may underflow to -1 if `a` is 0 and `b` is 1.  But `-1 * -1 == 1` regardless
+        // of the choice of modulus, so this is okay.
         let tmp_wire = builder.sub(a.get_wire(), b.get_wire());
         let wire = builder.mul(&tmp_wire, &tmp_wire);
 

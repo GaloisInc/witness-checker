@@ -95,6 +95,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
 
         // Enforce that the bit representation is equivalent to this Num.
         let recomposed_wire = Self::compose_bits(b, &bits);
+        // This `sub` may underflow, but we only care whether the result is zero or nonzero.
         let difference = b.sub(&self.zki_wire, &recomposed_wire);
         b.assert_zero(&difference);
 
@@ -110,13 +111,6 @@ impl<Scalar: PrimeField> Num<Scalar> {
         other: &Self,
         builder: &mut impl IRBuilderT,
     ) -> Result<Self, String> {
-        match (&mut self.value, &other.value) {
-            (Some(ref mut self_val), Some(ref other_val)) => self_val.add_assign(other_val),
-            _ => {}
-        }
-
-        self.zki_wire = builder.add(&self.zki_wire, &other.zki_wire);
-
         let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
         if new_real_bits > Scalar::CAPACITY as u16 {
             return Err(format!(
@@ -126,6 +120,14 @@ impl<Scalar: PrimeField> Num<Scalar> {
                 Scalar::CAPACITY,
             ));
         }
+
+        match (&mut self.value, &other.value) {
+            (Some(ref mut self_val), Some(ref other_val)) => self_val.add_assign(other_val),
+            _ => {}
+        }
+
+        self.zki_wire = builder.add(&self.zki_wire, &other.zki_wire);
+
         self.real_bits = new_real_bits;
         self.valid_bits = cmp::min(self.valid_bits, other.valid_bits);
         Ok(self)
@@ -142,6 +144,17 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // other.real_bits`, then we'll trample on some high bits of `self`, but that's okay
         // because `valid_bits` is the `min` of the two inputs, and will be smaller than
         // `other.real_bits`.
+
+        let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
+        if new_real_bits > Scalar::CAPACITY as u16 {
+            return Err(format!(
+                "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
+                self.real_bits,
+                other.real_bits,
+                Scalar::CAPACITY,
+            ));
+        }
+
         let max_value: Scalar = scalar_from_biguint(&(BigUint::from(1_u8) << other.real_bits))?;
 
         match (&mut self.value, &other.value) {
@@ -157,15 +170,6 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let other_shifted = b.sub(&max_wire, &other.zki_wire);
         self.zki_wire = b.add(&self.zki_wire, &other_shifted);
 
-        let new_real_bits = cmp::max(self.real_bits, other.real_bits) + 1;
-        if new_real_bits > Scalar::CAPACITY as u16 {
-            return Err(format!(
-                "sum of {} bits and {} bits doesn't fit in a field element ({} usable bits)",
-                self.real_bits,
-                other.real_bits,
-                Scalar::CAPACITY,
-            ));
-        }
         self.real_bits = new_real_bits;
         self.valid_bits = cmp::min(self.valid_bits, other.valid_bits);
 
@@ -173,13 +177,6 @@ impl<Scalar: PrimeField> Num<Scalar> {
     }
 
     pub fn mul(mut self, other: &Self, b: &mut impl IRBuilderT) -> Result<Self, String> {
-        match (&mut self.value, &other.value) {
-            (Some(ref mut self_val), Some(ref other_val)) => self_val.mul_assign(other_val),
-            _ => {}
-        }
-
-        self.zki_wire = b.mul(&self.zki_wire, &other.zki_wire);
-
         fn mul_bits(b1: u16, b2: u16) -> u16 {
             // If `bits == 0`, then the value must be zero, so the product is also zero.
             if b1 == 0 || b2 == 0 {
@@ -210,6 +207,14 @@ impl<Scalar: PrimeField> Num<Scalar> {
                 Scalar::NUM_BITS,
             ));
         }
+
+        match (&mut self.value, &other.value) {
+            (Some(ref mut self_val), Some(ref other_val)) => self_val.mul_assign(other_val),
+            _ => {}
+        }
+
+        self.zki_wire = b.mul(&self.zki_wire, &other.zki_wire);
+
         self.real_bits = new_real_bits;
 
         self.valid_bits = cmp::min(self.real_bits, other.real_bits);
@@ -221,6 +226,16 @@ impl<Scalar: PrimeField> Num<Scalar> {
     pub fn neg(mut self, b: &mut impl IRBuilderT) -> Result<Self, String> {
         // Computing `0 - a` in the field could underflow, producing garbage.  We instead compute
         // `2^N - a`, which never underflows, but does increase `real_bits` by one.
+
+        let new_real_bits = self.real_bits + 1;
+        if new_real_bits > Scalar::CAPACITY as u16 {
+            return Err(format!(
+                "negation of {} bits doesn't fit in a field element ({} bits)",
+                self.real_bits,
+                Scalar::CAPACITY,
+            ));
+        }
+
         let max_value: Scalar =
             scalar_from_biguint::<Scalar>(&(BigUint::from(1_u8) << self.real_bits))?;
 
@@ -234,14 +249,6 @@ impl<Scalar: PrimeField> Num<Scalar> {
         let max_wire = b.new_constant(encode_scalar(&max_value));
         self.zki_wire = b.sub(&max_wire, &self.zki_wire);
 
-        let new_real_bits = self.real_bits + 1;
-        if new_real_bits > Scalar::CAPACITY as u16 {
-            return Err(format!(
-                "negation of {} bits doesn't fit in a field element ({} bits)",
-                self.real_bits,
-                Scalar::CAPACITY,
-            ));
-        }
         self.real_bits = new_real_bits;
         // `valid_bits` remains the same.
 
@@ -277,6 +284,8 @@ impl<Scalar: PrimeField> Num<Scalar> {
         };
 
         // result = cond * (self - else) + else
+        // This computation is field size agnostic: some steps may overflow the `Scalar` modulus or
+        // any higher modulus, without affecting the result.
         let self_else = b.sub(&self.zki_wire, &else_.zki_wire);
         let cond_self_else = b.mul(&self_else, &cond.zki_wire);
         self.zki_wire = b.add(&cond_self_else, &else_.zki_wire);
@@ -319,29 +328,7 @@ impl<Scalar: PrimeField> Num<Scalar> {
         // let num = self.zki_wire.clone();
         let is_zero = is_zero_bool.wire(b);
 
-        // Enforce that (is_zero * num == 0), then we have:
-        //     (num != 0) implies (is_zero == 0)
-        // (is_zero != 0) implies (num == 0)
-        let product = b.mul(&is_zero, &self.zki_wire);
-        b.assert_zero(&product);
-
-        // Compute the inverse of num.
-        // We don't prove that it is necessarily the inverse, but we need it to
-        // satisfy the constraint below in the case where (is_zero == 0).
-
-        let inverse_value = self
-            .value
-            .map(|val| encode_scalar(&val.invert().unwrap_or_else(|| Scalar::zero())));
-
-        let inverse = b.new_witness(inverse_value);
-
-        // Enforce that (num * inverse + is_zero - 1 == 0), then we have:
-        //     (num == 0) implies (is_zero == 1)
-        // (is_zero != 1) implies (num != 0)
-        let num_inverse = b.mul(&self.zki_wire, &inverse);
-        let n_i_iz = b.add(&num_inverse, &is_zero);
-        let n_i_iz_1 = b.addc(&n_i_iz, b.neg_one());
-        b.assert_zero(&n_i_iz_1);
+        b.check_is_zero(&self.zki_wire, &self.value, &is_zero);
 
         is_zero_bool
     }

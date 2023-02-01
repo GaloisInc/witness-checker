@@ -42,6 +42,7 @@ subtle = "2.2.1"
 bumpalo = "3.4"
 
 num-bigint = "0.3.0"
+num-integer = "0.1.43"
 num-traits = "0.2.12"
 
 generic-array = "*"

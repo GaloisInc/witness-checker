@@ -48,11 +48,10 @@ pub fn encode_scalar<Scalar: PrimeField>(fr: &Scalar) -> Vec<u8> {
     le
 }
 
-pub fn encode_field_order<Scalar: PrimeField>() -> Vec<u8> {
+pub fn get_field_order<Scalar: PrimeField>() -> BigUint {
     let neg_one = Scalar::one().neg();
     let neg_one = BigUint::from_bytes_le(&encode_scalar(&neg_one));
-    let order: BigUint = neg_one + BigUint::one();
-    order.to_bytes_le()
+    neg_one + BigUint::one()
 }
 
 pub fn _scalar_from_unsigned<Scalar: PrimeField>(val: u64) -> Result<Scalar, String> {
