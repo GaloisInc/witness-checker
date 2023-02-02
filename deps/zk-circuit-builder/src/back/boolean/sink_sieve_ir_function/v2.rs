@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use zki_sieve_v3;
 use zki_sieve_v3::structs::count::Count;
 use zki_sieve_v3::structs::directives::Directive;
 use zki_sieve_v3::structs::function::{Function, FunctionBody};
 use zki_sieve_v3::structs::gates::Gate;
+use zki_sieve_v3::structs::plugin::PluginBody;
 use zki_sieve_v3::structs::private_inputs::PrivateInputs;
 use zki_sieve_v3::structs::public_inputs::PublicInputs;
 use zki_sieve_v3::structs::relation::Relation;
@@ -75,6 +77,31 @@ impl SieveIrFormat for SieveIrV2 {
         )
     }
 
+    const HAS_PLUGINS: bool = true;
+
+    fn new_plugin_function(
+        name: String,
+        outs: impl IntoIterator<Item = u64>,
+        ins: impl IntoIterator<Item = u64>,
+        plugin_name: String,
+        op_name: String,
+        args: Vec<String>,
+    ) -> Function {
+        let body = PluginBody {
+            name: plugin_name,
+            operation: op_name,
+            params: args,
+            public_count: HashMap::new(),
+            private_count: HashMap::new(),
+        };
+        Function::new(
+            name,
+            outs.into_iter().map(|n| Count::new(0, n)).collect(),
+            ins.into_iter().map(|n| Count::new(0, n)).collect(),
+            FunctionBody::PluginBody(body),
+        )
+    }
+
     fn relation_gate_count_approx(r: &Relation) -> usize {
         r.directives.len()
     }
@@ -83,7 +110,7 @@ impl SieveIrFormat for SieveIrV2 {
         mut visit_gate: impl FnMut(Gate),
         mut visit_function: impl FnMut(Function),
     ) {
-        debug_assert_eq!(r.plugins, Vec::<String>::new());
+        debug_assert_eq!(r.plugins, vec!["mux_v0"]);
         debug_assert_eq!(r.types, vec![Type::Field(vec![2])]);
         for d in r.directives {
             match d {
