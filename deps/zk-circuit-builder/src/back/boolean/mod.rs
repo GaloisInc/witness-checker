@@ -298,7 +298,6 @@ impl<'w, S: Sink> Backend<'w, S> {
                             let quot_times_b_plus_rem =
                                 self.sink.add_no_wrap(TEMP, n, quot_times_b, rem);
                             let eq_bits_inv = self.sink.xor(TEMP, n, a, quot_times_b_plus_rem);
-                            dbg!(eq_bits_inv);
                             self.sink.assert_zero(n, eq_bits_inv);
                         }
 
@@ -316,12 +315,10 @@ impl<'w, S: Sink> Backend<'w, S> {
                             // `rem < b` if the sign bit of `rem - b` is set.
                             let rem_lt_b = rem_minus_b_ext + n;
                             let rem_lt_b_inv = self.sink.not(TEMP, 1, rem_lt_b);
-                            dbg!(rem_lt_b_inv);
 
                             let b_inv = self.sink.not(TEMP, n, b);
                             let b_zero = self.sink.and_all(TEMP, n, b_inv);
                             let b_zero_inv = self.sink.not(TEMP, 1, b_zero);
-                            dbg!(b_zero_inv);
 
                             let ok_inv = self.sink.and(TEMP, 1, rem_lt_b_inv, b_zero_inv);
                             self.sink.assert_zero(1, ok_inv);
