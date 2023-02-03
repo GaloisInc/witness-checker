@@ -13,14 +13,9 @@ pub fn mux(
     t: WireId,
     e: WireId,
 ) -> WireId {
-    // TODO: this can probably be optimized
-    let c_inv = sink.not(TEMP, 1, c);
-
+    // `((t ^ e) & c) ^ e`.  When `c` is zero, this is `0 ^ e`;  otherwise, this is `t ^ e ^ e`.
     let c_mask = sink.concat_chunks(TEMP, &[(Source::RepWire(c), n)]);
-    let c_inv_mask = sink.concat_chunks(TEMP, &[(Source::RepWire(c_inv), n)]);
-
-    let t_masked = sink.and(TEMP, n, t, c_mask);
-    let e_masked = sink.and(TEMP, n, e, c_inv_mask);
-
-    sink.xor(expire, n, t_masked, e_masked)
+    let te = sink.xor(TEMP, n, t, e);
+    let te_masked = sink.and(TEMP, n, te, c_mask);
+    sink.xor(expire, n, e, te_masked)
 }
