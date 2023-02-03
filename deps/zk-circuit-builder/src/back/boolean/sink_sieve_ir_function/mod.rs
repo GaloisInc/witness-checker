@@ -8,6 +8,7 @@ use std::mem;
 use num_bigint::BigUint;
 use zki_sieve;
 use zki_sieve_v3;
+use crate::back::UsePlugins;
 use crate::ir::circuit::Bits;
 use super::{Sink, WireId, Time, TEMP, Source, AssertNoWrap};
 use super::arith;
@@ -82,6 +83,10 @@ pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     /// Whether we've emitted a relation message yet.  The first relation message must contain some
     /// additional data.
     emitted_relation: bool,
+
+    // Plugins
+    use_plugin_mux_v0: bool,
+
     _marker: PhantomData<IR>,
 }
 
@@ -133,7 +138,7 @@ pub trait Dispatch {
 
 impl<S, IR: SieveIrFormat> SieveIrFunctionSink<S, IR>
 where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
-    pub fn new(sink: S) -> SieveIrFunctionSink<S, IR> {
+    pub fn new(sink: S, use_plugins: UsePlugins) -> SieveIrFunctionSink<S, IR> {
         SieveIrFunctionSink {
             sink,
             alloc: WireAlloc::new(vec![
@@ -151,6 +156,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             func_info: Vec::new(),
             func_map: HashMap::new(),
             emitted_relation: false,
+            use_plugin_mux_v0: use_plugins.mux_v0,
             _marker: PhantomData,
         }
     }
@@ -227,7 +233,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         if IR::HAS_PLUGINS {
             match desc {
-                FunctionDesc::Mux(n) => {
+                FunctionDesc::Mux(n) if self.use_plugin_mux_v0 => {
                     let (idx, name) = self.add_func_info(desc, &[n], &[1, n, n]);
                     if n == 0 {
                         return idx;
@@ -259,6 +265,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             func_info: mem::take(&mut self.func_info),
             func_map: mem::take(&mut self.func_map),
             emitted_relation: false,
+            use_plugin_mux_v0: self.use_plugin_mux_v0,
             _marker: PhantomData,
         };
 

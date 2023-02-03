@@ -563,6 +563,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 #[cfg(test)]
 mod test {
     use std::collections::{HashMap, HashSet};
+    use crate::back::UsePlugins;
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
         IntSize,
@@ -900,14 +901,14 @@ mod test {
         let mut sieve_ir_backend = {
             use zki_sieve::producers::sink::MemorySink;
             let sink = MemorySink::default();
-            let sink = sink_sieve_ir_function::SieveIrV1Sink::new(sink);
+            let sink = sink_sieve_ir_function::SieveIrV1Sink::new(sink, UsePlugins::all());
             Backend::new(sink)
         };
         #[cfg(feature = "sieve_ir")]
         let mut sieve_ir_v2_backend = {
             use zki_sieve_v3::producers::sink::MemorySink;
             let sink = MemorySink::default();
-            let sink = sink_sieve_ir_function::SieveIrV2Sink::new(sink);
+            let sink = sink_sieve_ir_function::SieveIrV2Sink::new(sink, UsePlugins::all());
             Backend::new(sink)
         };
 

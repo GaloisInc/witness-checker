@@ -8,7 +8,7 @@ use env_logger;
 use num_bigint::BigUint;
 use num_traits::One;
 
-use zk_circuit_builder::back;
+use zk_circuit_builder::back::{self, UsePlugins};
 use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
 use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
@@ -92,6 +92,11 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("skip-backend-validation")
              .long("skip-backend-validation")
              .help("don't validate the circuit constructed by the backend"))
+        .arg(Arg::with_name("available-plugins")
+             .long("available-plugins")
+             .takes_value(true)
+             .value_name("NAMES")
+             .help("enable only the listed IR0+ plugins (default: enable all plugins)"))
 
         // Debug flags
         .arg(Arg::with_name("debug-segment-graph")
@@ -230,6 +235,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             panic!("invalid --field-modulus {:?}: {}", s, e);
         })
     });
+    let use_plugins = args.value_of("available-plugins")
+        .map(UsePlugins::from_str)
+        .unwrap_or_else(UsePlugins::all);
     let mut backend =
         if let Some(workspace) = args.value_of("sieve-ir-out") {
             assert!(modulus.is_none(),
@@ -246,7 +254,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         } else if let Some(workspace) = args.value_of("boolean-sieve-ir-v2-out") {
             assert!(modulus.is_none(),
                 "--field-modulus is not supported with --boolean-sieve-ir-v2-out");
-            back::new_boolean_sieve_ir_v2(workspace)
+            back::new_boolean_sieve_ir_v2(workspace, use_plugins)
         } else if let Some(dest) = args.value_of_os("zkif-out") {
             assert!(modulus.is_none(), "--field-modulus is not supported with --zkif-out");
             back::new_zkif(dest)
