@@ -1,4 +1,4 @@
-# Cheesecloth witness checker prototype
+# Cheesecloth witness checker
 
 This tool constructs a witness/trace checking circuit, which checks that a
 (secret) trace represents a valid execution of a (public) program.  The output
@@ -27,3 +27,25 @@ later evaluate using `mac-n-cheese` or a similar tool.
 
 You may need to add `CARGO_NET_GIT_FETCH_WITH_CLI=true` to `cargo` commands to
 clone dependencies.
+
+
+## Output formats
+
+`witness-checker` can produce circuits in several formats, selected by
+command-line arguments:
+
+* `--zkif-out DIR`: Generate R1CS in zkinterface format in directory `DIR/`.
+  The constraint system uses the field `F128p` (integers modulo `2^128 - 159`).
+* `--sieve-ir-out DIR`: Generate an arithmetic circuit in the SIEVE phase 1 IR
+  format ("IR1") in directory `DIR/`.  The circuit uses the field `F128p`.
+* `--sieve-ir-v2-out DIR`: Generate an arithmetic circuit in the SIEVE phase 2
+  IR format ("IR0+") in directory `DIR/`.  The circuit uses the field `F128p`.
+* `--boolean-sieve-ir-out DIR`: Generate a boolean circuit in the SIEVE phase 1
+  IR format ("IR1") in directory `DIR/`.  The circuit uses the field `F2`
+  (integers modulo 2).
+* `--boolean-sieve-ir-v2-out DIR`: Generate a boolean circuit in the SIEVE
+  phase 2 IR format ("IR0+") in directory `DIR/`.  The circuit uses the field
+  `F2` (integers modulo 2).
+
+For some output formats, it's possible to select a non-default prime field
+using the `--field-modulus P` option.
