@@ -970,6 +970,10 @@ mod test {
         test_gate_with_arith_sink(TestArithSink::default(), input_bits, false, f)
     }
 
+    /// Like `test_gate`, but skips testing with the SIEVE IR v2 evaluator.  This is a workaround
+    /// for lack of support for certain plugins in the evaluator.
+    ///
+    /// TODO: Remove this once the evaluator supports all the necessary plugins.
     fn test_gate_skip_v2_eval<const N: usize>(
         input_bits: [i16; N],
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
