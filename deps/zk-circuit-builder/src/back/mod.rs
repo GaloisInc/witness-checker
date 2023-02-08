@@ -30,6 +30,50 @@ pub unsafe trait Backend<'a> {
 }
 
 
+macro_rules! declare_use_plugins {
+    ($($plugin:ident),*) => {
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub struct UsePlugins {
+            $(pub $plugin: bool,)*
+        }
+
+        impl UsePlugins {
+            pub fn none() -> UsePlugins {
+                UsePlugins {
+                    $($plugin: false,)*
+                }
+            }
+
+            pub fn all() -> UsePlugins {
+                UsePlugins {
+                    $($plugin: true,)*
+                }
+            }
+
+            pub fn set(&mut self, name: &str, value: bool) {
+                let UsePlugins { $(ref mut $plugin,)* } = *self;
+                match name {
+                    $(stringify!($plugin) => { *$plugin = value; },)*
+                    // Ignore unknown plugins
+                    _ => {},
+                }
+            }
+
+            /// Parse a comma-separated list of plugin names into an `UsePlugins` set that
+            /// contains only those plugins.
+            pub fn from_str(x: &str) -> UsePlugins {
+                let mut ap = UsePlugins::none();
+                for name in x.split(",") {
+                    ap.set(name.trim(), true);
+                }
+                ap
+            }
+        }
+    };
+}
+declare_use_plugins!(mux_v0);
+
+
 #[cfg(feature = "bellman")]
 pub mod zkif;
 
@@ -285,7 +329,7 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
 
         let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
-        let bool_sink = SieveIrV1Sink::new(sink);
+        let bool_sink = SieveIrV1Sink::new(sink, UsePlugins::none());
         let backend = Backend::new(bool_sink);
         return Box::new(BackendWrapper {
             backend,
@@ -332,7 +376,10 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
     }
 }
 
-pub fn new_boolean_sieve_ir_v2<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
+pub fn new_boolean_sieve_ir_v2<'a>(
+    workspace: &str,
+    use_plugins: UsePlugins,
+) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
         use self::boolean::Backend;
@@ -350,7 +397,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a>
 
         let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
-        let bool_sink = SieveIrV2Sink::new(sink);
+        let bool_sink = SieveIrV2Sink::new(sink, use_plugins);
         let backend = Backend::new(bool_sink);
         return Box::new(BackendWrapper {
             backend,

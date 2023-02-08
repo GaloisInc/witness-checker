@@ -17,6 +17,7 @@ use crate::ir::circuit::{
 
 
 mod arith;
+mod ops;
 #[cfg(feature = "sieve_ir")]
 pub mod sink_sieve_ir_function;
 mod wire_alloc;
@@ -87,6 +88,8 @@ pub trait Sink {
     /// Multiply two `n`-bit inputs to produce a `2n`-bit product.
     fn wide_mul(&mut self, expire: Time, n: u64, a: WireId, b: WireId) -> WireId;
     fn neg(&mut self, expire: Time, n: u64, a: WireId) -> WireId;
+
+    fn mux(&mut self, expire: Time, n: u64, c: WireId, t: WireId, e: WireId) -> WireId;
 
     fn assert_zero(&mut self, n: u64, a: WireId);
 
@@ -295,7 +298,6 @@ impl<'w, S: Sink> Backend<'w, S> {
                             let quot_times_b_plus_rem =
                                 self.sink.add_no_wrap(TEMP, n, quot_times_b, rem);
                             let eq_bits_inv = self.sink.xor(TEMP, n, a, quot_times_b_plus_rem);
-                            dbg!(eq_bits_inv);
                             self.sink.assert_zero(n, eq_bits_inv);
                         }
 
@@ -313,12 +315,10 @@ impl<'w, S: Sink> Backend<'w, S> {
                             // `rem < b` if the sign bit of `rem - b` is set.
                             let rem_lt_b = rem_minus_b_ext + n;
                             let rem_lt_b_inv = self.sink.not(TEMP, 1, rem_lt_b);
-                            dbg!(rem_lt_b_inv);
 
                             let b_inv = self.sink.not(TEMP, n, b);
                             let b_zero = self.sink.and_all(TEMP, n, b_inv);
                             let b_zero_inv = self.sink.not(TEMP, 1, b_zero);
-                            dbg!(b_zero_inv);
 
                             let ok_inv = self.sink.and(TEMP, 1, rem_lt_b_inv, b_zero_inv);
                             self.sink.assert_zero(1, ok_inv);
@@ -457,17 +457,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let c = self.wire_map[&cw];
                 let t = self.wire_map[&tw];
                 let e = self.wire_map[&ew];
-
-                // TODO: this can probably be optimized
-                let c_inv = self.sink.not(TEMP, 1, c);
-
-                let c_mask = self.sink.concat_chunks(TEMP, &[(Source::RepWire(c), n)]);
-                let c_inv_mask = self.sink.concat_chunks(TEMP, &[(Source::RepWire(c_inv), n)]);
-
-                let t_masked = self.sink.and(TEMP, n, t, c_mask);
-                let e_masked = self.sink.and(TEMP, n, e, c_inv_mask);
-
-                self.sink.xor(expire, n, t_masked, e_masked)
+                self.sink.mux(expire, n, c, t, e)
             },
 
             GateKind::Cast(aw, ty) => {
@@ -573,6 +563,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 #[cfg(test)]
 mod test {
     use std::collections::{HashMap, HashSet};
+    use crate::back::UsePlugins;
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
         IntSize,
@@ -749,6 +740,15 @@ mod test {
                 format_args!("neg({})", a))
         }
 
+        fn mux(&mut self, expire: Time, n: u64, c: WireId, t: WireId, e: WireId) -> WireId {
+            let c_uint = self.get_uint(1, c);
+            let t_uint = self.get_uint(n, t);
+            let e_uint = self.get_uint(n, e);
+            let out_uint = if !c_uint.is_zero() { t_uint } else { e_uint };
+            self.init(expire, n, |_, i| out_uint.bit(i),
+                format_args!("mux({}, {}, {})", c, t, e))
+        }
+
         fn assert_zero(&mut self, n: u64, a: WireId) {
             for i in 0 .. n {
                 trace!("assert_zero({}) = {}", a + i, self.get(a + i));
@@ -839,6 +839,10 @@ mod test {
             arith::neg(self, expire, n, a)
         }
 
+        fn mux(&mut self, expire: Time, n: u64, c: WireId, t: WireId, e: WireId) -> WireId {
+            self.inner.mux(expire, n, c, t, e)
+        }
+
         fn assert_zero(&mut self, n: u64, a: WireId) {
             self.inner.assert_zero(n, a);
         }
@@ -885,6 +889,7 @@ mod test {
     fn test_gate_with_arith_sink<const N: usize>(
         arith_sink: TestArithSink,
         input_bits: [i16; N],
+        skip_v2_eval: bool,
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
     ) {
         let arenas = Arenas::new();
@@ -896,14 +901,14 @@ mod test {
         let mut sieve_ir_backend = {
             use zki_sieve::producers::sink::MemorySink;
             let sink = MemorySink::default();
-            let sink = sink_sieve_ir_function::SieveIrV1Sink::new(sink);
+            let sink = sink_sieve_ir_function::SieveIrV1Sink::new(sink, UsePlugins::all());
             Backend::new(sink)
         };
         #[cfg(feature = "sieve_ir")]
         let mut sieve_ir_v2_backend = {
             use zki_sieve_v3::producers::sink::MemorySink;
             let sink = MemorySink::default();
-            let sink = sink_sieve_ir_function::SieveIrV2Sink::new(sink);
+            let sink = sink_sieve_ir_function::SieveIrV2Sink::new(sink, UsePlugins::all());
             Backend::new(sink)
         };
 
@@ -913,6 +918,9 @@ mod test {
 
             #[cfg(feature = "sieve_ir")]
             sieve_ir_backend.enforce_true(&c, w);
+
+            #[cfg(feature = "sieve_ir")]
+            sieve_ir_v2_backend.enforce_true(&c, w);
         });
 
         #[cfg(feature = "sieve_ir")]
@@ -934,7 +942,7 @@ mod test {
         }
 
         #[cfg(feature = "sieve_ir")]
-        {
+        if !skip_v2_eval {
             use zki_sieve_v3::Source;
             use zki_sieve_v3::consumers::evaluator::{Evaluator, PlaintextBackend};
             use zki_sieve_v3::consumers::validator::Validator;
@@ -946,27 +954,6 @@ mod test {
             let mut validator = Validator::new_as_prover();
             for msg in source.iter_messages() {
                 let msg = msg.unwrap();
-                if let Message::Relation(ref r) = msg {
-                    for d in &r.directives {
-                        match *d {
-                            Directive::Function(ref f) => {
-                                eprintln!("function {} : {:?} -> {:?}",
-                                    f.name, f.input_count, f.output_count);
-                                match f.body {
-                                    FunctionBody::Gates(ref gs) => {
-                                        for g in gs {
-                                            eprintln!("  {:?}", g);
-                                        }
-                                    },
-                                    FunctionBody::PluginBody(ref p) => {
-                                        eprintln!("  plugin {:?}", p);
-                                    },
-                                }
-                            },
-                            Directive::Gate(ref g) => { eprintln!("{:?}", g); },
-                        }
-                    }
-                }
                 validator.ingest_message(&msg);
             }
             assert_eq!(validator.get_violations(), Vec::<String>::new());
@@ -980,7 +967,18 @@ mod test {
         input_bits: [i16; N],
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
     ) {
-        test_gate_with_arith_sink(TestArithSink::default(), input_bits, f)
+        test_gate_with_arith_sink(TestArithSink::default(), input_bits, false, f)
+    }
+
+    /// Like `test_gate`, but skips testing with the SIEVE IR v2 evaluator.  This is a workaround
+    /// for lack of support for certain plugins in the evaluator.
+    ///
+    /// TODO: Remove this once the evaluator supports all the necessary plugins.
+    fn test_gate_skip_v2_eval<const N: usize>(
+        input_bits: [i16; N],
+        mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
+    ) {
+        test_gate_with_arith_sink(TestArithSink::default(), input_bits, true, f)
     }
 
 
@@ -1117,6 +1115,15 @@ mod test {
 
 
     #[test]
+    fn mux_1() {
+        // Skip SIEVE IR v2 evaluation, since the current evaluator doesn't support the `mux_v0`
+        // plugin we use.
+        test_gate_skip_v2_eval([1, 1, 1], |c, [x, y, z]| c.mux(x, y, z));
+        test_gate_skip_v2_eval([1, -1, -1], |c, [x, y, z]| c.mux(x, y, z));
+    }
+
+
+    #[test]
     fn not_3() {
         test_gate([3], |c, [w]| c.not(w));
     }
@@ -1238,5 +1245,14 @@ mod test {
     fn ge_3() {
         test_gate([3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
         test_gate([-3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
+    }
+
+
+    #[test]
+    fn mux_3() {
+        // Skip SIEVE IR v2 evaluation, since the current evaluator doesn't support the `mux_v0`
+        // plugin we use.
+        test_gate_skip_v2_eval([1, 3, 3], |c, [x, y, z]| c.mux(x, y, z));
+        test_gate_skip_v2_eval([1, -3, -3], |c, [x, y, z]| c.mux(x, y, z));
     }
 }

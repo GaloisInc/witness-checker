@@ -744,6 +744,10 @@ mod test {
             self.inner.neg(expire, n, a)
         }
 
+        fn mux(&mut self, expire: Time, n: u64, c: WireId, t: WireId, e: WireId) -> WireId {
+            self.inner.mux(expire, n, c, t, e)
+        }
+
         fn assert_zero(&mut self, n: u64, a: WireId) {
             for i in 0 .. n {
                 trace!("assert_zero({}) = {}", a + i, self.inner.get(a + i));

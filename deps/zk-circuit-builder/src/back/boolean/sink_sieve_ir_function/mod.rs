@@ -5,11 +5,14 @@ use std::io;
 use std::iter;
 use std::marker::PhantomData;
 use std::mem;
+use num_bigint::BigUint;
 use zki_sieve;
 use zki_sieve_v3;
+use crate::back::UsePlugins;
 use crate::ir::circuit::Bits;
 use super::{Sink, WireId, Time, TEMP, Source, AssertNoWrap};
 use super::arith;
+use super::ops;
 use super::wire_alloc::WireAlloc;
 
 
@@ -48,6 +51,16 @@ pub trait SieveIrFormat {
         gates: Vec<Self::Gate>,
     ) -> Self::Function;
 
+    const HAS_PLUGINS: bool;
+    fn new_plugin_function(
+        name: String,
+        outs: impl IntoIterator<Item = u64>,
+        ins: impl IntoIterator<Item = u64>,
+        plugin_name: String,
+        op_name: String,
+        args: Vec<String>,
+    ) -> Self::Function;
+
     fn relation_gate_count_approx(r: &Self::Relation) -> usize;
     fn visit_relation(
         r: Self::Relation,
@@ -70,6 +83,10 @@ pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     /// Whether we've emitted a relation message yet.  The first relation message must contain some
     /// additional data.
     emitted_relation: bool,
+
+    // Plugins
+    use_plugin_mux_v0: bool,
+
     _marker: PhantomData<IR>,
 }
 
@@ -90,6 +107,7 @@ enum FunctionDesc {
     MulNoWrap(u64),
     WideMul(u64),
     Neg(u64),
+    Mux(u64),
 }
 
 struct FunctionInfo {
@@ -120,7 +138,7 @@ pub trait Dispatch {
 
 impl<S, IR: SieveIrFormat> SieveIrFunctionSink<S, IR>
 where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
-    pub fn new(sink: S) -> SieveIrFunctionSink<S, IR> {
+    pub fn new(sink: S, use_plugins: UsePlugins) -> SieveIrFunctionSink<S, IR> {
         SieveIrFunctionSink {
             sink,
             alloc: WireAlloc::new(vec![
@@ -138,6 +156,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             func_info: Vec::new(),
             func_map: HashMap::new(),
             emitted_relation: false,
+            use_plugin_mux_v0: use_plugins.mux_v0,
             _marker: PhantomData,
         }
     }
@@ -187,12 +206,52 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
+    fn add_func_info(
+        &mut self,
+        desc: FunctionDesc,
+        output_count: &[u64],
+        input_count: &[u64],
+    ) -> (usize, String) {
+        let idx = self.func_info.len();
+        self.func_map.insert(desc, idx);
+        let name = format!("f{}", idx);
+        self.func_info.push(FunctionInfo {
+            name: name.clone(),
+            counts: output_count.iter().cloned().chain(input_count.iter().cloned()).collect(),
+            num_outputs: output_count.len(),
+        });
+        (idx, name)
+    }
+
     fn get_function(
         &mut self,
         desc: FunctionDesc,
     ) -> usize {
         if let Some(s) = self.func_map.get(&desc) {
             return s.to_owned();
+        }
+
+        if IR::HAS_PLUGINS {
+            match desc {
+                FunctionDesc::Mux(n) if self.use_plugin_mux_v0 => {
+                    let (idx, name) = self.add_func_info(desc, &[n], &[1, n, n]);
+                    if n == 0 {
+                        return idx;
+                    }
+
+                    self.functions.push(IR::new_plugin_function(
+                        name.clone(),
+                        [n],
+                        [1, n, n],
+                        "mux_v0".into(),
+                        "strict".into(),
+                        vec![],
+                    ));
+                    return idx;
+                },
+
+                _ => {},
+            }
         }
 
         let mut sub_sink = SieveIrFunctionSink::<_, IR> {
@@ -206,6 +265,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             func_info: mem::take(&mut self.func_info),
             func_map: mem::take(&mut self.func_map),
             emitted_relation: false,
+            use_plugin_mux_v0: self.use_plugin_mux_v0,
             _marker: PhantomData,
         };
 
@@ -282,20 +342,21 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 sub_sink.copy_into(out, n, a_neg);
                 (vec![n], vec![n])
             },
+            FunctionDesc::Mux(n) => {
+                // Note the order of the `e` and `t` arguments is reversed, for compatibility with
+                // the `mux_v0` plugin.
+                let [out, c, e, t] = sub_sink.alloc.preallocate([n, 1, n, n]);
+                let mux = ops::mux(&mut sub_sink, TEMP, n, c, t, e);
+                sub_sink.copy_into(out, n, mux);
+                (vec![n], vec![1, n, n])
+            },
         };
 
         // Move `func_map` and `func_info` from `sub_sink` back into `self`, so in the future we
         // can use any extra functions that happened to be defined by this `sub_sink`.
         self.func_map = mem::take(&mut sub_sink.func_map);
         self.func_info = mem::take(&mut sub_sink.func_info);
-        let idx = self.func_info.len();
-        self.func_map.insert(desc, idx);
-        let name = format!("f{}", idx);
-        self.func_info.push(FunctionInfo {
-            name: name.clone(),
-            counts: output_count.iter().cloned().chain(input_count.iter().cloned()).collect(),
-            num_outputs: output_count.len(),
-        });
+        let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
 
         // For functions with no outputs (e.g. `And(0)`), we record an entry in `self.func_info`
         // but don't emit an actual `zki_sieve_v3` function.
@@ -447,6 +508,11 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         self.emit_call(expire, FunctionDesc::Neg(n), &[a])
     }
 
+    fn mux(&mut self, expire: Time, n: u64, c: WireId, t: WireId, e: WireId) -> WireId {
+        // Note the order of the `e` and `t` arguments is reversed - see `Mux` case above.
+        self.emit_call(expire, FunctionDesc::Mux(n), &[c, e, t])
+    }
+
     fn assert_zero(&mut self, n: u64, a: WireId) {
         for i in 0 .. n {
             self.gates.push(IR::gate_assert_zero(a + i));
@@ -581,6 +647,7 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
             directives,
         };
         if !self.emitted_relation {
+            r.plugins = vec!["mux_v0".into()];
             r.types = vec![Type::Field(vec![2])];
         }
         self.sink.push_relation_message(&r).unwrap();

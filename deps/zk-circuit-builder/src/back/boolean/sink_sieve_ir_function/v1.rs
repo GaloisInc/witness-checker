@@ -91,6 +91,19 @@ impl SieveIrFormat for SieveIrV1 {
         )
     }
 
+    const HAS_PLUGINS: bool = false;
+
+    fn new_plugin_function(
+        _name: String,
+        _outs: impl IntoIterator<Item = u64>,
+        _ins: impl IntoIterator<Item = u64>,
+        _plugin_name: String,
+        _op_name: String,
+        _args: Vec<String>,
+    ) -> Function {
+        panic!("plugins are not supported by this format")
+    }
+
     fn relation_gate_count_approx(r: &Relation) -> usize {
         r.gates.len()
     }
