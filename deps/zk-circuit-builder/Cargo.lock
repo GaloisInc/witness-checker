@@ -1394,6 +1394,7 @@ dependencies = [
  "generic-array",
  "log",
  "num-bigint",
+ "num-integer",
  "num-traits",
  "rand_core 0.5.1",
  "scuttlebutt",

@@ -69,8 +69,11 @@ pub fn div<Scalar: PrimeField>(
     let rest_num = Num::from_int(builder, &rest_int);
 
     // Ensure that: numerator == quotient * denominator + rest.
-    // we first compute 'quotient * denominator', then 'numerator - rest', finally compute the
+    // We first compute 'quotient * denominator', then 'numerator - rest', finally compute the
     // difference of the two and ensure that it's null.
+    //
+    // This logic is field size agnostic.  It may overflow in the `Scalar` field or in any larger
+    // field, but this won't affect the outcome.
     let quo_times_denom = builder.mul(&quot_num.zki_wire, &denom_num.zki_wire);
     let num_minus_rest = builder.sub(&numer_num.zki_wire, &rest_num.zki_wire);
     let diff_all = builder.sub(&quo_times_denom, &num_minus_rest);

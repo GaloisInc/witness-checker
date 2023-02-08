@@ -477,7 +477,7 @@ fn test_backend_sieve_ir_v2() -> zki_sieve_v3::Result<()> {
     use zki_sieve_v3::producers::sink::MemorySink;
     use zki_sieve_v3::Source;
 
-    let mut ir_builder = IRBuilder::new::<Scalar>(MemorySink::default());
+    let mut ir_builder = IRBuilder::new::<Scalar>(MemorySink::default(), None);
 
     // If you want a stacktrace to debug duplicate gates, set warnings_panic to true.
     ir_builder.enable_profiler();

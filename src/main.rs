@@ -2,8 +2,10 @@ use std::fs;
 use std::io;
 use std::iter;
 use std::path::Path;
+use std::str::FromStr;
 use clap::{App, Arg, ArgMatches};
 use env_logger;
+use num_bigint::BigUint;
 use num_traits::One;
 
 use zk_circuit_builder::back;
@@ -58,6 +60,11 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output boolean SIEVE IR v2 (IR0+) circuit representation in this directory"))
+        .arg(Arg::with_name("field-modulus")
+             .long("field-modulus")
+             .takes_value(true)
+             .value_name("P")
+             .help("generate a circuit in the field modulo P"))
         .arg(Arg::with_name("validate-only")
              .long("validate-only")
              .help("check only that the trace is valid; don't require it to demonstrate a bug"))
@@ -218,22 +225,36 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
 
     // Set up the backend.
+    let modulus = args.value_of("field-modulus").map(|s| {
+        BigUint::from_str(s).unwrap_or_else(|e| {
+            panic!("invalid --field-modulus {:?}: {}", s, e);
+        })
+    });
     let mut backend =
         if let Some(workspace) = args.value_of("sieve-ir-out") {
+            assert!(modulus.is_none(),
+                "--field-modulus is not supported with --sieve-ir-out");
             let dedup = args.is_present("sieve-ir-dedup");
             back::new_sieve_ir(workspace, dedup)
         } else if let Some(workspace) = args.value_of("sieve-ir-v2-out") {
             let dedup = args.is_present("sieve-ir-dedup");
-            back::new_sieve_ir_v2(workspace, dedup)
+            back::new_sieve_ir_v2(workspace, modulus, dedup)
         } else if let Some(workspace) = args.value_of("boolean-sieve-ir-out") {
+            assert!(modulus.is_none(),
+                "--field-modulus is not supported with --boolean-sieve-ir-out");
             back::new_boolean_sieve_ir(workspace)
         } else if let Some(workspace) = args.value_of("boolean-sieve-ir-v2-out") {
+            assert!(modulus.is_none(),
+                "--field-modulus is not supported with --boolean-sieve-ir-v2-out");
             back::new_boolean_sieve_ir_v2(workspace)
         } else if let Some(dest) = args.value_of_os("zkif-out") {
+            assert!(modulus.is_none(), "--field-modulus is not supported with --zkif-out");
             back::new_zkif(dest)
         } else if args.is_present("stats") {
+            // --field-modulus is accepted but ignored here.
             back::new_stats()
         } else {
+            // --field-modulus is accepted but ignored here.
             back::new_dummy()
         };
     let mcx_backend_guard = mcx.set_backend(&mut *backend);

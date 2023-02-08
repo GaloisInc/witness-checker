@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use num_bigint::BigUint;
 use crate::ir::circuit::{CircuitBase, Wire, EraseVisitor, MigrateVisitor};
 use crate::ir::migrate;
 use crate::stats::Stats;
@@ -185,7 +186,11 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
 #[cfg(feature = "sieve_ir")]
 pub mod sieve_ir_v2;
 
-pub fn new_sieve_ir_v2<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + 'a> {
+pub fn new_sieve_ir_v2<'a>(
+    workspace: &str,
+    modulus: Option<BigUint>,
+    dedup: bool,
+) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
         use self::sieve_ir_v2::{
@@ -205,7 +210,7 @@ pub fn new_sieve_ir_v2<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> 
 
         let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
-        let mut ir_builder = IRBuilder::new::<Scalar>(sink);
+        let mut ir_builder = IRBuilder::new::<Scalar>(sink, modulus);
         // ir_builder.enable_profiler();
         if !dedup {
             ir_builder.disable_dedup();

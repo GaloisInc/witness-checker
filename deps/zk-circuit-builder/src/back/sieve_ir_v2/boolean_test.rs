@@ -15,7 +15,7 @@ use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
 fn new_builder() -> IRBuilder<MemorySink> {
-    IRBuilder::new::<QuarkScalar>(MemorySink::default())
+    IRBuilder::new::<QuarkScalar>(MemorySink::default(), None)
 }
 
 fn evaluate(b: IRBuilder<MemorySink>) -> Evaluator<PlaintextBackend> {
