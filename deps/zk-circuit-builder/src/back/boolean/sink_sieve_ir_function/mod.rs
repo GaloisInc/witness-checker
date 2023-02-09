@@ -647,7 +647,9 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
             directives,
         };
         if !self.emitted_relation {
-            r.plugins = vec!["mux_v0".into()];
+            if self.use_plugin_mux_v0 {
+                r.plugins.push("mux_v0".into());
+            }
             r.types = vec![Type::Field(vec![2])];
         }
         self.sink.push_relation_message(&r).unwrap();
