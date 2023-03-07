@@ -12,8 +12,8 @@ use log::*;
 use zk_circuit_builder::gadget::bit_pack;
 use zk_circuit_builder::ir::circuit::CircuitExt;
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, Flatten};
-use zk_circuit_builder::routing::sort;
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, Flatten};
+use zk_circuit_builder::routing::sort::{self, CompareLt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
@@ -45,7 +45,7 @@ impl<'a> Memory<'a> {
     /// the segment.
     pub fn init_segment(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         seg: &MemSegment,
         mut exec_equivs: ExecSegments<'a, '_>,
     ) -> Vec<TWire<'a, u64>> {
@@ -110,7 +110,7 @@ impl<'a> Memory<'a> {
     pub fn add_cycles<'b>(
         &mut self,
         cx: &Context<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         len: usize,
         sparsity: usize,
     ) -> CyclePorts<'a> {
@@ -124,7 +124,7 @@ impl<'a> Memory<'a> {
     pub fn add_cycles_irregular<'b>(
         &mut self,
         cx: &Context<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         len: usize,
         idxs: impl IntoIterator<Item = usize>,
     ) -> CyclePorts<'a> {
@@ -137,7 +137,7 @@ impl<'a> Memory<'a> {
     fn add_cycles_common<'b>(
         &mut self,
         cx: &Context<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         cycles_len: u32,
         ranges: impl IntoIterator<Item = (u32, u8)>,
     ) -> CyclePorts<'a> {
@@ -195,7 +195,7 @@ impl<'a> Memory<'a> {
         self,
         mh: &mut MigrateHandle<'a>,
         cx: &mut Rooted<'a, Context<'a>>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
     ) {
         let (mut ports, unused): (_, Vec<bool>) = {
             let Memory { ports, unused } = self;
@@ -211,11 +211,11 @@ impl<'a> Memory<'a> {
             let mut sort = Rooted::new({
                 let packed_ports = ports.open(mh).iter().zip(unused.iter())
                     .filter_map(|(mp, &unused)| if unused { None } else { Some(mp) })
-                    .map(|&mp| PackedMemPort::from_unpacked(&b, mp))
+                    .map(|&mp| PackedMemPort::from_unpacked(b, mp))
                     .collect::<Vec<_>>();
                 // Using `lt` instead of `le` for the comparison here means the sortedness check will
                 // also ensure that every `MemPort` is distinct.
-                sort::sort(&b, &packed_ports, |b, &x, &y| b.lt(x, y))
+                sort::sort(b, &packed_ports, CompareLt)
             }, mh);
 
             while !sort.open(mh).is_ready() {
@@ -225,7 +225,7 @@ impl<'a> Memory<'a> {
 
             let (packed_ports, sorted) = sort.take().finish(b);
             wire_assert!(cx = &cx.open(mh), sorted, "memory op sorting failed");
-            packed_ports.iter().map(|pmp| pmp.unpack(&b)).collect::<Vec<_>>()
+            packed_ports.iter().map(|pmp| pmp.unpack(b)).collect::<Vec<_>>()
         }, mh);
 
         // Debug logging, showing the state before and after sorting.
@@ -258,7 +258,7 @@ impl<'a> Memory<'a> {
         if sorted_ports.open(mh).len() > 0 {
             let cx = cx.open(mh);
             let sorted_ports = sorted_ports.open(mh);
-            check_mem(&cx, &b, &sorted_ports[0], b.lit(false), sorted_ports[0]);
+            check_mem(&cx, b, &sorted_ports[0], b.lit(false), sorted_ports[0]);
         }
 
         for i in 1 .. sorted_ports.open(mh).len() {
@@ -268,7 +268,7 @@ impl<'a> Memory<'a> {
             let port = sorted_ports[i];
 
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
-            check_mem(&cx, &b, prev, prev_valid, port);
+            check_mem(&cx, b, prev, prev_valid, port);
 
             unsafe { mh.erase_and_migrate(b.circuit()) };
         }
@@ -447,7 +447,7 @@ impl<'a> CyclePorts<'a> {
     /// is the length passed to `add_cycles_irregular`) will produce every in-use `MemPort`.  This
     /// method achieves that by returning every port in `ports` aside from those that are publicly
     /// known to be unused (`num_candidate_users() == 0`).
-    pub fn get(&self, b: &Builder<'a>, i: usize) -> TWire<'a, MemPort> {
+    pub fn get(&self, b: &impl Builder<'a>, i: usize) -> TWire<'a, MemPort> {
         let (idx, user) = match self.index_to_port(u32::try_from(i).unwrap()) {
             Some(x) => x,
             // `None` means no port covers step `i`.
@@ -470,7 +470,7 @@ impl<'a> CyclePorts<'a> {
     /// Initialize the `MemPort` for `i` with the values in `port`.  `i` is the index of a cycle,
     /// not a port, so it can range up to `self.ports.len() * self.sparsity` (the number of cycles
     /// covered by this `CyclePorts`), not just `self.ports.len()` (the number of actual ports).
-    pub fn set_port(&mut self, b: &Builder<'a>, i: usize, port: MemPort) {
+    pub fn set_port(&mut self, b: &impl Builder<'a>, i: usize, port: MemPort) {
         let (idx, user) = self.index_to_port(u32::try_from(i).unwrap())
             .unwrap_or_else(|| panic!("no memory port is available for index {}", i));
         let smp = &mut self.ports[idx];
@@ -506,7 +506,7 @@ impl<'a> CyclePorts<'a> {
     }
 
     /// Perform validity checks, as described in `docs/memory_sparsity.md`.
-    fn assert_valid(&self, cx: &Context<'a>, b: &Builder<'a>) {
+    fn assert_valid(&self, cx: &Context<'a>, b: &impl Builder<'a>) {
         for (i, smp) in self.ports.iter().enumerate() {
             if smp.num_candidate_users() == 0 {
                 // This needs no assertion.  The port is publicly known to be unused, so we ensure
@@ -556,7 +556,7 @@ impl<'a> CyclePorts<'a> {
 /// well-aligned addresses.
 fn addr_misalignment<'a>(
     _cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     addr: TWire<'a, u64>,
     width: TWire<'a, MemOpWidth>,
 ) -> TWire<'a, ByteOffset> {
@@ -574,7 +574,7 @@ fn addr_misalignment<'a>(
 
 fn check_mem<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     prev: &TWire<'a, MemPort>,
     prev_valid: TWire<'a, bool>,
     port: TWire<'a, MemPort>,
@@ -664,7 +664,7 @@ fn check_mem<'a>(
 /// Extract `width` bytes from `value`, starting at the offset indicated by the low bits of `addr`.
 /// The result is zero-extended to 64 bits.
 pub fn extract_bytes_at_offset<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     value: TWire<'a, u64>,
     addr: TWire<'a, u64>,
     width: MemOpWidth,
@@ -695,7 +695,7 @@ pub fn extract_bytes_at_offset<'a>(
 
 /// Extract the low `width` bytes of `value`, zero-extended to 64 bits.
 pub fn extract_low_bytes<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     value: TWire<'a, u64>,
     width: MemOpWidth,
 ) -> TWire<'a, u64> {
@@ -718,7 +718,7 @@ pub fn extract_low_bytes<'a>(
 /// Compare `value1` and `value2` for equality, except the bytes identified by `addr` and `width`
 /// may vary.
 pub fn compare_except_bytes_at_offset<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     value1: TWire<'a, u64>,
     value2: TWire<'a, u64>,
     offset: TWire<'a, ByteOffset>,
@@ -747,7 +747,7 @@ pub fn compare_except_bytes_at_offset<'a>(
 }
 
 pub fn word_addr<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     addr: TWire<'a, u64>,
 ) -> TWire<'a, WordAddr> {
     let (_offset, waddr) = *bit_pack::split_bits::<(ByteOffset, WordAddr)>(b, addr.repr);

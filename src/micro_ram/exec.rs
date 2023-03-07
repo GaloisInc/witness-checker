@@ -3,7 +3,7 @@ use log::info;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{Builder, TWire};
+use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::known_mem::KnownMem;
@@ -36,7 +36,7 @@ pub struct ExecBuilder<'a> {
 
 impl<'a> ExecBuilder<'a> {
     pub fn build(
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         mcx: &'a MigrateContext<'a>,
         cx: Context<'a>,
         exec: &ExecBody,
@@ -60,7 +60,7 @@ impl<'a> ExecBuilder<'a> {
     }
 
     fn new(
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         cx: Context<'a>,
         exec: &ExecBody,
         equiv_segments: EquivSegments<'a>,
@@ -87,7 +87,7 @@ impl<'a> ExecBuilder<'a> {
         }
     }
 
-    fn init(&mut self, b: &Builder<'a>, exec: &ExecBody, exec_name: &str) {
+    fn init(&mut self, b: &impl Builder<'a>, exec: &ExecBody, exec_name: &str) {
         if let Some(ref out_path) = self.debug_segment_graph_path {
             std::fs::write(out_path, self.seg_graph_builder.dump()).unwrap();
         }
@@ -95,7 +95,7 @@ impl<'a> ExecBuilder<'a> {
         let mut kmem = KnownMem::with_default(b.lit(0));
         for seg in &exec.init_mem {
             let values = self.mem.init_segment(
-                &b, seg, self.equiv_segments.exec_segments(exec_name));
+                b, seg, self.equiv_segments.exec_segments(exec_name));
             kmem.init_segment(seg, &values);
         }
         self.seg_graph_builder.set_cpu_init_mem(kmem);
@@ -116,7 +116,7 @@ impl<'a> ExecBuilder<'a> {
     fn run(
         this: &mut Rooted<'a, Self>,
         mh: &mut MigrateHandle<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         exec: &ExecBody,
     ) {
         for item in this.open(mh).seg_graph_builder.get_order() {
@@ -136,7 +136,7 @@ impl<'a> ExecBuilder<'a> {
         }
     }
 
-    fn add_segment(&mut self, b: &Builder<'a>, exec: &ExecBody, idx: usize) {
+    fn add_segment(&mut self, b: &impl Builder<'a>, exec: &ExecBody, idx: usize) {
         let mut segment_builder = SegmentBuilder {
             cx: &self.cx,
             b: b,
@@ -149,7 +149,7 @@ impl<'a> ExecBuilder<'a> {
         };
 
         let seg_def = &exec.segments[idx];
-        let prev_state = self.seg_graph_builder.get_initial(&b, idx).clone();
+        let prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
         let prev_kmem = self.seg_graph_builder.take_initial_mem(idx);
         let (mut seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem);
         self.seg_graph_builder.set_final(idx, seg.final_state().clone());
@@ -177,7 +177,7 @@ impl<'a> ExecBuilder<'a> {
     fn finish(
         self,
         mh: &mut MigrateHandle<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         _exec: &ExecBody,
     ) -> (Context<'a>, EquivSegments<'a>) {
         let x = self;
@@ -208,7 +208,7 @@ impl<'a> ExecBuilder<'a> {
 
 fn check_last<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     s: &TWire<'a, RamState>,
     expect_zero: bool,
 ) {

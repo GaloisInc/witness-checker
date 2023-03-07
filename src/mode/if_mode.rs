@@ -1,7 +1,9 @@
 use zk_circuit_builder::eval::Evaluator;
 use zk_circuit_builder::ir::circuit::{CircuitTrait, Ty, Wire};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
-use zk_circuit_builder::ir::typed::{Builder, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire};
+use zk_circuit_builder::ir::typed::{
+    self, Builder, BuilderExt, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire,
+};
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
 use std::cell::Cell;
@@ -334,7 +336,7 @@ impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
         }
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         if let Some(w) = w.repr.try_unwrap() {
             A::to_wire(bld, w)
         } else {
@@ -342,19 +344,19 @@ impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
         }
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(IfMode::new(|_| A::from_wire(bld, w)))
     }
 }
 
 impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
-    fn lit(bld: &Builder<'a>, x: IfMode<M, A>) -> IfMode<M, TWire<'a, A>> {
+    fn lit(bld: &impl Builder<'a>, x: IfMode<M, A>) -> IfMode<M, TWire<'a, A>> {
         x.map(|x| bld.lit(x))
     }
 }
 
 impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
+    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
         IfMode::new(|_pf| bld.with_label("IfMode", || bld.secret_uninit()))
     }
 
@@ -362,7 +364,7 @@ impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
         if let Some(pf) = check_mode() {
             let s = s.get(&pf);
             let val = val.get(&pf);
-            Builder::set_secret_from_lit(&s, &val, force);
+            typed::set_secret_from_lit(&s, &val, force);
         }
     }
 }
@@ -376,7 +378,7 @@ where
 {
     type Output = IfMode<M, <T as Mux<'a, C, E>>::Output>;
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: IfMode<M, TWire<'a, T>>,
         e: IfMode<M, TWire<'a, E>>,

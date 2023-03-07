@@ -6,7 +6,7 @@ use zk_circuit_builder::eval::{self, CachingEvaluator, Evaluator};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitFilter, DynCircuit, FilterNil, TyKind, Wire,
 };
-use zk_circuit_builder::ir::typed::{self, Builder};
+use zk_circuit_builder::ir::typed::{self, BuilderExt, BuilderImpl};
 use zk_circuit_builder::lower;
 use num_bigint::BigInt;
 use zki_sieve::FilesSink;
@@ -61,7 +61,7 @@ where
 {
     let arenas = Arenas::new();
     let c = make_circuit!(&arenas);
-    let b = Builder::new(&c);
+    let b = BuilderImpl::new(&c);
 
 
     let inv = b.lit(x.inverse());

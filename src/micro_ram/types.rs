@@ -6,7 +6,7 @@ use zk_circuit_builder::eval::Evaluator;
 use zk_circuit_builder::gadget::bit_pack;
 use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
 use zk_circuit_builder::ir::typed::{
-    self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
+    self, Builder, BuilderExt, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::primitive_binary_impl;
@@ -99,7 +99,7 @@ impl<'a> Repr<'a> for RamInstr {
 }
 
 impl<'a> Lit<'a> for RamInstr {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         RamInstrRepr {
             opcode: bld.lit(a.opcode),
             dest: bld.lit(a.dest),
@@ -111,7 +111,7 @@ impl<'a> Lit<'a> for RamInstr {
 }
 
 impl<'a> Secret<'a> for RamInstr {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
+    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
         RamInstrRepr {
             opcode: bld.secret_uninit(),
             dest: bld.secret_uninit(),
@@ -122,11 +122,11 @@ impl<'a> Secret<'a> for RamInstr {
     }
 
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.opcode, &val.opcode, force);
-        Builder::set_secret_from_lit(&s.dest, &val.dest, force);
-        Builder::set_secret_from_lit(&s.op1, &val.op1, force);
-        Builder::set_secret_from_lit(&s.op2, &val.op2, force);
-        Builder::set_secret_from_lit(&s.imm, &val.imm, force);
+        typed::set_secret_from_lit(&s.opcode, &val.opcode, force);
+        typed::set_secret_from_lit(&s.dest, &val.dest, force);
+        typed::set_secret_from_lit(&s.op1, &val.op1, force);
+        typed::set_secret_from_lit(&s.op2, &val.op2, force);
+        typed::set_secret_from_lit(&s.imm, &val.imm, force);
     }
 }
 
@@ -140,7 +140,7 @@ where
     type Output = RamInstr;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: RamInstrRepr<'a>,
         e: RamInstrRepr<'a>,
@@ -158,7 +158,7 @@ where
 
 impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         let parts = [
             bld.eq(a.opcode, b.opcode),
             bld.eq(a.dest, b.dest),
@@ -227,7 +227,7 @@ impl<'a> Repr<'a> for RamState {
 }
 
 impl<'a> Lit<'a> for RamState {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         RamStateRepr {
             cycle: bld.lit(a.cycle),
             pc: bld.lit(a.pc),
@@ -239,28 +239,28 @@ impl<'a> Lit<'a> for RamState {
 }
 
 impl<'a> Secret<'a> for RamState {
-    fn secret(_bld: &Builder<'a>) -> Self::Repr {
+    fn secret(_bld: &impl Builder<'a>) -> Self::Repr {
         panic!("can't construct RamState via Builder::secret - use RamState::secret instead");
     }
 
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
-        Builder::set_secret_from_lit(&s.pc, &val.pc, force);
+        typed::set_secret_from_lit(&s.cycle, &val.cycle, force);
+        typed::set_secret_from_lit(&s.pc, &val.pc, force);
         assert_eq!(s.regs.len(), val.regs.len());
         for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
-            Builder::set_secret_from_lit(s_reg, val_reg, force);
+            typed::set_secret_from_lit(s_reg, val_reg, force);
         }
         if let Some(pf) = check_mode::<AnyTainted>() {
             for (s_reg, val_reg) in s.tainted_regs.get(&pf).iter().zip(val.tainted_regs.get(&pf).iter()) {
-                Builder::set_secret_from_lit(s_reg, val_reg, force);
+                typed::set_secret_from_lit(s_reg, val_reg, force);
             }
         }
-        Builder::set_secret_from_lit(&s.live, &val.live, force);
+        typed::set_secret_from_lit(&s.live, &val.live, force);
     }
 }
 
 impl RamState {
-    pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
+    pub fn secret_with_value<'a>(bld: &impl Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
             cycle: bld.secret_init(|| a.cycle),
             pc: bld.secret_init(|| a.pc),
@@ -272,7 +272,7 @@ impl RamState {
         })
     }
 
-    pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
+    pub fn secret_with_len<'a>(bld: &impl Builder<'a>, len: usize) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
             cycle: bld.secret_uninit(),
             pc: bld.secret_uninit(),
@@ -287,7 +287,7 @@ impl RamState {
     }
 
     pub fn secret<'a>(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         len: usize,
     ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
         let wire = Self::secret_with_len(bld, len);
@@ -317,7 +317,7 @@ where
     type Output = RamState;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: Self::Repr,
         e: Self::Repr,
@@ -342,7 +342,7 @@ where
 
 impl<'a> typed::Eq<'a, RamState> for RamState {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         assert_eq!(a.regs.len(), b.regs.len());
         let mut acc = bld.lit(true);
         acc = bld.and(acc, bld.eq(a.cycle, b.cycle));
@@ -409,39 +409,39 @@ macro_rules! mk_named_enum {
 
         impl<'a> Flatten<'a> for $Name {
             fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::U8) }
-            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
-            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+            fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
+            fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::U8);
                 TWire::new(TWire::new(w))
             }
         }
 
         impl<'a> Lit<'a> for $Name {
-            fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+            fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
                 bld.lit(a as u8)
             }
         }
 
         impl<'a> Secret<'a> for $Name {
-            fn secret(bld: &Builder<'a>) -> Self::Repr {
+            fn secret(bld: &impl Builder<'a>) -> Self::Repr {
                 bld.secret_uninit()
             }
 
             fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-                Builder::set_secret_from_lit(s, val, force);
+                typed::set_secret_from_lit(s, val, force);
             }
         }
 
         impl<'a> typed::Eq<'a, $Name> for $Name {
             type Output = bool;
-            fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+            fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
                 bld.eq(a, b).repr
             }
         }
 
         impl<'a> typed::Ne<'a, $Name> for $Name {
             type Output = bool;
-            fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+            fn ne(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
                 bld.ne(a, b).repr
             }
         }
@@ -592,11 +592,11 @@ impl<'a> Flatten<'a> for Label {
         c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16)))
     }
 
-    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
@@ -610,20 +610,20 @@ impl<'a> FromEval<'a> for Label {
 
 // Cast u64 to Label.
 impl<'a> Cast<'a, Label> for u64 {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         let ty = <Label as Flatten>::wire_type(bld.circuit());
         bld.circuit().cast(x, ty)
     }
 }
 
 impl<'a> Cast<'a, u64> for Label {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         bld.circuit().cast(x, bld.circuit().ty(TyKind::U64))
     }
 }
 
 impl<'a> Lit<'a> for Label {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         assert!(valid_label(a.0));
 
         // bld.lit(a.0).repr
@@ -637,7 +637,7 @@ impl<'a> Mux<'a, bool, Label> for Label {
     type Output = Label;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: Wire<'a>,
         t: Wire<'a>,
         e: Wire<'a>,
@@ -647,7 +647,7 @@ impl<'a> Mux<'a, bool, Label> for Label {
 }
 
 impl<'a> Secret<'a> for Label {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
+    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
         let ty = <Label as Flatten>::wire_type(bld.circuit());
         bld.circuit().new_secret_wire_uninit(ty)
     }
@@ -672,7 +672,7 @@ impl fmt::Debug for WordLabel {
 
 impl<'a> typed::Eq<'a, WordLabel> for WordLabel {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         let mut acc = bld.eq(a[0], b[0]);
         for (&a,&b) in a.iter().zip(b.iter()).skip(1) {
             acc = bld.and(acc, bld.eq(a,b));
@@ -687,7 +687,7 @@ impl<'a> Repr<'a> for WordLabel {
 }
 
 impl<'a> Lit<'a> for WordLabel {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         <[Label; WORD_BYTES]>::lit(bld, a.0)
     }
 }
@@ -700,7 +700,7 @@ where
     type Output = WordLabel;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: [TWire<'a, Label>; 8],
         e: [TWire<'a, Label>; 8],
@@ -710,7 +710,7 @@ where
 }
 
 impl<'a> Secret<'a> for WordLabel {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
+    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
         <[Label; WORD_BYTES]>::secret(bld)
     }
 
@@ -724,11 +724,11 @@ impl<'a> Flatten<'a> for WordLabel {
         <[Label; WORD_BYTES]>::wire_type(c)
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         <[Label; WORD_BYTES]>::to_wire(bld, TWire::new(w.repr))
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(<[Label; WORD_BYTES]>::from_wire(bld, w).repr)
     }
 }
@@ -793,7 +793,7 @@ where
     type Output = MemOpKind;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: TWire<'a, u8>,
         e: TWire<'a, u8>,
@@ -863,7 +863,7 @@ where
     type Output = MemOpWidth;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: TWire<'a, u8>,
         e: TWire<'a, u8>,
@@ -873,7 +873,7 @@ where
 }
 
 impl<'a> Cast<'a, u8> for MemOpWidth {
-    fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
         let ty = <u8 as Flatten>::wire_type(bld.circuit());
         bld.circuit().cast(x.repr, ty)
     }
@@ -894,7 +894,7 @@ impl<'a> Repr<'a> for MemPort {
 }
 
 impl<'a> Lit<'a> for MemPort {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         MemPortRepr {
             cycle: bld.lit(a.cycle),
             addr: bld.lit(a.addr),
@@ -907,7 +907,7 @@ impl<'a> Lit<'a> for MemPort {
 }
 
 impl<'a> Secret<'a> for MemPort {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
+    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
         MemPortRepr {
             cycle: bld.secret_uninit(),
             addr: bld.secret_uninit(),
@@ -919,12 +919,12 @@ impl<'a> Secret<'a> for MemPort {
     }
 
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
-        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
-        Builder::set_secret_from_lit(&s.value, &val.value, force);
-        Builder::set_secret_from_lit(&s.op, &val.op, force);
-        Builder::set_secret_from_lit(&s.width, &val.width, force);
-        Builder::set_secret_from_lit(&s.tainted, &val.tainted, force);
+        typed::set_secret_from_lit(&s.cycle, &val.cycle, force);
+        typed::set_secret_from_lit(&s.addr, &val.addr, force);
+        typed::set_secret_from_lit(&s.value, &val.value, force);
+        typed::set_secret_from_lit(&s.op, &val.op, force);
+        typed::set_secret_from_lit(&s.width, &val.width, force);
+        typed::set_secret_from_lit(&s.tainted, &val.tainted, force);
     }
 }
 
@@ -941,7 +941,7 @@ where
     type Output = MemPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: MemPortRepr<'a>,
         e: MemPortRepr<'a>,
@@ -982,17 +982,17 @@ impl<'a> Flatten<'a> for ByteOffset {
         c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
 
 impl<'a> Lit<'a> for ByteOffset {
-    fn lit(bld: &Builder<'a>, x: Self) -> Wire<'a> {
+    fn lit(bld: &impl Builder<'a>, x: Self) -> Wire<'a> {
         let c = bld.circuit();
         c.lit(Self::wire_type(c), x.raw() as u64)
     }
@@ -1000,7 +1000,7 @@ impl<'a> Lit<'a> for ByteOffset {
 
 impl<'a> Mux<'a, bool, ByteOffset> for ByteOffset {
     type Output = ByteOffset;
-    fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+    fn mux(bld: &impl Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
         bld.circuit().mux(c, t, e)
     }
 }
@@ -1008,13 +1008,13 @@ impl<'a> Mux<'a, bool, ByteOffset> for ByteOffset {
 
 impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a, b)
     }
 }
 
 impl<'a> Cast<'a, u8> for ByteOffset {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         bld.circuit().cast(x, bld.circuit().ty(TyKind::U8))
     }
 }
@@ -1038,18 +1038,18 @@ impl<'a> Flatten<'a> for WordAddr {
             MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
 
 impl<'a> typed::Eq<'a, WordAddr> for WordAddr {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a, b)
     }
 }
@@ -1065,7 +1065,7 @@ pub struct PackedMemPortRepr<'a> {
 
 impl PackedMemPort {
     pub fn from_unpacked<'a>(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         mp: TWire<'a, MemPort>,
     ) -> TWire<'a, PackedMemPort> {
         // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_CYCLE (-1) comes before all real
@@ -1083,7 +1083,7 @@ impl PackedMemPort {
 }
 
 impl<'a> PackedMemPortRepr<'a> {
-    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
+    pub fn unpack(&self, bld: &impl Builder<'a>) -> TWire<'a, MemPort> {
         let (cycle_adj, waddr) = *bit_pack::split_bits::<(u32, WordAddr)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
         let (value, op, width, tainted, offset) =
@@ -1101,7 +1101,7 @@ impl<'a> Mux<'a, bool, PackedMemPort> for PackedMemPort {
     type Output = PackedMemPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: Wire<'a>,
         t: Self::Repr,
         e: Self::Repr,
@@ -1115,21 +1115,21 @@ impl<'a> Mux<'a, bool, PackedMemPort> for PackedMemPort {
 
 impl<'a> typed::Eq<'a, PackedMemPort> for PackedMemPort {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a.key, b.key)
     }
 }
 
 impl<'a> typed::Lt<'a, PackedMemPort> for PackedMemPort {
     type Output = bool;
-    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn lt(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().lt(a.key, b.key)
     }
 }
 
 impl<'a> typed::Le<'a, PackedMemPort> for PackedMemPort {
     type Output = bool;
-    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn le(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().le(a.key, b.key)
     }
 }
@@ -1157,7 +1157,7 @@ impl<'a> Repr<'a> for FetchPort {
 }
 
 impl<'a> Lit<'a> for FetchPort {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         FetchPortRepr {
             addr: bld.lit(a.addr),
             instr: bld.lit(a.instr),
@@ -1167,7 +1167,7 @@ impl<'a> Lit<'a> for FetchPort {
 }
 
 impl<'a> Secret<'a> for FetchPort {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
+    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
         FetchPortRepr {
             addr: bld.secret_uninit(),
             instr: bld.secret_uninit(),
@@ -1176,9 +1176,9 @@ impl<'a> Secret<'a> for FetchPort {
     }
 
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
-        Builder::set_secret_from_lit(&s.instr, &val.instr, force);
-        Builder::set_secret_from_lit(&s.write, &val.write, force);
+        typed::set_secret_from_lit(&s.addr, &val.addr, force);
+        typed::set_secret_from_lit(&s.instr, &val.instr, force);
+        typed::set_secret_from_lit(&s.write, &val.write, force);
     }
 }
 
@@ -1192,7 +1192,7 @@ where
     type Output = FetchPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: FetchPortRepr<'a>,
         e: FetchPortRepr<'a>,
@@ -1216,7 +1216,7 @@ pub struct PackedFetchPortRepr<'a> {
 
 impl PackedFetchPort {
     pub fn from_unpacked<'a>(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         fp: TWire<'a, FetchPort>,
     ) -> TWire<'a, PackedFetchPort> {
         // ConcatBits is little-endian.  To sort by `addr` first and then by `write`, we have to
@@ -1234,7 +1234,7 @@ impl PackedFetchPort {
 }
 
 impl<'a> PackedFetchPortRepr<'a> {
-    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, FetchPort> {
+    pub fn unpack(&self, bld: &impl Builder<'a>) -> TWire<'a, FetchPort> {
         let (not_write, addr) = *bit_pack::split_bits::<(_, _)>(bld, self.key);
         let (opcode, dest, op1, op2, imm) =
             *bit_pack::split_bits::<(_, _, _, _, _)>(bld, self.data);
@@ -1254,7 +1254,7 @@ impl<'a> Mux<'a, bool, PackedFetchPort> for PackedFetchPort {
     type Output = PackedFetchPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: Wire<'a>,
         t: Self::Repr,
         e: Self::Repr,
@@ -1268,21 +1268,21 @@ impl<'a> Mux<'a, bool, PackedFetchPort> for PackedFetchPort {
 
 impl<'a> typed::Eq<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a.key, b.key)
     }
 }
 
 impl<'a> typed::Lt<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
-    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn lt(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().lt(a.key, b.key)
     }
 }
 
 impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
-    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn le(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().le(a.key, b.key)
     }
 }

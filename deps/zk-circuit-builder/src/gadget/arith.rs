@@ -3,7 +3,7 @@ use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
     CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind, GadgetKindRef,
 };
-use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
+use crate::ir::typed::{Builder, BuilderExt as _, Repr, TWire};
 
 
 fn overflow_result(ty: Ty, raw: BigInt) -> Value {
@@ -325,14 +325,14 @@ impl<'a> GadgetKind<'a> for WideMul {
 }
 
 
-pub trait BuilderExt<'a>: AsBuilder<'a> {
+pub trait BuilderExt<'a>: Builder<'a> {
     fn add_with_overflow<A: AddWithOverflowTrait<'a, B>, B: Repr<'a>>(
         &self,
         a: TWire<'a, A>,
         b: TWire<'a, B>,
     ) -> (TWire<'a, A::Output>, TWire<'a, bool>) {
         let (result, overflow) = <A as AddWithOverflowTrait<B>>::add_with_overflow(
-            self.as_builder(),
+            self,
             a.repr,
             b.repr,
         );
@@ -345,7 +345,7 @@ pub trait BuilderExt<'a>: AsBuilder<'a> {
         b: TWire<'a, B>,
     ) -> (TWire<'a, A::Output>, TWire<'a, bool>) {
         let (result, overflow) = <A as SubWithOverflowTrait<B>>::sub_with_overflow(
-            self.as_builder(),
+            self,
             a.repr,
             b.repr,
         );
@@ -358,21 +358,21 @@ pub trait BuilderExt<'a>: AsBuilder<'a> {
         b: TWire<'a, B>,
     ) -> TWire<'a, A::Output> {
         TWire::new(<A as WideMulTrait<B>>::wide_mul(
-            self.as_builder(),
+            self,
             a.repr,
             b.repr,
         ))
     }
 }
 
-impl<'a> BuilderExt<'a> for Builder<'a> {}
+impl<'a, B: Builder<'a>> BuilderExt<'a> for B {}
 
 
 pub trait AddWithOverflowTrait<'a, Other = Self>
 where Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn add_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Self::Repr,
         b: Other::Repr,
     ) -> (<Self::Output as Repr<'a>>::Repr, <bool as Repr<'a>>::Repr);
@@ -381,7 +381,7 @@ where Self: Repr<'a>, Other: Repr<'a> {
 impl<'a> AddWithOverflowTrait<'a> for u64 {
     type Output = u64;
     fn add_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (Wire<'a>, Wire<'a>) {
@@ -397,7 +397,7 @@ pub trait SubWithOverflowTrait<'a, Other = Self>
 where Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn sub_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Self::Repr,
         b: Other::Repr,
     ) -> (<Self::Output as Repr<'a>>::Repr, <bool as Repr<'a>>::Repr);
@@ -406,7 +406,7 @@ where Self: Repr<'a>, Other: Repr<'a> {
 impl<'a> SubWithOverflowTrait<'a> for u64 {
     type Output = u64;
     fn sub_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (Wire<'a>, Wire<'a>) {
@@ -422,7 +422,7 @@ pub trait WideMulTrait<'a, Other = Self>
 where Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn wide_mul(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Self::Repr,
         b: Other::Repr,
     ) -> <Self::Output as Repr<'a>>::Repr;
@@ -431,7 +431,7 @@ where Self: Repr<'a>, Other: Repr<'a> {
 impl<'a> WideMulTrait<'a> for u64 {
     type Output = (u64, u64);
     fn wide_mul(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (TWire<'a, u64>, TWire<'a, u64>) {
@@ -445,7 +445,7 @@ impl<'a> WideMulTrait<'a> for u64 {
 impl<'a> WideMulTrait<'a> for i64 {
     type Output = (u64, i64);
     fn wide_mul(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (TWire<'a, u64>, TWire<'a, i64>) {

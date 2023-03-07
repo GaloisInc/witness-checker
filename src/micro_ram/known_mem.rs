@@ -74,7 +74,7 @@ impl<'a> KnownMem<'a> {
 
     pub fn load(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         width: MemOpWidth,
@@ -87,7 +87,7 @@ impl<'a> KnownMem<'a> {
 
     fn load_public(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         addr: u64,
         width: MemOpWidth,
     ) -> Option<TWire<'a, u64>> {
@@ -168,7 +168,7 @@ impl<'a> KnownMem<'a> {
 
     pub fn store(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
@@ -179,7 +179,7 @@ impl<'a> KnownMem<'a> {
 
     pub fn poison(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
@@ -190,7 +190,7 @@ impl<'a> KnownMem<'a> {
 
     fn store_common(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         ev: &mut CachingEvaluator<'a, eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
@@ -221,7 +221,7 @@ impl<'a> KnownMem<'a> {
 
     fn store_public(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         addr: u64,
         value: TWire<'a, u64>,
         width: MemOpWidth,
@@ -391,7 +391,7 @@ fn split_mem_addr(addr: u64) -> (u64, ByteOffset) {
 ///
 /// Note that this function uses exclusive ranges (`lo .. hi`) rather than inclusive ones.
 fn extract_byte_range<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     value: TWire<'a, u64>,
     lo: u64,
     hi: u64,
@@ -410,7 +410,7 @@ fn extract_byte_range<'a>(
 ///
 /// Note that this function uses exclusive ranges (`lo .. hi`) rather than inclusive ones.
 fn extract_byte_range_extended<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     value: TWire<'a, u64>,
     lo: u64,
     hi: u64,
@@ -425,7 +425,7 @@ fn extract_byte_range_extended<'a>(
 ///
 /// Note that this function uses exclusive ranges (`new_lo .. new_hi`) rather than inclusive ones.
 fn replace_byte_range<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     orig_size: u64,
     orig: TWire<'a, u64>,
     new_lo: u64,
@@ -654,14 +654,14 @@ impl RangeSet {
 mod test {
     use zk_circuit_builder::eval::{self, CachingEvaluator};
     use zk_circuit_builder::ir::circuit::{Circuit, Arenas, FilterNil};
-    use zk_circuit_builder::ir::typed::{Builder, EvaluatorExt};
+    use zk_circuit_builder::ir::typed::{BuilderExt, BuilderImpl, EvaluatorExt};
     use super::*;
 
     #[test]
     fn bytes() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -680,7 +680,7 @@ mod test {
     fn bytes_to_word() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -697,7 +697,7 @@ mod test {
     fn word_to_bytes() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -721,7 +721,7 @@ mod test {
     fn bytes_to_word_with_gaps() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0x8877665544332211));
@@ -740,7 +740,7 @@ mod test {
     fn bytes_to_word_no_default() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::new();
@@ -759,7 +759,7 @@ mod test {
     fn bytes_to_word_with_gaps_no_default() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
 
         let mut m = KnownMem::new();
         for &i in &[1,2,3,5,6] {
@@ -774,7 +774,7 @@ mod test {
     fn overwrite_smaller() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -797,7 +797,7 @@ mod test {
     fn overwrite_larger() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -816,7 +816,7 @@ mod test {
     fn overwrite_same_size() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut m = KnownMem::with_default(b.lit(0));
@@ -838,7 +838,7 @@ mod test {
     fn load_end() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
@@ -873,7 +873,7 @@ mod test {
     fn load_end_word() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
@@ -903,7 +903,7 @@ mod test {
     fn store_end_overwrite() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;
@@ -924,7 +924,7 @@ mod test {
     fn store_end_replace() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let waddr = u64::MAX - 7;

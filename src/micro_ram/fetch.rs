@@ -5,10 +5,10 @@
 use log::*;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
-use zk_circuit_builder::routing::sort;
+use zk_circuit_builder::routing::sort::{self, CompareLe};
 
 #[derive(Migrate)]
 pub struct Fetch<'a> {
@@ -18,7 +18,7 @@ pub struct Fetch<'a> {
 }
 
 impl<'a> Fetch<'a> {
-    pub fn new(b: &Builder<'a>, prog: &[RamInstr]) -> Fetch<'a> {
+    pub fn new(b: &impl Builder<'a>, prog: &[RamInstr]) -> Fetch<'a> {
         let mut ports = Vec::with_capacity(prog.len());
 
         for (i, instr) in prog.iter().enumerate() {
@@ -41,7 +41,7 @@ impl<'a> Fetch<'a> {
 
     pub fn add_cycles<'b>(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         len: usize,
     ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
@@ -67,7 +67,7 @@ impl<'a> Fetch<'a> {
         self,
         mh: &mut MigrateHandle<'a>,
         cx: &mut Rooted<'a, Context<'a>>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
     ) {
         let (mut ports,) = {
             let Fetch { ports, default_instr: _ } = self;
@@ -78,9 +78,9 @@ impl<'a> Fetch<'a> {
             let _g = b.scoped_label("fetch/sort");
             let mut sort = Rooted::new({
                 let packed_ports = ports.open(mh).iter().map(|&fp| {
-                    PackedFetchPort::from_unpacked(&b, fp)
+                    PackedFetchPort::from_unpacked(b, fp)
                 }).collect::<Vec<_>>();
-                sort::sort(&b, &packed_ports, |b, &x, &y| b.le(x, y))
+                sort::sort(b, &packed_ports, CompareLe)
             }, mh);
 
             while !sort.open(mh).is_ready() {
@@ -90,7 +90,7 @@ impl<'a> Fetch<'a> {
 
             let (packed_ports, sorted) = sort.take().finish(b);
             wire_assert!(cx = &cx.open(mh), sorted, "instruction fetch sorting failed");
-            packed_ports.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
+            packed_ports.iter().map(|pfp| pfp.unpack(b)).collect::<Vec<_>>()
         }, mh);
 
         // Debug logging, showing the state before and after sorting.
@@ -158,7 +158,7 @@ impl<'a> CyclePorts<'a> {
         self.ports.iter().map(|p| p.fp)
     }
 
-    pub fn set(&self, b: &Builder<'a>, idx: usize, addr: u64, instr: RamInstr) {
+    pub fn set(&self, b: &impl Builder<'a>, idx: usize, addr: u64, instr: RamInstr) {
         self.ports[idx].addr_secret.set(b, addr);
         self.ports[idx].instr_secret.set(b, instr);
     }
@@ -167,7 +167,7 @@ impl<'a> CyclePorts<'a> {
 
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     port: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label("fetch/check_first");
@@ -180,7 +180,7 @@ fn check_first_fetch<'a>(
 
 fn check_fetch<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     port1: TWire<'a, FetchPort>,
     port2: TWire<'a, FetchPort>,
 ) {

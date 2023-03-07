@@ -14,7 +14,7 @@ use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
     Circuit, Arenas, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
 };
-use zk_circuit_builder::ir::typed::{Builder, TWire};
+use zk_circuit_builder::ir::typed::{Builder, BuilderExt, BuilderImpl, TWire};
 use zk_circuit_builder::lower;
 
 use cheesecloth::wire_assert;
@@ -115,7 +115,7 @@ fn parse_args() -> ArgMatches<'static> {
 
 fn check_first<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     s: &TWire<'a, RamState>,
 ) {
     let _g = b.scoped_label("check_first");
@@ -180,7 +180,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let c = Circuit::new(&arenas, is_prover, cf);
     let c = &c as &DynCircuit;
 
-    let b = Builder::new(c);
+    let b = BuilderImpl::new(c);
     let mut cx = Context::new(c);
 
     // Load the program and trace from files
