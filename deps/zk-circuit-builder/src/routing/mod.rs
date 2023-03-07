@@ -273,7 +273,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut rb = RoutingBuilder::new();
         let inputs = (0 .. n).map(|i| b.lit(i as u32)).collect::<Vec<_>>();
@@ -285,7 +285,7 @@ mod test {
         let outputs = rb.finish_exact(&b).run(&b);
 
         let output_vals = outputs.iter()
-            .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())
+            .map(|&w| ev.eval_typed(&c, w).unwrap().try_into().unwrap())
             .collect::<Vec<usize>>();
         trace!("outputs: {:?}", output_vals);
         for (j, i) in output_vals.into_iter().enumerate() {

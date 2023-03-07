@@ -4,7 +4,9 @@ use std::fmt;
 use serde::{de, Deserialize};
 use zk_circuit_builder::eval::Evaluator;
 use zk_circuit_builder::gadget::bit_pack;
-use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
+use zk_circuit_builder::ir::circuit::{
+    CircuitBase, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize,
+};
 use zk_circuit_builder::ir::typed::{
     self, Builder, BuilderExt, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
 };
@@ -447,8 +449,12 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> FromEval<'a> for $Name {
-            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-                let raw = u8::from_eval(ev, a.repr)?;
+            fn from_eval<E: Evaluator<'a>>(
+                c: &CircuitBase<'a>,
+                ev: &mut E,
+                a: Self::Repr,
+            ) -> Option<Self> {
+                let raw = u8::from_eval(c, ev, a.repr)?;
                 let result = Self::from_raw(raw);
                 if result.is_none() {
                     eprintln!(
@@ -602,8 +608,12 @@ impl<'a> Flatten<'a> for Label {
 }
 
 impl<'a> FromEval<'a> for Label {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = FromEval::from_eval(ev, a)?;
+    fn from_eval<E: Evaluator<'a>>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self> {
+        let val = FromEval::from_eval(c, ev, a)?;
         Some(Label(val))
     }
 }
@@ -734,8 +744,12 @@ impl<'a> Flatten<'a> for WordLabel {
 }
 
 impl<'a> FromEval<'a> for WordLabel {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        Some(WordLabel(<[Label; WORD_BYTES]>::from_eval(ev, a)?))
+    fn from_eval<E: Evaluator<'a>>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self> {
+        Some(WordLabel(<[Label; WORD_BYTES]>::from_eval(c, ev, a)?))
     }
 }
 
@@ -1020,8 +1034,12 @@ impl<'a> Cast<'a, u8> for ByteOffset {
 }
 
 impl<'a> FromEval<'a> for ByteOffset {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = FromEval::from_eval(ev, a)?;
+    fn from_eval<E: Evaluator<'a>>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self> {
+        let val = FromEval::from_eval(c, ev, a)?;
         Some(ByteOffset(val))
     }
 }

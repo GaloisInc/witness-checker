@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::iter;
 use zk_circuit_builder::gadget::arith::BuilderExt as _;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::ir::circuit::CircuitTrait;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, EvaluatorExt};
 use crate::micro_ram::context::Context;
@@ -34,7 +35,7 @@ pub struct Segment<'a> {
 pub struct SegmentBuilder<'a, 'b, B> {
     pub cx: &'b Context<'a>,
     pub b: &'b B,
-    pub ev: &'b mut CachingEvaluator<'a, eval::Public>,
+    pub ev: &'b mut CachingEvaluator<eval::Public>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
@@ -258,7 +259,7 @@ fn operand_value<'a>(
 fn calc_step<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
-    ev: &mut CachingEvaluator<'a, eval::Public>,
+    ev: &mut CachingEvaluator<eval::Public>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
@@ -268,7 +269,7 @@ fn calc_step<'a>(
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let _g = b.scoped_label("calc_step");
 
-    let opcode = ev.eval_typed(instr.opcode).and_then(Opcode::from_raw);
+    let opcode = ev.eval_typed(b.circuit(), instr.opcode).and_then(Opcode::from_raw);
 
     let mut cases = Vec::new();
     // This has to be defined outside the macro so it's visible to the body expressions passed to
@@ -396,7 +397,7 @@ fn calc_step<'a>(
 
     case!(Opcode::Advise, {
         if opcode == Some(Opcode::Advise) {
-            if let Some(max) = ev.eval_typed(y) {
+            if let Some(max) = ev.eval_typed(b.circuit(), y) {
                 wire_assert!(
                     cx, b.le(advice, b.lit(max)),
                     "step {}: advice value {} is out of range (expected <= {})",

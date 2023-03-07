@@ -6,7 +6,9 @@ use std::num::Wrapping;
 use arrayvec::ArrayVec;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::gadget::bit_pack;
-use zk_circuit_builder::ir::circuit::{Wire, TyKind, CircuitExt, GateKind, UnOp, BinOp};
+use zk_circuit_builder::ir::circuit::{
+    Wire, TyKind, CircuitTrait, CircuitExt, GateKind, UnOp, BinOp,
+};
 use zk_circuit_builder::ir::migrate::{self, Migrate, impl_migrate_trivial};
 use zk_circuit_builder::ir::typed::{TWire, Builder, EvaluatorExt};
 use crate::micro_ram::types::{MemOpWidth, WORD_BYTES, WORD_LOG_BYTES, ByteOffset, MemSegment};
@@ -75,13 +77,13 @@ impl<'a> KnownMem<'a> {
     pub fn load(
         &mut self,
         b: &impl Builder<'a>,
-        ev: &mut CachingEvaluator<'a, eval::Public>,
+        ev: &mut CachingEvaluator<eval::Public>,
         addr: TWire<'a, u64>,
         width: MemOpWidth,
     ) -> Option<TWire<'a, u64>> {
         // Get the address being loaded as a `u64`.  If the address isn't a constant, then we can't
         // determine anything about the value.
-        let public_addr = ev.eval_typed(addr)?;
+        let public_addr = ev.eval_typed(b.circuit(), addr)?;
         self.load_public(b, public_addr, width)
     }
 
@@ -169,7 +171,7 @@ impl<'a> KnownMem<'a> {
     pub fn store(
         &mut self,
         b: &impl Builder<'a>,
-        ev: &mut CachingEvaluator<'a, eval::Public>,
+        ev: &mut CachingEvaluator<eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
@@ -180,7 +182,7 @@ impl<'a> KnownMem<'a> {
     pub fn poison(
         &mut self,
         b: &impl Builder<'a>,
-        ev: &mut CachingEvaluator<'a, eval::Public>,
+        ev: &mut CachingEvaluator<eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
@@ -191,18 +193,18 @@ impl<'a> KnownMem<'a> {
     fn store_common(
         &mut self,
         b: &impl Builder<'a>,
-        ev: &mut CachingEvaluator<'a, eval::Public>,
+        ev: &mut CachingEvaluator<eval::Public>,
         addr: TWire<'a, u64>,
         value: TWire<'a, u64>,
         width: MemOpWidth,
         poisoned: bool,
     ) {
-        let public_addr = ev.eval_typed(addr);
+        let public_addr = ev.eval_typed(b.circuit(), addr);
 
         if let Some(public_addr) = public_addr {
             self.store_public(b, public_addr, value, width, poisoned);
         } else {
-            let addr_expr = wire_arith_expr(ev, addr);
+            let addr_expr = wire_arith_expr(b, ev, addr);
             let addr_range = arith_expr_range(addr_expr, &self.wire_range);
             let byte_range = addr_range.and_then(|(start, end)| {
                 let end = end.checked_add(width.bytes() as u64 - 1)?;
@@ -533,27 +535,28 @@ impl<'a> ArithExpr<'a> {
 }
 
 fn wire_arith_expr<'a>(
-    ev: &mut CachingEvaluator<'a, eval::Public>,
+    b: &impl Builder<'a>,
+    ev: &mut CachingEvaluator<eval::Public>,
     w: TWire<'a, u64>,
 ) -> ArithExpr<'a> {
-    if let Some(value) = ev.eval_typed(w) {
+    if let Some(value) = ev.eval_typed(b.circuit(), w) {
         return ArithExpr::new_constant(value);
     }
 
     let result = match w.repr.kind {
-        GateKind::Unary(UnOp::Neg, a) =>
-            Some(wire_arith_expr(ev, TWire::new(a)).neg()),
-        GateKind::Binary(BinOp::Add, a, b) => {
-            wire_arith_expr(ev, TWire::new(a))
-                .add(wire_arith_expr(ev, TWire::new(b)))
+        GateKind::Unary(UnOp::Neg, x) =>
+            Some(wire_arith_expr(b, ev, TWire::new(x)).neg()),
+        GateKind::Binary(BinOp::Add, x, y) => {
+            wire_arith_expr(b, ev, TWire::new(x))
+                .add(wire_arith_expr(b, ev, TWire::new(y)))
         },
-        GateKind::Binary(BinOp::Sub, a, b) => {
-            wire_arith_expr(ev, TWire::new(a))
-                .sub(wire_arith_expr(ev, TWire::new(b)))
+        GateKind::Binary(BinOp::Sub, x, y) => {
+            wire_arith_expr(b, ev, TWire::new(x))
+                .sub(wire_arith_expr(b, ev, TWire::new(y)))
         },
-        GateKind::Binary(BinOp::Mul, a, b) => {
-            wire_arith_expr(ev, TWire::new(a))
-                .mul(wire_arith_expr(ev, TWire::new(b)))
+        GateKind::Binary(BinOp::Mul, x, y) => {
+            wire_arith_expr(b, ev, TWire::new(x))
+                .mul(wire_arith_expr(b, ev, TWire::new(y)))
         },
         _ => None,
     };
@@ -662,7 +665,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
@@ -671,7 +674,7 @@ mod test {
 
         for i in 0..8 {
             let w = m.load_public(&b, i, MemOpWidth::W1).unwrap();
-            let v = ev.eval_typed(w).unwrap();
+            let v = ev.eval_typed(&c, w).unwrap();
             assert_eq!(v, i + 1);
         }
     }
@@ -681,7 +684,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
@@ -689,7 +692,7 @@ mod test {
         }
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
 
@@ -698,7 +701,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
@@ -706,7 +709,7 @@ mod test {
         let mut ok = true;
         for i in 0..8 {
             let w = m.load_public(&b, i, MemOpWidth::W1).unwrap();
-            let v = ev.eval_typed(w).unwrap();
+            let v = ev.eval_typed(&c, w).unwrap();
             if v != i + 1 {
                 ok = false;
                 eprintln!("error ({}): {} != {}", i, v, i + 1);
@@ -722,7 +725,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0x8877665544332211));
         for &i in &[1,2,3,5,6] {
@@ -730,7 +733,7 @@ mod test {
         }
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x8807065504030211);
     }
 
@@ -741,7 +744,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::new();
         for i in 0..8 {
@@ -749,7 +752,7 @@ mod test {
         }
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
 
@@ -775,7 +778,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for &i in &[1,2,3,5,6] {
@@ -788,7 +791,7 @@ mod test {
         assert!(m.mem.len() == 3);
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
 
@@ -798,7 +801,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0x0000000000000201), MemOpWidth::W8, false);
@@ -807,7 +810,7 @@ mod test {
         assert!(m.mem.len() == 1);
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
 
@@ -817,7 +820,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         m.store_public(&b, 0, b.lit(0), MemOpWidth::W2, false);
@@ -828,7 +831,7 @@ mod test {
         m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
 
         let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
 
@@ -839,7 +842,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -851,20 +854,20 @@ mod test {
 
         // These three exercise the cases where `entry.width < width`.
         let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0007060504030201);
 
         let w = m.load_public(&b, waddr + 4, MemOpWidth::W4).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x00070605);
 
         let w = m.load_public(&b, waddr + 6, MemOpWidth::W2).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0007);
 
         // This one exercises the case where there are no overlapping entries.
         let w = m.load_public(&b, waddr + 7, MemOpWidth::W1).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x00);
     }
 
@@ -874,7 +877,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -882,19 +885,19 @@ mod test {
 
         // These four exercise the case where `entry.width >= width`.
         let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
 
         let w = m.load_public(&b, waddr + 4, MemOpWidth::W4).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x08070605);
 
         let w = m.load_public(&b, waddr + 6, MemOpWidth::W2).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807);
 
         let w = m.load_public(&b, waddr + 7, MemOpWidth::W1).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x08);
     }
 
@@ -904,7 +907,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -915,7 +918,7 @@ mod test {
         m.store_public(&b, waddr + 7, b.lit(0x38), MemOpWidth::W1, false);
 
         let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x3827161504030201);
     }
 
@@ -925,7 +928,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
@@ -936,7 +939,7 @@ mod test {
         m.store_public(&b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
 
         let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
-        let v = ev.eval_typed(w).unwrap();
+        let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
 

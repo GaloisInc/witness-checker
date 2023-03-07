@@ -3,7 +3,7 @@ use std::fmt;
 use std::mem;
 
 use zk_circuit_builder::eval::{self, CachingEvaluator};
-use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt};
+use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, CircuitExt};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire, FromEval, EvaluatorExt};
 
@@ -187,7 +187,8 @@ impl CondKind {
 pub struct Context<'a> {
     asserts: RefCell<Vec<Cond<'a>>>,
     bugs: RefCell<Vec<Cond<'a>>>,
-    eval: Option<RefCell<CachingEvaluator<'a, eval::RevealSecrets>>>,
+    eval: Option<RefCell<CachingEvaluator<eval::RevealSecrets>>>,
+    circuit: &'a CircuitBase<'a>,
     is_prover: bool,
 }
 
@@ -196,7 +197,8 @@ impl<'a> Context<'a> {
         Context {
             asserts: RefCell::new(Vec::new()),
             bugs: RefCell::new(Vec::new()),
-            eval: Some(RefCell::new(CachingEvaluator::new(c))),
+            eval: Some(RefCell::new(CachingEvaluator::new())),
+            circuit: c.as_base(),
             is_prover: c.is_prover(),
         }
     }
@@ -256,7 +258,7 @@ impl<'a> Context<'a> {
 
     fn eval_raw<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> Option<T> {
         let eval = self.eval.as_ref()?;
-        eval.borrow_mut().eval_typed(w)
+        eval.borrow_mut().eval_typed(self.circuit, w)
     }
 
     pub fn eval<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> SecretValue<T> {
@@ -284,6 +286,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Context<'a> {
             asserts: RefCell::new(asserts),
             bugs: RefCell::new(bugs),
             eval: v.visit(self.eval),
+            circuit: v.new_circuit(),
             is_prover: self.is_prover,
         }
     }
