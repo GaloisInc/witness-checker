@@ -22,7 +22,9 @@ use cheesecloth::micro_ram::context::Context;
 use cheesecloth::micro_ram::exec::ExecBuilder;
 use cheesecloth::micro_ram::feature::Feature;
 use cheesecloth::micro_ram::mem::EquivSegments;
-use cheesecloth::micro_ram::types::{VersionedMultiExec, RamState, Segment, TraceChunk, WORD_BOTTOM};
+use cheesecloth::micro_ram::types::{
+    VersionedMultiExec, MultiExec, RamState, Segment, TraceChunk, WORD_BOTTOM,
+};
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -98,6 +100,13 @@ fn parse_args() -> ArgMatches<'static> {
              .value_name("NAMES")
              .help("enable only the listed IR0+ plugins (default: enable all plugins)"))
 
+        // Special flag for T&E, used by generate_statements.py
+        .arg(Arg::with_name("test-expand-trace")
+             .long("test-expand-trace")
+             .takes_value(true)
+             .value_name("FACTOR")
+             .help("add extra segments to multiply the max trace length by FACTOR"))
+
         // Debug flags
         .arg(Arg::with_name("debug-segment-graph")
              .long("debug-segment-graph")
@@ -134,6 +143,35 @@ fn check_first<'a>(
     }
 
     tainted::check_first(cx, b, &s.tainted_regs);
+}
+
+fn expand_trace(multi_exec: &mut MultiExec, factor: usize) {
+    eprintln!("expanding trace by a factor of {}", factor);
+    if factor <= 1 {
+        return;
+    }
+
+    for exec in multi_exec.execs.values_mut() {
+        let orig_len = exec.segments.len();
+        exec.segments.reserve((factor - 1) * orig_len);
+        for mut seg in exec.segments.clone() {
+            for _ in 1 .. factor {
+                for succ in &mut seg.successors {
+                    *succ += orig_len;
+                }
+                exec.segments.push(seg.clone());
+            }
+        }
+
+        // Add a dummy edge from segment 0 to each copy of segment 0 so that they aren't dropped
+        // for being unreachable in the segment graph.
+        for i in 1 .. factor {
+            exec.segments[0].successors.push(i * orig_len);
+        }
+
+        assert_eq!(exec.segments.len(), orig_len * factor);
+        eprintln!("expanded execution: {} -> {}", orig_len, orig_len * factor);
+    }
 }
 
 
@@ -225,6 +263,13 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             exec.trace = vec![new_chunk];
             
         }
+    }
+
+    if let Some(factor_str) = args.value_of("test-expand-trace") {
+        let factor = factor_str.parse::<usize>().unwrap_or_else(|e| {
+            panic!("bad --test-expand-trace argument {:?}: {}", factor_str, e);
+        });
+        expand_trace(&mut multi_exec.inner, factor);
     }
 
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
