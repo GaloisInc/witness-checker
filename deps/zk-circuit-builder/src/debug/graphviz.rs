@@ -1,5 +1,5 @@
 use std::fmt::{self, Write};
-use crate::ir::circuit::{self, CircuitTrait, Field, Wire, GateKind, Ty, TyKind};
+use crate::ir::circuit::{self, CircuitBase, Field, Wire, GateKind, Ty, TyKind};
 use crate::eval::{self, Evaluator, CachingEvaluator, Value};
 
 fn write_val(s: &mut String, v: Value) -> Result<(), fmt::Error> {
@@ -49,10 +49,10 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
 }
 
 pub fn make_graph<'a>(
-    c: &'a impl CircuitTrait<'a>,
+    c: &'a CircuitBase<'a>,
     ws: impl Iterator<Item = Wire<'a>>,
 ) -> Result<String, fmt::Error> {
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
     let mut s = String::new();
     writeln!(s, "digraph {{")?;
@@ -84,7 +84,7 @@ pub fn make_graph<'a>(
 
         write!(label, "{}\n", w.label)?;
 
-        let val = ev.eval_wire(w);
+        let val = ev.eval_wire(c, w);
         match val {
             Ok(val) => write_val(&mut label, val)?,
             _ => write!(label, "[eval failed]")?,

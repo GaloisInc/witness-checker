@@ -117,10 +117,11 @@ fn uint_max(sz: IntSize) -> BigInt {
 }
 
 fn eval<'a>(
+    c: &impl CircuitTrait<'a>,
     e: &mut impl Evaluator<'a>,
     w: Wire<'a>,
 ) -> Option<BigInt> {
-    e.eval_wire(w).ok().and_then(Value::unwrap_single)
+    e.eval_wire(c, w).ok().and_then(Value::unwrap_single)
 }
 
 fn const_foldable(gk: GateKind) -> bool {
@@ -154,7 +155,7 @@ fn try_const_fold<'a>(
     }
 
     let ty = gk.ty(c);
-    let val = eval::eval_gate_public(c, ty, gk)?;
+    let val = eval::eval_gate_public(c.as_base(), ty, gk)?;
     let i = val.as_single()?;
     Some(c.lit(ty, i))
 }
@@ -184,7 +185,7 @@ fn try_identities<'a>(
         GateKind::Binary(op, a, b) => match_identities! {
             op, (a, b);
             vars (ac, bc);
-            eval |w| eval(ev, w);
+            eval |w| eval(c, ev, w);
             // x + 0 = 0 + x = x
             BinOp::Add, (is_zero, _) => b,
             BinOp::Add, (_, is_zero) => a,
@@ -241,7 +242,7 @@ fn try_identities<'a>(
         GateKind::Shift(op, a, b) => match_identities! {
             op, (a, b);
             vars (ac, bc);
-            eval |w| eval(ev, w);
+            eval |w| eval(c, ev, w);
             // x << 0 = x >> 0 = x
             ShiftOp::Shl, (_, is_zero) => a,
             ShiftOp::Shr, (_, is_zero) => a,
@@ -249,7 +250,7 @@ fn try_identities<'a>(
         GateKind::Compare(op, a, b) => match_identities! {
             op, (a, b);
             vars (ac, bc);
-            eval |w| eval(ev, w);
+            eval |w| eval(c, ev, w);
             // x == x, x <= x, x >= x: true
             CmpOp::Eq, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 1),
             CmpOp::Le, (_, _) if wire_eq(a, b) => c.lit(c.ty(TyKind::BOOL), 1),
@@ -266,10 +267,10 @@ fn try_identities<'a>(
             CmpOp::Lt, (_, is_zero) if a.ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
             CmpOp::Gt, (is_zero, _) if a.ty.is_uint() => c.lit(c.ty(TyKind::BOOL), 0),
         },
-        GateKind::Mux(c, t, e) => match_identities! {
-            (), (c);
+        GateKind::Mux(c_, t, e) => match_identities! {
+            (), (c_);
             vars (cc);
-            eval |w| eval(ev, w);
+            eval |w| eval(c, ev, w);
             (), (is_zero) => e,
             (), (is_one) => t,
             (), (_) if wire_eq(t, e) => t,
@@ -327,15 +328,16 @@ fn try_identity_compare_mux<'a>(
     guard!(matches!(b.kind, GateKind::Lit(..) | GateKind::Mux(..)));
 
     fn gather_mux_leaves<'a>(
+        c: &impl CircuitTrait<'a>,
         ev: &mut impl Evaluator<'a>,
         w: Wire<'a>,
         out: &mut Vec<BigInt>,
     ) -> bool {
         match w.kind {
             GateKind::Mux(_, t, e) => {
-                gather_mux_leaves(ev, t, out) && gather_mux_leaves(ev, e, out)
+                gather_mux_leaves(c, ev, t, out) && gather_mux_leaves(c, ev, e, out)
             },
-            _ => match eval(ev, w) {
+            _ => match eval(c, ev, w) {
                 Some(x) => {
                     out.push(x);
                     true
@@ -348,8 +350,8 @@ fn try_identity_compare_mux<'a>(
     }
     let mut a_vals = Vec::new();
     let mut b_vals = Vec::new();
-    guard!(gather_mux_leaves(ev, a, &mut a_vals));
-    guard!(gather_mux_leaves(ev, b, &mut b_vals));
+    guard!(gather_mux_leaves(c, ev, a, &mut a_vals));
+    guard!(gather_mux_leaves(c, ev, b, &mut b_vals));
 
     let mut all_true = true;
     let mut all_false = true;

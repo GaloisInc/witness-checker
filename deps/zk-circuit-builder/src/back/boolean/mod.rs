@@ -264,8 +264,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                         }
 
                         let sz = aw.ty.integer_size();
-                        let a_val = eval::eval_wire_secret(c, aw);
-                        let b_val = eval::eval_wire_secret(c, bw);
+                        let a_val = eval::eval_wire_secret(c.as_base(), aw);
+                        let b_val = eval::eval_wire_secret(c.as_base(), bw);
                         let (quot_bits, rem_bits) = match (a_val.as_ref(), b_val.as_ref()) {
                             (Some(a_val), Some(b_val)) => {
                                 let a_uint = a_val.as_single().unwrap();
@@ -877,9 +877,9 @@ mod test {
             let inputs = *<&[_; N]>::try_from(&inputs as &[_]).unwrap();
             let out = f(c, inputs);
 
-            let val = eval::eval_wire_secret(c, out).unwrap().unwrap_single().unwrap();
+            let val = eval::eval_wire_secret(c.as_base(), out).unwrap().unwrap_single().unwrap();
             let ok = c.eq(out, c.lit(out.ty, val));
-            let ok_val = eval::eval_wire_secret(c, ok).unwrap().unwrap_single().unwrap();
+            let ok_val = eval::eval_wire_secret(c.as_base(), ok).unwrap().unwrap_single().unwrap();
             assert_eq!(ok_val, 1_u64.into());
 
             enforce_true(ok);
@@ -1012,11 +1012,11 @@ mod test {
     #[test]
     fn shl_1() {
         test_gate([1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
         test_gate([-1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
     }
@@ -1024,11 +1024,11 @@ mod test {
     #[test]
     fn shr_1() {
         test_gate([1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
         test_gate([-1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
     }
@@ -1146,11 +1146,11 @@ mod test {
     #[test]
     fn shl_3() {
         test_gate([3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
         test_gate([-3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
     }
@@ -1158,11 +1158,11 @@ mod test {
     #[test]
     fn shr_3() {
         test_gate([3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
         test_gate([-3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
     }

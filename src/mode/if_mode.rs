@@ -1,5 +1,5 @@
 use zk_circuit_builder::eval::Evaluator;
-use zk_circuit_builder::ir::circuit::{CircuitTrait, Ty, Wire};
+use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, Ty, Wire};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{
     self, Builder, BuilderExt, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire,
@@ -311,10 +311,14 @@ impl<'de, M: ModePred, A: Deserialize<'de>> Deserialize<'de> for IfMode<M, A> {
 }
 
 impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
+    fn from_eval<E: Evaluator<'a>>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self> {
         if let Some(pf) = check_mode() {
             let x = a.unwrap(&pf);
-            ev.eval_typed(x).map(|r| IfMode::some(&pf, r))
+            ev.eval_typed(c, x).map(|r| IfMode::some(&pf, r))
         } else {
             // JP: Better combinator for this? map_with_or?
             Some(IfMode::none())

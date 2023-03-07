@@ -20,11 +20,11 @@ where
     }
 
     // `RevealSecrets` is okay here because the output is also secret.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
     let mut r2l = (0 .. xs.len()).collect::<Vec<_>>();
     let mut try_compare = |x, y| -> Option<bool> {
-        ev.eval_typed(compare(x, y))
+        ev.eval_typed(c, compare(x, y))
     };
     // We can't bail out from inside `sort_by` closure, so we record failures separately.
     let mut ok = true;
@@ -202,13 +202,13 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
         let b = BuilderImpl::new(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
         let (ws, _) = sort(&b, &ws, CompareLt).run(&b);
 
         let vals = ws.iter()
-            .map(|&w| ev.eval_typed(w).unwrap().try_into().unwrap())
+            .map(|&w| ev.eval_typed(&c, w).unwrap().try_into().unwrap())
             .collect::<Vec<usize>>();
         for (&x, &y) in vals.iter().zip(vals.iter().skip(1)) {
             assert!(x <= y);
