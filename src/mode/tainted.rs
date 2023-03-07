@@ -1,6 +1,6 @@
 
 use zk_circuit_builder::gadget::bit_pack;
-use zk_circuit_builder::ir::typed::{Builder, TWire};
+use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
     types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, WORD_BOTTOM, WordLabel, RamInstr, TaintCalcIntermediate, BOTTOM, MAYBE_TAINTED, WORD_BYTES, WORD_MAYBE_TAINTED}
@@ -11,7 +11,7 @@ use crate::{wire_assert, wire_bug_if};
 // Builds the circuit that calculates our conservative dynamic taint tracking semantics. 
 pub fn calc_step<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
@@ -135,7 +135,7 @@ pub fn calc_step<'a>(
 }
 
 fn join<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label1: TWire<'a,Label>,
     label2: TWire<'a,Label>,
 ) -> TWire<'a,Label> {
@@ -155,7 +155,7 @@ fn join<'a>(
 }
 
 fn map_join_vec<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label: TWire<'a,Label>,
     labels: TWire<'a,WordLabel>,
 ) -> TWire<'a,WordLabel> {
@@ -168,7 +168,7 @@ fn map_join_vec<'a>(
 }
 
 fn fold1_join_vec<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     labels: TWire<'a,WordLabel>,
 ) -> TWire<'a,Label> {
     let mut res = labels[0];
@@ -179,7 +179,7 @@ fn fold1_join_vec<'a>(
 }
 
 fn check_vec<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     guard: TWire<'a,Label>,
     labels: TWire<'a,WordLabel>,
 ) -> TWire<'a,WordLabel> {
@@ -187,15 +187,15 @@ fn check_vec<'a>(
 }
 
 fn is_taint<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     opcode: TWire<'a,u8>,
 ) -> TWire<'a, bool> {
     b.eq(opcode, b.lit(Opcode::Taint1 as u8))
 }
 
 fn convert_to_label<'a,'b>(
-    cx: &ContextWhen<'a,'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     idx: usize,
     label: TWire<'a, u64>, // Label>,
 ) -> TWire<'a, Label> {
@@ -213,7 +213,7 @@ fn convert_to_label<'a,'b>(
 
 // Duplicate a value `width` times. Fills the remaining elements with `default`.
 fn duplicate<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label: TWire<'a, Label>,
     width: MemOpWidth,
     default: Label,
@@ -230,7 +230,7 @@ fn duplicate<'a>(
 }
 
 fn approx<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label: TWire<'a, Label>,
 ) -> TWire<'a, WordLabel> {
     let bottom = b.lit(BOTTOM);
@@ -239,7 +239,7 @@ fn approx<'a>(
 }
 
 fn approx2<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label1: TWire<'a, Label>,
     label2: TWire<'a, Label>,
 ) -> TWire<'a, WordLabel> {
@@ -250,7 +250,7 @@ fn approx2<'a>(
 
 // Take `width` elements starting at the given offset. Fills the remaining elements with `default`.
 fn take_width_at_offset<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     labels: TWire<'a, WordLabel>,
     offset: TWire<'a, ByteOffset>,
     width: MemOpWidth,
@@ -273,7 +273,7 @@ fn take_width_at_offset<'a>(
 
 // Shift right by `offset`, filling with `default`.
 fn shift_labels<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     labels: TWire<'a, WordLabel>,
     offset: TWire<'a, ByteOffset>,
     default: Label,
@@ -293,7 +293,7 @@ fn shift_labels<'a>(
 
 // Compare `width` labels.
 fn eq_word_labels_with_width<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     width: TWire<'a, MemOpWidth>,
     label1: TWire<'a, WordLabel>,
     label2: TWire<'a, WordLabel>,
@@ -310,7 +310,7 @@ fn eq_word_labels_with_width<'a>(
 }
 
 fn eq_packed_labels_except_at_offset<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     offset: TWire<'a, ByteOffset>,
     width: TWire<'a, MemOpWidth>,
     label1: TWire<'a, WordLabel>,
@@ -327,7 +327,7 @@ fn eq_packed_labels_except_at_offset<'a>(
 
 // Checks if the byte at index idx is in range.
 fn in_range<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     idx: TWire<'a, u8>,
     offset: TWire<'a, ByteOffset>,
     width: TWire<'a, MemOpWidth>,
@@ -340,7 +340,7 @@ fn in_range<'a>(
 
 pub fn check_state<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     cycle: u32,
     calc_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
     trace_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
@@ -363,7 +363,7 @@ pub fn check_state<'a>(
 
 pub fn check_first<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     init_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
 ) {
     if let Some(init_regs) = init_regs.try_get() {
@@ -379,7 +379,7 @@ pub fn check_first<'a>(
 
 pub fn check_step<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     seg_idx: usize,
     idx: usize,
     instr: TWire<'a, RamInstr>,
@@ -415,8 +415,8 @@ pub fn check_step<'a>(
 // Circuit for checking memory operations. Only called when an operation is a memory operation
 // (read, write, poison).
 pub fn check_step_mem<'a, 'b>(
-    cx: &ContextWhen<'a, 'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     seg_idx: usize,
     idx: usize,
     mem_port: &TWire<'a, MemPort>, 
@@ -451,8 +451,8 @@ pub fn check_step_mem<'a, 'b>(
 // Circuit that checks memory when port2 is a read. Since it is a read, port2's tainted must be the same as
 // port1's tainted.
 pub fn check_read_memports<'a, 'b>(
-    cx: &ContextWhen<'a, 'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     port1label: &TWire<'a, IfMode<AnyTainted,WordLabel>>,
     port2: &TWire<'a, MemPort>, 
 ) {
@@ -473,8 +473,8 @@ pub fn check_read_memports<'a, 'b>(
 
 // Circuit that checks memory when port is a write. Since it is a write, port's unmodified tainted bits must be the same as prev's.
 pub fn check_write_memports<'a, 'b>(
-    cx: &ContextWhen<'a, 'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     prev_label: &TWire<'a, IfMode<AnyTainted,WordLabel>>,
     port2: &TWire<'a, MemPort>,
     offset2: &TWire<'a, ByteOffset>,

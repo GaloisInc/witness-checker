@@ -1,6 +1,6 @@
 use std::u32;
 use crate::ir::migrate::{self, Migrate};
-use crate::ir::typed::{TWire, Builder, Repr, Lit, Mux};
+use crate::ir::typed::{TWire, Builder, BuilderExt, Repr, Lit, Mux};
 
 mod benes;
 pub mod sort;
@@ -66,13 +66,13 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
     }
 
     /// Finish building the routing network circuit.
-    pub fn finish(self, b: &Builder<'a>) -> FinishRouting<'a, T>
+    pub fn finish(self, b: &impl Builder<'a>) -> FinishRouting<'a, T>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a> + Default, T::Repr: Clone {
         self.finish_with_default(b, T::default())
     }
 
     /// Finish building the routing network circuit.
-    pub fn finish_with_default(mut self, b: &Builder<'a>, default: T) -> FinishRouting<'a, T>
+    pub fn finish_with_default(mut self, b: &impl Builder<'a>, default: T) -> FinishRouting<'a, T>
     where T: Mux<'a, bool, T, Output = T> + Lit<'a>, T::Repr: Clone {
         let pad = b.lit(default);
 
@@ -91,7 +91,7 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
 
     /// Finish building the routing network circuit.  Panics if the number of inputs is not equal
     /// to the number of outputs.
-    pub fn finish_exact(self, _b: &Builder<'a>) -> FinishRouting<'a, T>
+    pub fn finish_exact(self, _b: &impl Builder<'a>) -> FinishRouting<'a, T>
     where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
         assert!(self.inputs.len() == self.num_outputs);
         let n = self.inputs.len();
@@ -138,7 +138,7 @@ where
 
 
 fn benes_switch<'a, T>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     x: TWire<'a, T>,
     y: TWire<'a, T>,
     flags: benes::SwitchFlags,
@@ -184,7 +184,7 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
     }
 
     /// Run one step of circuit construction.
-    pub fn step(&mut self, b: &Builder<'a>) {
+    pub fn step(&mut self, b: &impl Builder<'a>) {
         assert!(self.layer < self.bn.num_layers);
         let bn = &self.bn;
         let ws = &mut self.ws;
@@ -225,7 +225,7 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
             .collect()
     }
 
-    pub fn run(mut self, b: &Builder<'a>) -> Vec<TWire<'a, T>> {
+    pub fn run(mut self, b: &impl Builder<'a>) -> Vec<TWire<'a, T>> {
         while !self.is_ready() {
             self.step(b);
         }
@@ -258,7 +258,7 @@ mod test {
     use log::*;
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{Arenas, Circuit, FilterNil};
-    use crate::ir::typed::EvaluatorExt;
+    use crate::ir::typed::{BuilderImpl, EvaluatorExt};
     use super::*;
 
     fn init() {
@@ -272,7 +272,7 @@ mod test {
 
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = Builder::new(&c);
+        let b = BuilderImpl::new(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(&c);
 
         let mut rb = RoutingBuilder::new();

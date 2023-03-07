@@ -14,32 +14,336 @@ use crate::eval::Evaluator;
 use crate::ir::circuit::{AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize, Wire, Ty, TyKind, CellResetGuard};
 use crate::ir::migrate::{self, Migrate};
 
-pub struct Builder<'a> {
+
+pub trait Builder<'a>: 'a + Sized {
+    type Circuit: ?Sized + CircuitTrait<'a>;
+    // TODO: remove 'a lifetime here (use same lifetime as self)
+    fn circuit(&self) -> &'a Self::Circuit;
+}
+
+pub trait BuilderExt<'a>: Builder<'a> {
+    fn is_prover(&self) -> bool {
+        self.circuit().is_prover()
+    }
+
+    fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
+        self.circuit().scoped_label(label)
+    }
+
+    fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
+        self.circuit().with_label(label, f)
+    }
+
+    fn lit<T: Lit<'a>>(&self, x: T) -> TWire<'a, T> {
+        TWire::new(Lit::lit(self, x))
+    }
+
+    fn secret<T: Secret<'a> + Default>(&self) -> (TWire<'a, T>, TSecretHandle<'a, T>)
+    where T::Repr: Clone {
+        self.secret_default(T::default())
+    }
+
+    fn secret_default<T: Secret<'a>>(
+        &self,
+        default: T,
+    ) -> (TWire<'a, T>, TSecretHandle<'a, T>)
+    where T::Repr: Clone {
+        let w = self.secret_uninit::<T>();
+        let sh = TSecretHandle::new(w.clone(), self.lit(default));
+        (w, sh)
+    }
+
+    fn secret_init<T: Secret<'a>, F>(&self, mk_val: F) -> TWire<'a, T>
+    where F: FnOnce() -> T {
+        let w = self.secret_uninit::<T>();
+        if self.is_prover() {
+            let lit = self.lit(mk_val());
+            set_secret_from_lit(&w, &lit, true);
+        }
+        w
+    }
+
+    fn secret_uninit<T: Secret<'a>>(&self) -> TWire<'a, T> {
+        TWire::new(<T as Secret>::secret(self))
+    }
+
+    fn neq_zero<T>(&self, x: TWire<'a, T>) -> TWire<'a, bool>
+    where
+    T: Repr<'a>,
+    T: Eq<'a, Output=bool>,
+    T: Lit<'a>,
+    T: num_traits::Zero,
+    {
+        // TODO: Use custom gate.
+        let c : TWire<'a, bool> = self.eq(x,self.lit(T::zero()));
+        self.not(c)
+    }
+
+
+    fn neg<A: Neg<'a>>(&self, a: TWire<'a, A>) -> TWire<'a, A::Output> {
+        TWire::new(<A as Neg>::neg(self, a.repr))
+    }
+
+    fn not<A: Not<'a>>(&self, a: TWire<'a, A>) -> TWire<'a, A::Output> {
+        TWire::new(<A as Not>::not(self, a.repr))
+    }
+
+
+    fn add<A: Add<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Add<B>>::add(self, a.repr, b.repr))
+    }
+
+    fn sub<A: Sub<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Sub<B>>::sub(self, a.repr, b.repr))
+    }
+
+    fn mul<A: Mul<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Mul<B>>::mul(self, a.repr, b.repr))
+    }
+
+    fn div<A: Div<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Div<B>>::div(self, a.repr, b.repr))
+    }
+
+    fn mod_<A: Mod<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Mod<B>>::mod_(self, a.repr, b.repr))
+    }
+
+    fn and<A: And<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as And<B>>::and(self, a.repr, b.repr))
+    }
+
+    fn or<A: Or<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Or<B>>::or(self, a.repr, b.repr))
+    }
+
+    fn xor<A: Xor<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Xor<B>>::xor(self, a.repr, b.repr))
+    }
+
+    fn shl<A: Shl<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Shl<B>>::shl(self, a.repr, b.repr))
+    }
+
+    fn shr<A: Shr<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Shr<B>>::shr(self, a.repr, b.repr))
+    }
+
+    fn eq<A: Eq<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Eq<B>>::eq(self, a.repr, b.repr))
+    }
+
+    fn ne<A: Ne<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Ne<B>>::ne(self, a.repr, b.repr))
+    }
+
+    fn lt<A: Lt<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Lt<B>>::lt(self, a.repr, b.repr))
+    }
+
+    fn le<A: Le<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Le<B>>::le(self, a.repr, b.repr))
+    }
+
+    fn gt<A: Gt<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Gt<B>>::gt(self, a.repr, b.repr))
+    }
+
+    fn ge<A: Ge<'a, B>, B: Repr<'a>>(
+        &self,
+        a: TWire<'a, A>,
+        b: TWire<'a, B>,
+    ) -> TWire<'a, A::Output> {
+        TWire::new(<A as Ge<B>>::ge(self, a.repr, b.repr))
+    }
+
+
+    fn mux<C: Repr<'a>, T: Mux<'a, C, E>, E: Repr<'a>>(
+        &self,
+        c: TWire<'a, C>,
+        t: TWire<'a, T>,
+        e: TWire<'a, E>,
+    ) -> TWire<'a, T::Output> {
+        TWire::new(<T as Mux<C, E>>::mux(self, c.repr, t.repr, e.repr))
+    }
+
+    fn cast<T: Cast<'a, U>, U: Repr<'a>>(
+        &self,
+        x: TWire<'a, T>,
+    ) -> TWire<'a, U> {
+        TWire::new(<T as Cast<U>>::cast(self, x.repr))
+    }
+
+
+    fn mux_multi<C, A>(
+        &self,
+        cases: &[TWire<'a, (C, A)>],
+        default: TWire<'a, A>,
+    ) -> TWire<'a, A>
+    where
+        C: Repr<'a>,
+        A: Mux<'a, C, A, Output = A>,
+        C::Repr: Clone,
+        A::Repr: Clone,
+    {
+        let mut val = default;
+        for case in cases {
+            let (cond, then) = case.clone().repr;
+            val = self.mux(cond, then, val);
+        }
+        val
+    }
+
+    fn index<I, T>(
+        &self,
+        arr: &[TWire<'a, T>],
+        idx: TWire<'a, I>,
+        mut mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
+    ) -> TWire<'a, T>
+    where
+        I: Eq<'a, I>,
+        I::Repr: Clone,
+        T: Mux<'a, <I as Eq<'a, I>>::Output, T, Output = T>,
+        T::Repr: Clone,
+    {
+        let mut val = arr.first().expect("can't index in an empty array").clone();
+        for (i, x) in arr.iter().enumerate().skip(1) {
+            let eq = self.eq(idx.clone(), mk_idx(self, i));
+            val = self.mux(eq, x.clone(), val);
+        }
+        val
+    }
+
+    fn index_with_default<I, T>(
+        &self,
+        arr: &[TWire<'a, T>],
+        idx: TWire<'a, I>,
+        default: TWire<'a, T>,
+        mut mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
+    ) -> TWire<'a, T>
+    where
+        I: Eq<'a, I>,
+        I::Repr: Clone,
+        T: Mux<'a, <I as Eq<'a, I>>::Output, T, Output = T>,
+        T::Repr: Clone,
+    {
+        let mut val = default;
+        for (i, x) in arr.iter().enumerate() {
+            let eq = self.eq(idx.clone(), mk_idx(self, i));
+            val = self.mux(eq, x.clone(), val);
+        }
+        val
+    }
+
+    /// Output a `val` from `vals` on which `check(val)` outputs `true`.  If all checks output
+    /// false (or `vals` is empty), then this function outputs `default` instead.
+    fn select<C, A>(
+        &self,
+        vals: &[TWire<'a, A>],
+        default: TWire<'a, A>,
+        mut check: impl FnMut(&TWire<'a, A>) -> TWire<'a, C>,
+    ) -> TWire<'a, A>
+    where
+        C: Repr<'a>,
+        A: Mux<'a, C, A, Output = A>,
+        A::Repr: Clone,
+    {
+        let mut acc = default;
+        for val in vals {
+            let cond = check(val);
+            acc = self.mux(cond, val.clone(), acc);
+        }
+        acc
+    }
+}
+
+impl<'a, B: Builder<'a>> BuilderExt<'a> for B {}
+
+
+pub fn set_secret_from_lit<'a, T: Secret<'a>>(s: &TWire<'a, T>, val: &TWire<'a, T>, force: bool) {
+    <T as Secret>::set_from_lit(&s.repr, &val.repr, force);
+}
+
+
+pub struct BuilderImpl<'a> {
     c: &'a DynCircuit<'a>,
 }
 
-impl<'a> Builder<'a> {
-    pub fn new(c: &'a DynCircuit<'a>) -> Builder<'a> {
-        Builder { c: c }
-    }
-
-    pub fn is_prover(&self) -> bool {
-        self.c.is_prover()
-    }
-
-    pub fn circuit(&self) -> &'a DynCircuit<'a> {
-        &self.c
-    }
-
-    pub fn scoped_label<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
-        self.c.scoped_label(label)
-    }
-
-    pub fn with_label<T: fmt::Display, F: FnOnce() -> R, R>(&self, label: T, f: F) -> R {
-        self.c.with_label(label, f)
+impl<'a> BuilderImpl<'a> {
+    pub fn new(c: &'a DynCircuit<'a>) -> BuilderImpl<'a> {
+        BuilderImpl { c: c }
     }
 }
 
+impl<'a> Builder<'a> for BuilderImpl<'a> {
+    type Circuit = DynCircuit<'a>;
+
+    fn circuit(&self) -> &'a DynCircuit<'a> {
+        self.c
+    }
+}
+
+/*
 pub trait AsBuilder<'a> {
     fn as_builder(&self) -> &Builder<'a>;
 }
@@ -47,6 +351,7 @@ pub trait AsBuilder<'a> {
 impl<'a> AsBuilder<'a> for Builder<'a> {
     fn as_builder(&self) -> &Builder<'a> { self }
 }
+*/
 
 /// Typed wire, which carries a a representation of `T`.  This is useful for distinguishing wires
 /// with different high-level types, even when they share a low-level representation.
@@ -128,7 +433,7 @@ impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
         TSecretHandle { secret, default }
     }
 
-    pub fn set(&self, bld: &Builder<'a>, val: T) {
+    pub fn set(&self, bld: &impl Builder<'a>, val: T) {
         let lit = bld.lit(val);
         T::set_from_lit(&self.secret.repr, &lit.repr, true);
     }
@@ -192,73 +497,22 @@ where <Self as Repr<'a>>::Repr: Sized {
     fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a>;
 
     /// Convert a `TWire<Self>` to a single `Wire`, whose type is given by `wire_type`.
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a>;
+    fn to_wire(bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a>;
 
     /// Convert a single `Wire` back into a `TWire<Self>`.
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self>;
+    fn from_wire(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self>;
 }
 
 
 pub trait Lit<'a>
 where Self: Repr<'a> {
-    fn lit(bld: &Builder<'a>, x: Self) -> Self::Repr;
+    fn lit(bld: &impl Builder<'a>, x: Self) -> Self::Repr;
 }
 
 pub trait Secret<'a>
 where Self: Repr<'a> + Lit<'a> + Sized {
-    fn secret(bld: &Builder<'a>) -> Self::Repr;
+    fn secret(bld: &impl Builder<'a>) -> Self::Repr;
     fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool);
-}
-
-impl<'a> Builder<'a> {
-    pub fn lit<T: Lit<'a>>(&self, x: T) -> TWire<'a, T> {
-        TWire::new(Lit::lit(self, x))
-    }
-
-    pub fn secret<T: Secret<'a> + Default>(&self) -> (TWire<'a, T>, TSecretHandle<'a, T>)
-    where T::Repr: Clone {
-        self.secret_default(T::default())
-    }
-
-    pub fn secret_default<T: Secret<'a>>(
-        &self,
-        default: T,
-    ) -> (TWire<'a, T>, TSecretHandle<'a, T>)
-    where T::Repr: Clone {
-        let w = self.secret_uninit::<T>();
-        let sh = TSecretHandle::new(w.clone(), self.lit(default));
-        (w, sh)
-    }
-
-    pub fn secret_init<T: Secret<'a>, F>(&self, mk_val: F) -> TWire<'a, T>
-    where F: FnOnce() -> T {
-        let w = self.secret_uninit::<T>();
-        if self.c.is_prover() {
-            let lit = self.lit(mk_val());
-            Builder::set_secret_from_lit(&w, &lit, true);
-        }
-        w
-    }
-
-    pub fn secret_uninit<T: Secret<'a>>(&self) -> TWire<'a, T> {
-        TWire::new(<T as Secret>::secret(self))
-    }
-
-    pub fn neq_zero<T>(&self, x: TWire<'a, T>) -> TWire<'a, bool>
-    where
-    T: Repr<'a>,
-    T: Eq<'a, Output=bool>,
-    T: Lit<'a>,
-    T: num_traits::Zero,
-    {
-        // TODO: Use custom gate.
-        let c : TWire<'a, bool> = self.eq(x,self.lit(T::zero()));
-        self.not(c)
-    }
-
-    pub fn set_secret_from_lit<T: Secret<'a>>(s: &TWire<'a, T>, val: &TWire<'a, T>, force: bool) {
-        <T as Secret>::set_from_lit(&s.repr, &val.repr, force);
-    }
 }
 
 pub trait FromEval<'a>
@@ -274,17 +528,9 @@ macro_rules! define_un_ops {
         $(
             pub trait $Op<'a>: Repr<'a> {
                 type Output: Repr<'a>;
-                fn $op(bld: &Builder<'a>, a: Self::Repr) -> <Self::Output as Repr<'a>>::Repr;
+                fn $op(bld: &impl Builder<'a>, a: Self::Repr) -> <Self::Output as Repr<'a>>::Repr;
             }
         )*
-
-        impl<'a> Builder<'a> {
-            $(
-                pub fn $op<A: $Op<'a>>(&self, a: TWire<'a, A>) -> TWire<'a, A::Output> {
-                    TWire::new(<A as $Op>::$op(self, a.repr))
-                }
-            )*
-        }
     };
 }
 
@@ -302,24 +548,12 @@ macro_rules! define_bin_ops {
             where Self: Repr<'a>, Other: Repr<'a> {
                 type Output: Repr<'a>;
                 fn $op(
-                    bld: &Builder<'a>,
+                    bld: &impl Builder<'a>,
                     a: Self::Repr,
                     b: Other::Repr,
                 ) -> <Self::Output as Repr<'a>>::Repr;
             }
         )*
-
-        impl<'a> Builder<'a> {
-            $(
-                pub fn $op<A: $Op<'a, B>, B: Repr<'a>>(
-                    &self,
-                    a: TWire<'a, A>,
-                    b: TWire<'a, B>,
-                ) -> TWire<'a, A::Output> {
-                    TWire::new(<A as $Op<B>>::$op(self, a.repr, b.repr))
-                }
-            )*
-        }
     };
 }
 
@@ -346,40 +580,20 @@ pub trait Mux<'a, Cond, Other = Self>
 where Cond: Repr<'a>, Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: Cond::Repr,
         t: Self::Repr,
         e: Other::Repr,
     ) -> <Self::Output as Repr<'a>>::Repr;
 }
 
-impl<'a> Builder<'a> {
-    pub fn mux<C: Repr<'a>, T: Mux<'a, C, E>, E: Repr<'a>>(
-        &self,
-        c: TWire<'a, C>,
-        t: TWire<'a, T>,
-        e: TWire<'a, E>,
-    ) -> TWire<'a, T::Output> {
-        TWire::new(<T as Mux<C, E>>::mux(self, c.repr, t.repr, e.repr))
-    }
-}
-
 
 pub trait Cast<'a, Target = Self>
 where Self: Repr<'a>, Target: Repr<'a> {
     fn cast(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         x: Self::Repr,
     ) -> Target::Repr;
-}
-
-impl<'a> Builder<'a> {
-    pub fn cast<T: Cast<'a, U>, U: Repr<'a>>(
-        &self,
-        x: TWire<'a, T>,
-    ) -> TWire<'a, U> {
-        TWire::new(<T as Cast<U>>::cast(self, x.repr))
-    }
 }
 
 
@@ -388,8 +602,8 @@ macro_rules! primitive_unary_impl {
     ($Op:ident :: $op:ident ($T:ty)) => {
         impl<'a> $Op<'a> for $T {
             type Output = $T;
-            fn $op(bld: &Builder<'a>, a: Wire<'a>) -> Wire<'a> {
-                bld.c.$op(a)
+            fn $op(bld: &impl Builder<'a>, a: Wire<'a>) -> Wire<'a> {
+                bld.circuit().$op(a)
             }
         }
     };
@@ -400,7 +614,7 @@ macro_rules! primitive_binary_impl {
     ($Op:ident :: $op:ident ($T:ty, $U:ty) -> $R:ty) => {
         impl<'a> $Op<'a, $U> for $T {
             type Output = $R;
-            fn $op(bld: &Builder<'a>, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
+            fn $op(bld: &impl Builder<'a>, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
                 bld.circuit().$op(a, b)
             }
         }
@@ -413,22 +627,22 @@ impl<'a> Repr<'a> for bool {
 
 impl<'a> Flatten<'a> for bool {
     fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::BOOL) }
-    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
-    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
+    fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         assert!(*w.ty == TyKind::BOOL);
         TWire::new(w)
     }
 }
 
 impl<'a> Lit<'a> for bool {
-    fn lit(bld: &Builder<'a>, x: bool) -> Wire<'a> {
-        bld.c.lit(bld.c.ty(TyKind::BOOL), x as u64)
+    fn lit(bld: &impl Builder<'a>, x: bool) -> Wire<'a> {
+        bld.circuit().lit(bld.circuit().ty(TyKind::BOOL), x as u64)
     }
 }
 
 impl<'a> Secret<'a> for bool {
-    fn secret(bld: &Builder<'a>) -> Wire<'a> {
-        bld.c.new_secret_wire_uninit(bld.c.ty(TyKind::BOOL))
+    fn secret(bld: &impl Builder<'a>) -> Wire<'a> {
+        bld.circuit().new_secret_wire_uninit(bld.circuit().ty(TyKind::BOOL))
     }
 
     fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
@@ -456,16 +670,16 @@ primitive_binary_impl!(Ge::ge(bool, bool) -> bool);
 
 impl<'a> Mux<'a, bool> for bool {
     type Output = bool;
-    fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
-        bld.c.mux(c, t, e)
+    fn mux(bld: &impl Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+        bld.circuit().mux(c, t, e)
     }
 }
 
 macro_rules! integer_cast_impl {
     ($T:ty, $U:ty, $K:ident) => {
         impl<'a> Cast<'a, $U> for $T {
-            fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-                bld.c.cast(x, bld.c.ty(TyKind::$K))
+            fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+                bld.circuit().cast(x, bld.circuit().ty(TyKind::$K))
             }
         }
     };
@@ -479,22 +693,22 @@ macro_rules! integer_impls {
 
         impl<'a> Flatten<'a> for $T {
             fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::$K) }
-            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
-            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+            fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
+            fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::$K);
                 TWire::new(w)
             }
         }
 
         impl<'a> Lit<'a> for $T {
-            fn lit(bld: &Builder<'a>, x: $T) -> Wire<'a> {
-                bld.c.lit(bld.c.ty(TyKind::$K), x as u64)
+            fn lit(bld: &impl Builder<'a>, x: $T) -> Wire<'a> {
+                bld.circuit().lit(bld.circuit().ty(TyKind::$K), x as u64)
             }
         }
 
         impl<'a> Secret<'a> for $T {
-            fn secret(bld: &Builder<'a>) -> Wire<'a> {
-                bld.c.new_secret_wire_uninit(bld.c.ty(TyKind::$K))
+            fn secret(bld: &impl Builder<'a>) -> Wire<'a> {
+                bld.circuit().new_secret_wire_uninit(bld.circuit().ty(TyKind::$K))
             }
 
             fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
@@ -531,14 +745,14 @@ macro_rules! integer_impls {
 
         impl<'a> Mux<'a, bool> for $T {
             type Output = $T;
-            fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
-                bld.c.mux(c, t, e)
+            fn mux(bld: &impl Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+                bld.circuit().mux(c, t, e)
             }
         }
 
         impl<'a> Cast<'a, $T> for bool {
-            fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
-                bld.c.cast(x, bld.c.ty(TyKind::$K))
+            fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+                bld.circuit().cast(x, bld.circuit().ty(TyKind::$K))
             }
         }
 
@@ -617,22 +831,22 @@ macro_rules! field_impls {
 
         impl<'a> Flatten<'a> for $T {
             fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::GF(Field::$K)) }
-            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
-            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+            fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr }
+            fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::GF(Field::$K));
                 TWire::new(w)
             }
         }
 
         impl<'a> Lit<'a> for $T {
-            fn lit(bld: &Builder<'a>, x: $T) -> Wire<'a> {
-                bld.c.lit(bld.c.ty(TyKind::GF(Field::$K)), x)
+            fn lit(bld: &impl Builder<'a>, x: $T) -> Wire<'a> {
+                bld.circuit().lit(bld.circuit().ty(TyKind::GF(Field::$K)), x)
             }
         }
 
         impl<'a> Secret<'a> for $T {
-            fn secret(bld: &Builder<'a>) -> Wire<'a> {
-                bld.c.new_secret_wire_uninit(bld.c.ty(TyKind::GF(Field::$K)))
+            fn secret(bld: &impl Builder<'a>) -> Wire<'a> {
+                bld.circuit().new_secret_wire_uninit(bld.circuit().ty(TyKind::GF(Field::$K)))
             }
 
             fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
@@ -657,8 +871,8 @@ macro_rules! field_impls {
 
         impl<'a> Mux<'a, bool> for $T {
             type Output = $T;
-            fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
-                bld.c.mux(c, t, e)
+            fn mux(bld: &impl Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+                bld.circuit().mux(c, t, e)
             }
         }
 
@@ -702,17 +916,18 @@ macro_rules! tuple_impl {
                 c.ty_bundle(&[$($A::wire_type(c),)*])
             }
 
-            fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+            fn to_wire(bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 let ($($A,)*) = w.repr;
-                bld.c.pack(&[$(Flatten::to_wire(bld, $A),)*])
+                bld.circuit().pack(&[$(Flatten::to_wire(bld, $A),)*])
             }
 
-            fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+            fn from_wire(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 #![allow(unused)]       // `bld` in the zero-element case
                 let mut it = 0..;
-                $( let $A = Flatten::from_wire(bld, bld.c.extract(w, it.next().unwrap())); )*
+                $( let $A = Flatten::from_wire(
+                        bld, bld.circuit().extract(w, it.next().unwrap())); )*
                 let num_elems = it.next().unwrap();
 
                 match *w.ty {
@@ -727,7 +942,7 @@ macro_rules! tuple_impl {
         }
 
         impl<'a, $($A: Lit<'a>,)*> Lit<'a> for ($($A,)*) {
-            fn lit(bld: &Builder<'a>, x: Self) -> Self::Repr {
+            fn lit(bld: &impl Builder<'a>, x: Self) -> Self::Repr {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 #![allow(unused)]       // `bld` in the zero-element case
                 let ($($A,)*) = x;
@@ -736,7 +951,7 @@ macro_rules! tuple_impl {
         }
 
         impl<'a, $($A: Secret<'a>,)*> Secret<'a> for ($($A,)*) {
-            fn secret(bld: &Builder<'a>) -> Self::Repr {
+            fn secret(bld: &impl Builder<'a>) -> Self::Repr {
                 #![allow(unused)]       // `bld` in the zero-element case
                 ($(bld.secret_uninit::<$A>(),)*)
             }
@@ -778,7 +993,7 @@ macro_rules! tuple_impl {
             type Output = ($(<$A as Mux<'a, C, $B>>::Output,)*);
 
             fn mux(
-                bld: &Builder<'a>,
+                bld: &impl Builder<'a>,
                 c: C::Repr,
                 a: ($(TWire<'a, $A>,)*),
                 b: ($(TWire<'a, $B>,)*),
@@ -819,7 +1034,7 @@ macro_rules! array_impls {
                     c.ty_bundle(&[A::wire_type(c); $n])
                 }
 
-                fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+                fn to_wire(bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
                     // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
                     // to implement without unnecessary allocation.
                     unsafe {
@@ -834,11 +1049,11 @@ macro_rules! array_impls {
                             (o.as_mut_ptr() as *mut Wire).add(i).write(o_val);
                         }
 
-                        bld.c.pack(&o.assume_init())
+                        bld.circuit().pack(&o.assume_init())
                     }
                 }
 
-                fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+                fn from_wire(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                     match *w.ty {
                         TyKind::Bundle(tys) => assert!(tys.len() == $n),
                         // If num_elems is zero, there are no `bld.c.extract` calls, so the type error
@@ -853,7 +1068,7 @@ macro_rules! array_impls {
 
                         for i in 0 .. $n {
                             // If this panics, the remaining elements of `a` and `b` will leak.
-                            let o_val = A::from_wire(bld, bld.c.extract(w, i));
+                            let o_val = A::from_wire(bld, bld.circuit().extract(w, i));
 
                             (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
                         }
@@ -864,7 +1079,7 @@ macro_rules! array_impls {
             }
 
             impl<'a, A: Lit<'a>> Lit<'a> for [A; $n] {
-                fn lit(bld: &Builder<'a>, a: [A; $n]) -> [TWire<'a, A>; $n] {
+                fn lit(bld: &impl Builder<'a>, a: [A; $n]) -> [TWire<'a, A>; $n] {
                     // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
                     // to implement without unnecessary allocation.
                     unsafe {
@@ -885,7 +1100,7 @@ macro_rules! array_impls {
             }
 
             impl<'a, A: Secret<'a>> Secret<'a> for [A; $n] {
-                fn secret(bld: &Builder<'a>) -> [TWire<'a, A>; $n] {
+                fn secret(bld: &impl Builder<'a>) -> [TWire<'a, A>; $n] {
                     // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
                     // to implement without unnecessary allocation.
                     unsafe {
@@ -945,7 +1160,7 @@ macro_rules! array_impls {
                 type Output = [<A as Mux<'a, C, B>>::Output; $n];
 
                 fn mux(
-                    bld: &Builder<'a>,
+                    bld: &impl Builder<'a>,
                     c: C::Repr,
                     a: [TWire<'a, A>; $n],
                     b: [TWire<'a, B>; $n],
@@ -990,7 +1205,7 @@ impl<'a, A: Repr<'a>> Repr<'a> for Vec<A> {
 }
 
 impl<'a, A: Lit<'a>> Lit<'a> for Vec<A> {
-    fn lit(bld: &Builder<'a>, a: Vec<A>) -> Vec<TWire<'a, A>> {
+    fn lit(bld: &impl Builder<'a>, a: Vec<A>) -> Vec<TWire<'a, A>> {
         a.into_iter().map(|x| bld.lit(x)).collect()
     }
 }
@@ -1014,7 +1229,7 @@ where
     type Output = Vec<A::Output>;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         a: Vec<TWire<'a, A>>,
         b: Vec<TWire<'a, B>>,
@@ -1025,90 +1240,6 @@ where
         );
         let c = TWire::<C>::new(c);
         a.into_iter().zip(b.into_iter()).map(|(a, b)| bld.mux(c.clone(), a, b)).collect()
-    }
-}
-
-
-impl<'a> Builder<'a> {
-    pub fn mux_multi<C, A>(
-        &self,
-        cases: &[TWire<'a, (C, A)>],
-        default: TWire<'a, A>,
-    ) -> TWire<'a, A>
-    where
-        C: Repr<'a>,
-        A: Mux<'a, C, A, Output = A>,
-        C::Repr: Clone,
-        A::Repr: Clone,
-    {
-        let mut val = default;
-        for case in cases {
-            let (cond, then) = case.clone().repr;
-            val = self.mux(cond, then, val);
-        }
-        val
-    }
-
-    pub fn index<I, T>(
-        &self,
-        arr: &[TWire<'a, T>],
-        idx: TWire<'a, I>,
-        mut mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
-    ) -> TWire<'a, T>
-    where
-        I: Eq<'a, I>,
-        I::Repr: Clone,
-        T: Mux<'a, <I as Eq<'a, I>>::Output, T, Output = T>,
-        T::Repr: Clone,
-    {
-        let mut val = arr.first().expect("can't index in an empty array").clone();
-        for (i, x) in arr.iter().enumerate().skip(1) {
-            let eq = self.eq(idx.clone(), mk_idx(self, i));
-            val = self.mux(eq, x.clone(), val);
-        }
-        val
-    }
-
-    pub fn index_with_default<I, T>(
-        &self,
-        arr: &[TWire<'a, T>],
-        idx: TWire<'a, I>,
-        default: TWire<'a, T>,
-        mut mk_idx: impl FnMut(&Self, usize) -> TWire<'a, I>,
-    ) -> TWire<'a, T>
-    where
-        I: Eq<'a, I>,
-        I::Repr: Clone,
-        T: Mux<'a, <I as Eq<'a, I>>::Output, T, Output = T>,
-        T::Repr: Clone,
-    {
-        let mut val = default;
-        for (i, x) in arr.iter().enumerate() {
-            let eq = self.eq(idx.clone(), mk_idx(self, i));
-            val = self.mux(eq, x.clone(), val);
-        }
-        val
-    }
-
-    /// Output a `val` from `vals` on which `check(val)` outputs `true`.  If all checks output
-    /// false (or `vals` is empty), then this function outputs `default` instead.
-    pub fn select<C, A>(
-        &self,
-        vals: &[TWire<'a, A>],
-        default: TWire<'a, A>,
-        mut check: impl FnMut(&TWire<'a, A>) -> TWire<'a, C>,
-    ) -> TWire<'a, A>
-    where
-        C: Repr<'a>,
-        A: Mux<'a, C, A, Output = A>,
-        A::Repr: Clone,
-    {
-        let mut acc = default;
-        for val in vals {
-            let cond = check(val);
-            acc = self.mux(cond, val.clone(), acc);
-        }
-        acc
     }
 }
 

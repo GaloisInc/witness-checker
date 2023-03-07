@@ -3,7 +3,7 @@ use std::iter;
 use zk_circuit_builder::gadget::arith::BuilderExt as _;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, EvaluatorExt};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, EvaluatorExt};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
 use crate::micro_ram::known_mem::KnownMem;
@@ -31,9 +31,9 @@ pub struct Segment<'a> {
 
 }
 
-pub struct SegmentBuilder<'a, 'b> {
+pub struct SegmentBuilder<'a, 'b, B> {
     pub cx: &'b Context<'a>,
-    pub b: &'b Builder<'a>,
+    pub b: &'b B,
     pub ev: &'b mut CachingEvaluator<'a, eval::Public>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
@@ -42,7 +42,7 @@ pub struct SegmentBuilder<'a, 'b> {
     pub check_steps: usize,
 }
 
-impl<'a, 'b> SegmentBuilder<'a, 'b> {
+impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
     pub fn run(
         &mut self,
         idx: usize,
@@ -161,7 +161,7 @@ impl<'a> Segment<'a> {
 
     pub fn set_states(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         prog: &[RamInstr],
         init_cycle: u32,
         init_state: &RamState,
@@ -207,7 +207,7 @@ impl<'a> Segment<'a> {
     pub fn check_states(
         &self,
         cx: &Context<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         init_cycle: u32,
         check_steps: usize,
         states: &[RamState],
@@ -235,7 +235,7 @@ impl<'a> Segment<'a> {
     fn check_state(
         &self,
         cx: &Context<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         cycle: u32,
         actual: &TWire<'a, RamState>,
         expected: &RamState,
@@ -246,7 +246,7 @@ impl<'a> Segment<'a> {
 
 
 fn operand_value<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     s: &TWire<'a, RamState>,
     op: TWire<'a, u64>,
     imm: TWire<'a, bool>,
@@ -257,7 +257,7 @@ fn operand_value<'a>(
 
 fn calc_step<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     ev: &mut CachingEvaluator<'a, eval::Public>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
@@ -476,7 +476,7 @@ fn calc_step<'a>(
 
 fn check_state<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     seg_idx: usize,
     cycle: u32,
     calc_s: &TWire<'a, RamState>,
@@ -514,7 +514,7 @@ fn check_state<'a>(
 
 fn check_step<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     seg_idx: usize,
     idx: usize,
     cycle: TWire<'a, u32>,

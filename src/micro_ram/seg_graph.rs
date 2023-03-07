@@ -6,7 +6,7 @@ use std::mem;
 use log::*;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt};
 use zk_circuit_builder::routing::{RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
@@ -116,7 +116,7 @@ pub struct SegGraphBuilder<'a> {
 
 impl<'a> SegGraphBuilder<'a> {
     pub fn new(
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         seg_defs: &[types::Segment],
         params: &Params,
         cpu_init_state: RamState,
@@ -252,7 +252,7 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     /// Break cycles in the graph by inserting `CycleBreakNodes`.
-    fn break_cycles(&mut self, b: &Builder<'a>, params: &Params) {
+    fn break_cycles(&mut self, b: &impl Builder<'a>, params: &Params) {
         // If a segment's `good` flag is set, then there are no cycles involving that node or any
         // of its (transitive) predecessors.
         let mut good = vec![false; self.segments.len()];
@@ -418,7 +418,7 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     /// Initialize secrets needed for evaluation of intermediate values.
-    fn init_secrets(&mut self, b: &Builder<'a>, trace: &[TraceChunk]) {
+    fn init_secrets(&mut self, b: &impl Builder<'a>, trace: &[TraceChunk]) {
         // Initialize edge liveness flags.
 
         // Keep the set of live edges for use when setting CycleBreak states.
@@ -599,7 +599,7 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     /// Obtain the initial state to use for a given segment.
-    pub fn get_initial(&mut self, b: &Builder<'a>, idx: usize) -> TWire<'a, RamState> {
+    pub fn get_initial(&mut self, b: &impl Builder<'a>, idx: usize) -> TWire<'a, RamState> {
         let _g = b.scoped_label("seg_graph/get_initial");
         let mut it = self.segments[idx].preds.iter();
         let first_pred = it.next()
@@ -693,7 +693,7 @@ impl<'a> SegGraphBuilder<'a> {
         self.cpu_init_mem.set(mem);
     }
 
-    fn liveness_flag(&self, b: &Builder<'a>, l: Liveness) -> TWire<'a, bool> {
+    fn liveness_flag(&self, b: &impl Builder<'a>, l: Liveness) -> TWire<'a, bool> {
         match l {
             Liveness::Always => b.lit(true),
             Liveness::Edge(a, b) => self.edges[&(a, b)].wire().clone(),
@@ -702,7 +702,7 @@ impl<'a> SegGraphBuilder<'a> {
         }
     }
 
-    fn get_predecessor(&self, b: &Builder<'a>, pred: Predecessor) -> TWire<'a, RamState> {
+    fn get_predecessor(&self, b: &impl Builder<'a>, pred: Predecessor) -> TWire<'a, RamState> {
         let mut wire = self.get_final(pred.src).clone();
         let edge_live = self.liveness_flag(b, pred.live);
         wire.live = b.and(wire.live, edge_live);
@@ -734,7 +734,7 @@ impl<'a> SegGraphBuilder<'a> {
     pub fn build_network(
         this: &mut Rooted<'a, Projected<Self>>,
         mh: &mut MigrateHandle<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
     ) {
         let _g = b.scoped_label("seg_graph/build_network");
         let mut routing = Rooted::new(match this.open(mh).network {
@@ -757,7 +757,7 @@ impl<'a> SegGraphBuilder<'a> {
         this.open(mh).network = NetworkState::After(outputs);
     }
 
-    pub fn finish(mut self, cx: &Context<'a>, b: &Builder<'a>) {
+    pub fn finish(mut self, cx: &Context<'a>, b: &impl Builder<'a>) {
         let _g = b.scoped_label("seg_graph/finish");
         // Add equality assertions to constrain the CycleBreakNode secrets.  We do this first
         // because the later steps involve dismantling `self` to extract its `TSecretHandle`s.

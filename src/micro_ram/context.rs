@@ -5,7 +5,7 @@ use std::mem;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
-use zk_circuit_builder::ir::typed::{Builder, TWire, FromEval, EvaluatorExt};
+use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire, FromEval, EvaluatorExt};
 
 #[macro_export]
 macro_rules! wire_assert {
@@ -237,11 +237,11 @@ impl<'a> Context<'a> {
         self.bugs.borrow_mut().push(Cond::new(cond, msg, self.is_prover));
     }
 
-    pub fn when<R>(
+    pub fn when<R, B: Builder<'a>>(
         &self,
-        b: &Builder<'a>,
+        b: &B,
         path_cond: TWire<'a, bool>,
-        f: impl FnOnce(&ContextWhen<'a, '_>) -> R,
+        f: impl FnOnce(&ContextWhen<'a, '_, B>) -> R,
     ) -> R {
         f(&ContextWhen { cx: self, b, path_cond })
     }
@@ -308,13 +308,13 @@ impl<'a, 'b> Migrate<'a, 'b> for Cond<'a> {
     }
 }
 
-pub struct ContextWhen<'a, 'b> {
+pub struct ContextWhen<'a, 'b, B> {
     cx: &'b Context<'a>,
-    b: &'b Builder<'a>,
+    b: &'b B,
     path_cond: TWire<'a, bool>,
 }
 
-impl<'a, 'b> ContextWhen<'a, 'b> {
+impl<'a, 'b, B: Builder<'a>> ContextWhen<'a, 'b, B> {
     pub fn assert_cond(&self, cond: TWire<'a, bool>) -> TWire<'a, bool> {
         // The assertion passes if either this `when` block is not taken, or `cond` is satisfied.
         self.b.or(self.b.not(self.path_cond), cond)
@@ -341,11 +341,11 @@ impl<'a, 'b> ContextWhen<'a, 'b> {
         self.cx.bug_if(self.bug_cond(cond), msg);
     }
 
-    pub fn when<R>(
+    pub fn when<R, B2: Builder<'a>>(
         &self,
-        b: &Builder<'a>,
+        b: &B2,
         path_cond: TWire<'a, bool>,
-        f: impl FnOnce(&ContextWhen<'a, '_>) -> R,
+        f: impl FnOnce(&ContextWhen<'a, '_, B2>) -> R,
     ) -> R {
         self.cx.when(b, b.and(self.path_cond, path_cond), f)
     }
