@@ -1092,7 +1092,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
-    unsafe fn migrate_with<F, R>(&'a self, f: F) -> R
+    unsafe fn migrate_with<F, R>(&self, f: F) -> R
     where F: FnOnce(&mut MigrateVisitor<'a, 'a, '_>) -> R {
         let old = self.as_base().take();
 
@@ -1134,7 +1134,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// This method will panic when called on a `CircuitRef`.  It should only be called when the
     /// concrete type is `CircuitBase` or `Circuit`.
     unsafe fn migrate<T: Migrate<'a, 'a, Output = T>>(
-        &'a self,
+        &self,
         x: T,
     ) -> T {
         use crate::ir::migrate::Visitor;
@@ -1142,7 +1142,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
     unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a, '_>) -> R, R>(
-        &'a self,
+        &self,
         f: F,
     ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
         let mut v = EraseVisitor::new(self.as_base());
@@ -1164,7 +1164,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// This method is unsafe because it mutates the circuit filter (if any) in place, so the
     /// caller must ensure there are no outstanding references to the filter.
     unsafe fn erase<T: Migrate<'a, 'a, Output = T>>(
-        &'a self,
+        &self,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
         use crate::ir::migrate::Visitor;
@@ -1173,7 +1173,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
     /// Shorthand for `erase` followed by `migrate`.
     unsafe fn erase_and_migrate<T: Migrate<'a, 'a, Output = T>>(
-        &'a self,
+        &self,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
         let x = self.erase(x);

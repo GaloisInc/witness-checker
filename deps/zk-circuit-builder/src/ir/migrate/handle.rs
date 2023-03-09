@@ -133,7 +133,7 @@ impl<'a> MigrateHandle<'a> {
     /// arena (indicated by the `'a` lifetime) are always wrapped in `Rooted`.  If any references
     /// with `'a` lifetime are accessible outside of a `Rooted` wrapper, those references may be
     /// left dangling after calling this method.
-    pub unsafe fn erase_and_migrate<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &'a C) {
+    pub unsafe fn erase_and_migrate<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C) {
         if c.as_base().gc_size() > self.prev_size * 5 / 2 {
             c.erase_with(|v| self.mcx.erase_in_place(v));
             c.migrate_with(|v| self.mcx.migrate_in_place(v));
