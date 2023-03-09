@@ -201,11 +201,11 @@ mod test {
     fn check_benes_sort(inputs: &[u32]) {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
-        let (ws, _) = sort(&b, &ws, CompareLt).run(&b);
+        let (ws, _) = sort(b, &ws, CompareLt).run(b);
 
         let vals = ws.iter()
             .map(|&w| ev.eval_typed(&c, w).unwrap().try_into().unwrap())

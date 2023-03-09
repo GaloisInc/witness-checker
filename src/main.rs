@@ -12,7 +12,7 @@ use zk_circuit_builder::back::{self, UsePlugins};
 use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
 use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
-    Circuit, Arenas, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
+    Circuit, Arenas, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, GadgetKindRef,
 };
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, BuilderImpl, TWire};
 use zk_circuit_builder::lower;
@@ -178,9 +178,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
     let c = Circuit::new(&arenas, is_prover, cf);
-    let c = &c as &DynCircuit;
+    let c = &c;
 
-    let b = BuilderImpl::new(c);
+    let b = BuilderImpl::from_ref(c);
     let mut cx = Context::new(c);
 
     // Load the program and trace from files
@@ -284,7 +284,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         });
         if provided_init_state.is_some() {
             let init_state_wire = b.lit(init_state.clone());
-            check_first(&cx, &b, &init_state_wire);
+            check_first(&cx, b, &init_state_wire);
         }
 
         let check_steps = args.value_of("check-steps")
@@ -295,7 +295,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             .map(|s| s.to_owned());
 
         let (new_cx, new_equiv_segments) = ExecBuilder::build(
-            &b, &mcx, cx, &exec, name, equiv_segments, init_state,
+            b, &mcx, cx, &exec, name, equiv_segments, init_state,
             check_steps, expect_zero, debug_segment_graph_path);
         cx = new_cx;
         equiv_segments = new_equiv_segments;

@@ -272,7 +272,7 @@ mod test {
 
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut rb = RoutingBuilder::new();
@@ -282,7 +282,7 @@ mod test {
         for (i, &j) in perm[..n].iter().enumerate() {
             rb.connect(input_ids[i], output_ids[j]);
         }
-        let outputs = rb.finish_exact(&b).run(&b);
+        let outputs = rb.finish_exact(b).run(b);
 
         let output_vals = outputs.iter()
             .map(|&w| ev.eval_typed(&c, w).unwrap().try_into().unwrap())
