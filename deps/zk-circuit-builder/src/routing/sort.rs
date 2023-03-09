@@ -7,7 +7,7 @@ use crate::routing::{RoutingBuilder, FinishRouting};
 
 
 fn sorting_permutation<'a, C: CircuitTrait<'a> + ?Sized, T, F>(
-    c: &'a C,
+    c: &C,
     xs: &[TWire<'a, T>],
     mut compare: F,
 ) -> Option<Vec<usize>>
