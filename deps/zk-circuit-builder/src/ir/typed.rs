@@ -17,8 +17,7 @@ use crate::ir::migrate::{self, Migrate};
 
 pub trait Builder<'a>: 'a + Sized {
     type Circuit: ?Sized + CircuitTrait<'a>;
-    // TODO: remove 'a lifetime here (use same lifetime as self)
-    fn circuit(&self) -> &'a Self::Circuit;
+    fn circuit(&self) -> &Self::Circuit;
 }
 
 pub trait BuilderExt<'a>: Builder<'a> {
@@ -338,7 +337,7 @@ impl<'a> BuilderImpl<'a> {
 impl<'a> Builder<'a> for BuilderImpl<'a> {
     type Circuit = DynCircuit<'a>;
 
-    fn circuit(&self) -> &'a DynCircuit<'a> {
+    fn circuit(&self) -> &DynCircuit<'a> {
         self.c
     }
 }
