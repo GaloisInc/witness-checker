@@ -77,10 +77,14 @@ impl<'a> CircuitBase<'a> {
             is_prover,
             functions: RefCell::new(Vec::new()),
         };
-        c.preload_common_types();
-        c.preload_common_bits();
-        c.preload_common_strs();
+        c.preload_common();
         c
+    }
+
+    fn preload_common(&self) {
+        self.preload_common_types();
+        self.preload_common_bits();
+        self.preload_common_strs();
     }
 
     fn preload_common_types(&self) {
@@ -408,39 +412,44 @@ impl<'a> CircuitBase<'a> {
     }
 
 
-    /// Replace the current arenas with new ones, as preparation to migrate.  Returns the old
-    /// arenas.  This is unsafe because dropping the returned `Arenas` will invalidate any
-    /// outstanding references to values allocated there.
-    unsafe fn pre_migrate(&self) -> Arenas {
+    /// Replace the current arenas with new ones, and reset `*self` to a fresh circuit.  Returns
+    /// the old `Arenas` and `Circuit`.  This is unsafe because dropping the returned `Arenas` will
+    /// invalidate the `Circuit` and any outstanding references to values allocated there.
+    unsafe fn take(&self) -> ArenasAndCircuit<'a> {
         let CircuitBase {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
             ref intern_gadget_kind, ref intern_str, ref intern_bits,
             ref function_scope,
             ref current_label,
-            is_prover: _,
-            functions: _,
+            is_prover,
+            ref functions,
         } = *self;
 
-        let old_arenas = arenas.take();
+        let old_arenas = Box::new(arenas.take());
 
-        // Flush all the old interning tables, which hold references to the old arena.
-        intern_gate.borrow_mut().clear();
-        intern_ty.borrow_mut().clear();
-        intern_wire_list.borrow_mut().clear();
-        intern_ty_list.borrow_mut().clear();
-        intern_gadget_kind.borrow_mut().clear();
-        intern_str.borrow_mut().clear();
-        intern_bits.borrow_mut().clear();
+        let old_arenas_ptr: *const Arenas = &*old_arenas;
+        let old_circuit = CircuitBase {
+            arenas: &*old_arenas_ptr,
+            intern_gate: RefCell::new(intern_gate.take()),
+            intern_ty: RefCell::new(intern_ty.take()),
+            intern_wire_list: RefCell::new(intern_wire_list.take()),
+            intern_ty_list: RefCell::new(intern_ty_list.take()),
+            intern_gadget_kind: RefCell::new(intern_gadget_kind.take()),
+            intern_str: RefCell::new(intern_str.take()),
+            intern_bits: RefCell::new(intern_bits.take()),
+            function_scope: RefCell::new(function_scope.take()),
+            current_label: Cell::new(current_label.replace("")),
+            is_prover,
+            functions: RefCell::new(functions.take()),
+        };
 
-        self.preload_common_types();
+        self.preload_common();
 
-        // Migrate `current_label` to the new arena.
-        current_label.set(self.intern_str(current_label.get()));
-
-        assert!(function_scope.borrow().is_none(), "can't migrate inside define_function");
-
-        old_arenas
+        ArenasAndCircuit {
+            arenas: ManuallyDrop::new(old_arenas),
+            circuit: ManuallyDrop::new(old_circuit),
+        }
     }
 }
 
@@ -464,6 +473,22 @@ impl Arenas {
     unsafe fn take(&self) -> Arenas {
         Arenas {
             arena: UnsafeCell::new(ptr::replace(self.arena.get(), Bump::new())),
+        }
+    }
+}
+
+/// Helper type for use during migration.  We use this to make sure the old `circuit` and `Arenas`
+/// get dropped in the right order.  This is not safe for general use.
+struct ArenasAndCircuit<'a> {
+    arenas: ManuallyDrop<Box<Arenas>>,
+    circuit: ManuallyDrop<CircuitBase<'a>>,
+}
+
+impl<'a> Drop for ArenasAndCircuit<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.circuit);
+            ManuallyDrop::drop(&mut self.arenas);
         }
     }
 }
@@ -576,8 +601,8 @@ pub trait CircuitTrait<'a> {
     /// place.  There must be no outstanding references to the filter.
     ///
     /// This will panic when called on a `CircuitRef`, which doesn't have ownership of its filter.
-    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a>);
-    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a>);
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>);
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>);
 }
 
 impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
@@ -588,8 +613,8 @@ impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
         self.gate(kind)
     }
 
-    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a>) {}
-    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a>) {}
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {}
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {}
 }
 
 impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
@@ -602,10 +627,10 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
         self.filter().gate(&self.base, kind)
     }
 
-    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a>) {
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>) {
         (*self.filter.get()).migrate_in_place(v)
     }
-    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a>) {
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>) {
         (*self.filter.get()).erase_in_place(v)
     }
 }
@@ -618,10 +643,10 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for CircuitRef<'a, '_, 
         self.filter.gate(self.base, kind)
     }
 
-    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a>) {
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {
         panic!("can't migrate CircuitRef");
     }
-    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a>) {
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {
         panic!("can't erase CircuitRef");
     }
 }
@@ -634,8 +659,8 @@ pub type DynCircuitRef<'a, 'c> = CircuitRef<'a, 'c, dyn CircuitFilter<'a> + 'c>;
 pub trait CircuitFilter<'a> {
     fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a);
 
-    fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a>);
-    fn erase_in_place(&mut self, v: &mut EraseVisitor<'a>);
+    fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>);
+    fn erase_in_place(&mut self, v: &mut EraseVisitor<'a, '_>);
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a>;
 
@@ -660,11 +685,11 @@ macro_rules! circuit_filter_common_methods {
     () => {
         fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
 
-        fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a>) {
+        fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a, '_>) {
             $crate::ir::migrate::migrate_in_place(v, self);
         }
 
-        fn erase_in_place(&mut self, v: &mut $crate::ir::circuit::EraseVisitor<'a>) {
+        fn erase_in_place(&mut self, v: &mut $crate::ir::circuit::EraseVisitor<'a, '_>) {
             $crate::ir::migrate::migrate_in_place(v, self);
         }
     };
@@ -1067,23 +1092,33 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
-    unsafe fn migrate_with<F: FnOnce(&mut MigrateVisitor<'a, 'a>) -> R, R>(&'a self, f: F) -> R {
-        let old_arenas = self.as_base().pre_migrate();
-        let mut v = MigrateVisitor::new(self.as_base());
+    unsafe fn migrate_with<F, R>(&'a self, f: F) -> R
+    where F: FnOnce(&mut MigrateVisitor<'a, 'a, '_>) -> R {
+        let old = self.as_base().take();
 
-        let functions = mem::take(&mut *self.as_base().functions.borrow_mut()).into_iter()
-            .map(|f| v.visit(f))
-            .collect();
-        *self.as_base().functions.borrow_mut() = functions;
+        let new_circuit = self.as_base();
+        let mut v = MigrateVisitor::new(&old.circuit, new_circuit);
+
+        // Transfer parts of `old_circuit` into `self`, which has been cleared.
+        assert!(old.circuit.function_scope.borrow().is_none(),
+            "can't migrate inside define_function");
+        let current_label = new_circuit.intern_str(old.circuit.current_label.get());
+        new_circuit.current_label.set(current_label);
+        // Note we visit functions in the order they were originally defined.  This ensures the
+        // calls are topologically sorted.
+        let functions = old.circuit.as_base().functions.borrow_mut()
+            .iter().map(|&f| v.visit(f)).collect();
+        *new_circuit.functions.borrow_mut() = functions;
+
         self.migrate_filter(&mut v);
         let r = f(&mut v);
 
         info!("migrated {} wires, {} secrets", v.wire_map.len(), v.secret_map.len());
-        info!("  old size: {} bytes", old_arenas.allocated_bytes());
-        info!("  new size: {} bytes", self.as_base().arena().allocated_bytes());
+        info!("  old size: {} bytes", old.arenas.allocated_bytes());
+        info!("  new size: {} bytes", new_circuit.arena().allocated_bytes());
 
         drop(v);
-        drop(old_arenas);
+        drop(old);
 
         r
     }
@@ -1106,7 +1141,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.migrate_with(|v| v.visit(x))
     }
 
-    unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a>) -> R, R>(
+    unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a, '_>) -> R, R>(
         &'a self,
         f: F,
     ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
@@ -1150,8 +1185,9 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 impl<'a, C: CircuitTrait<'a> + ?Sized> CircuitExt<'a> for C {}
 
 
-pub struct MigrateVisitor<'a, 'b> {
-    new_circuit: &'b CircuitBase<'b>,
+pub struct MigrateVisitor<'a, 'b, 'c> {
+    old_circuit: &'c CircuitBase<'a>,
+    new_circuit: &'c CircuitBase<'b>,
 
     wire_map: HashMap<Wire<'a>, Wire<'b>>,
     secret_map: HashMap<Secret<'a>, Secret<'b>>,
@@ -1159,11 +1195,13 @@ pub struct MigrateVisitor<'a, 'b> {
     function_map: HashMap<Function<'a>, Function<'b>>,
 }
 
-impl<'a, 'b> MigrateVisitor<'a, 'b> {
+impl<'a, 'b, 'c> MigrateVisitor<'a, 'b, 'c> {
     fn new(
-        new_circuit: &'b CircuitBase<'b>,
-    ) -> MigrateVisitor<'a, 'b> {
+        old_circuit: &'c CircuitBase<'a>,
+        new_circuit: &'c CircuitBase<'b>,
+    ) -> MigrateVisitor<'a, 'b, 'c> {
         MigrateVisitor {
+            old_circuit,
             new_circuit,
 
             wire_map: HashMap::new(),
@@ -1174,8 +1212,12 @@ impl<'a, 'b> MigrateVisitor<'a, 'b> {
     }
 }
 
-impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
-    fn new_circuit(&self) -> &'b CircuitBase<'b> {
+impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b, '_> {
+    fn old_circuit(&self) -> &CircuitBase<'a> {
+        self.old_circuit
+    }
+
+    fn new_circuit(&self) -> &CircuitBase<'b> {
         self.new_circuit
     }
 
@@ -1225,8 +1267,8 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
 }
 
 
-pub struct EraseVisitor<'a> {
-    circuit: &'a CircuitBase<'a>,
+pub struct EraseVisitor<'a, 'c> {
+    circuit: &'c CircuitBase<'a>,
     erased_map: HashMap<Wire<'a>, Wire<'a>>,
     /// Keep track of the order in which we visit wires so that the backend can visit in a
     /// deterministic order.
@@ -1239,10 +1281,10 @@ pub struct EraseVisitor<'a> {
     erased_order: Vec<(Wire<'a>, Wire<'a>)>,
 }
 
-impl<'a> EraseVisitor<'a> {
+impl<'a, 'c> EraseVisitor<'a, 'c> {
     fn new(
-        circuit: &'a CircuitBase<'a>,
-    ) -> EraseVisitor<'a> {
+        circuit: &'c CircuitBase<'a>,
+    ) -> EraseVisitor<'a, 'c> {
         EraseVisitor {
             circuit,
             erased_map: HashMap::new(),
@@ -1251,8 +1293,12 @@ impl<'a> EraseVisitor<'a> {
     }
 }
 
-impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
-    fn new_circuit(&self) -> &'a CircuitBase<'a> {
+impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
+    fn old_circuit(&self) -> &CircuitBase<'a> {
+        self.circuit
+    }
+
+    fn new_circuit(&self) -> &CircuitBase<'a> {
         self.circuit
     }
 
@@ -1300,7 +1346,7 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
     }
 }
 
-impl<'a> EraseVisitor<'a> {
+impl<'a> EraseVisitor<'a, '_> {
     pub fn erased(&self) -> &[(Wire<'a>, Wire<'a>)] {
         &self.erased_order
     }

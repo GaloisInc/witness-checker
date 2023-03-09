@@ -303,7 +303,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     // Collect assertions and bugs.
     drop(b);
-    let (asserts, bugs) = cx.finish();
+    let (asserts, bugs) = cx.finish(c);
     let asserts = asserts.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
     let bugs = bugs.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
 

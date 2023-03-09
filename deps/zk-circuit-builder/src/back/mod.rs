@@ -15,14 +15,14 @@ use crate::stats::Stats;
 pub unsafe trait Backend<'a> {
     /// Called at the end of the `erase` step, after the `EraseVisitor` has been applied to all
     /// other objects in the program.
-    fn post_erase(&mut self, v: &mut EraseVisitor<'a>);
+    fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>);
 
     /// Called at the end of the `migrate` step, after the `MigrateVisitor` has been applied to all
     /// other objects in the program.
     ///
     /// Safety: This method must migrate all wires stored within the backend.  Any wires not
     /// migrated will be left dangling when `MigrateHandle::erase_and_migrate` is called.
-    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>);
+    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>);
 
     /// Assert that `accepted` is true, and finish writing out the circuit.  If `validate` is set,
     /// a validation pass will be run on the output afterward.
@@ -103,11 +103,11 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
@@ -186,11 +186,11 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
@@ -268,11 +268,11 @@ pub fn new_sieve_ir_v2<'a>(
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
@@ -338,11 +338,11 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
@@ -406,11 +406,11 @@ pub fn new_boolean_sieve_ir_v2<'a>(
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
@@ -451,8 +451,8 @@ pub fn new_dummy<'a>() -> Box<dyn Backend<'a> + 'a> {
 
 #[allow(unused)]
 unsafe impl<'a> Backend<'a> for () {
-    fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {}
-    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {}
+    fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>) {}
+    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>) {}
     fn finish(self: Box<Self>, c: &CircuitBase<'a>, accepted: Wire<'a>, validate: bool) {}
 }
 
@@ -467,12 +467,12 @@ pub fn new_stats<'a>() -> Box<dyn Backend<'a> + 'a> {
 
 
     unsafe impl<'a> Backend<'a> for BackendWrapper<'a> {
-        fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {
+        fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>) {
             self.stats.add_iter(v.erased().iter().map(|&(w, _)| w));
             migrate::migrate_in_place(v, &mut self.stats);
         }
 
-        fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
+        fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>) {
             migrate::migrate_in_place(v, &mut self.stats);
         }
 

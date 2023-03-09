@@ -516,7 +516,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         }
     }
 
-    pub fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+    pub fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
         use crate::ir::migrate::Visitor as _;
         // Each entry `(old, new)` in `v.erased()` indicates that wire `old` was replaced with the
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
@@ -529,7 +529,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         }
     }
 
-    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
         use crate::ir::migrate::Visitor as _;
 
         let old_wire_map = mem::take(&mut self.wire_map);
