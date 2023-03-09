@@ -2,7 +2,7 @@ use std::cmp;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 use generic_array::{ArrayLength, GenericArray};
@@ -324,21 +324,24 @@ pub fn set_secret_from_lit<'a, T: Secret<'a>>(s: &TWire<'a, T>, val: &TWire<'a, 
 }
 
 
-pub struct BuilderImpl<'a> {
-    c: &'a DynCircuit<'a>,
-}
+#[repr(transparent)]
+pub struct BuilderImpl<C>(C);
 
-impl<'a> BuilderImpl<'a> {
-    pub fn new(c: &'a DynCircuit<'a>) -> BuilderImpl<'a> {
-        BuilderImpl { c: c }
+impl<C> BuilderImpl<C> {
+    pub fn new(c: C) -> BuilderImpl<C> {
+        BuilderImpl(c)
+    }
+
+    pub fn from_ref<'a>(c: &'a C) -> &'a BuilderImpl<C> {
+        unsafe { mem::transmute(c) }
     }
 }
 
-impl<'a> Builder<'a> for BuilderImpl<'a> {
-    type Circuit = DynCircuit<'a>;
+impl<'a, C: CircuitTrait<'a> + 'a> Builder<'a> for BuilderImpl<C> {
+    type Circuit = C;
 
-    fn circuit(&self) -> &DynCircuit<'a> {
-        self.c
+    fn circuit(&self) -> &C {
+        &self.0
     }
 }
 

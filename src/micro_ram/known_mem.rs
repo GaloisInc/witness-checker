@@ -664,16 +664,16 @@ mod test {
     fn bytes() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
+            m.store_public(b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
         for i in 0..8 {
-            let w = m.load_public(&b, i, MemOpWidth::W1).unwrap();
+            let w = m.load_public(b, i, MemOpWidth::W1).unwrap();
             let v = ev.eval_typed(&c, w).unwrap();
             assert_eq!(v, i + 1);
         }
@@ -683,15 +683,15 @@ mod test {
     fn bytes_to_word() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for i in 0..8 {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
+            m.store_public(b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
-        let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
@@ -700,15 +700,15 @@ mod test {
     fn word_to_bytes() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
-        m.store_public(&b, 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
+        m.store_public(b, 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
 
         let mut ok = true;
         for i in 0..8 {
-            let w = m.load_public(&b, i, MemOpWidth::W1).unwrap();
+            let w = m.load_public(b, i, MemOpWidth::W1).unwrap();
             let v = ev.eval_typed(&c, w).unwrap();
             if v != i + 1 {
                 ok = false;
@@ -724,15 +724,15 @@ mod test {
     fn bytes_to_word_with_gaps() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0x8877665544332211));
         for &i in &[1,2,3,5,6] {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
+            m.store_public(b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
-        let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x8807065504030211);
     }
@@ -743,15 +743,15 @@ mod test {
     fn bytes_to_word_no_default() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::new();
         for i in 0..8 {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
+            m.store_public(b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
-        let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
@@ -762,14 +762,14 @@ mod test {
     fn bytes_to_word_with_gaps_no_default() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
 
         let mut m = KnownMem::new();
         for &i in &[1,2,3,5,6] {
-            m.store_public(&b, i, b.lit(i + 1), MemOpWidth::W1, false);
+            m.store_public(b, i, b.lit(i + 1), MemOpWidth::W1, false);
         }
 
-        assert!(m.load_public(&b, 0, MemOpWidth::W8).is_none());
+        assert!(m.load_public(b, 0, MemOpWidth::W8).is_none());
     }
 
     /// Overwrite some smaller entries with a single large one.
@@ -777,20 +777,20 @@ mod test {
     fn overwrite_smaller() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
         for &i in &[1,2,3,5,6] {
-            m.store_public(&b, i, b.lit(i + 3), MemOpWidth::W1, false);
+            m.store_public(b, i, b.lit(i + 3), MemOpWidth::W1, false);
         }
-        m.store_public(&b, 0, b.lit(0x0201), MemOpWidth::W2, false);
-        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2, false);
-        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
+        m.store_public(b, 0, b.lit(0x0201), MemOpWidth::W2, false);
+        m.store_public(b, 2, b.lit(0x0403), MemOpWidth::W2, false);
+        m.store_public(b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
         // All the one-byte writes should have been removed.
         assert!(m.mem.len() == 3);
 
-        let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
@@ -800,16 +800,16 @@ mod test {
     fn overwrite_larger() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
-        m.store_public(&b, 0, b.lit(0x0000000000000201), MemOpWidth::W8, false);
-        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2, false);
-        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
+        m.store_public(b, 0, b.lit(0x0000000000000201), MemOpWidth::W8, false);
+        m.store_public(b, 2, b.lit(0x0403), MemOpWidth::W2, false);
+        m.store_public(b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
         assert!(m.mem.len() == 1);
 
-        let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
@@ -819,18 +819,18 @@ mod test {
     fn overwrite_same_size() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut m = KnownMem::with_default(b.lit(0));
-        m.store_public(&b, 0, b.lit(0), MemOpWidth::W2, false);
-        m.store_public(&b, 2, b.lit(0), MemOpWidth::W2, false);
-        m.store_public(&b, 4, b.lit(0), MemOpWidth::W4, false);
-        m.store_public(&b, 0, b.lit(0x0201), MemOpWidth::W2, false);
-        m.store_public(&b, 2, b.lit(0x0403), MemOpWidth::W2, false);
-        m.store_public(&b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
+        m.store_public(b, 0, b.lit(0), MemOpWidth::W2, false);
+        m.store_public(b, 2, b.lit(0), MemOpWidth::W2, false);
+        m.store_public(b, 4, b.lit(0), MemOpWidth::W4, false);
+        m.store_public(b, 0, b.lit(0x0201), MemOpWidth::W2, false);
+        m.store_public(b, 2, b.lit(0x0403), MemOpWidth::W2, false);
+        m.store_public(b, 4, b.lit(0x08070605), MemOpWidth::W4, false);
 
-        let w = m.load_public(&b, 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }
@@ -841,32 +841,32 @@ mod test {
     fn load_end() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
         // We store to all of the last word except its final byte, since touching the last byte
         // could cause problems on the `store`.
-        m.store_public(&b, waddr + 0, b.lit(0x04030201), MemOpWidth::W4, false);
-        m.store_public(&b, waddr + 4, b.lit(0x0605), MemOpWidth::W2, false);
-        m.store_public(&b, waddr + 6, b.lit(0x07), MemOpWidth::W1, false);
+        m.store_public(b, waddr + 0, b.lit(0x04030201), MemOpWidth::W4, false);
+        m.store_public(b, waddr + 4, b.lit(0x0605), MemOpWidth::W2, false);
+        m.store_public(b, waddr + 6, b.lit(0x07), MemOpWidth::W1, false);
 
         // These three exercise the cases where `entry.width < width`.
-        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, waddr + 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0007060504030201);
 
-        let w = m.load_public(&b, waddr + 4, MemOpWidth::W4).unwrap();
+        let w = m.load_public(b, waddr + 4, MemOpWidth::W4).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x00070605);
 
-        let w = m.load_public(&b, waddr + 6, MemOpWidth::W2).unwrap();
+        let w = m.load_public(b, waddr + 6, MemOpWidth::W2).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0007);
 
         // This one exercises the case where there are no overlapping entries.
-        let w = m.load_public(&b, waddr + 7, MemOpWidth::W1).unwrap();
+        let w = m.load_public(b, waddr + 7, MemOpWidth::W1).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x00);
     }
@@ -876,27 +876,27 @@ mod test {
     fn load_end_word() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
-        m.store_public(&b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
+        m.store_public(b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
 
         // These four exercise the case where `entry.width >= width`.
-        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, waddr + 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
 
-        let w = m.load_public(&b, waddr + 4, MemOpWidth::W4).unwrap();
+        let w = m.load_public(b, waddr + 4, MemOpWidth::W4).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x08070605);
 
-        let w = m.load_public(&b, waddr + 6, MemOpWidth::W2).unwrap();
+        let w = m.load_public(b, waddr + 6, MemOpWidth::W2).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807);
 
-        let w = m.load_public(&b, waddr + 7, MemOpWidth::W1).unwrap();
+        let w = m.load_public(b, waddr + 7, MemOpWidth::W1).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x08);
     }
@@ -906,18 +906,18 @@ mod test {
     fn store_end_overwrite() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
         // These four exercise the case of overwriting parts of a larger entry.
-        m.store_public(&b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
-        m.store_public(&b, waddr + 4, b.lit(0x18171615), MemOpWidth::W4, false);
-        m.store_public(&b, waddr + 6, b.lit(0x2827), MemOpWidth::W2, false);
-        m.store_public(&b, waddr + 7, b.lit(0x38), MemOpWidth::W1, false);
+        m.store_public(b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
+        m.store_public(b, waddr + 4, b.lit(0x18171615), MemOpWidth::W4, false);
+        m.store_public(b, waddr + 6, b.lit(0x2827), MemOpWidth::W2, false);
+        m.store_public(b, waddr + 7, b.lit(0x38), MemOpWidth::W1, false);
 
-        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, waddr + 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x3827161504030201);
     }
@@ -927,18 +927,18 @@ mod test {
     fn store_end_replace() {
         let arenas = Arenas::new();
         let c = Circuit::new(&arenas, true, FilterNil);
-        let b = BuilderImpl::new(&c);
+        let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let waddr = u64::MAX - 7;
         let mut m = KnownMem::with_default(b.lit(0));
         // These four exercise the case of replacing smaller overlapping entries.
-        m.store_public(&b, waddr + 7, b.lit(0x38), MemOpWidth::W1, false);
-        m.store_public(&b, waddr + 6, b.lit(0x2827), MemOpWidth::W2, false);
-        m.store_public(&b, waddr + 4, b.lit(0x18171615), MemOpWidth::W4, false);
-        m.store_public(&b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
+        m.store_public(b, waddr + 7, b.lit(0x38), MemOpWidth::W1, false);
+        m.store_public(b, waddr + 6, b.lit(0x2827), MemOpWidth::W2, false);
+        m.store_public(b, waddr + 4, b.lit(0x18171615), MemOpWidth::W4, false);
+        m.store_public(b, waddr + 0, b.lit(0x0807060504030201), MemOpWidth::W8, false);
 
-        let w = m.load_public(&b, waddr + 0, MemOpWidth::W8).unwrap();
+        let w = m.load_public(b, waddr + 0, MemOpWidth::W8).unwrap();
         let v = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 0x0807060504030201);
     }

@@ -61,7 +61,7 @@ where
 {
     let arenas = Arenas::new();
     let c = make_circuit!(&arenas);
-    let b = BuilderImpl::new(&c);
+    let b = BuilderImpl::from_ref(&c);
 
 
     let inv = b.lit(x.inverse());
