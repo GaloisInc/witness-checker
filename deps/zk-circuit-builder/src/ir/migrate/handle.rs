@@ -89,11 +89,11 @@ impl<'a> MigrateContext<'a> {
         self.inner.borrow_mut().take(ptr)
     }
 
-    fn migrate_in_place(&self, v: &mut MigrateVisitor<'a, 'a>) {
+    fn migrate_in_place(&self, v: &mut MigrateVisitor<'a, 'a, '_>) {
         self.inner.borrow_mut().migrate_in_place(v)
     }
 
-    fn erase_in_place(&self, v: &mut EraseVisitor<'a>) {
+    fn erase_in_place(&self, v: &mut EraseVisitor<'a, '_>) {
         self.inner.borrow_mut().erase_in_place(v)
     }
 }
@@ -397,7 +397,7 @@ impl<'a> MigrateContextInner<'a> {
         dest.assume_init()
     }
 
-    pub fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
+    pub fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>) {
         unsafe {
             let v_ptr = v as *mut _ as *mut () as *mut _;
             let mut node = self.head;
@@ -413,7 +413,7 @@ impl<'a> MigrateContextInner<'a> {
         }
     }
 
-    pub fn erase_in_place(&mut self, v: &mut EraseVisitor<'a>) {
+    pub fn erase_in_place(&mut self, v: &mut EraseVisitor<'a, '_>) {
         unsafe {
             let v_ptr = v as *mut _ as *mut () as *mut _;
             let mut node = self.head;
@@ -438,9 +438,9 @@ struct Vtable {
     /// On return, `*dest` is always initialized.
     take_box: unsafe fn(*mut Storage<()>, *mut ()),
     /// `migrate_in_place(ptr, v)`: Apply visitor `v` to `*ptr` in-place.
-    migrate_in_place: unsafe fn(*mut Storage<()>, *mut MigrateVisitor<'static, 'static>),
+    migrate_in_place: unsafe fn(*mut Storage<()>, *mut MigrateVisitor<'static, 'static, 'static>),
     /// `erase_in_place(ptr, v)`: Apply visitor `v` to `*ptr` in-place.
-    erase_in_place: unsafe fn(*mut Storage<()>, *mut EraseVisitor<'static>),
+    erase_in_place: unsafe fn(*mut Storage<()>, *mut EraseVisitor<'static, 'static>),
 }
 
 impl Vtable {
@@ -460,13 +460,13 @@ impl Vtable {
             },
             migrate_in_place: |ptr, v| unsafe {
                 migrate::migrate_in_place(
-                    &mut *(v as *mut () as *mut MigrateVisitor<'a, 'a>),
+                    &mut *(v as *mut () as *mut MigrateVisitor<'a, 'a, '_>),
                     &mut (*(ptr as *mut Storage<T>)).data,
                 );
             },
             erase_in_place: |ptr, v| unsafe {
                 migrate::migrate_in_place(
-                    &mut *(v as *mut () as *mut EraseVisitor<'a>),
+                    &mut *(v as *mut () as *mut EraseVisitor<'a, '_>),
                     &mut (*(ptr as *mut Storage<T>)).data,
                 );
             },

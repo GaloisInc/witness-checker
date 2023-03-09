@@ -3,10 +3,11 @@
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
 use log::*;
+use zk_circuit_builder::ir::circuit::CircuitTrait;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt};
-use crate::micro_ram::context::Context;
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, EvaluatorExt};
+use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
 use zk_circuit_builder::routing::sort::{self, CompareLe};
 
@@ -95,23 +96,23 @@ impl<'a> Fetch<'a> {
 
         // Debug logging, showing the state before and after sorting.
         {
-            let cx = cx.open(mh);
+            let mut cev = ContextEval::new(b.circuit().as_base());
             trace!("fetches:");
             for (i, port) in ports.open(mh).iter().enumerate() {
                 trace!(
                     "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                    i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
-                    cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-                    cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+                    i, cev.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
+                    cev.eval(port.addr), cev.eval(port.instr.opcode), cev.eval(port.instr.dest),
+                    cev.eval(port.instr.op1), cev.eval(port.instr.op2), cev.eval(port.instr.imm),
                 );
             }
             trace!("sorted fetches:");
             for (i, port) in sorted_ports.open(mh).iter().enumerate() {
                 trace!(
                     "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                    i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
-                    cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-                    cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+                    i, cev.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
+                    cev.eval(port.addr), cev.eval(port.instr.opcode), cev.eval(port.instr.dest),
+                    cev.eval(port.instr.op1), cev.eval(port.instr.op2), cev.eval(port.instr.imm),
                 );
             }
         }

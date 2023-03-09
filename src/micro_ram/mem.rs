@@ -10,11 +10,13 @@ use std::iter;
 use std::rc::Rc;
 use log::*;
 use zk_circuit_builder::gadget::bit_pack;
-use zk_circuit_builder::ir::circuit::CircuitExt;
+use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, Flatten};
+use zk_circuit_builder::ir::typed::{
+    TWire, TSecretHandle, Builder, BuilderExt, Flatten, EvaluatorExt,
+};
 use zk_circuit_builder::routing::sort::{self, CompareLt};
-use crate::micro_ram::context::Context;
+use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
     MemoryEquivalence, MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BOTTOM, WORD_BYTES,
@@ -230,7 +232,7 @@ impl<'a> Memory<'a> {
 
         // Debug logging, showing the state before and after sorting.
         {
-            let cx = cx.open(mh);
+            let mut cev = ContextEval::new(b.circuit().as_base());
             trace!("mem ops:");
             for (i, (port, &unused)) in ports.open(mh).iter().zip(unused.iter()).enumerate() {
                 if unused {
@@ -238,8 +240,8 @@ impl<'a> Memory<'a> {
                 } else {
                     trace!(
                         "mem op {:3}: op{}, {:x}, value {}, cycle {}",
-                        i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value),
-                        cx.eval(port.cycle),
+                        i, cev.eval(port.op.repr), cev.eval(port.addr), cev.eval(port.value),
+                        cev.eval(port.cycle),
                     );
                 }
             }
@@ -247,8 +249,8 @@ impl<'a> Memory<'a> {
             for (i, port) in sorted_ports.open(mh).iter().enumerate() {
                 trace!(
                     "mem op {:3}: op{}, {:x}, value {}, cycle {}",
-                    i, cx.eval(port.op.repr), cx.eval(port.addr), cx.eval(port.value),
-                    cx.eval(port.cycle),
+                    i, cev.eval(port.op.repr), cev.eval(port.addr), cev.eval(port.value),
+                    cev.eval(port.cycle),
                 );
             }
         }

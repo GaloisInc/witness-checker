@@ -431,7 +431,7 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
         self.representer.new_repr(repr)
     }
 
-    pub fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+    pub fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
         // Each entry `(old, new)` in `v.erased()` indicates that wire `old` was replaced with the
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_to_repr[new]` as well.
@@ -443,7 +443,7 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
         }
     }
 
-    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
         use crate::ir::migrate::Visitor as _;
 
         let mut old_representer = mem::replace(&mut self.representer, Representer::new());
