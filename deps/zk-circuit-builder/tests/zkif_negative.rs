@@ -43,7 +43,7 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     }
 
     let mut backend = Backend::new(workspace, true);
-    backend.enforce_true(w);
+    backend.enforce_true(c.as_base(), w);
     backend.finish().unwrap();
 
     // Validate the circuit and witness.

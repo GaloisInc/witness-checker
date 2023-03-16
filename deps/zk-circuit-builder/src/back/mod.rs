@@ -113,11 +113,11 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
 
             fn finish(
                 mut self: Box<Self>,
-                _c: &CircuitBase<'w>,
+                c: &CircuitBase<'w>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
-                self.backend.enforce_true(accepted);
+                self.backend.enforce_true(c, accepted);
 
                 // Write files.
                 self.backend.finish().unwrap();
@@ -196,13 +196,13 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
 
             fn finish(
                 mut self: Box<Self>,
-                _c: &CircuitBase<'w>,
+                c: &CircuitBase<'w>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(accepted);
+                self.backend.enforce_true(c, accepted);
                 let ir_builder = self.backend.finish();
 
                 eprintln!();
@@ -278,13 +278,13 @@ pub fn new_sieve_ir_v2<'a>(
 
             fn finish(
                 mut self: Box<Self>,
-                _c: &CircuitBase<'w>,
+                c: &CircuitBase<'w>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(accepted);
+                self.backend.enforce_true(c, accepted);
                 let ir_builder = self.backend.finish();
 
                 eprintln!();

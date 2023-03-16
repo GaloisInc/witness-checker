@@ -31,8 +31,10 @@ use num_traits::Zero;
 
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
-    self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor, MigrateVisitor,
+    self, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor,
+    MigrateVisitor,
 };
+use crate::ir::migrate::Visitor as _;
 
 use super::{
     field::QuarkScalar,
@@ -79,8 +81,8 @@ impl<'a> Backend<'a> {
         self.cs.finish("cheesecloth")
     }
 
-    pub fn enforce_true(&mut self, wire: Wire<'a>) {
-        let repr_id = self.convert_wires(&[wire])[0];
+    pub fn enforce_true(&mut self, c: &CircuitBase<'a>, wire: Wire<'a>) {
+        let repr_id = self.convert_wires(c, &[wire])[0];
         let bool = self.representer.mut_repr(repr_id).as_boolean(&mut self.cs);
         enforce_true(&mut self.cs, &bool);
     }
@@ -91,14 +93,14 @@ impl<'a> Backend<'a> {
         bool.get_value()
     }
 
-    fn convert_wires(&mut self, wires: &[Wire<'a>]) -> Vec<ReprId> {
+    fn convert_wires(&mut self, c: &CircuitBase<'a>, wires: &[Wire<'a>]) -> Vec<ReprId> {
         let order = circuit::walk_wires_filtered(
             wires.iter().cloned(),
             |w| !self.wire_to_repr.contains_key(&w),
         ).collect::<Vec<_>>();
 
         for wire in order {
-            let wid = self.make_repr(wire);
+            let wid = self.make_repr(c, wire);
             self.wire_to_repr.insert(wire, wid);
         }
 
@@ -109,7 +111,7 @@ impl<'a> Backend<'a> {
         self.wire_to_repr[&wire]
     }
 
-    fn make_repr(&mut self, wire: Wire<'a>) -> ReprId {
+    fn make_repr(&mut self, c: &CircuitBase<'a>, wire: Wire<'a>) -> ReprId {
         // Most gates create a representation for a new wire,
         // but some no-op gates return directly the ReprId of their argument.
 
@@ -130,7 +132,7 @@ impl<'a> Backend<'a> {
                         let int = Int::alloc::<Scalar, _>(
                             &mut self.cs,
                             sz.bits() as usize,
-                            secret.val().map(|val| val.to_biguint()),
+                            secret.val(c).map(|val| val.to_biguint()),
                         )
                         .unwrap();
                         WireRepr::from(int)
@@ -450,7 +452,7 @@ impl<'a> Backend<'a> {
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_to_repr[new]` as well.
         let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter().cloned().unzip();
-        let old_reprs = self.convert_wires(&old_wires);
+        let old_reprs = self.convert_wires(v.new_circuit(), &old_wires);
         for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
             assert!(!self.wire_to_repr.contains_key(&new_wire));
             self.wire_to_repr.insert(new_wire, old_repr);
@@ -503,7 +505,7 @@ fn test_zkif() -> Result<()> {
     let diff2 = c.sub(lit, prod);
     let is_ge_zero2 = c.compare(CmpOp::Ge, diff2, zero);
 
-    b.convert_wires(&[is_zero, is_ge_zero1, is_ge_zero2]);
+    b.convert_wires(&c, &[is_zero, is_ge_zero1, is_ge_zero2]);
 
     fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();

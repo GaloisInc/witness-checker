@@ -2382,7 +2382,7 @@ impl<'a> SecretData<'a> {
     /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
     /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
     /// panic.
-    pub fn val(&self) -> Option<Bits<'a>> {
+    pub fn val(&self, _c: &CircuitBase<'a>) -> Option<Bits<'a>> {
         match self.val.get().unpack() {
             SecretValue::ProverInit(bits) => Some(bits),
             SecretValue::ProverUninit =>

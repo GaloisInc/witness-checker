@@ -33,7 +33,7 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     let sink = FilesSink::new_clean(&dir.path()).unwrap();
     let ir_builder = IRBuilder::new::<Scalar>(sink);
     let mut backend = Backend::new(ir_builder);
-    backend.enforce_true(w);
+    backend.enforce_true(c.as_base(), w);
     let ir_builder = backend.finish();
     ir_builder.finish();
 
