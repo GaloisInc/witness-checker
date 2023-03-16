@@ -148,7 +148,8 @@ pub fn extend_to_64<'a>(
             }
             GateKind::Secret(s) => {
                 let new_ty = extend_integer_ty(c, s.ty);
-                let new_val = s.val().map(|x| maybe_sign_extend(x.as_u64().unwrap(), s.ty));
+                let new_val = s.val(c.as_base())
+                    .map(|x| maybe_sign_extend(x.as_u64().unwrap(), s.ty));
                 return c.new_secret_wire_init(new_ty, || new_val.unwrap());
             }
             GateKind::Cast(w, ty) => {
@@ -204,7 +205,7 @@ pub fn int_to_uint<'a>(
                 return c.lit(new_ty, x);
             }
             GateKind::Secret(s) => {
-                return c.new_secret_wire_init(new_ty, || s.val().unwrap());
+                return c.new_secret_wire_init(new_ty, || s.val(c.as_base()).unwrap());
             }
             GateKind::Erased(_e) => panic!("can't change type of erased gate {:?}", gk),
             GateKind::Argument(_, _) => panic!("changing type of Argument gate is NYI"),

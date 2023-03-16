@@ -234,7 +234,7 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
             GateKind::Secret(secret) => {
                 assert!(secret.ty.is_integer());
-                self.sink.private(expire, n, secret.val())
+                self.sink.private(expire, n, secret.val(c.as_base()))
             },
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
