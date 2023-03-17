@@ -663,7 +663,7 @@ mod test {
     #[test]
     fn bytes() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -682,7 +682,7 @@ mod test {
     #[test]
     fn bytes_to_word() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -699,7 +699,7 @@ mod test {
     #[test]
     fn word_to_bytes() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -723,7 +723,7 @@ mod test {
     #[test]
     fn bytes_to_word_with_gaps() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -742,7 +742,7 @@ mod test {
     #[test]
     fn bytes_to_word_no_default() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -761,7 +761,7 @@ mod test {
     #[test]
     fn bytes_to_word_with_gaps_no_default() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
 
         let mut m = KnownMem::new();
@@ -776,7 +776,7 @@ mod test {
     #[test]
     fn overwrite_smaller() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -799,7 +799,7 @@ mod test {
     #[test]
     fn overwrite_larger() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -818,7 +818,7 @@ mod test {
     #[test]
     fn overwrite_same_size() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -840,7 +840,7 @@ mod test {
     #[test]
     fn load_end() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -875,7 +875,7 @@ mod test {
     #[test]
     fn load_end_word() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -905,7 +905,7 @@ mod test {
     #[test]
     fn store_end_overwrite() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -926,7 +926,7 @@ mod test {
     #[test]
     fn store_end_replace() {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 

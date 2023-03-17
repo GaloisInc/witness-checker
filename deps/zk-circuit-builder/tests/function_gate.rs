@@ -8,7 +8,7 @@ macro_rules! init_circuit {
     ($c:ident) => {
         let arenas = Arenas::new();
         let cf = FilterNil;
-        let c = Circuit::new(&arenas, true, cf);
+        let c = Circuit::new::<()>(&arenas, true, cf);
         let $c = &c;
     };
 }

@@ -11,7 +11,7 @@ use zki_sieve::FilesSink;
 macro_rules! make_circuit {
     ($arenas:expr) => {{
         let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-        let c = Circuit::new($arenas, true, cf);
+        let c = Circuit::new::<()>($arenas, true, cf);
         c
     }};
 }
