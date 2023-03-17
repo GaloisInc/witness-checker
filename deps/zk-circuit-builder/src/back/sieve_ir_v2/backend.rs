@@ -487,7 +487,7 @@ fn test_backend_sieve_ir_v2() -> zki_sieve_v3::Result<()> {
 
     let arenas = Arenas::new();
     let is_prover = true;
-    let c = CircuitBase::new(&arenas, is_prover);
+    let c = CircuitBase::new::<()>(&arenas, is_prover);
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);

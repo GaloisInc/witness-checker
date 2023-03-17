@@ -271,7 +271,7 @@ mod test {
         assert!(perm.iter().enumerate().skip(n).all(|(i, &j)| i == j));
 
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 

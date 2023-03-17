@@ -200,7 +200,7 @@ mod test {
 
     fn check_benes_sort(inputs: &[u32]) {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 

@@ -893,7 +893,7 @@ mod test {
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
     ) {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let mut backend = Backend::new(TestSink::default());
         let mut arith_backend = Backend::new(arith_sink);
 

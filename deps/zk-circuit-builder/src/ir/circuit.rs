@@ -9,7 +9,7 @@
 //!   trait abstracts over `Circuit` and `CircuitRef`.
 //! * The `CircuitExt` trait adds higher-level helper methods, so callers can use convenient
 //!   `add`/`sub` methods instead of manually constructing a `GateKind::Add`.
-use std::any;
+use std::any::{self, TypeId};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -55,6 +55,7 @@ pub struct CircuitBase<'a> {
     current_label: Cell<&'a str>,
     is_prover: bool,
     functions: RefCell<Vec<Function<'a>>>,
+    secret_type: TypeId,
 }
 
 struct FunctionScope<'a> {
@@ -62,7 +63,7 @@ struct FunctionScope<'a> {
 }
 
 impl<'a> CircuitBase<'a> {
-    pub fn new(arenas: &'a Arenas, is_prover: bool) -> CircuitBase<'a> {
+    pub fn new<S: 'static>(arenas: &'a Arenas, is_prover: bool) -> CircuitBase<'a> {
         let c = CircuitBase {
             arenas,
             intern_gate: RefCell::new(HashSet::new()),
@@ -76,6 +77,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(""),
             is_prover,
             functions: RefCell::new(Vec::new()),
+            secret_type: TypeId::of::<S>(),
         };
         c.preload_common();
         c
@@ -424,6 +426,7 @@ impl<'a> CircuitBase<'a> {
             ref current_label,
             is_prover,
             ref functions,
+            secret_type,
         } = *self;
 
         let old_arenas = Box::new(arenas.take());
@@ -442,6 +445,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(current_label.replace("")),
             is_prover,
             functions: RefCell::new(functions.take()),
+            secret_type,
         };
 
         self.preload_common();
@@ -517,9 +521,9 @@ pub struct Circuit<'a, F: ?Sized> {
 }
 
 impl<'a, F> Circuit<'a, F> {
-    pub fn new(arenas: &'a Arenas, is_prover: bool, filter: F) -> Circuit<'a, F> {
+    pub fn new<S: 'static>(arenas: &'a Arenas, is_prover: bool, filter: F) -> Circuit<'a, F> {
         Circuit {
-            base: CircuitBase::new(arenas, is_prover),
+            base: CircuitBase::new::<S>(arenas, is_prover),
             filter: UnsafeCell::new(filter),
         }
     }

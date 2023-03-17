@@ -474,8 +474,8 @@ mod test {
             a_ty: TyKind<'static>,
             b_ty: TyKind<'static>,
         ) {
-            let c1 = Circuit::new(arenas1, true, FilterNil);
-            let c2 = Circuit::new(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
+            let c1 = Circuit::new::<()>(arenas1, true, FilterNil);
+            let c2 = Circuit::new::<()>(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
 
             let gk1 = c1.intern_gadget_kind(WideMul);
             let gk2 = c2.intern_gadget_kind(WideMul);
@@ -535,8 +535,8 @@ mod test {
             a_ty: TyKind<'static>,
             b_ty: TyKind<'static>,
         ) {
-            let c1 = Circuit::new(arenas1, true, FilterNil);
-            let c2 = Circuit::new(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
+            let c1 = Circuit::new::<()>(arenas1, true, FilterNil);
+            let c2 = Circuit::new::<()>(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
 
             let gk1 = c1.intern_gadget_kind(WideMulSplit);
             let gk1_unsplit = c1.intern_gadget_kind(WideMul);

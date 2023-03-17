@@ -490,7 +490,7 @@ fn test_zkif() -> Result<()> {
     let mut b = Backend::new(Path::new("local/test"), true);
 
     let arenas = Arenas::new();
-    let c = CircuitBase::new(&arenas, true);
+    let c = CircuitBase::new::<()>(&arenas, true);
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);

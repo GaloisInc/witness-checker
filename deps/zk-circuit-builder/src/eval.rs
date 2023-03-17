@@ -762,7 +762,7 @@ mod test {
     #[test]
     fn value_trunc_uint_to_int() {
         let arenas = Arenas::new();
-        let c = CircuitBase::new(&arenas, true);
+        let c = CircuitBase::new::<()>(&arenas, true);
         let ty_i8 = c.ty(TyKind::I8);
 
         for &x in [0_u8, 1, 126, 127, 128, 129, 254, 255].iter() {
