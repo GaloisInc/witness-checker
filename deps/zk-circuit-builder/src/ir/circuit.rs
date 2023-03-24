@@ -9,6 +9,7 @@
 //!   trait abstracts over `Circuit` and `CircuitRef`.
 //! * The `CircuitExt` trait adds higher-level helper methods, so callers can use convenient
 //!   `add`/`sub` methods instead of manually constructing a `GateKind::Add`.
+use std::alloc::Layout;
 use std::any::{self, TypeId};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::cmp::Ordering;
@@ -293,6 +294,50 @@ impl<'a> CircuitBase<'a> {
 
     fn ty_list(&self, ty_list: &[Ty<'a>]) -> &'a [Ty<'a>] {
         self.intern_ty_list(ty_list)
+    }
+
+
+    fn alloc_secret_init_fn<S: 'static, F>(&self, f: F) -> SecretInitFn<'a>
+    where
+        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        fn erase<S>(
+            f: impl for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b> + Copy + 'static,
+        ) -> impl for<'b> Fn(&CircuitBase<'b>, *const (), &[Bits<'b>]) -> Bits<'b> + Copy + 'static {
+            move |c, secret, dep_vals| {
+                unsafe {
+                    let secret = &*(secret as *const S);
+                    f(c, secret, dep_vals)
+                }
+            }
+        }
+
+        unsafe {
+            let r = self.arena().alloc(erase::<S>(f));
+            SecretInitFn::new(IsCopy::new_ref(r) as _)
+        }
+    }
+
+    fn alloc_lazy_secret<S, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
+    where
+        S: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        // `S` must match this circuit's secret type.  As a special case, we also allow `()`, which
+        // essentially means that the `&S` input will be ignored.  We don't allow other ZSTs here
+        // because some ZSTs are used as markers, where having a value of that type means that some
+        // property holds.
+        assert!(TypeId::of::<S>() == self.secret_type ||
+            TypeId::of::<S>() == TypeId::of::<()>());
+        let sd = if self.is_prover {
+            let init = self.alloc_secret_init_fn::<S, F>(init);
+            SecretData::new_lazy_prover(ty, init, &[])
+        } else {
+            SecretData::new(ty, SecretValue::VerifierUnknown)
+        };
+        Secret(self.arena().alloc(sd))
     }
 
 
@@ -863,6 +908,27 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// function definition).
     fn new_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
         self.as_base().new_secret_input(ty)
+    }
+
+    fn new_secret_lazy<S, F>(&self, ty: Ty<'a>, init: F) -> Secret<'a>
+    where
+        S: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &S) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.as_base().alloc_lazy_secret(ty, &[], move |c, secret, _dep_vals| {
+            init(c, secret)
+        })
+    }
+
+    fn new_secret_derived<F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
+    where
+        F: for<'b> Fn(&CircuitBase<'b>, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.as_base().alloc_lazy_secret::<(), _>(ty, deps, move |c, _secret, dep_vals| {
+            init(c, dep_vals)
+        })
     }
 
 
@@ -2349,7 +2415,83 @@ impl<'a, 'b> Migrate<'a, 'b> for PackedSecretValue<'a> {
 }
 
 
-#[derive(Clone, PartialEq, Eq, Debug, Migrate)]
+/// Wrapper that signals that the wrapped type implements `Copy`.  Coercing `&IsCopy<Concrete>` to
+/// `&IsCopy<dyn Trait>` retains the fact that the underlying concrete type of the `dyn Trait`
+/// implements `Copy`.
+#[repr(transparent)]
+struct IsCopy<T: ?Sized>(T);
+
+impl<T: ?Sized> IsCopy<T> {
+    pub fn new_ref<'a>(r: &'a T) -> &'a IsCopy<T>
+    where T: Copy {
+        unsafe { mem::transmute(r) }
+    }
+
+    pub fn get_ref(&self) -> &T {
+        &self.0
+    }
+}
+
+/// `Migrate`-able wrapper for references to arena-allocated trait objects.  Requires `T: 'static`,
+/// meaning that the trait object can simply be copied to the new arena without requiring any
+/// migrations within its data.
+struct ArenaDyn<'a, T: ?Sized>(&'a IsCopy<T>);
+
+impl<'a, T: ?Sized> Clone for ArenaDyn<'a, T> {
+    fn clone(&self) -> Self { *self }
+}
+
+impl<'a, T: ?Sized> Copy for ArenaDyn<'a, T> {}
+
+impl<'a, T: ?Sized> ArenaDyn<'a, T> {
+    /// Create a new `ArenaDyn` reference.  We use `IsCopy` to assert that the concrete type
+    /// underlying `T` is `Copy`.  We can't add `T: Copy` since that won't hold when `T` is a `dyn`
+    /// type.
+    pub fn new(r: &'a IsCopy<T>) -> ArenaDyn<'a, T>
+    where T: 'static {
+        ArenaDyn(r)
+    }
+}
+
+impl<'a, T: ?Sized> fmt::Debug for ArenaDyn<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ArenaDyn({})", any::type_name::<T>())
+    }
+}
+
+impl<'a, 'b, T: ?Sized + 'static> Migrate<'a, 'b> for ArenaDyn<'a, T> {
+    type Output = ArenaDyn<'b, T>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> ArenaDyn<'b, T> {
+        // Copy the unsized value.
+        unsafe {
+            let size = mem::size_of_val::<IsCopy<T>>(self.0);
+            let align = mem::align_of_val::<IsCopy<T>>(self.0);
+            let layout = Layout::from_size_align(size, align).unwrap();
+            let src_ptr = self.0 as *const IsCopy<T> as *const u8;
+            let dest_ptr = v.new_circuit().arena().alloc_layout(layout).as_ptr();
+            ptr::copy_nonoverlapping(src_ptr, dest_ptr, size);
+
+            // Keep the vtable, but change the address.  This is a bit of a hack, since things like
+            // `ptr::from_raw_parts` are not yet stable.
+            let mut t_ptr = self.0 as *const IsCopy<T>;
+            *(&mut t_ptr as *mut *const IsCopy<T> as *mut *const u8) = dest_ptr;
+            ArenaDyn(&*t_ptr)
+        }
+    }
+}
+
+impl<'a, T: ?Sized> Deref for ArenaDyn<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.0.get_ref()
+    }
+}
+
+
+type SecretInitFn<'a> = ArenaDyn<'a,
+    dyn for<'b> Fn(&CircuitBase<'b>, *const (), &[Bits<'b>]) -> Bits<'b> + 'static>;
+
+#[derive(Clone, Debug)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
     val: Cell<PackedSecretValue<'a>>,
@@ -2359,6 +2501,26 @@ pub struct SecretData<'a> {
     /// constructing a second gate from the same `Secret` will panic even if the first gate isn't
     /// used anywhere.
     used: Cell<bool>,
+
+    init: Option<SecretInitFn<'a>>,
+    /// Dependencies for computing derived secrets.  The values on these wires (represented as
+    /// `Bits`) will be passed to `init`.
+    deps: &'a [Wire<'a>],
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
+    type Output = SecretData<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SecretData<'b> {
+        let deps = self.deps.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let deps = v.new_circuit().intern_wire_list(&deps);
+        SecretData {
+            ty: v.visit(self.ty),
+            val: v.visit(self.val),
+            used: v.visit(self.used),
+            init: v.visit(self.init),
+            deps,
+        }
+    }
 }
 
 impl<'a> SecretData<'a> {
@@ -2367,6 +2529,22 @@ impl<'a> SecretData<'a> {
             ty,
             val: Cell::new(val.pack()),
             used: Cell::new(false),
+            init: None,
+            deps: &[],
+        }
+    }
+
+    fn new_lazy_prover(
+        ty: Ty<'a>,
+        init: SecretInitFn<'a>,
+        deps: &'a [Wire<'a>],
+    ) -> SecretData<'a> {
+        SecretData {
+            ty,
+            val: Cell::new(SecretValue::ProverUninit.pack()),
+            used: Cell::new(false),
+            init: Some(init),
+            deps,
         }
     }
 
@@ -2382,11 +2560,22 @@ impl<'a> SecretData<'a> {
     /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
     /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
     /// panic.
-    pub fn val(&self, _c: &CircuitBase<'a>) -> Option<Bits<'a>> {
+    pub fn val(&self, c: &CircuitBase<'a>) -> Option<Bits<'a>> {
         match self.val.get().unpack() {
             SecretValue::ProverInit(bits) => Some(bits),
-            SecretValue::ProverUninit =>
-                panic!("tried to access uninitialized secert value"),
+            SecretValue::ProverUninit => {
+                let init = match self.init {
+                    Some(x) => x,
+                    None => panic!("tried to access uninitialized secret value"),
+                };
+                let dep_vals = self.deps.iter().map(|&w| {
+                    eval::eval_wire(c, w).unwrap().0
+                }).collect::<Vec<_>>();
+                assert_eq!(c.secret_type, TypeId::of::<()>());
+                let bits = init(c, &(), &dep_vals);
+                self.val.set(SecretValue::ProverInit(bits).pack());
+                Some(bits)
+            },
             SecretValue::VerifierUnknown => None,
             SecretValue::FunctionInput(_) =>
                 panic!("tried to access value of abstract function input"),
