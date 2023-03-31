@@ -1386,8 +1386,7 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
             return e;
         }
 
-        // `eval_wire` will update `w.value`.
-        let (bits, secret) = match eval::eval_wire(self.circuit, w) {
+        let (bits, secret) = match eval::eval_wire::<eval::RevealSecrets>(self.circuit, w) {
             Ok(x) => x,
             Err(e) => {
                 // Losing track of the value for this wire will leave us unable to construct the
@@ -1434,7 +1433,7 @@ enum WireDepsInner<'a> {
 }
 
 impl<'a> WireDeps<'a> {
-    fn zero() -> WireDeps<'a> {
+    pub fn zero() -> WireDeps<'a> {
         Self::small(0, [None, None, None])
     }
 
@@ -1502,7 +1501,11 @@ impl<'a> DoubleEndedIterator for WireDeps<'a> {
 }
 
 pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
-    match w.kind {
+    gate_deps(w.kind)
+}
+
+pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
+    match gk {
         GateKind::Lit(_, _) |
         GateKind::Secret(_) |
         GateKind::Erased(_) |
@@ -1520,68 +1523,100 @@ pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
     }
 }
 
-pub struct PostorderIter<'a, F> {
-    stack: Vec<Wire<'a>>,
-    /// Wires that have already been yielded.  We avoid processing the same wire twice.
-    seen: HashSet<Wire<'a>>,
-    filter: F,
+pub fn wire_and_secret_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
+    gate_and_secret_deps(w.kind)
 }
 
-impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
+pub fn gate_and_secret_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
+    match gk {
+        GateKind::Secret(s) => WireDeps::many(s.deps),
+        _ => gate_deps(gk),
+    }
+}
+
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+enum PostorderAction<T> {
+    Visit(T),
+    Emit(T),
+}
+
+pub struct PostorderIter<'a, F> {
+    stack: Vec<PostorderAction<Wire<'a>>>,
+    /// Wires that have already been yielded.  We avoid processing the same wire twice.
+    seen: HashSet<Wire<'a>>,
+    /// Visitor function, called on each wire.  Returns `(emit, deps)`; first, all wires listed in
+    /// `deps` will be visited (if they haven't been visited already), then the wire itself will be
+    /// emitted if `emit` is `true`.
+    visit: F,
+}
+
+impl<'a, F, I> Iterator for PostorderIter<'a, F>
+where
+    F: FnMut(Wire<'a>) -> (bool, I),
+    I: Iterator<Item = Wire<'a>>,
+{
     type Item = Wire<'a>;
     fn next(&mut self) -> Option<Wire<'a>> {
-        // NB: `last().cloned()`, not `pop()`.  We only pop the item if all its children have been
-        // processed.
-        while let Some(wire) = self.stack.last().cloned() {
-            // We may end up with the same wire on the stack twice, if the wire is accessible via
-            // two different paths.
-            if self.seen.contains(&wire) {
-                self.stack.pop();
-                continue;
-            }
+        let PostorderIter { ref mut stack, ref mut seen, ref mut visit } = *self;
 
-            let maybe_push = |w| {
-                if self.seen.contains(&w) || !(self.filter)(w) {
-                    false
-                } else {
-                    self.stack.push(w);
-                    true
-                }
-            };
+        while let Some(action) = stack.pop() {
+            match action {
+                PostorderAction::Visit(wire) => {
+                    if seen.contains(&wire) {
+                        continue;
+                    }
 
-            let children_pending = wire_deps(wire).rev().any(maybe_push);
+                    let (emit, deps) = visit(wire);
+                    if emit {
+                        stack.push(PostorderAction::Emit(wire));
+                    }
+                    for child in deps {
+                        stack.push(PostorderAction::Visit(child));
+                    }
+                },
 
-            if !children_pending {
-                let result = self.stack.pop();
-                debug_assert!(result == Some(wire));
-                self.seen.insert(wire);
-                return Some(wire);
+                PostorderAction::Emit(wire) => {
+                    if !seen.insert(wire) {
+                        continue;
+                    }
+                    return Some(wire);
+                },
             }
         }
         None
     }
 }
 
-pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
-where I: IntoIterator<Item = Wire<'a>> {
-    let mut stack = wires.into_iter().collect::<Vec<_>>();
+pub fn walk_wires_ex<'a, I, F, I2>(wires: I, visit: F) -> impl Iterator<Item = Wire<'a>>
+where
+    I: IntoIterator<Item = Wire<'a>>,
+    F: FnMut(Wire<'a>) -> (bool, I2),
+    I2: Iterator<Item = Wire<'a>>,
+{
+    let mut stack = wires.into_iter().map(PostorderAction::Visit).collect::<Vec<_>>();
     stack.reverse();
     PostorderIter {
         stack,
         seen: HashSet::new(),
-        filter: |_| true,
+        visit,
     }
 }
 
-pub fn walk_wires_filtered<'a, I, F>(wires: I, filter: F) -> PostorderIter<'a, F>
+pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
+where I: IntoIterator<Item = Wire<'a>> {
+    walk_wires_ex(wires, |w| (true, wire_deps(w)))
+}
+
+pub fn walk_wires_filtered<'a, I, F>(wires: I, mut filter: F) -> impl Iterator<Item = Wire<'a>>
 where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
-    let mut stack = wires.into_iter().collect::<Vec<_>>();
-    stack.reverse();
-    PostorderIter {
-        stack,
-        seen: HashSet::new(),
-        filter,
-    }
+    walk_wires_ex(wires, move |w| {
+        if filter(w) {
+            (true, wire_deps(w))
+        } else {
+            (false, WireDeps::zero())
+        }
+    })
 }
 
 /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
@@ -2569,7 +2604,7 @@ impl<'a> SecretData<'a> {
                     None => panic!("tried to access uninitialized secret value"),
                 };
                 let dep_vals = self.deps.iter().map(|&w| {
-                    eval::eval_wire(c, w).unwrap().0
+                    eval::eval_wire::<eval::RevealSecrets>(c, w).unwrap().0
                 }).collect::<Vec<_>>();
                 assert_eq!(c.secret_type, TypeId::of::<()>());
                 let bits = init(c, &(), &dep_vals);

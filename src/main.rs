@@ -326,7 +326,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         .collect::<Vec<_>>();
 
     {
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets, ()>::new();
         let flag_vals = flags.iter().map(|&w| {
             ev.eval_wire(c, w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();
