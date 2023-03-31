@@ -2592,44 +2592,6 @@ impl<'a> SecretData<'a> {
         self.used.set(true);
     }
 
-    /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
-    /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
-    /// panic.
-    pub fn val(&self, c: &CircuitBase<'a>) -> Option<Bits<'a>> {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(bits) => Some(bits),
-            SecretValue::ProverUninit => {
-                let init = match self.init {
-                    Some(x) => x,
-                    None => panic!("tried to access uninitialized secret value"),
-                };
-                let dep_vals = self.deps.iter().map(|&w| {
-                    eval::eval_wire::<eval::RevealSecrets>(c, w).unwrap().0
-                }).collect::<Vec<_>>();
-                assert_eq!(c.secret_type, TypeId::of::<()>());
-                let bits = init(c, &(), &dep_vals);
-                self.val.set(SecretValue::ProverInit(bits).pack());
-                Some(bits)
-            },
-            SecretValue::VerifierUnknown => None,
-            SecretValue::FunctionInput(_) =>
-                panic!("tried to access value of abstract function input"),
-        }
-    }
-
-    /// Try to retrieve the value of this secret.  In verifier mode, this always returns `None`.
-    /// In prover mode, this returns `Some(bits)` if the value has been initialized and `None`
-    /// otherwise.
-    pub fn try_val(&self) -> Option<Bits<'a>> {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(bits) => Some(bits),
-            SecretValue::ProverUninit => None,
-            SecretValue::VerifierUnknown => None,
-            SecretValue::FunctionInput(_) =>
-                panic!("tried to access value of abstract function input"),
-        }
-    }
-
     pub fn has_val(&self) -> bool {
         match self.val.get().unpack() {
             SecretValue::ProverInit(_) => true,
