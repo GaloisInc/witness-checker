@@ -29,6 +29,7 @@ use std::path::Path;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
+use crate::eval::{Evaluator, CachingEvaluator, RevealSecrets};
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor,
@@ -65,6 +66,7 @@ pub struct Backend<'a> {
     wire_to_repr: HashMap<Wire<'a>, ReprId>,
     representer: Representer,
     cs: ZkifCS<Scalar>,
+    ev: CachingEvaluator<'a, 'static, RevealSecrets, ()>,
 }
 
 impl<'a> Backend<'a> {
@@ -74,6 +76,7 @@ impl<'a> Backend<'a> {
             wire_to_repr: HashMap::new(),
             representer: Representer::new(),
             cs: ZkifCS::new(workspace, proving),
+            ev: CachingEvaluator::new(),
         }
     }
 
@@ -129,10 +132,11 @@ impl<'a> Backend<'a> {
                 match *secret.ty {
                     TyKind::Uint(sz) | TyKind::Int(sz) => {
                         // TODO: can we use Num::alloc here instead?
+                        let opt_bits = self.ev.eval_wire_bits(c, wire).ok().map(|(b, _)| b);
                         let int = Int::alloc::<Scalar, _>(
                             &mut self.cs,
                             sz.bits() as usize,
-                            secret.val(c).map(|val| val.to_biguint()),
+                            opt_bits.map(|val| val.to_biguint()),
                         )
                         .unwrap();
                         WireRepr::from(int)

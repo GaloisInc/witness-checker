@@ -7,7 +7,7 @@ use std::slice;
 use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
-use crate::eval;
+use crate::eval::{self, Evaluator, CachingEvaluator, RevealSecrets};
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
@@ -148,6 +148,7 @@ pub struct Backend<'w, S> {
     /// Maps each high-level `Wire` to the `WireId` of the first bit in its representation.  The
     /// number of bits in the representation can be computed from the wire type.
     wire_map: BTreeMap<Wire<'w>, WireId>,
+    ev: CachingEvaluator<'w, 'static, RevealSecrets, ()>,
 }
 
 impl<'w, S: Sink> Backend<'w, S> {
@@ -155,6 +156,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         Backend {
             sink,
             wire_map: BTreeMap::new(),
+            ev: CachingEvaluator::new(),
         }
     }
 
@@ -232,9 +234,10 @@ impl<'w, S: Sink> Backend<'w, S> {
                 assert!(ty.is_integer());
                 self.sink.lit(expire, n, val)
             },
-            GateKind::Secret(secret) => {
-                assert!(secret.ty.is_integer());
-                self.sink.private(expire, n, secret.val(c.as_base()))
+            GateKind::Secret(_secret) => {
+                assert!(w.ty.is_integer());
+                let opt_bits = self.ev.eval_wire_bits(c.as_base(), w).ok().map(|(b, _)| b);
+                self.sink.private(expire, n, opt_bits)
             },
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
@@ -264,8 +267,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                         }
 
                         let sz = aw.ty.integer_size();
-                        let a_val = eval::eval_wire_secret(c.as_base(), aw);
-                        let b_val = eval::eval_wire_secret(c.as_base(), bw);
+                        let a_val = self.ev.eval_wire(c.as_base(), aw).ok();
+                        let b_val = self.ev.eval_wire(c.as_base(), bw).ok();
                         let (quot_bits, rem_bits) = match (a_val.as_ref(), b_val.as_ref()) {
                             (Some(a_val), Some(b_val)) => {
                                 let a_uint = a_val.as_single().unwrap();
