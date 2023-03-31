@@ -109,6 +109,22 @@ impl<'a> CircuitBase<'a> {
         intern.insert("");
     }
 
+    pub unsafe fn with_secret_type_unchecked<'b, S: 'static>(
+        &'b self,
+    ) -> &'b CircuitBaseWithSecretType<'a, S> {
+        mem::transmute(self)
+    }
+
+    pub fn with_secret_type<S: 'static>(&self) -> Option<&CircuitBaseWithSecretType<'a, S>> {
+        unsafe {
+            if self.secret_type == TypeId::of::<S>() {
+                Some(self.with_secret_type_unchecked())
+            } else {
+                None
+            }
+        }
+    }
+
     fn arena(&self) -> &'a Bump {
         self.arenas.arena()
     }
@@ -2540,7 +2556,7 @@ pub struct SecretData<'a> {
     init: Option<SecretInitFn<'a>>,
     /// Dependencies for computing derived secrets.  The values on these wires (represented as
     /// `Bits`) will be passed to `init`.
-    deps: &'a [Wire<'a>],
+    pub deps: &'a [Wire<'a>],
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
@@ -2636,6 +2652,26 @@ impl<'a> SecretData<'a> {
             self.set_default(bits);
         }
     }
+
+    pub fn has_init(&self) -> bool {
+        self.init.is_some()
+    }
+
+    /// Run the lazy initialization function to calculate the value of this secret.
+    ///
+    /// Note that this does not call `self.set`.
+    // FIXME: this is currenly unsound because the caller can extract a secret from a function
+    // body, where the secret type may be something other than `S`
+    pub fn init<S>(
+        &self,
+        c: &CircuitBaseWithSecretType<'a, S>,
+        secret: &S,
+        dep_vals: &[Bits<'a>],
+    ) -> Bits<'a> {
+        let init = self.init.unwrap();
+        let bits = unsafe { init(c, secret as *const S as *const (), dep_vals) };
+        bits
+    }
 }
 
 /// A handle that can be used to set the value of a `Secret`.  Sets a default value on drop, if a
@@ -2679,6 +2715,20 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretHandle<'a> {
     }
 }
 
+
+/// Wrapper around `CircuitBase<'a>`, where the secret type of the circuit is known to be `S`.
+#[repr(transparent)]
+pub struct CircuitBaseWithSecretType<'a, S> {
+    c: CircuitBase<'a>,
+    _marker: PhantomData<S>,
+}
+
+impl<'a, S> Deref for CircuitBaseWithSecretType<'a, S> {
+    type Target = CircuitBase<'a>;
+    fn deref(&self) -> &CircuitBase<'a> {
+        &self.c
+    }
+}
 
 
 #[derive(Clone, Debug, Migrate)]
