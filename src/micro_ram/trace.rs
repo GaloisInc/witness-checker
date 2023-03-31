@@ -35,7 +35,7 @@ pub struct Segment<'a> {
 pub struct SegmentBuilder<'a, 'b, B> {
     pub cx: &'b Context<'a>,
     pub b: &'b B,
-    pub ev: &'b mut CachingEvaluator<eval::Public>,
+    pub ev: &'b mut CachingEvaluator<'a, 'static, eval::Public, ()>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
@@ -259,7 +259,7 @@ fn operand_value<'a>(
 fn calc_step<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
-    ev: &mut CachingEvaluator<eval::Public>,
+    ev: &mut CachingEvaluator<'a, '_, eval::Public, ()>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
