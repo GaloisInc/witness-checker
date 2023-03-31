@@ -28,6 +28,7 @@ use std::mem;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
+use crate::eval::{Evaluator, CachingEvaluator, RevealSecrets};
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor,
@@ -60,6 +61,7 @@ pub struct Backend<'w, IRB: IRBuilderT> {
     wire_to_repr: BTreeMap<Wire<'w>, ReprId>,
     representer: Representer,
     builder: IRB,
+    ev: CachingEvaluator<'w, 'static, RevealSecrets, ()>,
 }
 
 impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
@@ -69,6 +71,7 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
             wire_to_repr: BTreeMap::new(),
             representer: Representer::new(),
             builder: ir_builder,
+            ev: CachingEvaluator::new(),
         }
     }
 
@@ -146,10 +149,11 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
                 match *secret.ty {
                     TyKind::Uint(sz) | TyKind::Int(sz) => {
                         // TODO: can we use Num::alloc here instead?
+                        let opt_bits = self.ev.eval_wire_bits(c, wire).ok().map(|(b, _)| b);
                         let int = Int::alloc(
                             &mut self.builder,
                             sz.bits() as usize,
-                            secret.val(c).map(|val| val.to_biguint()),
+                            opt_bits.map(|val| val.to_biguint()),
                         );
                         WireRepr::from(int)
                     }
