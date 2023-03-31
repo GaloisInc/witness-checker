@@ -251,7 +251,7 @@ trait EvalContext<'a> {
         Ok((bits.to_bigint(w.ty), sec))
     }
 
-    fn eval_secret(&self, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>>;
+    fn eval_secret(&self, c: &CircuitBase<'a>, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>>;
     fn get_erased(&self, e: Erased<'a>) -> Result<(Bits<'a>, bool), Error<'a>>;
     fn get_argument(&self, i: usize) -> Result<(Bits<'a>, bool), Error<'a>>;
 
@@ -317,7 +317,7 @@ impl<'a, 's, S: SecretEvaluator<'a>, T> SecretEvaluator<'a> for CachingEvaluator
 }
 
 impl<'a, 's, S, T> Evaluator<'a> for CachingEvaluator<'a, 's, S, T>
-where S: SecretEvaluator<'a> + Default {
+where S: SecretEvaluator<'a> + Default, T: 'static {
     fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
         &mut self,
         c: &C,
@@ -358,14 +358,26 @@ where S: SecretEvaluator<'a> + Default {
 }
 
 impl<'a, 's, S, T> EvalContext<'a> for CachingEvaluator<'a, 's, S, T>
-where S: SecretEvaluator<'a> + Default {
+where S: SecretEvaluator<'a> + Default, T: 'static {
     fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
         self.cache.get(&w).cloned().ok_or(Error::UnevalInput)
     }
 
-    fn eval_secret(&self, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>> {
+    fn eval_secret(&self, c: &CircuitBase<'a>, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>> {
         if !S::REVEAL_SECRETS {
             return Err(Error::Secret);
+        }
+
+        if s.has_init() {
+            let dep_vals = s.deps.iter().map(|&w| {
+                self.get_value(w).map(|(b, _)| b)
+            }).collect::<Result<Vec<_>, _>>()?;
+            let c = c.with_secret_type::<T>().unwrap();
+            let bits = s.init(c, self.secret, &dep_vals);
+            if !self.in_function {
+                s.set(bits);
+            }
+            return Ok(bits);
         }
 
         if self.in_function {
@@ -614,7 +626,7 @@ fn eval_gate_inner<'a>(
     Ok(match gk {
         GateKind::Lit(bits, _) => (bits, false),
 
-        GateKind::Secret(s) => (ecx.eval_secret(s)?, true),
+        GateKind::Secret(s) => (ecx.eval_secret(c, s)?, true),
 
         GateKind::Erased(e) => ecx.get_erased(e)?,
 
@@ -771,7 +783,7 @@ fn eval_call<'a>(
         .map_or(0, |i| i + 1);
     let mut secrets = vec![None; num_secrets];
     for &(id, s) in secret_args {
-        secrets[id.0] = Some(outer_ecx.eval_secret(s)?);
+        secrets[id.0] = Some(outer_ecx.eval_secret(c, s)?);
     }
 
     let mut inner_eval = outer_ecx.enter_function(func, arg_bits, secrets);
