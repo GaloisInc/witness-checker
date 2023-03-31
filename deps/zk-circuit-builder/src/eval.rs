@@ -338,14 +338,16 @@ where S: SecretEvaluator<'a> + Default {
 
         for w in order {
             let result = eval_gate_inner(c, self, w.ty, w.kind);
-            w.value.set(match result {
-                Ok((bits, false)) => GateValue::Public(bits),
-                Ok((bits, true)) => GateValue::Secret(bits),
-                Err(Error::UnknownSecret(s)) => GateValue::NeedsSecret(s),
-                Err(Error::UnevalInput) |
-                Err(Error::Secret) => GateValue::Unset,
-                Err(Error::Other) => GateValue::Failed,
-            });
+            if !self.in_function {
+                w.value.set(match result {
+                    Ok((bits, false)) => GateValue::Public(bits),
+                    Ok((bits, true)) => GateValue::Secret(bits),
+                    Err(Error::UnknownSecret(s)) => GateValue::NeedsSecret(s),
+                    Err(Error::UnevalInput) |
+                    Err(Error::Secret) => GateValue::Unset,
+                    Err(Error::Other) => GateValue::Failed,
+                });
+            }
             let (bits, sec) = result?;
             self.cache.insert(w, (bits, sec));
         }
