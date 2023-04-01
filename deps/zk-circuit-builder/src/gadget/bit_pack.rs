@@ -23,7 +23,8 @@ impl<'a> Iterator for BundleTys<'a> {
                     self.stk.extend(tys.iter().rev().cloned());
                 },
                 TyKind::Uint(_) | TyKind::Int(_) => return Some(ty),
-                TyKind::GF(f)  => panic!("Bitvector operations are not currently supported for field {:?}", f),
+                TyKind::GF(f) => panic!("Bitvector operations are not currently supported for field {:?}", f),
+                TyKind::RawBits => panic!("Bitvector operations are not supported RawBits"),
             }
         }
         None
@@ -48,7 +49,10 @@ impl<'a> Iterator for BundleWires<'_, 'a> {
                     let c = self.c;
                     self.stk.extend((0 .. tys.len()).rev().map(|i| c.extract(w, i)));
                 },
-                TyKind::Uint(_) | TyKind::Int(_) | TyKind::GF(_) => return Some(w),
+                TyKind::Uint(_) |
+                TyKind::Int(_) |
+                TyKind::GF(_) |
+                TyKind::RawBits => return Some(w),
             }
         }
         None
@@ -155,12 +159,15 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
                     *pos = end;
                     c.cast(extract_bits(&c, inp, start, end), ty)
                 },
-                TyKind::GF(f) => {
-                    panic!("Decompose is not currently supported for field {:?}", f);
-                }
                 TyKind::Bundle(tys) => {
                     c.pack_iter(tys.iter().map(|&ty| walk(c, inp, ty, pos)))
                 },
+                TyKind::GF(f) => {
+                    panic!("Decompose is not currently supported for field {:?}", f);
+                }
+                TyKind::RawBits => {
+                    panic!("Decompose is not supported for RawBits");
+                }
             }
         }
         let mut pos = 0;

@@ -30,6 +30,7 @@ fn flatten<'a>(c: &impl CircuitTrait<'a>, w: Wire<'a>, out: &mut Vec<Wire<'a>>) 
             }
         },
         TyKind::Int(_) | TyKind::Uint(_) => { out.push(w); },
-        TyKind::GF(f)  => panic!{"ConcatBits is currently unsupported for GF({:?})", f},
+        TyKind::GF(f) => panic!("ConcatBits is currently unsupported for GF({:?})", f),
+        TyKind::RawBits => panic!("ConcatBits is unsupported RawBits"),
     }
 }

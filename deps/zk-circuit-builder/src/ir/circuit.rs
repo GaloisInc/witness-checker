@@ -1655,6 +1655,20 @@ pub enum TyKind<'a> {
     Uint(IntSize),
     GF(Field),
     Bundle(&'a [Ty<'a>]),
+
+    /// Raw bits, with no particular interpretation.  This type is not accepted as input by any
+    /// gate, nor can it be included in a `Bundle`.  However, it can appear as the type of a
+    /// `Secret` gate and in the dependency list of a derived secret.
+    ///
+    /// This is used to fit arbitrary intermediate values into the wire-based dependency tracking
+    /// for derived secrets.  Suppose you have a function that takes many input wires, does an
+    /// expensive computation on their values, and derives many secrets from the result.  It would
+    /// be inefficient to repeat the expensive computation for each derived secret.  To avoid this,
+    /// you can create an intermediate secret derived from all the inputs via the expensive
+    /// computation, and then derive the many secrets from that result.  As the intermediate value
+    /// might not make sense as a circuit value or fit into the normal circuit type system, we
+    /// provide `RawBits` to use for it instead.
+    RawBits,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -1717,6 +1731,7 @@ impl TyKind<'_> {
             TyKind::Uint(_) => None,
             TyKind::GF(f) => Some(f),
             TyKind::Bundle(_) => None,
+            TyKind::RawBits => None,
         }
     }
 
@@ -1726,6 +1741,7 @@ impl TyKind<'_> {
             TyKind::Uint(_) => true,
             TyKind::GF(_) => false,
             TyKind::Bundle(_) => false,
+            TyKind::RawBits => false,
         }
     }
 
@@ -1734,7 +1750,8 @@ impl TyKind<'_> {
             TyKind::Int(sz) => sz,
             TyKind::Uint(sz) => sz,
             TyKind::GF(f) => f.bit_size(),
-            TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
+            TyKind::Bundle(_) |
+            TyKind::RawBits => panic!("{:?} has no IntSize", self),
         }
     }
 
@@ -1760,6 +1777,7 @@ impl TyKind<'_> {
             TyKind::Bundle(tys) => {
                 c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
             },
+            TyKind::RawBits => c.ty(TyKind::RawBits),
         }
     }
 
@@ -1777,6 +1795,7 @@ impl TyKind<'_> {
             TyKind::Bundle(tys) => {
                 tys.iter().map(|ty| ty.digits()).sum()
             },
+            TyKind::RawBits => panic!("RawBits type has unknown digit width"),
         }
     }
 }
@@ -1793,6 +1812,7 @@ impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
                 let tys = tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
                 Bundle(v.new_circuit().intern_ty_list(&tys))
             },
+            RawBits => RawBits,
         }
     }
 }
@@ -1806,6 +1826,7 @@ static COMMON_TY_I8: TyKind = TyKind::I8;
 static COMMON_TY_I16: TyKind = TyKind::I16;
 static COMMON_TY_I32: TyKind = TyKind::I32;
 static COMMON_TY_I64: TyKind = TyKind::I64;
+static COMMON_TY_RAW_BITS: TyKind = TyKind::RawBits;
 
 static COMMON_TYPES: &[&TyKind] = &[
     &COMMON_TY_BOOL,
@@ -1817,6 +1838,7 @@ static COMMON_TYPES: &[&TyKind] = &[
     &COMMON_TY_I16,
     &COMMON_TY_I32,
     &COMMON_TY_I64,
+    &COMMON_TY_RAW_BITS,
 ];
 
 impl Ty<'_> {
@@ -1842,6 +1864,10 @@ impl Ty<'_> {
             64 => Ty(&COMMON_TY_I64),
             _ => panic!("not a common bit width: {}", width),
         }
+    }
+
+    pub fn raw_bits<'a>() -> Ty<'a> {
+        Ty(&COMMON_TY_RAW_BITS)
     }
 }
 

@@ -48,6 +48,7 @@ impl Value {
                 assert_eq!(pos, bits.0.len());
                 Value::Bundle(vals)
             },
+            TyKind::RawBits => panic!("can't convert RawBits to Value"),
         }
     }
 
