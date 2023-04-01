@@ -44,6 +44,7 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
             }
             write!(s, "]")?;
         },
+        TyKind::RawBits => { write!(s, "raw_bits")?; },
     }
     Ok(())
 }
