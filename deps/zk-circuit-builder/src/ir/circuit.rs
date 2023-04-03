@@ -10,7 +10,7 @@
 //! * The `CircuitExt` trait adds higher-level helper methods, so callers can use convenient
 //!   `add`/`sub` methods instead of manually constructing a `GateKind::Add`.
 use std::alloc::Layout;
-use std::any::{self, TypeId};
+use std::any::{self, Any, TypeId, type_name};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -349,7 +349,7 @@ impl<'a> CircuitBase<'a> {
             TypeId::of::<S>() == TypeId::of::<()>());
         let sd = if self.is_prover {
             let init = self.alloc_secret_init_fn::<S, F>(init);
-            SecretData::new_lazy_prover(ty, init, &[])
+            SecretData::new_lazy_prover::<S>(ty, init, &[])
         } else {
             SecretData::new(ty, SecretValue::VerifierUnknown)
         };
@@ -2583,6 +2583,7 @@ pub struct SecretData<'a> {
     /// Dependencies for computing derived secrets.  The values on these wires (represented as
     /// `Bits`) will be passed to `init`.
     pub deps: &'a [Wire<'a>],
+    secret_type: TypeId,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
@@ -2596,6 +2597,7 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
             used: v.visit(self.used),
             init: v.visit(self.init),
             deps,
+            secret_type: self.secret_type,
         }
     }
 }
@@ -2608,10 +2610,11 @@ impl<'a> SecretData<'a> {
             used: Cell::new(false),
             init: None,
             deps: &[],
+            secret_type: TypeId::of::<()>(),
         }
     }
 
-    fn new_lazy_prover(
+    fn new_lazy_prover<S: 'static>(
         ty: Ty<'a>,
         init: SecretInitFn<'a>,
         deps: &'a [Wire<'a>],
@@ -2622,6 +2625,7 @@ impl<'a> SecretData<'a> {
             used: Cell::new(false),
             init: Some(init),
             deps,
+            secret_type: TypeId::of::<S>(),
         }
     }
 
@@ -2686,16 +2690,15 @@ impl<'a> SecretData<'a> {
     /// Run the lazy initialization function to calculate the value of this secret.
     ///
     /// Note that this does not call `self.set`.
-    // FIXME: this is currenly unsound because the caller can extract a secret from a function
-    // body, where the secret type may be something other than `S`
-    pub fn init<S>(
+    pub fn init(
         &self,
-        c: &CircuitBaseWithSecretType<'a, S>,
-        secret: &S,
+        c: &CircuitBase<'a>,
+        secret: &dyn Any,
         dep_vals: &[Bits<'a>],
     ) -> Bits<'a> {
+        assert!(self.secret_type == secret.type_id() || self.secret_type == TypeId::of::<()>());
         let init = self.init.unwrap();
-        let bits = unsafe { init(c, secret as *const S as *const (), dep_vals) };
+        let bits = unsafe { init(c, secret as *const dyn Any as *const (), dep_vals) };
         bits
     }
 }

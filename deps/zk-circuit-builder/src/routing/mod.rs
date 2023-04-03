@@ -273,7 +273,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets, ()>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let mut rb = RoutingBuilder::new();
         let inputs = (0 .. n).map(|i| b.lit(i as u32)).collect::<Vec<_>>();
