@@ -61,7 +61,7 @@ pub struct Backend<'w, IRB: IRBuilderT> {
     wire_to_repr: BTreeMap<Wire<'w>, ReprId>,
     representer: Representer,
     builder: IRB,
-    ev: CachingEvaluator<'w, 'static, RevealSecrets, ()>,
+    ev: CachingEvaluator<'w, 'static, RevealSecrets>,
 }
 
 impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {

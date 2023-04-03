@@ -1,17 +1,19 @@
+use std::any::Any;
 use std::cmp;
 use std::collections::{HashMap, BTreeMap};
 use std::convert::TryFrom;
 use std::iter;
+use std::ptr;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 #[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
-
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
     GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, SecretValue, SecretInputId,
 };
+use crate::util::CowBox;
 
 use self::Value::SingleField;
 use self::Value::SingleInteger;
@@ -267,9 +269,9 @@ trait EvalContext<'a> {
 
 /// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
 /// sharing.
-pub struct CachingEvaluator<'a, 's, S, T> {
+pub struct CachingEvaluator<'a, 's, S> {
     secret_eval: S,
-    secret: &'s T,
+    secret: CowBox<'s, dyn Any>,
     cache: HashMap<Wire<'a>, (Bits<'a>, bool)>,
     in_function: bool,
     args: Vec<(Bits<'a>, bool)>,
@@ -278,11 +280,27 @@ pub struct CachingEvaluator<'a, 's, S, T> {
     secrets: Vec<Option<Bits<'a>>>,
 }
 
-impl<'a, S: Default> CachingEvaluator<'a, 'static, S, ()> {
+impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
     pub fn new() -> Self {
+        Self::with_secret(&())
+    }
+}
+
+impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
+    pub fn with_boxed_secret(secret: Box<dyn Any>) -> Self {
+        Self::with_secret_cow(CowBox::from(secret))
+    }
+}
+
+impl<'a, 's, S: Default> CachingEvaluator<'a, 's, S> {
+    pub fn with_secret(secret: &'s dyn Any) -> Self {
+        Self::with_secret_cow(CowBox::from(secret))
+    }
+
+    fn with_secret_cow(secret: CowBox<'s, dyn Any>) -> Self {
         CachingEvaluator {
             secret_eval: S::default(),
-            secret: &(),
+            secret,
             cache: HashMap::new(),
             in_function: false,
             args: Vec::new(),
@@ -291,13 +309,13 @@ impl<'a, S: Default> CachingEvaluator<'a, 'static, S, ()> {
     }
 }
 
-impl<'a, 'b, 's, S: Migrate<'a, 'b>, T> Migrate<'a, 'b> for CachingEvaluator<'a, 's, S, T> {
-    type Output = CachingEvaluator<'b, 's, S::Output, T>;
+impl<'a, 'b, 's, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, 's, S> {
+    type Output = CachingEvaluator<'b, 's, S::Output>;
 
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(
         self,
         v: &mut V,
-    ) -> CachingEvaluator<'b, 's, S::Output, T> {
+    ) -> CachingEvaluator<'b, 's, S::Output> {
         CachingEvaluator {
             secret_eval: v.visit(self.secret_eval),
             secret: self.secret,
@@ -313,12 +331,12 @@ impl<'a, 'b, 's, S: Migrate<'a, 'b>, T> Migrate<'a, 'b> for CachingEvaluator<'a,
     }
 }
 
-impl<'a, 's, S: SecretEvaluator<'a>, T> SecretEvaluator<'a> for CachingEvaluator<'a, 's, S, T> {
+impl<'a, 's, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, 's, S> {
     const REVEAL_SECRETS: bool = S::REVEAL_SECRETS;
 }
 
-impl<'a, 's, S, T> Evaluator<'a> for CachingEvaluator<'a, 's, S, T>
-where S: SecretEvaluator<'a> + Default, T: 'static {
+impl<'a, 's, S> Evaluator<'a> for CachingEvaluator<'a, 's, S>
+where S: SecretEvaluator<'a> + Default {
     fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
         &mut self,
         c: &C,
@@ -358,8 +376,8 @@ where S: SecretEvaluator<'a> + Default, T: 'static {
     }
 }
 
-impl<'a, 's, S, T> EvalContext<'a> for CachingEvaluator<'a, 's, S, T>
-where S: SecretEvaluator<'a> + Default, T: 'static {
+impl<'a, 's, S> EvalContext<'a> for CachingEvaluator<'a, 's, S>
+where S: SecretEvaluator<'a> + Default {
     fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
         self.cache.get(&w).cloned().ok_or(Error::UnevalInput)
     }
@@ -373,8 +391,7 @@ where S: SecretEvaluator<'a> + Default, T: 'static {
             let dep_vals = s.deps.iter().map(|&w| {
                 self.get_value(w).map(|(b, _)| b)
             }).collect::<Result<Vec<_>, _>>()?;
-            let c = c.with_secret_type::<T>().unwrap();
-            let bits = s.init(c, self.secret, &dep_vals);
+            let bits = s.init(c, &*self.secret, &dep_vals);
             if !self.in_function {
                 s.set(bits);
             }
@@ -430,9 +447,12 @@ where S: SecretEvaluator<'a> + Default, T: 'static {
         args: Vec<(Bits<'a>, bool)>,
         secrets: Vec<Option<Bits<'a>>>,
     ) -> Self::FunctionContext {
+        // FIXME: awful lifetime hack.  This works as long as `self` outlives the returned
+        // `FunctionContext`.
+        let secret: &'static dyn Any = unsafe { &*ptr::addr_of!(*self.secret) };
         CachingEvaluator {
             secret_eval: S::default(),
-            secret: self.secret,
+            secret: CowBox::from(secret),
             cache: HashMap::new(),
             in_function: true,
             args,
@@ -797,7 +817,7 @@ pub fn eval_gate<'a, S: SecretEvaluator<'a> + Default>(
     ty: Ty<'a>,
     gk: GateKind<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    let mut ev = CachingEvaluator::<S, ()>::new();
+    let mut ev = CachingEvaluator::<S>::new();
     for w in circuit::gate_deps(gk) {
         let _ = ev.eval_wire(c, w)?;
     }
@@ -819,7 +839,7 @@ pub fn eval_wire<'a, S: SecretEvaluator<'a> + Default>(
     c: &CircuitBase<'a>,
     w: Wire<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    let mut ev = CachingEvaluator::<S, ()>::new();
+    let mut ev = CachingEvaluator::<S>::new();
     ev.eval_wire_bits(c, w)
 }
 

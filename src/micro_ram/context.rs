@@ -354,7 +354,7 @@ impl<'a, 'b> ContextEval<'a, 'b> {
 
 impl<'a> ContextEval<'a, '_> {
     fn eval_raw<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> Option<T> {
-        let mut ev = CachingEvaluator::<eval::RevealSecrets, ()>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         ev.eval_typed(self.c, w)
     }
 

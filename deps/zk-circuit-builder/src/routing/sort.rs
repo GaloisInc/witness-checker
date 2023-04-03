@@ -20,7 +20,7 @@ where
     }
 
     // `RevealSecrets` is okay here because the output is also secret.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets, ()>::new();
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
     let mut r2l = (0 .. xs.len()).collect::<Vec<_>>();
     let mut try_compare = |x, y| -> Option<bool> {
@@ -202,7 +202,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets, ()>::new();
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
         let ws = inputs.iter().cloned().map(|i| b.lit(i as u32)).collect::<Vec<_>>();
         let (ws, _) = sort(b, &ws, CompareLt).run(b);

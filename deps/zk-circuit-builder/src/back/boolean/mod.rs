@@ -148,7 +148,7 @@ pub struct Backend<'w, S> {
     /// Maps each high-level `Wire` to the `WireId` of the first bit in its representation.  The
     /// number of bits in the representation can be computed from the wire type.
     wire_map: BTreeMap<Wire<'w>, WireId>,
-    ev: CachingEvaluator<'w, 'static, RevealSecrets, ()>,
+    ev: CachingEvaluator<'w, 'static, RevealSecrets>,
 }
 
 impl<'w, S: Sink> Backend<'w, S> {

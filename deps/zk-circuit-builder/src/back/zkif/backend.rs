@@ -66,7 +66,7 @@ pub struct Backend<'a> {
     wire_to_repr: HashMap<Wire<'a>, ReprId>,
     representer: Representer,
     cs: ZkifCS<Scalar>,
-    ev: CachingEvaluator<'a, 'static, RevealSecrets, ()>,
+    ev: CachingEvaluator<'a, 'static, RevealSecrets>,
 }
 
 impl<'a> Backend<'a> {

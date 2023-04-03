@@ -31,7 +31,7 @@ pub struct ExecBuilder<'a> {
     // These fields come last because they contain caches keyed on `Wire`s.  On migration, only
     // wires that were used during the migration of some previous field will be kept in the cache.
     cx: Context<'a>,
-    ev: CachingEvaluator<'a, 'static, eval::Public, ()>,
+    ev: CachingEvaluator<'a, 'static, eval::Public>,
 }
 
 impl<'a> ExecBuilder<'a> {
