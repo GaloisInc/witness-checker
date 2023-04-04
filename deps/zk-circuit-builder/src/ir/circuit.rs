@@ -286,17 +286,10 @@ impl<'a> CircuitBase<'a> {
             _ => {},
         }
 
-        let value = match kind {
-            GateKind::Lit(bits, _) => GateValue::Public(bits),
-            GateKind::Erased(e) => e.gate_value(),
-            _ => GateValue::Unset,
-        };
-
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
             label: Label(self.current_label.get()),
-            value: Unhashed(GateValueCell::new(value)),
         }))
     }
 
@@ -2015,33 +2008,6 @@ impl<'a, 'b> Migrate<'a, 'b> for PackedGateValue<'a> {
 }
 
 
-#[derive(Clone, Debug, Default)]
-pub struct GateValueCell<'a>(Cell<PackedGateValue<'a>>);
-
-impl<'a> GateValueCell<'a> {
-    pub fn new(gv: GateValue<'a>) -> GateValueCell<'a> {
-        GateValueCell(Cell::new(gv.pack()))
-    }
-
-    pub fn get(&self) -> GateValue<'a> {
-        self.0.get().unpack()
-    }
-
-    pub fn set(&self, x: GateValue<'a>) {
-        self.0.set(x.pack());
-    }
-
-    pub fn is_valid(&self) -> bool {
-        match self.0.get().unpack() {
-            GateValue::Unset => false,
-            GateValue::Public(_) |
-            GateValue::Secret(_) => true,
-            GateValue::NeedsSecret(s) => !s.has_val(),
-            GateValue::Failed => true,
-        }
-    }
-}
-
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
     /// Cached output type of this gate.  Computed when the `Gate` is created.  The result is
@@ -2050,7 +2016,6 @@ pub struct Gate<'a> {
     pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
     pub label: Label<'a>,
-    pub value: Unhashed<GateValueCell<'a>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -2216,7 +2181,6 @@ impl<'a, 'b> Migrate<'a, 'b> for Gate<'a> {
             ty: v.visit(self.ty),
             kind: v.visit(self.kind),
             label: v.visit(self.label),
-            value: v.visit(self.value),
         }
     }
 }
@@ -2256,13 +2220,6 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 Call(f, ws, ss)
             },
         }
-    }
-}
-
-impl<'a, 'b> Migrate<'a, 'b> for GateValueCell<'a> {
-    type Output = GateValueCell<'b>;
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> GateValueCell<'b> {
-        GateValueCell(Cell::new(v.visit(self.0.into_inner())))
     }
 }
 
