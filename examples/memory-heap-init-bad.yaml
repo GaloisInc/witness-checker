@@ -1,6 +1,9 @@
 ## FLAGS: --validate-only
-# An example with a conditional branch and separate segments for each side.
-# This tests segment graphs that split and merge.
+# An example with `heap_init: true`, which changes the way the initial value of
+# r0 is computed.
+#
+# Note that due to the use of public PC, some of the register-value checks are
+# trivially true, and therefore don't get printed in the output.
 
 - [0,1,0,0]
 - [public-pc, heap_init]
@@ -20,8 +23,6 @@
   params:
     num_regs: 2
 
-  # Use a dummy initial memory segment to set the initial r0 to a specific
-  # value (the end address of the segment)
   init_mem:
     - start: 7
       len: 0
