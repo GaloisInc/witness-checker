@@ -9,6 +9,7 @@ use std::convert::TryFrom;
 use std::iter;
 use std::rc::Rc;
 use log::*;
+use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::gadget::bit_pack;
 use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
@@ -232,7 +233,8 @@ impl<'a> Memory<'a> {
 
         // Debug logging, showing the state before and after sorting.
         {
-            let mut cev = ContextEval::new(b.circuit().as_base());
+            let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+            let mut cev = ContextEval::new(b.circuit().as_base(), &mut ev);
             trace!("mem ops:");
             for (i, (port, &unused)) in ports.open(mh).iter().zip(unused.iter()).enumerate() {
                 if unused {

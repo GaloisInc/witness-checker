@@ -3,6 +3,7 @@
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
 use log::*;
+use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::circuit::CircuitTrait;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
@@ -96,7 +97,8 @@ impl<'a> Fetch<'a> {
 
         // Debug logging, showing the state before and after sorting.
         {
-            let mut cev = ContextEval::new(b.circuit().as_base());
+            let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+            let mut cev = ContextEval::new(b.circuit().as_base(), &mut ev);
             trace!("fetches:");
             for (i, port) in ports.open(mh).iter().enumerate() {
                 trace!(

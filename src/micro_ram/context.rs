@@ -3,9 +3,10 @@ use std::fmt;
 use std::mem;
 
 use zk_circuit_builder::eval::{self, CachingEvaluator};
-use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, CircuitExt};
+use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, CircuitExt, GateKind};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire, FromEval, EvaluatorExt};
+
 
 #[macro_export]
 macro_rules! wire_assert {
@@ -54,6 +55,7 @@ macro_rules! wire_bug_if {
     }};
 }
 
+
 pub struct SecretValue<T>(pub Option<T>);
 
 impl<T> SecretValue<T> {
@@ -99,94 +101,10 @@ impl<T: fmt::UpperHex> fmt::UpperHex for SecretValue<T> {
 }
 
 
-struct Cond<'a> {
-    c: TWire<'a, bool>,
-    state: CondState<'a>,
-}
-
-enum CondState<'a> {
-    /// The condition hasn't been checked yet.  If it fails, the callback will be used to produce
-    /// the error message.
-    Pending(Box<dyn FnOnce(&mut ContextEval<'a, '_>) -> String + 'a>),
-    /// The condition was migrated before it could be checked.  It hasn't been checked
-    /// (successfully) yet.  If it fails, the saved (incomplete) message will be printed.
-    PendingMigrated(Box<str>),
-    /// The condition was checked successfully.
-    Reported,
-    /// We're running in verifier mode, so no conditions can be checked.
-    VerifierMode,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-enum CondKind {
-    Assert,
-    Bug,
-}
-
-impl<'a> Cond<'a> {
-    pub fn new(
-        c: TWire<'a, bool>,
-        msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
-        is_prover: bool,
-    ) -> Cond<'a> {
-        let state = if is_prover {
-            CondState::Pending(Box::new(msg))
-        } else {
-            CondState::VerifierMode
-        };
-        Cond { c, state }
-    }
-
-    fn try_report(
-        mut self,
-        cev: &mut ContextEval<'a, '_>,
-        kind: CondKind,
-        triggered: Option<bool>,
-    ) -> Self {
-        self.state = match self.state {
-            CondState::Pending(msg_func) => match triggered {
-                Some(true) => {
-                    let msg = msg_func(cev);
-                    eprintln!("{}: {}", kind.prefix(), msg);
-                    CondState::Reported
-                },
-                Some(false) => CondState::Reported,
-                None => {
-                    let msg = msg_func(cev);
-                    eprintln!(
-                        "unable to determine validity (missing secret): {}: {}",
-                        kind.prefix(), msg,
-                    );
-                    CondState::PendingMigrated(msg.into_boxed_str())
-                },
-            },
-            CondState::PendingMigrated(msg) => match triggered {
-                Some(true) => {
-                    eprintln!("{}: {}", kind.prefix(), msg);
-                    CondState::Reported
-                },
-                Some(false) => CondState::Reported,
-                None => CondState::PendingMigrated(msg),
-            }
-            CondState::Reported => CondState::Reported,
-            CondState::VerifierMode => CondState::VerifierMode,
-        };
-        self
-    }
-}
-
-impl CondKind {
-    fn prefix(self) -> &'static str {
-        match self {
-            CondKind::Assert => "invalid trace",
-            CondKind::Bug => "found bug",
-        }
-    }
-}
-
+#[derive(Migrate)]
 pub struct Context<'a> {
-    asserts: RefCell<Vec<Cond<'a>>>,
-    bugs: RefCell<Vec<Cond<'a>>>,
+    asserts: RefCell<Vec<TWire<'a, bool>>>,
+    bugs: RefCell<Vec<TWire<'a, bool>>>,
     is_prover: bool,
 }
 
@@ -203,21 +121,7 @@ impl<'a> Context<'a> {
         mut self,
         c: &C,
     ) -> (Vec<TWire<'a, bool>>, Vec<TWire<'a, bool>>) {
-        let mut cev = ContextEval::new(c.as_base());
-
-        let assert_conds = mem::take(&mut *self.asserts.borrow_mut());
-        let asserts = assert_conds.into_iter().map(|cond| {
-            let triggered = cev.assert_triggered(cond.c);
-            cond.try_report(&mut cev, CondKind::Assert, triggered).c
-        }).collect();
-
-        let bug_conds = mem::take(&mut *self.bugs.borrow_mut());
-        let bugs = bug_conds.into_iter().map(|cond| {
-            let triggered = cev.bug_triggered(cond.c);
-            cond.try_report(&mut cev, CondKind::Bug, triggered).c
-        }).collect();
-
-        (asserts, bugs)
+        (self.asserts.into_inner(), self.bugs.into_inner())
     }
 
     /// Mark the execution as invalid if `cond` is false.  A failed assertion represents
@@ -226,9 +130,26 @@ impl<'a> Context<'a> {
         &self,
         b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
-        msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
+        msg: impl Fn(&mut ContextEval<'a, '_>) -> String + Copy + 'a,
     ) {
-        self.asserts.borrow_mut().push(Cond::new(cond, msg, self.is_prover));
+        if let GateKind::Lit(..) = cond.repr.kind {
+            let val = eval::LiteralEvaluator.eval_typed(b.circuit(), cond).unwrap();
+            if !val {
+                let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+                let mut cev = ContextEval::new(b.circuit().as_base(), &mut ev);
+                eprintln!("warning: trace is trivially invalid: {}", msg(&mut cev));
+            }
+        } else {
+            let hook = b.circuit().alloc_eval_hook_fn(move |c, ev, _w, bits| {
+                let val = !bits.is_zero();
+                if !val {
+                    let mut cev = ContextEval::new(c, ev);
+                    eprintln!("invalid trace: {}", msg(&mut cev));
+                }
+            });
+            cond.repr.eval_hook.set(Some(hook));
+        }
+        self.asserts.borrow_mut().push(cond);
     }
 
     /// Signal an error condition of `cond` is true.  This should be used for situations like
@@ -237,9 +158,26 @@ impl<'a> Context<'a> {
         &self,
         b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
-        msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
+        msg: impl Fn(&mut ContextEval<'a, '_>) -> String + Copy + 'a,
     ) {
-        self.bugs.borrow_mut().push(Cond::new(cond, msg, self.is_prover));
+        if let GateKind::Lit(..) = cond.repr.kind {
+            let val = eval::LiteralEvaluator.eval_typed(b.circuit(), cond).unwrap();
+            if val {
+                let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+                let mut cev = ContextEval::new(b.circuit().as_base(), &mut ev);
+                eprintln!("warning: found trivial bug: {}", msg(&mut cev));
+            }
+        } else {
+            let hook = b.circuit().alloc_eval_hook_fn(move |c, ev, _w, bits| {
+                let val = !bits.is_zero();
+                if val {
+                    let mut cev = ContextEval::new(c, ev);
+                    eprintln!("found bug: {}", msg(&mut cev));
+                }
+            });
+            cond.repr.eval_hook.set(Some(hook));
+        }
+        self.bugs.borrow_mut().push(cond);
     }
 
     pub fn when<R, B: Builder<'a>>(
@@ -252,51 +190,6 @@ impl<'a> Context<'a> {
     }
 }
 
-impl<'a, 'b> Migrate<'a, 'b> for Context<'a> {
-    type Output = Context<'b>;
-
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(mut self, v: &mut V) -> Context<'b> {
-
-        let asserts = mem::take(&mut self.asserts).into_inner().into_iter().map(|cond| {
-            let mut cev = ContextEval::new(v.old_circuit());
-            let triggered = cev.assert_triggered(cond.c);
-            let cond = cond.try_report(&mut cev, CondKind::Assert, triggered);
-            v.visit(cond)
-        }).collect();
-
-        let bugs = mem::take(&mut self.bugs).into_inner().into_iter().map(|cond| {
-            let mut cev = ContextEval::new(v.old_circuit());
-            let triggered = cev.bug_triggered(cond.c);
-            let cond = cond.try_report(&mut cev, CondKind::Bug, triggered);
-            v.visit(cond)
-        }).collect();
-
-        Context {
-            asserts: RefCell::new(asserts),
-            bugs: RefCell::new(bugs),
-            is_prover: self.is_prover,
-        }
-    }
-}
-
-impl<'a, 'b> Migrate<'a, 'b> for Cond<'a> {
-    type Output = Cond<'b>;
-
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Cond<'b> {
-        Cond {
-            c: v.visit(self.c),
-            state: match self.state {
-                // The case that contains a `+ 'a` closure can't be migrated.
-                CondState::Pending(_) => panic!("can't migrate a Cond in CondState::Pending"),
-                // The remaining cases can be migrated to `'b` lifetime by deconstructing and
-                // reconstructing them.
-                CondState::PendingMigrated(msg) => CondState::PendingMigrated(msg),
-                CondState::Reported => CondState::Reported,
-                CondState::VerifierMode => CondState::VerifierMode,
-            },
-        }
-    }
-}
 
 pub struct ContextWhen<'a, 'b, B> {
     cx: &'b Context<'a>,
@@ -319,7 +212,7 @@ impl<'a, 'b, B: Builder<'a>> ContextWhen<'a, 'b, B> {
         &self,
         b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
-        msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
+        msg: impl Fn(&mut ContextEval<'a, '_>) -> String + Copy + 'a,
     ) {
         self.cx.assert(b, self.assert_cond(cond), msg);
     }
@@ -328,7 +221,7 @@ impl<'a, 'b, B: Builder<'a>> ContextWhen<'a, 'b, B> {
         &self,
         b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
-        msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
+        msg: impl Fn(&mut ContextEval<'a, '_>) -> String + Copy + 'a,
     ) {
         self.cx.bug_if(b, self.bug_cond(cond), msg);
     }
@@ -346,31 +239,24 @@ impl<'a, 'b, B: Builder<'a>> ContextWhen<'a, 'b, B> {
 
 pub struct ContextEval<'a, 'b> {
     c: &'b CircuitBase<'a>,
+    ev: &'b mut (dyn eval::EvaluatorObj<'a> + 'b),
 }
 
 impl<'a, 'b> ContextEval<'a, 'b> {
-    pub fn new(c: &'b CircuitBase<'a>) -> ContextEval<'a, 'b> {
-        ContextEval {
-            c,
-        }
+    pub fn new(
+        c: &'b CircuitBase<'a>,
+        ev: &'b mut (dyn eval::EvaluatorObj<'a> + 'b),
+    ) -> ContextEval<'a, 'b> {
+        ContextEval { c, ev }
     }
 }
 
 impl<'a> ContextEval<'a, '_> {
-    fn eval_raw<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> Option<T> {
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
-        ev.eval_typed(self.c, w)
+    fn eval_raw<T: FromEval<'a>>(&mut self, w: TWire<'a, T>) -> Option<T> {
+        self.ev.eval_typed(self.c, w)
     }
 
-    pub fn eval<T: FromEval<'a>>(&self, w: TWire<'a, T>) -> SecretValue<T> {
+    pub fn eval<T: FromEval<'a>>(&mut self, w: TWire<'a, T>) -> SecretValue<T> {
         SecretValue(self.eval_raw(w))
-    }
-
-    fn assert_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        self.eval_raw(cond).map(|ok| !ok)
-    }
-
-    fn bug_triggered(&self, cond: TWire<'a, bool>) -> Option<bool> {
-        self.eval_raw(cond)
     }
 }
