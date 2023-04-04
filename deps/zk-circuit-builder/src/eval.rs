@@ -172,6 +172,30 @@ pub trait SecretEvaluator<'a> {
     const REVEAL_SECRETS: bool;
 }
 
+/// Object-safe version of `Evaluator`.
+pub trait EvaluatorObj<'a> {
+    fn eval_wire(&mut self, c: &CircuitBase<'a>, w: Wire<'a>) -> EvalResult<'a>;
+    fn eval_wire_bits(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>>;
+}
+
+impl<'a, E: Evaluator<'a>> EvaluatorObj<'a> for E {
+    fn eval_wire(&mut self, c: &CircuitBase<'a>, w: Wire<'a>) -> EvalResult<'a> {
+        <Self as Evaluator>::eval_wire(self, c, w)
+    }
+
+    fn eval_wire_bits(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
+        <Self as Evaluator>::eval_wire_bits(self, c, w)
+    }
+}
+
 
 /// Public evaluation mode.  Secret values are always ignored, even when they are available.
 #[derive(Clone, Copy, Debug, Default, Migrate)]
@@ -358,6 +382,9 @@ where S: SecretEvaluator<'a> + Default {
         for w in order {
             let result = eval_gate_inner(c, self, w.ty, w.kind);
             let (bits, sec) = result?;
+            if let Some(hook) = w.eval_hook.get() {
+                (hook.0)(c, self, w, bits)
+            }
             self.cache.insert(w, (bits, sec));
         }
 
@@ -798,7 +825,7 @@ fn eval_call<'a>(
     }
 
     let mut inner_eval = outer_ecx.enter_function(func, arg_bits, secrets);
-    inner_eval.eval_wire_bits(c, func.result_wire)
+    Evaluator::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
 
@@ -809,7 +836,7 @@ pub fn eval_gate<'a, S: SecretEvaluator<'a> + Default>(
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let mut ev = CachingEvaluator::<S>::new();
     for w in circuit::gate_deps(gk) {
-        let _ = ev.eval_wire(c, w)?;
+        let _ = Evaluator::eval_wire(&mut ev, c, w)?;
     }
     eval_gate_inner(c, &ev, ty, gk)
 }
@@ -830,7 +857,7 @@ pub fn eval_wire<'a, S: SecretEvaluator<'a> + Default>(
     w: Wire<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let mut ev = CachingEvaluator::<S>::new();
-    ev.eval_wire_bits(c, w)
+    Evaluator::eval_wire_bits(&mut ev, c, w)
 }
 
 pub fn eval_wire_public<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
