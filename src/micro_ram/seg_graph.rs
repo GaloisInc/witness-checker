@@ -769,7 +769,7 @@ impl<'a> SegGraphBuilder<'a> {
                 count = b.add(count, b.cast(state.live));
                 cx.when(b, state.live, |cx| {
                     wire_assert!(
-                        cx, b.eq(cbn.secret.wire().clone(), state),
+                        cx, b, b.eq(cbn.secret.wire().clone(), state),
                         "CycleBreak {} incoming edge {:?} is live, but state doesn't match {:?}",
                         i, pred.live, pred.src,
                     );
@@ -779,7 +779,7 @@ impl<'a> SegGraphBuilder<'a> {
             // If the CycleBreakNode's secret state is live, then at least one input must be live.
             cx.when(b, cbn.secret.wire().live, |cx| {
                 wire_assert!(
-                    cx, b.ne(count, b.lit(0)),
+                    cx, b, b.ne(count, b.lit(0)),
                     "CycleBreak {} has live output but no live inputs",
                     i,
                 );
@@ -838,7 +838,7 @@ impl<'a> SegGraphBuilder<'a> {
             };
 
             wire_assert!(
-                cx, ok,
+                cx, b, ok,
                 "segment {} ({}) has {} live successors (expected 0{})",
                 i, cx.eval(segment_live).map(|b| if b { "live" } else { "dead" }),
                 cx.eval(count), if cx.eval(segment_live).0 != Some(false) { " or 1" } else { "" },

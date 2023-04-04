@@ -70,7 +70,7 @@ pub fn calc_step<'a>(
             // Assert that we're not jumping to a tainted location.
             cx.when(b, b.or(b.or(is_jmp, is_cjmp), is_cnjmp), |cx| {
                 wire_assert!(
-                    cx, b.eq(ty_joined, b.lit(BOTTOM)),
+                    cx, b, b.eq(ty_joined, b.lit(BOTTOM)),
                     "Invalid jump. Cannot jump to tainted destination {} with label {} at cycle {}",
                     cx.eval(concrete_y), cx.eval(ty_joined), idx,
                 );
@@ -79,7 +79,7 @@ pub fn calc_step<'a>(
             // Assert that the conditional is not tainted.
             cx.when(b, b.or(is_cjmp, is_cnjmp), |cx| {
                 wire_assert!(
-                    cx, b.eq(tx_joined, b.lit(BOTTOM)),
+                    cx, b, b.eq(tx_joined, b.lit(BOTTOM)),
                     "Invalid jump. Cannot branch on tainted data with label {} at cycle {}",
                     cx.eval(tx_joined), idx,
                 );
@@ -203,7 +203,7 @@ fn convert_to_label<'a,'b>(
 
     // Check that the label is valid by ensuring the casted label is unchanged.
     wire_assert!(
-        cx, b.eq(label, b.cast(l)),
+        cx, b, b.eq(label, b.cast(l)),
         "Invalid tainted label {} at cycle {}",
         cx.eval(label), idx,
     );
@@ -353,7 +353,7 @@ pub fn check_state<'a>(
 
         for (i, (&v_calc, &v_new)) in calc_regs.iter().zip(trace_regs.iter()).enumerate() {
             wire_assert!(
-                cx, b.eq(v_new, v_calc),
+                cx, b, b.eq(v_new, v_calc),
                 "cycle {} sets tainted label of reg {} to {:?} (expected {:?})",
                 cycle, i, cx.eval(v_new), cx.eval(v_calc),
             );
@@ -369,7 +369,7 @@ pub fn check_first<'a>(
     if let Some(init_regs) = init_regs.try_get() {
         for (i, &r) in init_regs.iter().enumerate() {
             wire_assert!(
-                cx, b.eq(r, b.lit(WORD_BOTTOM)),
+                cx, b, b.eq(r, b.lit(WORD_BOTTOM)),
                 "initial tainted r{} has value {:?} (expected {:?})",
                 i, cx.eval(r), WORD_BOTTOM,
             );
@@ -402,7 +402,7 @@ pub fn check_step<'a>(
                     // the sink. Equivalent to `not . canFlowTo`.
                     let mt = b.lit(MAYBE_TAINTED);
                     wire_bug_if!(
-                        cx, b.and(b.and(b.ne(xt, y), b.ne(xt, b.lit(BOTTOM))), b.and(b.ne(xt, mt), b.ne(y, mt))),
+                        cx, b, b.and(b.and(b.ne(xt, y), b.ne(xt, b.lit(BOTTOM))), b.and(b.ne(xt, mt), b.ne(y, mt))),
                         "leak of tainted data from register {:x} (byte {}) with label {} does not match output channel label {} on cycle {},{}",
                         cx.eval(instr.op1), i, cx.eval(xt), cx.eval(y), seg_idx, idx,
                     );
@@ -437,7 +437,7 @@ pub fn check_step_mem<'a, 'b>(
             let width = mem_port.width;
             // Compare the lowest `width` labels.
             wire_assert!(
-                cx, eq_word_labels_with_width(b, mem_port.width, port_shifted, expect_tainted),
+                cx, b, eq_word_labels_with_width(b, mem_port.width, port_shifted, expect_tainted),
                 "segment {}: step {}'s mem port (op {:?}, offset {:?}, width {:?}) has tainted {:?} expected {:?} ({:?})",
                 seg_idx, idx, cx.eval(op),
                 cx.eval(offset), cx.eval(width),
@@ -463,7 +463,7 @@ pub fn check_read_memports<'a, 'b>(
         let addr2 = port2.addr;
         let cycle2 = port2.cycle;
         wire_assert!(
-            cx, b.eq(tainted1, tainted2),
+            cx, b, b.eq(tainted1, tainted2),
             "tainted read from {:#x} on cycle {} produced {:?} (expected {:?})",
             cx.eval(addr2), cx.eval(cycle2),
             cx.eval(tainted2), cx.eval(tainted1),
@@ -487,7 +487,7 @@ pub fn check_write_memports<'a, 'b>(
         let addr2 = port2.addr;
         let cycle2 = port2.cycle;
         wire_assert!(
-            cx, eq_packed_labels_except_at_offset(b, *offset2, width2, tainted1, tainted2),
+            cx, b, eq_packed_labels_except_at_offset(b, *offset2, width2, tainted1, tainted2),
             "tainted write from {:x} on cycle {} modified outside width {:?}: 0x{:?} != 0x{:?}",
             cx.eval(addr2), cx.eval(cycle2),
             cx.eval(width2),
