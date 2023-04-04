@@ -1411,18 +1411,22 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
             return e;
         }
 
-        let (bits, secret) = match self.ev.get_mut().eval_wire_bits(self.circuit, w) {
-            Ok(x) => x,
-            Err(e) => {
-                // Losing track of the value for this wire will leave us unable to construct the
-                // witness.  We can't simply choose not to erase the wire because that would leave
-                // the `GateKind` visible to later rewrite passes, which could cause the prover and
-                // verifier circuits to diverge.
-                panic!("failed to evaluate erased wire {:?}: {:?}", w, e);
-            },
+        let ed = if self.circuit.is_prover() {
+            let (bits, secret) = match self.ev.get_mut().eval_wire_bits(self.circuit, w) {
+                Ok(x) => x,
+                Err(e) => {
+                    // Losing track of the value for this wire will leave us unable to construct
+                    // the witness.  We can't simply choose not to erase the wire because that
+                    // would leave the `GateKind` visible to later rewrite passes, which could
+                    // cause the prover and verifier circuits to diverge.
+                    panic!("failed to evaluate erased wire {:?}: {:?}", w, e);
+                },
+            };
+            ErasedData::new(w.ty, bits, secret)
+        } else {
+            ErasedData::new_unset(w.ty)
         };
-
-        let ed = self.circuit.arena().alloc(ErasedData::new(w.ty, bits, secret));
+        let ed = self.circuit.arena().alloc(ed);
         let e = self.circuit.erased(Erased(ed));
         self.erased_map.insert(w, e);
         self.erased_order.push((w, e));
@@ -2756,6 +2760,13 @@ impl<'a> ErasedData<'a> {
         ErasedData {
             ty,
             value: GateValue::from_bits(bits, secret).pack(),
+        }
+    }
+
+    pub fn new_unset(ty: Ty<'a>) -> ErasedData<'a> {
+        ErasedData {
+            ty,
+            value: GateValue::Unset.pack(),
         }
     }
 
