@@ -328,16 +328,16 @@ impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
 
 impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
     pub fn with_boxed_secret(secret: Box<dyn Any>) -> Self {
-        Self::with_secret_cow(CowBox::from(secret))
+        Self::with_cow_secret(CowBox::from(secret))
     }
 }
 
 impl<'a, 's, S: Default> CachingEvaluator<'a, 's, S> {
     pub fn with_secret(secret: &'s dyn Any) -> Self {
-        Self::with_secret_cow(CowBox::from(secret))
+        Self::with_cow_secret(CowBox::from(secret))
     }
 
-    fn with_secret_cow(secret: CowBox<'s, dyn Any>) -> Self {
+    pub fn with_cow_secret(secret: CowBox<'s, dyn Any>) -> Self {
         CachingEvaluator {
             secret_eval: S::default(),
             secret,
