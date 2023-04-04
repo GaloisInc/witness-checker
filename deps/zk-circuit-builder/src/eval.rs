@@ -131,13 +131,8 @@ impl Value {
     }
 }
 
-pub trait Evaluator<'a>: SecretEvaluator<'a> {
-    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
-        let (bits, sec) = self.eval_wire_bits(c, w)?;
-        debug_assert!(Self::REVEAL_SECRETS || !sec);
-        let val = Value::from_bits(w.ty, bits);
-        Ok(val)
-    }
+pub trait Evaluator<'a> {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a>;
 
     fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
         &mut self,
@@ -196,6 +191,20 @@ impl<'a, E: Evaluator<'a>> EvaluatorObj<'a> for E {
     }
 }
 
+impl<'a> Evaluator<'a> for dyn EvaluatorObj<'a> + '_ {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        EvaluatorObj::eval_wire(self, c.as_base(), w)
+    }
+
+    fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
+        &mut self,
+        c: &C,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
+        EvaluatorObj::eval_wire_bits(self, c.as_base(), w)
+    }
+}
+
 
 /// Public evaluation mode.  Secret values are always ignored, even when they are available.
 #[derive(Clone, Copy, Debug, Default, Migrate)]
@@ -243,6 +252,13 @@ impl<'a> SecretEvaluator<'a> for LiteralEvaluator {
 }
 
 impl<'a> Evaluator<'a> for LiteralEvaluator {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        let (bits, sec) = Evaluator::eval_wire_bits(self, c, w)?;
+        debug_assert!(!sec);
+        let val = Value::from_bits(w.ty, bits);
+        Ok(val)
+    }
+
     fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
         &mut self,
         c: &C,
@@ -361,6 +377,13 @@ impl<'a, 's, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a
 
 impl<'a, 's, S> Evaluator<'a> for CachingEvaluator<'a, 's, S>
 where S: SecretEvaluator<'a> + Default {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        let (bits, sec) = Evaluator::eval_wire_bits(self, c, w)?;
+        debug_assert!(S::REVEAL_SECRETS || !sec);
+        let val = Value::from_bits(w.ty, bits);
+        Ok(val)
+    }
+
     fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
         &mut self,
         c: &C,
