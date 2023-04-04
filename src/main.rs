@@ -25,6 +25,7 @@ use cheesecloth::micro_ram::mem::EquivSegments;
 use cheesecloth::micro_ram::types::{
     VersionedMultiExec, MultiExec, RamState, Segment, TraceChunk, WORD_BOTTOM,
 };
+use cheesecloth::micro_ram::witness::MultiExecWitness;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -271,6 +272,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         });
         expand_trace(&mut multi_exec.inner, factor);
     }
+
+    let multi_exec_witness = MultiExecWitness::from_raw(&multi_exec.inner);
 
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
 
