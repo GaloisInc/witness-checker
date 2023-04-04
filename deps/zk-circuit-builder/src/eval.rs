@@ -432,9 +432,6 @@ where S: SecretEvaluator<'a> + Default {
                 self.get_value(w).map(|(b, _)| b)
             }).collect::<Result<Vec<_>, _>>()?;
             let bits = s.init(c, &*self.secret, &dep_vals);
-            if !self.in_function {
-                s.set(bits);
-            }
             return Ok(bits);
         }
 
