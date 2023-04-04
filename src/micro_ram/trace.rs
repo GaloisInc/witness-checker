@@ -85,7 +85,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             let init_state_pc = init_state.pc;
             cx.when(b, init_state.live, |cx| {
                 wire_assert!(
-                    cx, b.eq(init_state_pc, b.lit(init_pc)),
+                    cx, b, b.eq(init_state_pc, b.lit(init_pc)),
                     "segment {}: initial pc is {:x} (expected {:x})",
                     idx, cx.eval(init_state_pc), init_pc,
                 );
@@ -110,7 +110,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
                     let pc = prev_state.pc;
                     cx.when(b, prev_state.live, |cx| {
                         wire_assert!(
-                            cx, b.eq(addr, pc),
+                            cx, b, b.eq(addr, pc),
                             "segment {}: fetch in slot {} accesses address {:x} (expected {:x})",
                             idx, i, cx.eval(addr), cx.eval(pc),
                         );
@@ -399,7 +399,7 @@ fn calc_step<'a>(
         if opcode == Some(Opcode::Advise) {
             if let Some(max) = ev.eval_typed(b.circuit(), y) {
                 wire_assert!(
-                    cx, b.le(advice, b.lit(max)),
+                    cx, b, b.le(advice, b.lit(max)),
                     "step {}: advice value {} is out of range (expected <= {})",
                     idx, cx.eval(advice), max,
                 );
@@ -487,7 +487,7 @@ fn check_state<'a>(
 
     for (i, (&v_calc, &v_new)) in calc_s.regs.iter().zip(trace_s.regs.iter()).enumerate() {
         wire_assert!(
-            cx, b.eq(v_new, v_calc),
+            cx, b, b.eq(v_new, v_calc),
             "segment {}: cycle {} sets reg {} to {} (expected {})",
             seg_idx, cycle, i, cx.eval(v_new), cx.eval(v_calc),
         );
@@ -496,7 +496,7 @@ fn check_state<'a>(
     let trace_pc = trace_s.pc;
     let calc_pc = calc_s.pc;
     wire_assert!(
-        cx, b.eq(trace_pc, calc_pc),
+        cx, b, b.eq(trace_pc, calc_pc),
         "segment {}: cycle {} sets pc to {} (expected {})",
         seg_idx, cycle, cx.eval(trace_pc), cx.eval(calc_pc),
     );
@@ -505,7 +505,7 @@ fn check_state<'a>(
     let trace_cycle = b.lit(cycle + 1);
     let calc_cycle = calc_s.cycle;
     wire_assert!(
-        cx, b.eq(trace_cycle, calc_cycle),
+        cx, b, b.eq(trace_cycle, calc_cycle),
         "segment {}: cycle {} sets cycle to {} (expected {})",
         seg_idx, cycle, cx.eval(trace_cycle), cx.eval(calc_cycle),
     );
@@ -549,7 +549,7 @@ fn check_step<'a>(
 
         cx.when(b, b.and(is_mem, live), |cx| {
             wire_assert!(
-                cx, b.eq(mem_port.addr, addr),
+                cx, b, b.eq(mem_port.addr, addr),
                 "segment {}: step {}'s mem port has address {} (expected {})",
                 seg_idx, idx, cx.eval(mem_port.addr), cx.eval(addr),
             );
@@ -561,7 +561,7 @@ fn check_step<'a>(
             for &(flag, op) in flag_ops.iter() {
                 cx.when(b, flag, |cx| {
                     wire_assert!(
-                        cx, b.eq(mem_port.op, b.lit(op)),
+                        cx, b, b.eq(mem_port.op, b.lit(op)),
                         "segment {}: step {}'s mem port has op kind {} (expected {}, {:?})",
                         seg_idx, idx, cx.eval(mem_port.op.repr), op as u8, op,
                     );
@@ -574,7 +574,7 @@ fn check_step<'a>(
         for w in MemOpWidth::iter() {
             cx.when(b, b.and(b.eq(instr.opcode, b.lit(w.store_opcode() as u8)), live), |cx| {
                 wire_assert!(
-                    cx, b.eq(mem_port.width, b.lit(w)),
+                    cx, b, b.eq(mem_port.width, b.lit(w)),
                     "segment {}: step {}'s mem port has width {:?} (expected {:?})",
                     seg_idx, idx, cx.eval(mem_port.width), w,
                 );
@@ -582,7 +582,7 @@ fn check_step<'a>(
                 let stored_value = extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w);
                 let x_low = extract_low_bytes(b, x, w);
                 wire_assert!(
-                    cx, b.eq(stored_value, x_low),
+                    cx, b, b.eq(stored_value, x_low),
                     "segment {}: step {}'s mem port stores value {} at {:x} (expected value {})",
                     seg_idx, idx, cx.eval(stored_value), cx.eval(mem_port.addr), cx.eval(x),
                 );
@@ -591,7 +591,7 @@ fn check_step<'a>(
 
         cx.when(b, b.and(is_poison, live), |cx| {
             wire_assert!(
-                cx, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
+                cx, b, b.eq(mem_port.width, b.lit(MemOpWidth::W8)),
                 "segment {}: step {}'s mem port has width {:?} (expected {:?})",
                 seg_idx, idx, cx.eval(mem_port.width), MemOpWidth::W8,
             );
@@ -602,7 +602,7 @@ fn check_step<'a>(
         // invalid.
         let expect_cycle = b.mux(b.and(is_mem, live), cycle, b.lit(MEM_PORT_UNUSED_CYCLE));
         wire_assert!(
-            cx, b.eq(mem_port.cycle, expect_cycle),
+            cx, b, b.eq(mem_port.cycle, expect_cycle),
             "segment {}: step {} mem port cycle number is {} (expected {}; mem op? {})",
             seg_idx, idx, cx.eval(mem_port.cycle), cx.eval(expect_cycle), cx.eval(is_mem),
         );

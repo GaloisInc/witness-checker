@@ -226,7 +226,7 @@ impl<'a> Memory<'a> {
             }
 
             let (packed_ports, sorted) = sort.take().finish(b);
-            wire_assert!(cx = &cx.open(mh), sorted, "memory op sorting failed");
+            wire_assert!(cx = &cx.open(mh), b, sorted, "memory op sorting failed");
             packed_ports.iter().map(|pmp| pmp.unpack(b)).collect::<Vec<_>>()
         }, mh);
 
@@ -516,7 +516,7 @@ impl<'a> CyclePorts<'a> {
 
                 // FIXME: temporary assertion until the above is implemented
                 wire_assert!(
-                    cx, b.eq(smp.mp.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
+                    cx, b, b.eq(smp.mp.cycle, b.lit(MEM_PORT_UNUSED_CYCLE)),
                     "block {} must be unused, as it has no candidate users",
                     i,
                 );
@@ -544,7 +544,7 @@ impl<'a> CyclePorts<'a> {
                 let max = smp.max_candidate_users;
                 let mask = smp.public_non_users;
                 wire_assert!(
-                    cx, acc,
+                    cx, b, acc,
                     "block {} user index {} is invalid (max {}, excluded mask {:b})",
                     i, cx.eval(user), max, mask,
                 );
@@ -587,7 +587,7 @@ fn check_mem<'a>(
     // Alignment: `addr` must be a multiple of `width.bytes()`.
     let misalign = addr_misalignment(cx, b, port.addr, port.width);
     wire_assert!(
-        cx, b.eq(misalign, b.lit(ByteOffset::new(0))),
+        cx, b, b.eq(misalign, b.lit(ByteOffset::new(0))),
         "unaligned access of {:x} with width {:?} on cycle {}",
         cx.eval(port.addr), cx.eval(port.width), cx.eval(port.cycle),
     );
@@ -600,14 +600,14 @@ fn check_mem<'a>(
         cx.when(b, b.eq(prev.op, b.lit(MemOpKind::Poison)), |cx| {
             // Poison -> Poison is invalid.
             wire_assert!(
-                cx, b.not(is_poison),
+                cx, b, b.not(is_poison),
                 "double poison of address {:x} on cycle {}",
                 cx.eval(port.addr), cx.eval(port.cycle),
             );
 
             // Poison -> Read/Write is a bug.
             wire_bug_if!(
-                cx, b.not(is_poison),
+                cx, b, b.not(is_poison),
                 "access of poisoned address {:x} on cycle {}",
                 cx.eval(port.addr), cx.eval(port.cycle),
             );
@@ -623,7 +623,7 @@ fn check_mem<'a>(
     cx.when(b, b.and(is_read, active), |cx| {
         // Reads must produce the same value as the previous operation.
         wire_assert!(
-            cx, b.eq(port.value, prev_value),
+            cx, b, b.eq(port.value, prev_value),
             "read from {:x} on cycle {} produced {} (expected {})",
             cx.eval(port.addr), cx.eval(port.cycle),
             cx.eval(port.value), cx.eval(prev_value),
@@ -652,7 +652,7 @@ fn check_mem<'a>(
             );
         }
         wire_assert!(
-            cx, mostly_eq_acc,
+            cx, b, mostly_eq_acc,
             "{:?} to {:x} on cycle {} modified outside width {:?}: 0x{:x} != 0x{:x}",
             cx.eval(port.op), cx.eval(port.addr), cx.eval(port.cycle), cx.eval(port.width),
             cx.eval(port.value), cx.eval(prev_value),

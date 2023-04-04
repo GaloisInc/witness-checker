@@ -9,10 +9,10 @@ use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire, FromEval, Evalua
 
 #[macro_export]
 macro_rules! wire_assert {
-    ($cx:ident, $cond:expr, $($args:tt)*) => {
+    ($cx:ident, $b:expr, $cond:expr, $($args:tt)*) => {
         {
             let cond = $cond;
-            $cx.assert(cond, move |$cx| {
+            $cx.assert($b, cond, move |$cx| {
                 let msg = format!("{}", format_args!($($args)*));
                 // Suppress unused variable warning regarding $cx, without disabling the warning
                 // for the entire block.
@@ -22,23 +22,23 @@ macro_rules! wire_assert {
         }
     };
 
-    ($cx:ident = $cx_expr:expr, $cond:expr, $($args:tt)*) => {{
+    ($cx:ident = $cx_expr:expr, $b:expr, $cond:expr, $($args:tt)*) => {{
         let $cx = $cx_expr;
-        wire_assert!($cx, $cond, $($args)*);
+        wire_assert!($cx, $b, $cond, $($args)*);
     }};
 
-    (& $cx:ident, $cond:expr, $($args:tt)*) => {{
+    (& $cx:ident, $b:expr, $cond:expr, $($args:tt)*) => {{
         let $cx = &$cx;
-        wire_assert!($cx, $cond, $($args)*);
+        wire_assert!($cx, $b, $cond, $($args)*);
     }};
 }
 
 #[macro_export]
 macro_rules! wire_bug_if {
-    ($cx:ident, $cond:expr, $($args:tt)*) => {
+    ($cx:ident, $b:expr, $cond:expr, $($args:tt)*) => {
         {
             let cond = $cond;
-            $cx.bug_if(cond, move |$cx| {
+            $cx.bug_if($b, cond, move |$cx| {
                 let msg = format!("{}", format_args!($($args)*));
                 // Suppress unused variable warning regarding $cx, without disabling the warning
                 // for the entire block.
@@ -48,9 +48,9 @@ macro_rules! wire_bug_if {
         }
     };
 
-    (& $cx:ident, $cond:expr, $($args:tt)*) => {{
+    (& $cx:ident, $b:expr, $cond:expr, $($args:tt)*) => {{
         let $cx = &$cx;
-        wire_bug_if!($cx, $cond, $($args)*);
+        wire_bug_if!($cx, $b, $cond, $($args)*);
     }};
 }
 
@@ -224,6 +224,7 @@ impl<'a> Context<'a> {
     /// misbehavior on the part of the prover.
     pub fn assert(
         &self,
+        b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
         msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
     ) {
@@ -234,6 +235,7 @@ impl<'a> Context<'a> {
     /// buffer overflows, which indicate a bug in the subject program.
     pub fn bug_if(
         &self,
+        b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
         msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
     ) {
@@ -315,18 +317,20 @@ impl<'a, 'b, B: Builder<'a>> ContextWhen<'a, 'b, B> {
 
     pub fn assert(
         &self,
+        b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
         msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
     ) {
-        self.cx.assert(self.assert_cond(cond), msg);
+        self.cx.assert(b, self.assert_cond(cond), msg);
     }
 
     pub fn bug_if(
         &self,
+        b: &impl Builder<'a>,
         cond: TWire<'a, bool>,
         msg: impl FnOnce(&mut ContextEval<'a, '_>) -> String + 'a,
     ) {
-        self.cx.bug_if(self.bug_cond(cond), msg);
+        self.cx.bug_if(b, self.bug_cond(cond), msg);
     }
 
     pub fn when<R, B2: Builder<'a>>(

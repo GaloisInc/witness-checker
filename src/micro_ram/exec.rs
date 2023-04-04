@@ -216,7 +216,7 @@ fn check_last<'a>(
     let r0 = s.regs[0];
     if expect_zero {
         wire_assert!(
-            cx, b.eq(r0, b.lit(0)),
+            cx, b, b.eq(r0, b.lit(0)),
             "final r0 is {} (expected {})",
             cx.eval(r0), 0,
         );

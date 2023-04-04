@@ -121,13 +121,13 @@ fn check_first<'a>(
     let _g = b.scoped_label("check_first");
     let pc = s.pc;
     wire_assert!(
-        cx, b.eq(pc, b.lit(0)),
+        cx, b, b.eq(pc, b.lit(0)),
         "initial pc is {} (expected {})",
         cx.eval(pc), 0,
     );
     for (i, &r) in s.regs.iter().enumerate().skip(1) {
         wire_assert!(
-            cx, b.eq(r, b.lit(0)),
+            cx, b, b.eq(r, b.lit(0)),
             "initial r{} has value {} (expected {})",
             i, cx.eval(r), 0,
         );

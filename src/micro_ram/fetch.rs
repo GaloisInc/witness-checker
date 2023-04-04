@@ -90,7 +90,7 @@ impl<'a> Fetch<'a> {
             }
 
             let (packed_ports, sorted) = sort.take().finish(b);
-            wire_assert!(cx = &cx.open(mh), sorted, "instruction fetch sorting failed");
+            wire_assert!(cx = &cx.open(mh), b, sorted, "instruction fetch sorting failed");
             packed_ports.iter().map(|pfp| pfp.unpack(b)).collect::<Vec<_>>()
         }, mh);
 
@@ -173,7 +173,7 @@ fn check_first_fetch<'a>(
 ) {
     let _g = b.scoped_label("fetch/check_first");
     wire_assert!(
-        cx, port.write,
+        cx, b, port.write,
         "uninit fetch from program address {:x}",
         cx.eval(port.addr),
     );
@@ -188,12 +188,12 @@ fn check_fetch<'a>(
     let _g = b.scoped_label("fetch/check");
     cx.when(b, b.not(port2.write), |cx| {
         wire_assert!(
-            cx, b.eq(port2.addr, port1.addr),
+            cx, b, b.eq(port2.addr, port1.addr),
             "fetch from uninitialized program address {:x}",
             cx.eval(port2.addr),
         );
         wire_assert!(
-            cx, b.eq(port2.instr, port1.instr),
+            cx, b, b.eq(port2.instr, port1.instr),
             "fetch from program address {:x} produced wrong instruction",
             cx.eval(port2.addr),
         );
