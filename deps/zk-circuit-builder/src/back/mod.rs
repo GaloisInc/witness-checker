@@ -125,7 +125,7 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
-                self.backend.enforce_true(c, accepted);
+                self.backend.enforce_true(c, ev, accepted);
 
                 // Write files.
                 self.backend.finish().unwrap();
@@ -211,7 +211,7 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(c, accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let ir_builder = self.backend.finish();
 
                 eprintln!();
@@ -294,7 +294,7 @@ pub fn new_sieve_ir_v2<'a>(
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(c, accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let ir_builder = self.backend.finish();
 
                 eprintln!();
@@ -365,7 +365,7 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(c, accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let bool_sink = self.backend.finish();
                 let sink = bool_sink.finish();
 
@@ -434,7 +434,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(c, accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let bool_sink = self.backend.finish();
                 let sink = bool_sink.finish();
 

@@ -148,7 +148,6 @@ pub struct Backend<'w, S> {
     /// Maps each high-level `Wire` to the `WireId` of the first bit in its representation.  The
     /// number of bits in the representation can be computed from the wire type.
     wire_map: BTreeMap<Wire<'w>, WireId>,
-    ev: CachingEvaluator<'w, 'static, RevealSecrets>,
 }
 
 impl<'w, S: Sink> Backend<'w, S> {
@@ -156,14 +155,18 @@ impl<'w, S: Sink> Backend<'w, S> {
         Backend {
             sink,
             wire_map: BTreeMap::new(),
-            ev: CachingEvaluator::new(),
         }
     }
 
     /// Populate `wire_map` with entries for all the wires in `wires`.  Temporary intermediate
     /// values will not be kept in `wire_map`.  The caller is responsible for removing the entries
     /// from `wire_map`, if desired.
-    fn convert_wires(&mut self, c: &impl CircuitTrait<'w>, wires: &[Wire<'w>]) -> Vec<WireId> {
+    fn convert_wires(
+        &mut self,
+        c: &impl CircuitTrait<'w>,
+        ev: &mut impl Evaluator<'w>,
+        wires: &[Wire<'w>],
+    ) -> Vec<WireId> {
         let order = circuit::walk_wires_filtered(
             wires.iter().cloned(),
             |w| !self.wire_map.contains_key(&w),
@@ -202,7 +205,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 
         // Convert each gate.
         for (i, (&w, &j)) in order.iter().zip(last_use.iter()).enumerate() {
-            let wire_id = self.convert_wire(c, j as Time, w);
+            let wire_id = self.convert_wire(c, ev, j as Time, w);
             trace!("converted: {} = {:?}", wire_id, crate::ir::circuit::DebugDepth(0, &w.kind));
             self.wire_map.insert(w, wire_id);
 
@@ -227,7 +230,13 @@ impl<'w, S: Sink> Backend<'w, S> {
         wires.iter().cloned().map(|w| self.wire_map[&w]).collect::<Vec<_>>()
     }
 
-    fn convert_wire(&mut self, c: &impl CircuitTrait<'w>, expire: Time, w: Wire<'w>) -> WireId {
+    fn convert_wire(
+        &mut self,
+        c: &impl CircuitTrait<'w>,
+        ev: &mut impl Evaluator<'w>,
+        expire: Time,
+        w: Wire<'w>,
+    ) -> WireId {
         let n = type_bits(w.ty);
         match w.kind {
             GateKind::Lit(val, ty) => {
@@ -236,7 +245,7 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
             GateKind::Secret(_secret) => {
                 assert!(w.ty.is_integer());
-                let opt_bits = self.ev.eval_wire_bits(c.as_base(), w).ok().map(|(b, _)| b);
+                let opt_bits = ev.eval_wire_bits(c.as_base(), w).ok().map(|(b, _)| b);
                 self.sink.private(expire, n, opt_bits)
             },
 
@@ -267,8 +276,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                         }
 
                         let sz = aw.ty.integer_size();
-                        let a_val = self.ev.eval_wire(c.as_base(), aw).ok();
-                        let b_val = self.ev.eval_wire(c.as_base(), bw).ok();
+                        let a_val = ev.eval_wire(c.as_base(), aw).ok();
+                        let b_val = ev.eval_wire(c.as_base(), bw).ok();
                         let (quot_bits, rem_bits) = match (a_val.as_ref(), b_val.as_ref()) {
                             (Some(a_val), Some(b_val)) => {
                                 let a_uint = a_val.as_single().unwrap();
@@ -525,7 +534,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_map[new]` as well.
         let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter().cloned().unzip();
-        let old_reprs = self.convert_wires(v.new_circuit(), &old_wires);
+        let old_reprs = self.convert_wires(v.new_circuit(), &mut *v.evaluator(), &old_wires);
         for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
             assert!(!self.wire_map.contains_key(&new_wire));
             self.wire_map.insert(new_wire, old_repr);
@@ -550,8 +559,13 @@ impl<'w, S: Sink> Backend<'w, S> {
         }
     }
 
-    pub fn enforce_true(&mut self, c: &impl CircuitTrait<'w>, w: Wire<'w>) {
-        let wire_ids = self.convert_wires(c, &[w]);
+    pub fn enforce_true(
+        &mut self,
+        c: &impl CircuitTrait<'w>,
+        ev: &mut impl Evaluator<'w>,
+        w: Wire<'w>,
+    ) {
+        let wire_ids = self.convert_wires(c, ev, &[w]);
         let w = wire_ids[0];
         let w_inv = self.sink.not(TEMP, 1, w);
         self.sink.assert_zero(1, w_inv);
@@ -567,6 +581,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 mod test {
     use std::collections::{HashMap, HashSet};
     use crate::back::UsePlugins;
+    use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
         IntSize,
@@ -897,6 +912,7 @@ mod test {
     ) {
         let arenas = Arenas::new();
         let c = Circuit::new::<()>(&arenas, true, FilterNil);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         let mut backend = Backend::new(TestSink::default());
         let mut arith_backend = Backend::new(arith_sink);
 
@@ -916,14 +932,14 @@ mod test {
         };
 
         test_gate_common(&c, input_bits, f, |w| {
-            backend.enforce_true(&c, w);
-            arith_backend.enforce_true(&c, w);
+            backend.enforce_true(&c, &mut ev, w);
+            arith_backend.enforce_true(&c, &mut ev, w);
 
             #[cfg(feature = "sieve_ir")]
-            sieve_ir_backend.enforce_true(&c, w);
+            sieve_ir_backend.enforce_true(&c, &mut ev, w);
 
             #[cfg(feature = "sieve_ir")]
-            sieve_ir_v2_backend.enforce_true(&c, w);
+            sieve_ir_v2_backend.enforce_true(&c, &mut ev, w);
         });
 
         #[cfg(feature = "sieve_ir")]

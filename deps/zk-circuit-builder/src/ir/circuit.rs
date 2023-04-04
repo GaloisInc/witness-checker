@@ -11,7 +11,7 @@
 //!   `add`/`sub` methods instead of manually constructing a `GateKind::Add`.
 use std::alloc::Layout;
 use std::any::{self, Any, TypeId, type_name};
-use std::cell::{Cell, RefCell, UnsafeCell};
+use std::cell::{self, Cell, RefCell, UnsafeCell};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -26,7 +26,7 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use crate::eval;
+use crate::eval::{self, Evaluator, CachingEvaluator};
 use crate::ir::migrate::{self, Migrate, Visitor as _};
 
 
@@ -1368,6 +1368,7 @@ pub struct EraseVisitor<'a, 'c> {
     /// may place that block at any unused address, and that choice affects the ordering of
     /// pointers.
     erased_order: Vec<(Wire<'a>, Wire<'a>)>,
+    ev: RefCell<CachingEvaluator<'a, 'c, eval::RevealSecrets>>,
 }
 
 impl<'a, 'c> EraseVisitor<'a, 'c> {
@@ -1378,7 +1379,12 @@ impl<'a, 'c> EraseVisitor<'a, 'c> {
             circuit,
             erased_map: HashMap::new(),
             erased_order: Vec::new(),
+            ev: RefCell::new(CachingEvaluator::new()),
         }
+    }
+
+    pub fn evaluator(&self) -> cell::RefMut<CachingEvaluator<'a, 'c, eval::RevealSecrets>> {
+        self.ev.borrow_mut()
     }
 }
 
@@ -1405,7 +1411,7 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
             return e;
         }
 
-        let (bits, secret) = match eval::eval_wire::<eval::RevealSecrets>(self.circuit, w) {
+        let (bits, secret) = match self.ev.get_mut().eval_wire_bits(self.circuit, w) {
             Ok(x) => x,
             Err(e) => {
                 // Losing track of the value for this wire will leave us unable to construct the
