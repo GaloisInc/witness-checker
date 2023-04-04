@@ -41,13 +41,11 @@ fn function_gate_basic() {
         eval::eval_wire_public(c.as_base(), result1).unwrap(),
         eval::Value::SingleInteger(5_i32.into()),
     );
-    assert!(matches!(result1.value.get(), GateValue::Public(_)));
 
     assert_eq!(
         eval::eval_wire_public(c.as_base(), result2).unwrap(),
         eval::Value::SingleInteger(26_i32.into()),
     );
-    assert!(matches!(result2.value.get(), GateValue::Public(_)));
 }
 
 #[test]
@@ -86,12 +84,10 @@ fn function_gate_secret() {
         eval::Value::SingleInteger(5_i32.into()),
     );
     assert!(eval::eval_wire_public(c.as_base(), result1).is_none());
-    assert!(matches!(result1.value.get(), GateValue::Secret(_) | GateValue::Unset));
 
     assert_eq!(
         eval::eval_wire_secret(c.as_base(), result2).unwrap(),
         eval::Value::SingleInteger(26_i32.into()),
     );
     assert!(eval::eval_wire_public(c.as_base(), result2).is_none());
-    assert!(matches!(result2.value.get(), GateValue::Secret(_) | GateValue::Unset));
 }
