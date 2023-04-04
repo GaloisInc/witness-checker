@@ -290,6 +290,7 @@ impl<'a> CircuitBase<'a> {
             ty: kind.ty(self),
             kind,
             label: Label(self.current_label.get()),
+            eval_hook: Unhashed(Cell::new(None)),
         }))
     }
 
@@ -978,6 +979,15 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// function definition).
     fn new_secret_wire_input(&self, ty: Ty<'a>) -> (Wire<'a>, SecretInputId) {
         self.as_base().new_secret_wire_input(ty)
+    }
+
+
+    fn alloc_eval_hook_fn<F>(&self, f: F) -> EvalHookFn<'a>
+    where
+        F: Fn(&CircuitBase<'a>, &mut dyn eval::EvaluatorObj<'a>, Wire<'a>, Bits<'a>) + Copy + 'a,
+    {
+        let r = self.as_base().arena().alloc(f);
+        EvalHookFn(r)
     }
 
 
@@ -2016,6 +2026,17 @@ pub struct Gate<'a> {
     pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
     pub label: Label<'a>,
+    /// Hook function to run after successfully evaluating this gate.
+    ///
+    /// As the closure used here may contain `Wire<'a>` captures, it can't be migrated.  Migrate
+    /// operations will instead clear this field; after migration, `eval_hook` will always be
+    /// `None`.
+    ///
+    /// Note this field is ignored during interning.  This could result in confusing interactions
+    /// where two `Gate`s unexpectedly alias and setting one gate's `eval_hook` overwrites the
+    /// `eval_hook` that was provided for the other gate.  However, these hooks are only used for
+    /// debugging, so this is okay for now.
+    pub eval_hook: Unhashed<Cell<Option<EvalHookFn<'a>>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -2181,6 +2202,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Gate<'a> {
             ty: v.visit(self.ty),
             kind: v.visit(self.kind),
             label: v.visit(self.label),
+            eval_hook: Unhashed(Cell::new(None)),
         }
     }
 }
@@ -2764,6 +2786,21 @@ impl<'a, 'b> Migrate<'a, 'b> for Erased<'a> {
 
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Erased<'b> {
         v.visit_erased(self)
+    }
+}
+
+
+#[derive(Clone, Copy)]
+pub struct EvalHookFn<'a>(pub &'a (dyn Fn(
+    &CircuitBase<'a>,
+    &mut dyn eval::EvaluatorObj<'a>,
+    Wire<'a>,
+    Bits<'a>,
+) + 'a));
+
+impl fmt::Debug for EvalHookFn<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "EvalHookFn(..)")
     }
 }
 
