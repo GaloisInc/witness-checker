@@ -311,7 +311,7 @@ impl<'de, M: ModePred, A: Deserialize<'de>> Deserialize<'de> for IfMode<M, A> {
 }
 
 impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> {
-    fn from_eval<E: Evaluator<'a>>(
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,

@@ -449,7 +449,7 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> FromEval<'a> for $Name {
-            fn from_eval<E: Evaluator<'a>>(
+            fn from_eval<E: Evaluator<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: Self::Repr,
@@ -608,7 +608,7 @@ impl<'a> Flatten<'a> for Label {
 }
 
 impl<'a> FromEval<'a> for Label {
-    fn from_eval<E: Evaluator<'a>>(
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
@@ -744,7 +744,7 @@ impl<'a> Flatten<'a> for WordLabel {
 }
 
 impl<'a> FromEval<'a> for WordLabel {
-    fn from_eval<E: Evaluator<'a>>(
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
@@ -1034,7 +1034,7 @@ impl<'a> Cast<'a, u8> for ByteOffset {
 }
 
 impl<'a> FromEval<'a> for ByteOffset {
-    fn from_eval<E: Evaluator<'a>>(
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
