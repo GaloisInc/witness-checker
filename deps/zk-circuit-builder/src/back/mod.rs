@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use num_bigint::BigUint;
+use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::{CircuitBase, Wire, EraseVisitor, MigrateVisitor};
 use crate::ir::migrate;
 use crate::stats::Stats;
@@ -26,7 +27,13 @@ pub unsafe trait Backend<'a> {
 
     /// Assert that `accepted` is true, and finish writing out the circuit.  If `validate` is set,
     /// a validation pass will be run on the output afterward.
-    fn finish(self: Box<Self>, c: &CircuitBase<'a>, accepted: Wire<'a>, validate: bool);
+    fn finish(
+        self: Box<Self>,
+        c: &CircuitBase<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::RevealSecrets>,
+        accepted: Wire<'a>,
+        validate: bool,
+    );
 }
 
 
@@ -114,6 +121,7 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
             fn finish(
                 mut self: Box<Self>,
                 c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
@@ -197,6 +205,7 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
             fn finish(
                 mut self: Box<Self>,
                 c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
@@ -279,6 +288,7 @@ pub fn new_sieve_ir_v2<'a>(
             fn finish(
                 mut self: Box<Self>,
                 c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
@@ -349,6 +359,7 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
             fn finish(
                 mut self: Box<Self>,
                 c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
@@ -417,6 +428,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
             fn finish(
                 mut self: Box<Self>,
                 c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
@@ -453,7 +465,13 @@ pub fn new_dummy<'a>() -> Box<dyn Backend<'a> + 'a> {
 unsafe impl<'a> Backend<'a> for () {
     fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>) {}
     fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>) {}
-    fn finish(self: Box<Self>, c: &CircuitBase<'a>, accepted: Wire<'a>, validate: bool) {}
+    fn finish(
+        self: Box<Self>,
+        c: &CircuitBase<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::RevealSecrets>,
+        accepted: Wire<'a>,
+        validate: bool,
+    ) {}
 }
 
 
@@ -476,7 +494,13 @@ pub fn new_stats<'a>() -> Box<dyn Backend<'a> + 'a> {
             migrate::migrate_in_place(v, &mut self.stats);
         }
 
-        fn finish(mut self: Box<Self>, _c: &CircuitBase<'a>, accepted: Wire<'a>, _validate: bool) {
+        fn finish(
+            mut self: Box<Self>,
+            _c: &CircuitBase<'a>,
+            _ev: &mut CachingEvaluator<'a, '_, eval::RevealSecrets>,
+            accepted: Wire<'a>,
+            _validate: bool,
+        ) {
             self.stats.add(&[accepted]);
             eprintln!(" ===== stats =====");
             self.stats.print();

@@ -350,7 +350,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     drop(mcx_backend_guard);
     let accepted = flags[0];
     let validate = !args.is_present("skip-backend-validation");
-    backend.finish(c.as_base(), accepted, validate);
+    let mut ev = CachingEvaluator::new();
+    backend.finish(c.as_base(), &mut ev, accepted, validate);
 
     // Unused in some configurations.
     let _ = num_asserts;
