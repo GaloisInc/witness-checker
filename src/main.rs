@@ -141,48 +141,6 @@ fn check_first<'a>(
 fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let is_prover = !args.is_present("verifier-mode");
 
-    let arenas = Arenas::new();
-    let mcx = zk_circuit_builder::ir::migrate::handle::MigrateContext::new();
-
-    let arg_test_gadget_eval = args.is_present("test-gadget-eval");
-    let arg_zkif_out = args.is_present("zkif-out");
-    let arg_sieve_out = args.is_present("sieve-out");
-    let gadget_supported = move |g: GadgetKindRef| {
-        use zk_circuit_builder::gadget::bit_pack::{ConcatBits, ExtractBits};
-        let mut ok = false;
-        if arg_test_gadget_eval {
-            return true;
-        }
-        if arg_zkif_out || arg_sieve_out {
-            ok = ok || g.cast::<ConcatBits>().is_some();
-            ok = ok || g.cast::<ExtractBits>().is_some();
-        }
-        ok
-    };
-
-    let cf = FilterNil;
-    //let cf = lower::const_fold::ConstFold(c);
-    let cf = cf.add_pass(lower::bool_::not_to_xor);
-    let cf = cf.add_pass(lower::bool_::compare_to_logic);
-    let cf = cf.add_pass(lower::bool_::mux);
-    let cf = cf.add_opt_pass(
-        args.is_present("zkif-out") ||
-            args.is_present("sieve-ir-out") ||
-            args.is_present("sieve-ir-v2-out") ||
-            args.is_present("boolean-sieve-ir-out") ||
-            args.is_present("boolean-sieve-ir-v2-out"),
-        lower::int::compare_to_greater_or_equal_to_zero);
-    let cf = cf.add_pass(lower::int::non_constant_shift);
-    let cf = lower::const_fold::ConstFold(cf);
-    let cf = cf.add_pass(lower::bundle::simplify);
-    let cf = cf.add_pass(lower::bundle::unbundle_mux);
-    let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
-    let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
-    let c = Circuit::new::<()>(&arenas, is_prover, cf);
-    let c = &c;
-
-    let b = BuilderImpl::from_ref(c);
-    let mut cx = Context::new(c);
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
@@ -231,6 +189,51 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let multi_exec_witness = MultiExecWitness::from_raw(&multi_exec.inner);
 
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
+
+
+    // Set up the circuit and builder
+    let arenas = Arenas::new();
+    let mcx = zk_circuit_builder::ir::migrate::handle::MigrateContext::new(&multi_exec_witness);
+
+    let arg_test_gadget_eval = args.is_present("test-gadget-eval");
+    let arg_zkif_out = args.is_present("zkif-out");
+    let arg_sieve_out = args.is_present("sieve-out");
+    let gadget_supported = move |g: GadgetKindRef| {
+        use zk_circuit_builder::gadget::bit_pack::{ConcatBits, ExtractBits};
+        let mut ok = false;
+        if arg_test_gadget_eval {
+            return true;
+        }
+        if arg_zkif_out || arg_sieve_out {
+            ok = ok || g.cast::<ConcatBits>().is_some();
+            ok = ok || g.cast::<ExtractBits>().is_some();
+        }
+        ok
+    };
+
+    let cf = FilterNil;
+    //let cf = lower::const_fold::ConstFold(c);
+    let cf = cf.add_pass(lower::bool_::not_to_xor);
+    let cf = cf.add_pass(lower::bool_::compare_to_logic);
+    let cf = cf.add_pass(lower::bool_::mux);
+    let cf = cf.add_opt_pass(
+        args.is_present("zkif-out") ||
+            args.is_present("sieve-ir-out") ||
+            args.is_present("sieve-ir-v2-out") ||
+            args.is_present("boolean-sieve-ir-out") ||
+            args.is_present("boolean-sieve-ir-v2-out"),
+        lower::int::compare_to_greater_or_equal_to_zero);
+    let cf = cf.add_pass(lower::int::non_constant_shift);
+    let cf = lower::const_fold::ConstFold(cf);
+    let cf = cf.add_pass(lower::bundle::simplify);
+    let cf = cf.add_pass(lower::bundle::unbundle_mux);
+    let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
+    let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
+    let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf);
+    let c = &c;
+
+    let b = BuilderImpl::from_ref(c);
+    let mut cx = Context::new(c);
 
     // Set up the backend.
     let modulus = args.value_of("field-modulus").map(|s| {
@@ -353,7 +356,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     drop(mcx_backend_guard);
     let accepted = flags[0];
     let validate = !args.is_present("skip-backend-validation");
-    let mut ev = CachingEvaluator::new();
+    let mut ev = CachingEvaluator::with_secret(&multi_exec_witness);
     backend.finish(c.as_base(), &mut ev, accepted, validate);
 
     // Unused in some configurations.

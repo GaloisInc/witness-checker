@@ -15,6 +15,7 @@
 //! `Rooted` values must be explicitly "opened" for access.  The lifetimes are arranged to ensure
 //! that it is impossible to call `erase_and_migrate` while any `Rooted` values are currently open.
 use std::alloc::Layout;
+use std::any::Any;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem::{self, MaybeUninit};
@@ -23,6 +24,7 @@ use std::ptr;
 use crate::back::Backend;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, MigrateVisitor, EraseVisitor};
 use crate::ir::migrate::{self, Migrate};
+use crate::util::CowBox;
 
 
 pub struct MigrateHandle<'a> {
@@ -33,6 +35,7 @@ pub struct MigrateHandle<'a> {
 
 pub struct MigrateContext<'a> {
     inner: RefCell<MigrateContextInner<'a>>,
+    secret_value: &'a dyn Any,
 }
 
 pub struct Rooted<'a, T> {
@@ -55,13 +58,17 @@ pub struct Projected<'a, T> {
 
 
 impl<'a> MigrateContext<'a> {
-    pub fn new() -> MigrateContext<'a> {
+    pub fn new(secret_value: &'a dyn Any) -> MigrateContext<'a> {
         MigrateContext {
             inner: RefCell::new(MigrateContextInner::new()),
+            secret_value,
         }
     }
 
-    pub fn set_backend<'b>(&'b self, backend: &'b mut (dyn Backend<'a> + 'a)) -> BackendGuard<'a, 'b> {
+    pub fn set_backend<'b>(
+        &'b self,
+        backend: &'b mut (dyn Backend<'a> + 'a),
+    ) -> BackendGuard<'a, 'b> {
         unsafe {
             self.inner.borrow_mut().set_backend(backend);
             BackendGuard { mcx: self }
@@ -135,8 +142,9 @@ impl<'a> MigrateHandle<'a> {
     /// left dangling after calling this method.
     pub unsafe fn erase_and_migrate<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C) {
         if c.as_base().gc_size() > self.prev_size * 5 / 2 {
-            c.erase_with(|v| self.mcx.erase_in_place(v));
-            c.migrate_with(|v| self.mcx.migrate_in_place(v));
+            let mcx = self.mcx;
+            c.erase_with(CowBox::from(mcx.secret_value), |v| mcx.erase_in_place(v));
+            c.migrate_with(|v| mcx.migrate_in_place(v));
             self.prev_size = c.as_base().gc_size();
         }
     }

@@ -28,6 +28,7 @@ use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
 use crate::eval::{self, Evaluator, CachingEvaluator};
 use crate::ir::migrate::{self, Migrate, Visitor as _};
+use crate::util::CowBox;
 
 
 // CircuitBase layer
@@ -1232,9 +1233,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
     unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a, '_>) -> R, R>(
         &self,
+        secret_value: CowBox<dyn Any>,
         f: F,
     ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
-        let mut v = EraseVisitor::new(self.as_base());
+        let mut v = EraseVisitor::new(self.as_base(), secret_value);
 
         // Don't erase inside `self.functions`.
         self.erase_filter(&mut v);
@@ -1254,18 +1256,20 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// caller must ensure there are no outstanding references to the filter.
     unsafe fn erase<T: Migrate<'a, 'a, Output = T>>(
         &self,
+        secret_value: CowBox<dyn Any>,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
         use crate::ir::migrate::Visitor;
-        self.erase_with(|v| v.visit(x))
+        self.erase_with(secret_value, |v| v.visit(x))
     }
 
     /// Shorthand for `erase` followed by `migrate`.
     unsafe fn erase_and_migrate<T: Migrate<'a, 'a, Output = T>>(
         &self,
+        secret_value: CowBox<dyn Any>,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
-        let x = self.erase(x);
+        let x = self.erase(secret_value, x);
         let (x, erased_map) = self.migrate(x);
         (x, erased_map)
     }
@@ -1374,12 +1378,13 @@ pub struct EraseVisitor<'a, 'c> {
 impl<'a, 'c> EraseVisitor<'a, 'c> {
     fn new(
         circuit: &'c CircuitBase<'a>,
+        secret_value: CowBox<'c, dyn Any>,
     ) -> EraseVisitor<'a, 'c> {
         EraseVisitor {
             circuit,
             erased_map: HashMap::new(),
             erased_order: Vec::new(),
-            ev: RefCell::new(CachingEvaluator::new()),
+            ev: RefCell::new(CachingEvaluator::with_cow_secret(secret_value)),
         }
     }
 
