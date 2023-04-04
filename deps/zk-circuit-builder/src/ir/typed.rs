@@ -519,7 +519,11 @@ where Self: Repr<'a> + Lit<'a> + Sized {
 
 pub trait FromEval<'a>
 where Self: Repr<'a> + Sized {
-    fn from_eval<E: Evaluator<'a>>(c: &CircuitBase<'a>, ev: &mut E, a: Self::Repr) -> Option<Self>;
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self>;
 }
 
 
@@ -653,7 +657,7 @@ impl<'a> Secret<'a> for bool {
 }
 
 impl<'a> FromEval<'a> for bool {
-    fn from_eval<E: Evaluator<'a>>(
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
@@ -723,7 +727,7 @@ macro_rules! integer_impls {
         }
 
         impl<'a> FromEval<'a> for $T {
-            fn from_eval<E: Evaluator<'a>>(
+            fn from_eval<E: Evaluator<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: Self::Repr,
@@ -865,7 +869,7 @@ macro_rules! field_impls {
         }
 
         impl<'a> FromEval<'a> for $T {
-            fn from_eval<E: Evaluator<'a>>(
+            fn from_eval<E: Evaluator<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: Self::Repr,
@@ -986,7 +990,7 @@ macro_rules! tuple_impl {
         }
 
         impl<'a, $($A: FromEval<'a>,)*> FromEval<'a> for ($($A,)*) {
-            fn from_eval<E: Evaluator<'a>>(
+            fn from_eval<E: Evaluator<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: ($(TWire<'a, $A>,)*),
@@ -1142,7 +1146,7 @@ macro_rules! array_impls {
             }
 
             impl<'a, A: FromEval<'a>> FromEval<'a> for [A; $n] {
-                fn from_eval<E: Evaluator<'a>>(
+                fn from_eval<E: Evaluator<'a> + ?Sized>(
                     c: &CircuitBase<'a>,
                     ev: &mut E,
                     a: [TWire<'a, A>; $n],
@@ -1227,7 +1231,7 @@ impl<'a, A: Lit<'a>> Lit<'a> for Vec<A> {
 }
 
 impl<'a, A: FromEval<'a>> FromEval<'a> for Vec<A> {
-    fn from_eval<E: Evaluator<'a>>(
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Vec<TWire<'a, A>>,
@@ -1272,7 +1276,7 @@ pub trait EvaluatorExt<'a> {
     ) -> Option<T>;
 }
 
-impl<'a, E: Evaluator<'a>> EvaluatorExt<'a> for E {
+impl<'a, E: Evaluator<'a> + ?Sized> EvaluatorExt<'a> for E {
     fn eval_typed<C: CircuitTrait<'a> + ?Sized, T: FromEval<'a>>(
         &mut self,
         c: &C,
