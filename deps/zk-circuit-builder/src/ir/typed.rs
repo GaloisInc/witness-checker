@@ -2,6 +2,7 @@ use std::cmp;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::iter;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
@@ -11,7 +12,10 @@ use num_traits::Zero;
 #[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::eval::Evaluator;
-use crate::ir::circuit::{AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize, Wire, Ty, TyKind, CellResetGuard};
+use crate::ir::circuit::{
+    AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize,
+    Wire, Ty, TyKind, CellResetGuard, GateKind,
+};
 use crate::ir::migrate::{self, Migrate};
 
 
@@ -65,6 +69,100 @@ pub trait BuilderExt<'a>: Builder<'a> {
     fn secret_uninit<T: Secret<'a>>(&self) -> TWire<'a, T> {
         TWire::new(<T as Secret>::secret(self))
     }
+
+    fn secret_lazy<T, S, F>(&self, init: F) -> TWire<'a, T>
+    where
+        T: for<'b> LazySecret<'b>,
+        S: 'static,
+        F: Fn(&S) -> T + Sized + Copy + 'static,
+    {
+        self.secret_lazy_sized(&[], init)
+    }
+
+    /// Create a lazy secret.
+    ///
+    /// `sizes` gives the expected sizes of any dynamically-sized data structures (such as `Vec`s)
+    /// within the constructed value of type `T`.  Vector lengths and wire counts are public
+    /// information, and the `sizes` argument lets us know how many secret wires to construct when
+    /// operating in verifier mode.  The required length of `sizes` and the interpretation of its
+    /// elements depends on `T`.  For the common case where `T` is `Vec<U>` and `U` contains no
+    /// other complex data structures, `sizes` should have a single element giving the length of
+    /// the `Vec`.
+    fn secret_lazy_sized<T, S, F>(&self, sizes: &[usize], init: F) -> TWire<'a, T>
+    where
+        T: for<'b> LazySecret<'b>,
+        S: 'static,
+        F: Fn(&S) -> T + Sized + Copy + 'static,
+    {
+        lazy_secret_common::<Self, T, _>(self, sizes, move |ty, expected_word_len| {
+            self.circuit().secret_lazy(ty, move |c, s| {
+                lazy_secret_init_bits(c, init(s), expected_word_len)
+            })
+        })
+    }
+
+    fn secret_derived<T, D, F>(&self, deps: TWire<'a, D>, init: F) -> TWire<'a, T>
+    where
+        T: for<'b> LazySecret<'b>,
+        D: for<'b> SecretDep<'b>,
+        F: Fn(D) -> T + Sized + Copy + 'static,
+    {
+        self.secret_derived_sized(&[], deps, init)
+    }
+
+    fn secret_derived_sized<T, D, F>(
+        &self,
+        sizes: &[usize],
+        deps: TWire<'a, D>,
+        init: F,
+    ) -> TWire<'a, T>
+    where
+        T: for<'b> LazySecret<'b>,
+        D: for<'b> SecretDep<'b>,
+        F: Fn(D) -> T + Sized + Copy + 'static,
+    {
+        let expect_num_wires = D::num_wires(&deps.repr);
+        let expect_num_sizes = D::num_sizes(&deps.repr);
+        let fixed_size = expect_num_sizes == 0;
+
+        let mut dep_wires: Vec<Wire>;
+        if fixed_size {
+            dep_wires = Vec::with_capacity(expect_num_wires);
+        } else {
+            // For non-fixed-size `D`, we collect the `sizes` list from `deps` and add it as an
+            // extra `RawBits` literal in order to pass it into the closure (which must be `Copy`
+            // and `'static`, forbidding normal means of passing it in).
+            dep_wires = Vec::with_capacity(1 + expect_num_wires);
+            let mut sizes = Vec::with_capacity(expect_num_sizes);
+            D::for_each_size(&deps.repr, |s| sizes.push(u32::try_from(s).unwrap()));
+            debug_assert_eq!(sizes.len(), expect_num_sizes);
+            let sizes = self.circuit().as_base().intern_bits(&sizes);
+            let sizes_wire = self.circuit().gate(GateKind::Lit(sizes, Ty::raw_bits()));
+            dep_wires.push(sizes_wire);
+        }
+
+        D::for_each_wire(&deps.repr, |w| dep_wires.push(w));
+        debug_assert_eq!(dep_wires.len(), expect_num_wires + (if fixed_size { 0 } else { 1 }));
+        let dep_wires = self.circuit().wire_list(&dep_wires);
+
+        lazy_secret_common::<Self, T, _>(self, sizes, move |ty, expected_word_len| {
+            self.circuit().secret_derived(ty, dep_wires, move |c, bs| {
+                let mut it = bs.iter().copied();
+                let dep_val = if fixed_size {
+                    D::from_bits_iter(&mut iter::empty(), &mut it)
+                } else {
+                    let sizes = it.next().unwrap();
+                    D::from_bits_iter(
+                        &mut sizes.0.iter().map(|&x| usize::try_from(x).unwrap()),
+                        &mut it,
+                    )
+                };
+                debug_assert!(it.next().is_none());
+                lazy_secret_init_bits(c, init(dep_val), expected_word_len)
+            })
+        })
+    }
+
 
     fn neq_zero<T>(&self, x: TWire<'a, T>) -> TWire<'a, bool>
     where
@@ -319,6 +417,55 @@ pub trait BuilderExt<'a>: Builder<'a> {
 impl<'a, B: Builder<'a>> BuilderExt<'a> for B {}
 
 
+fn lazy_secret_common<'a, B, T, F>(
+    b: &B,
+    sizes: &[usize],
+    mut f: F,
+) -> TWire<'a, T>
+where
+    B: Builder<'a>,
+    T: for<'b> LazySecret<'b>,
+    F: FnMut(Ty<'a>, usize) -> Wire<'a>,
+{
+    let num_wires = T::num_wires(&mut sizes.iter().copied());
+    let expected_word_len = T::expected_word_len(&mut sizes.iter().copied());
+
+    if num_wires == 1 {
+        let r = T::build_repr_from_wires(b.circuit(), &mut sizes.iter().copied(), &mut |ty| {
+            f(ty, expected_word_len)
+        });
+        TWire::new(r)
+    } else {
+        let cache = f(Ty::raw_bits(), expected_word_len);
+        let cache_deps = b.circuit().wire_list(&[cache]);
+        let mut pos = 0;
+        let r = T::build_repr_from_wires(b.circuit(), &mut sizes.iter().copied(), &mut |ty| {
+            let start = pos;
+            pos += ty.digits();
+            let end = pos;
+            b.circuit().secret_derived(ty, cache_deps, move |c, bs| {
+                let b = bs[0];
+                c.intern_bits(&b.0[start .. end])
+            })
+        });
+        debug_assert_eq!(pos, expected_word_len);
+        TWire::new(r)
+    }
+}
+
+fn lazy_secret_init_bits<'b, T: LazySecret<'b>>(
+    c: &CircuitBase<'b>,
+    x: T,
+    expected_word_len: usize,
+) -> Bits<'b> {
+    let word_len = x.word_len();
+    debug_assert_eq!(word_len, expected_word_len);
+    let mut words = Vec::with_capacity(word_len);
+    x.push_words(&mut words);
+    c.intern_bits(&words)
+}
+
+
 pub fn set_secret_from_lit<'a, T: Secret<'a>>(s: &TWire<'a, T>, val: &TWire<'a, T>, force: bool) {
     <T as Secret>::set_from_lit(&s.repr, &val.repr, force);
 }
@@ -524,6 +671,69 @@ where Self: Repr<'a> + Sized {
         ev: &mut E,
         a: Self::Repr,
     ) -> Option<Self>;
+}
+
+/// Types that support being used as the type of a lazy secret.
+///
+/// # Size parameters
+///
+/// Data structures such as `Vec<T>` are represented using a variable number of wires; that is, the
+/// number of wires in the representation of a particular `Vec<T>` is known only dynamically.
+/// However, these numbers are public information, since the prover and verifier must agree on the
+/// number of wires in the circuit.  This means the verifier must have a way to construct a
+/// `TWire<Vec<T>>` with the right number of elements, even though the values of those elements are
+/// unknown.
+///
+/// To handle this, we introduce a notion of "size parameters", which describe the shape of a data
+/// structure independent of the actual values it contains.  The `sizes` of a value is a sequence
+/// of `usize`s, whose count and interpretation depends on the type.  The type `u32` has fixed
+/// size; it is always represented using a single wire, so it requires no `sizes` to construct.
+/// The type `Vec<u32>` requires one size parameter, which is the length of the vector;
+/// constructing a `TWire<Vec<u32>>` with `sizes == &[5]` produces a vector containing 5 elements
+/// of type `TWire<u32>`.
+///
+/// Both Rust values (of type `T`) and their circuit representations (of type `T::Repr`) have size
+/// parameters.  A Rust value and its corresponding `TWire` always have identical shapes.  That is,
+/// `x` and `bld.lit(x)` always have the same size parameters.
+pub trait LazySecret<'a>
+where Self: Repr<'a> {
+    /// Get the number of wires required to represent a value of type `Self` with the indicated
+    /// `sizes`.
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize;
+
+    /// Build an instance of `Self::Repr` (with the indicated `sizes`) from a stream of individual
+    /// wires.
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr;
+
+    /// Compute the expected length in words given the indicated `sizes`.
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize;
+
+    /// Count the number of `u32` words in the `Bits` representation of `self`.
+    fn word_len(&self) -> usize;
+
+    /// Push the words of `self` onto `out`.
+    fn push_words(&self, out: &mut Vec<u32>);
+}
+
+/// Types tha support being used as dependencies of derived secrets.
+pub trait SecretDep<'a>
+where Self: Repr<'a> {
+    fn num_wires(x: &Self::Repr) -> usize;
+    /// Iterate over the wires that make up `x`.  This calls `f` exactly `num_wires(x)` times.
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>));
+    fn num_sizes(x: &Self::Repr) -> usize;
+    /// Iterate over the size parameters that describe the shape of `x`.  This calls `f` exactly
+    /// `num_sizes(x)` times.
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize));
+    /// Build a concrete instance of `Self` from the provided `bits` and `sizes`.
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Self;
 }
 
 
@@ -735,6 +945,59 @@ macro_rules! integer_impls {
                 let val = ev.eval_single_integer_wire(c, a).ok()?;
                 // Conversion should succeed, assuming `a` really carries a value of type `$T`.
                 Some(<$T as TryFrom<_>>::try_from(val).unwrap())
+            }
+        }
+
+        impl<'a> LazySecret<'a> for $T {
+            fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+
+            fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+            ) -> Self::Repr {
+                build_wire(Self::wire_type(c))
+            }
+
+            fn expected_word_len(_sizes: &mut impl Iterator<Item = usize>) -> usize {
+                TyKind::$K.digits()
+            }
+
+            fn word_len(&self) -> usize {
+                TyKind::$K.digits()
+            }
+
+            fn push_words(&self, out: &mut Vec<u32>) {
+                let bs = self.to_le_bytes();
+                for i in (0 .. bs.len()).step_by(4) {
+                    let mut word_bytes = [0; 4];
+                    let n = cmp::min(bs.len() - i, 4);
+                    word_bytes[..n].copy_from_slice(&bs[i .. i + n]);
+                    out.push(u32::from_le_bytes(word_bytes));
+                }
+            }
+        }
+
+        impl<'a> SecretDep<'a> for $T {
+            fn num_wires(x: &Self::Repr) -> usize { 1 }
+            fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+                f(*x);
+            }
+            fn num_sizes(x: &Self::Repr) -> usize { 0 }
+            fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+            fn from_bits_iter(
+                _sizes: &mut impl Iterator<Item = usize>,
+                bits: &mut impl Iterator<Item = Bits<'a>>,
+            ) -> Self {
+                let bits = bits.next().unwrap();
+                let mut bs = [0; mem::size_of::<$T>()];
+                for (i, &word) in bits.0.iter().enumerate() {
+                    let word_bytes = word.to_le_bytes();
+                    let j = i * word_bytes.len();
+                    let n = cmp::min(bs.len() - j, word_bytes.len());
+                    bs[j .. j + n].copy_from_slice(&word_bytes);
+                }
+                <$T>::from_le_bytes(bs)
             }
         }
 
@@ -1286,3 +1549,43 @@ impl<'a, E: Evaluator<'a> + ?Sized> EvaluatorExt<'a> for E {
     }
 }
 
+
+#[cfg(test)]
+mod test {
+    use crate::eval::{self, CachingEvaluator};
+    use crate::ir::circuit::{Arenas, Circuit, FilterNil};
+    use super::*;
+
+    #[test]
+    fn lazy_secret_int() {
+        let arenas = Arenas::new();
+        let c = Circuit::new::<u32>(&arenas, true, FilterNil);
+        let b = BuilderImpl::from_ref(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&12345_u32);
+
+        let w = b.secret_lazy(|&x: &u32| {
+            assert_eq!(x, 12345);
+            (x / 100) as u16
+        });
+        assert!(matches!(w.kind, GateKind::Secret(..)));
+        let v: u16 = ev.eval_typed(&c, w).unwrap();
+        assert_eq!(v, 123);
+    }
+
+    #[test]
+    fn derived_secret_int() {
+        let arenas = Arenas::new();
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+        let b = BuilderImpl::from_ref(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+
+        let a = b.add(b.lit(12300_u32), b.lit(45_u32));
+        let w = b.secret_derived(a, |x: u32| {
+            assert_eq!(x, 12345);
+            (x / 100) as u16
+        });
+        assert!(matches!(w.kind, GateKind::Secret(..)));
+        let v: u16 = ev.eval_typed(&c, w).unwrap();
+        assert_eq!(v, 123);
+    }
+}
