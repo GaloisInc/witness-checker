@@ -427,6 +427,7 @@ where
     T: for<'b> LazySecret<'b>,
     F: FnMut(Ty<'a>, usize) -> Wire<'a>,
 {
+    // This call will panic if there aren't enough entries in `sizes`.
     let num_wires = T::num_wires(&mut sizes.iter().copied());
     let expected_word_len = T::expected_word_len(&mut sizes.iter().copied());
 
@@ -712,10 +713,11 @@ where Self: Repr<'a> {
     /// Compute the expected length in words given the indicated `sizes`.
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize;
 
-    /// Count the number of `u32` words in the `Bits` representation of `self`.
+    /// Count the number of `u32` words in the `Bits` representation of `self`.  This is always
+    /// equal to the sum of the `digits()` length of the wire types for all wires in `Self::Repr`.
     fn word_len(&self) -> usize;
 
-    /// Push the words of `self` onto `out`.
+    /// Push the words of `self` onto `out`.  This always pushes exactly `self.word_len()` words.
     fn push_words(&self, out: &mut Vec<u32>);
 }
 
@@ -877,6 +879,40 @@ impl<'a> FromEval<'a> for bool {
     }
 }
 
+impl<'a> LazySecret<'a> for bool {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        build_wire(Self::wire_type(c))
+    }
+
+    fn expected_word_len(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn word_len(&self) -> usize { 1 }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        out.push(*self as u32);
+    }
+}
+
+impl<'a> SecretDep<'a> for bool {
+    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(*x);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+    fn from_bits_iter(
+        _sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Self {
+        let bits = bits.next().unwrap();
+        !bits.is_zero()
+    }
+}
+
 primitive_unary_impl!(Not::not(bool));
 primitive_binary_impl!(And::and(bool, bool) -> bool);
 primitive_binary_impl!(Or::or(bool, bool) -> bool);
@@ -995,6 +1031,11 @@ macro_rules! integer_impls {
                     let word_bytes = word.to_le_bytes();
                     let j = i * word_bytes.len();
                     let n = cmp::min(bs.len() - j, word_bytes.len());
+                    if n == 0 {
+                        // The evaluator may add extra zeros at the end for some types.
+                        debug_assert!(bits.0[i..].iter().all(|&x| x == 0));
+                        break;
+                    }
                     bs[j .. j + n].copy_from_slice(&word_bytes);
                 }
                 <$T>::from_le_bytes(bs)
@@ -1172,6 +1213,64 @@ macro_rules! field_impls {
                     .expect("Error deserializing field from bits")
             }
         }
+
+        impl<'a> LazySecret<'a> for $T {
+            fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+
+            fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+            ) -> Self::Repr {
+                build_wire(Self::wire_type(c))
+            }
+
+            fn expected_word_len(_sizes: &mut impl Iterator<Item = usize>) -> usize {
+                TyKind::GF(Field::$K).digits()
+            }
+
+            fn word_len(&self) -> usize {
+                TyKind::GF(Field::$K).digits()
+            }
+
+            fn push_words(&self, out: &mut Vec<u32>) {
+                let bs = self.to_bytes();
+                for i in (0 .. bs.len()).step_by(4) {
+                    let mut word_bytes = [0; 4];
+                    let n = cmp::min(bs.len() - i, 4);
+                    word_bytes[..n].copy_from_slice(&bs[i .. i + n]);
+                    out.push(u32::from_le_bytes(word_bytes));
+                }
+            }
+        }
+
+        impl<'a> SecretDep<'a> for $T {
+            fn num_wires(x: &Self::Repr) -> usize { 1 }
+            fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+                f(*x);
+            }
+            fn num_sizes(x: &Self::Repr) -> usize { 0 }
+            fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+            fn from_bits_iter(
+                _sizes: &mut impl Iterator<Item = usize>,
+                bits: &mut impl Iterator<Item = Bits<'a>>,
+            ) -> Self {
+                let bits = bits.next().unwrap();
+                let mut bs = GenericArray::<u8, <$T as FiniteField>::ByteReprLen>::default();
+                for (i, &word) in bits.0.iter().enumerate() {
+                    let word_bytes = word.to_le_bytes();
+                    let j = i * word_bytes.len();
+                    let n = cmp::min(bs.len() - j, word_bytes.len());
+                    if n == 0 {
+                        // The evaluator may add extra zeros at the end for some types.
+                        debug_assert!(bits.0[i..].iter().all(|&x| x == 0));
+                        break;
+                    }
+                    bs[j .. j + n].copy_from_slice(&word_bytes);
+                }
+                <$T>::from_bytes(&bs).unwrap()
+            }
+        }
     };
 }
 
@@ -1262,6 +1361,70 @@ macro_rules! tuple_impl {
                 #![allow(unused)]       // `ev` in the zero-element case
                 let ($($A,)*) = a;
                 Some(($($A::from_eval(c, ev, $A.repr)?,)*))
+            }
+        }
+
+        impl<'a, $($A: LazySecret<'a>,)*> LazySecret<'a> for ($($A,)*) {
+            fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                0 $( + $A::num_wires(sizes) )*
+            }
+            fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+            ) -> Self::Repr {
+                #![allow(unused)]       // Arguments are unused in the zero-element case
+                (
+                    $( TWire::<$A>::new($A::build_repr_from_wires(c, sizes, build_wire)), )*
+                )
+            }
+            fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                0 $( + $A::expected_word_len(sizes) )*
+            }
+            fn word_len(&self) -> usize {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                let ($(ref $A,)*) = *self;
+                0 $( + $A.word_len() )*
+            }
+            fn push_words(&self, out: &mut Vec<u32>) {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                #![allow(unused)]       // `out` in the zero-element case
+                let ($(ref $A,)*) = *self;
+                $( $A.push_words(out); )*
+            }
+        }
+
+        impl<'a, $($A: SecretDep<'a>,)*> SecretDep<'a> for ($($A,)*) {
+            fn num_wires(x: &Self::Repr) -> usize {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                let ($(ref $A,)*) = *x;
+                0 $( + $A::num_wires(&$A.repr) )*
+            }
+            fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                #![allow(unused)]       // `f` in the zero-element case
+                let ($(ref $A,)*) = *x;
+                $( $A::for_each_wire($A, |w| f(w)); )*
+            }
+            fn num_sizes(x: &Self::Repr) -> usize {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                let ($(ref $A,)*) = *x;
+                0 $( + $A::num_sizes(&$A.repr) )*
+            }
+            fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+                #![allow(bad_style)]    // Capitalized variable names $A
+                #![allow(unused)]       // `f` in the zero-element case
+                let ($(ref $A,)*) = *x;
+                $( $A::for_each_size($A, |w| f(w)); )*
+            }
+            fn from_bits_iter(
+                sizes: &mut impl Iterator<Item = usize>,
+                bits: &mut impl Iterator<Item = Bits<'a>>,
+            ) -> Self {
+                #![allow(unused)]       // Arguments are unused in the zero-element case
+                (
+                    $( $A::from_bits_iter(sizes, bits), )*
+                )
             }
         }
 
@@ -1433,6 +1596,77 @@ macro_rules! array_impls {
                 }
             }
 
+            impl<'a, A: LazySecret<'a>> LazySecret<'a> for [A; $n] {
+                fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                    // `$n * A::num_wires(sizes)` is wrong because each array element of a type
+                    // like `[Vec<T>; 3]` may have a different size.
+                    (0 .. $n).map(|_| A::num_wires(sizes)).sum()
+                }
+                fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+                    c: &C,
+                    sizes: &mut impl Iterator<Item = usize>,
+                    build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+                ) -> Self::Repr {
+                    unsafe {
+                        let mut o = MaybeUninit::uninit();
+
+                        for i in 0 .. $n {
+                            let o_val = TWire::<A>::new(
+                                A::build_repr_from_wires(c, sizes, build_wire),
+                            );
+                            (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
+                        }
+
+                        o.assume_init()
+                    }
+                }
+                fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                    (0 .. $n).map(|_| A::expected_word_len(sizes)).sum()
+                }
+                fn word_len(&self) -> usize {
+                    self.iter().map(|x| x.word_len()).sum()
+                }
+                fn push_words(&self, out: &mut Vec<u32>) {
+                    for x in self.iter() {
+                        x.push_words(out);
+                    }
+                }
+            }
+
+            impl<'a, A: SecretDep<'a>> SecretDep<'a> for [A; $n] {
+                fn num_wires(x: &Self::Repr) -> usize {
+                    x.iter().map(|tw| A::num_wires(&tw.repr)).sum()
+                }
+                fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+                    for y in x.iter() {
+                        A::for_each_wire(y, |w| f(w));
+                    }
+                }
+                fn num_sizes(x: &Self::Repr) -> usize {
+                    x.iter().map(|tw| A::num_sizes(&tw.repr)).sum()
+                }
+                fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+                    for y in x.iter() {
+                        A::for_each_size(y, |w| f(w));
+                    }
+                }
+                fn from_bits_iter(
+                    sizes: &mut impl Iterator<Item = usize>,
+                    bits: &mut impl Iterator<Item = Bits<'a>>,
+                ) -> Self {
+                    unsafe {
+                        let mut o = MaybeUninit::uninit();
+
+                        for i in 0 .. $n {
+                            let o_val = A::from_bits_iter(sizes, bits);
+                            (o.as_mut_ptr() as *mut A).add(i).write(o_val);
+                        }
+
+                        o.assume_init()
+                    }
+                }
+            }
+
             impl<'a, C, A, B> Mux<'a, C, [B; $n]> for [A; $n]
             where
                 C: Repr<'a>,
@@ -1505,6 +1739,64 @@ impl<'a, A: FromEval<'a>> FromEval<'a> for Vec<A> {
 
 // No `impl Secret for Vec<A>`, since we can't determine how many wires to create in the case where
 // the value is unknown.
+
+impl<'a, A: LazySecret<'a>> LazySecret<'a> for Vec<A> {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        let n = sizes.next().unwrap();
+        (0 .. n).map(|_| A::num_wires(sizes)).sum()
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        let n = sizes.next().unwrap();
+        iter::repeat_with(|| {
+            TWire::<A>::new(A::build_repr_from_wires(c, sizes, build_wire))
+        }).take(n).collect()
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        let n = sizes.next().unwrap();
+        (0 .. n).map(|_| A::expected_word_len(sizes)).sum()
+    }
+    fn word_len(&self) -> usize {
+        self.iter().map(A::word_len).sum()
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        for x in self {
+            x.push_words(out);
+        }
+    }
+}
+
+impl<'a, A: SecretDep<'a>> SecretDep<'a> for Vec<A> {
+    fn num_wires(x: &Self::Repr) -> usize {
+        x.iter().map(|tw| A::num_wires(&tw.repr)).sum()
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        for tw in x {
+            A::for_each_wire(&tw.repr, |w| f(w))
+        }
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        1 + x.iter().map(|tw| A::num_sizes(&tw.repr)).sum::<usize>()
+    }
+    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+        f(x.len());
+        for tw in x {
+            A::for_each_size(&tw.repr, |s| f(s))
+        }
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Self {
+        let n = sizes.next().unwrap();
+        iter::repeat_with(|| A::from_bits_iter(sizes, bits)).take(n).collect()
+    }
+}
 
 impl<'a, C, A, B> Mux<'a, C, Vec<B>> for Vec<A>
 where
@@ -1587,5 +1879,72 @@ mod test {
         assert!(matches!(w.kind, GateKind::Secret(..)));
         let v: u16 = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, 123);
+    }
+
+    #[test]
+    fn lazy_secret_pair() {
+        let arenas = Arenas::new();
+        let c = Circuit::new::<u32>(&arenas, true, FilterNil);
+        let b = BuilderImpl::from_ref(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&12345_u32);
+
+        let w = b.secret_lazy(|&x: &u32| {
+            assert_eq!(x, 12345);
+            (x as u64 * 1_000_000_000, (x / 100) as u16)
+        });
+        assert!(matches!(w.0.kind, GateKind::Secret(..)));
+        assert!(matches!(w.1.kind, GateKind::Secret(..)));
+        let (v0, v1): (u64, u16) = ev.eval_typed(&c, w).unwrap();
+        assert_eq!(v0, 12345_000_000_000);
+        assert_eq!(v1, 123);
+    }
+
+    #[test]
+    fn derived_secret_pair() {
+        let arenas = Arenas::new();
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+        let b = BuilderImpl::from_ref(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+
+        let a = b.lit((12300_u32, 45_u64));
+        let w = b.secret_derived(a, |(x, y): (u32, u64)| {
+            assert_eq!(x, 12300);
+            assert_eq!(y, 45);
+            x as u16 + y as u16
+        });
+        assert!(matches!(w.kind, GateKind::Secret(..)));
+        let v: u16 = ev.eval_typed(&c, w).unwrap();
+        assert_eq!(v, 12345);
+    }
+
+    #[test]
+    fn lazy_secret_vec() {
+        let arenas = Arenas::new();
+        let c = Circuit::new::<u32>(&arenas, true, FilterNil);
+        let b = BuilderImpl::from_ref(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&12345_u32);
+
+        let w = b.secret_lazy_sized(&[3], |&x: &u32| {
+            assert_eq!(x, 12345);
+            vec![x / 10000, x / 100 % 100, x % 100]
+        });
+        let v: Vec<u32> = ev.eval_typed(&c, w).unwrap();
+        assert_eq!(v, vec![1, 23, 45]);
+    }
+
+    #[test]
+    fn derived_secret_vec() {
+        let arenas = Arenas::new();
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+        let b = BuilderImpl::from_ref(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+
+        let a = b.lit(vec![123_u32, 45]);
+        let w = b.secret_derived_sized(&[3], a, |x: Vec<u32>| {
+            assert_eq!(x, vec![123, 45]);
+            vec![x[0] / 100, x[0] % 100, x[1]]
+        });
+        let v: Vec<u32> = ev.eval_typed(&c, w).unwrap();
+        assert_eq!(v, vec![1, 23, 45]);
     }
 }
