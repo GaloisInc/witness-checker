@@ -344,7 +344,7 @@ impl<'a> CircuitBase<'a> {
             TypeId::of::<S>() == TypeId::of::<()>());
         let sd = if self.is_prover {
             let init = self.alloc_secret_init_fn::<S, F>(init);
-            SecretData::new_lazy_prover::<S>(ty, init, &[])
+            SecretData::new_lazy_prover::<S>(ty, init, deps)
         } else {
             SecretData::new(ty, SecretValue::VerifierUnknown)
         };
@@ -940,6 +940,23 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.as_base().alloc_lazy_secret::<(), _>(ty, deps, move |c, _secret, dep_vals| {
             init(c, dep_vals)
         })
+    }
+
+    fn secret_lazy<S, F>(&self, ty: Ty<'a>, init: F) -> Wire<'a>
+    where
+        S: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &S) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.secret(self.new_secret_lazy(ty, init))
+    }
+
+    fn secret_derived<F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Wire<'a>
+    where
+        F: for<'b> Fn(&CircuitBase<'b>, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.secret(self.new_secret_derived(ty, deps, init))
     }
 
 
@@ -3071,6 +3088,8 @@ impl<'a, 'b> Migrate<'a, 'b> for Label<'a> {
 
 /// An arbitrary-sized array of bits.  Used to represent values in the circuit and
 /// evaluator.
+///
+/// Integers of 64 bits or more are stored in little-endian order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Bits<'a>(pub &'a [u32]);
 
