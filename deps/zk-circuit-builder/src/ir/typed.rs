@@ -105,7 +105,7 @@ pub trait BuilderExt<'a>: Builder<'a> {
     where
         T: for<'b> LazySecret<'b>,
         D: for<'b> SecretDep<'b>,
-        F: Fn(D) -> T + Sized + Copy + 'static,
+        F: for <'b> Fn(<D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
     {
         self.secret_derived_sized(&[], deps, init)
     }
@@ -119,7 +119,7 @@ pub trait BuilderExt<'a>: Builder<'a> {
     where
         T: for<'b> LazySecret<'b>,
         D: for<'b> SecretDep<'b>,
-        F: Fn(D) -> T + Sized + Copy + 'static,
+        F: for <'b> Fn(<D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
     {
         let expect_num_wires = D::num_wires(&deps.repr);
         let expect_num_sizes = D::num_sizes(&deps.repr);
@@ -715,6 +715,7 @@ where Self: Repr<'a> {
 /// Types tha support being used as dependencies of derived secrets.
 pub trait SecretDep<'a>
 where Self: Repr<'a> {
+    type Decoded;
     fn num_wires(x: &Self::Repr) -> usize;
     /// Iterate over the wires that make up `x`.  This calls `f` exactly `num_wires(x)` times.
     fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>));
@@ -726,7 +727,7 @@ where Self: Repr<'a> {
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
-    ) -> Self;
+    ) -> Self::Decoded;
 }
 
 
@@ -889,6 +890,7 @@ impl<'a> LazySecret<'a> for bool {
 }
 
 impl<'a> SecretDep<'a> for bool {
+    type Decoded = bool;
     fn num_wires(x: &Self::Repr) -> usize { 1 }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         f(*x);
@@ -898,7 +900,7 @@ impl<'a> SecretDep<'a> for bool {
     fn from_bits_iter(
         _sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
-    ) -> Self {
+    ) -> bool {
         let bits = bits.next().unwrap();
         !bits.is_zero()
     }
@@ -1006,6 +1008,7 @@ macro_rules! integer_impls {
         }
 
         impl<'a> SecretDep<'a> for $T {
+            type Decoded = $T;
             fn num_wires(x: &Self::Repr) -> usize { 1 }
             fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
                 f(*x);
@@ -1015,7 +1018,7 @@ macro_rules! integer_impls {
             fn from_bits_iter(
                 _sizes: &mut impl Iterator<Item = usize>,
                 bits: &mut impl Iterator<Item = Bits<'a>>,
-            ) -> Self {
+            ) -> $T {
                 let bits = bits.next().unwrap();
                 let mut bs = [0; mem::size_of::<$T>()];
                 for (i, &word) in bits.0.iter().enumerate() {
@@ -1236,6 +1239,7 @@ macro_rules! field_impls {
         }
 
         impl<'a> SecretDep<'a> for $T {
+            type Decoded = $T;
             fn num_wires(x: &Self::Repr) -> usize { 1 }
             fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
                 f(*x);
@@ -1245,7 +1249,7 @@ macro_rules! field_impls {
             fn from_bits_iter(
                 _sizes: &mut impl Iterator<Item = usize>,
                 bits: &mut impl Iterator<Item = Bits<'a>>,
-            ) -> Self {
+            ) -> $T {
                 let bits = bits.next().unwrap();
                 let mut bs = GenericArray::<u8, <$T as FiniteField>::ByteReprLen>::default();
                 for (i, &word) in bits.0.iter().enumerate() {
@@ -1386,6 +1390,7 @@ macro_rules! tuple_impl {
         }
 
         impl<'a, $($A: SecretDep<'a>,)*> SecretDep<'a> for ($($A,)*) {
+            type Decoded = ( $( $A::Decoded, )* );
             fn num_wires(x: &Self::Repr) -> usize {
                 #![allow(bad_style)]    // Capitalized variable names $A
                 let ($(ref $A,)*) = *x;
@@ -1411,7 +1416,7 @@ macro_rules! tuple_impl {
             fn from_bits_iter(
                 sizes: &mut impl Iterator<Item = usize>,
                 bits: &mut impl Iterator<Item = Bits<'a>>,
-            ) -> Self {
+            ) -> Self::Decoded {
                 #![allow(unused)]       // Arguments are unused in the zero-element case
                 (
                     $( $A::from_bits_iter(sizes, bits), )*
@@ -1625,6 +1630,7 @@ macro_rules! array_impls {
             }
 
             impl<'a, A: SecretDep<'a>> SecretDep<'a> for [A; $n] {
+                type Decoded = [A::Decoded; $n];
                 fn num_wires(x: &Self::Repr) -> usize {
                     x.iter().map(|tw| A::num_wires(&tw.repr)).sum()
                 }
@@ -1644,13 +1650,13 @@ macro_rules! array_impls {
                 fn from_bits_iter(
                     sizes: &mut impl Iterator<Item = usize>,
                     bits: &mut impl Iterator<Item = Bits<'a>>,
-                ) -> Self {
+                ) -> [A::Decoded; $n] {
                     unsafe {
                         let mut o = MaybeUninit::uninit();
 
                         for i in 0 .. $n {
                             let o_val = A::from_bits_iter(sizes, bits);
-                            (o.as_mut_ptr() as *mut A).add(i).write(o_val);
+                            (o.as_mut_ptr() as *mut A::Decoded).add(i).write(o_val);
                         }
 
                         o.assume_init()
@@ -1763,6 +1769,7 @@ impl<'a, A: LazySecret<'a>> LazySecret<'a> for Vec<A> {
 }
 
 impl<'a, A: SecretDep<'a>> SecretDep<'a> for Vec<A> {
+    type Decoded = Vec<A::Decoded>;
     fn num_wires(x: &Self::Repr) -> usize {
         x.iter().map(|tw| A::num_wires(&tw.repr)).sum()
     }
@@ -1783,7 +1790,7 @@ impl<'a, A: SecretDep<'a>> SecretDep<'a> for Vec<A> {
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
-    ) -> Self {
+    ) -> Vec<A::Decoded> {
         let n = sizes.next().unwrap();
         iter::repeat_with(|| A::from_bits_iter(sizes, bits)).take(n).collect()
     }
