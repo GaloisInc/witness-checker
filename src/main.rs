@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::iter;
 use std::path::Path;
+use std::ptr;
 use std::str::FromStr;
 use clap::{App, Arg, ArgMatches};
 use env_logger;
@@ -319,6 +320,11 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let mcx_backend_guard = mcx.set_backend(&mut *backend);
 
 
+    // Hack: cast away the lifetime of the witness, pretending it's `'static`.   We do this to
+    // allow lazy secret callbacks to include `&'static str` names for executions.  This is okay as
+    // long as the witness outlives the circuit, which we ensure below.
+    let multi_exec_witness: &'static _ = unsafe { &*ptr::addr_of!(multi_exec_witness) };
+
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
     // for equivalent mem segments. 
@@ -345,6 +351,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         let debug_segment_graph_path = args.value_of("debug-segment-graph")
             .map(|s| s.to_owned());
 
+        // Get a `&'static str` version of `name` from the witness.
+        let name: &'static str = multi_exec_witness.execs.get_key_value(name).unwrap().0;
         let (new_cx, new_equiv_segments) = ExecBuilder::build(
             b, &mcx, cx, &exec, name, equiv_segments, init_state,
             check_steps, expect_zero, debug_segment_graph_path);
@@ -406,6 +414,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     // Unused in some configurations.
     let _ = num_asserts;
+
+    // Ensure `multi_exec_witness` is still valid.
+    let _ = &*multi_exec_witness;
 
     Ok(())
 }
