@@ -10,9 +10,10 @@ use crate::micro_ram::fetch::{self, Fetch};
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{self, Memory, extract_bytes_at_offset, extract_low_bytes};
 use crate::micro_ram::types::{
-    self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind, MemOpWidth, Advice,
-    REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE
+    self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind,
+    MemOpWidth, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE
 };
+use crate::micro_ram::witness::{MultiExecWitness, SegmentWitness};
 use crate::mode::if_mode::{AnyTainted, is_mode};
 use crate::mode::tainted;
 
@@ -27,9 +28,6 @@ pub struct Segment<'a> {
 
     fetch_ports: Option<fetch::CyclePorts<'a>>,
     mem_ports: mem::CyclePorts<'a>,
-    advice_secrets: Vec<TSecretHandle<'a, u64>>,
-    stutter_secrets: Vec<TSecretHandle<'a, bool>>,
-
 }
 
 pub struct SegmentBuilder<'a, 'b, B> {
@@ -50,6 +48,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
         s: &types::Segment,
         init_state: TWire<'a, RamState>,
         mut kmem: KnownMem<'a>,
+        project_witness: impl Fn(&MultiExecWitness) -> &SegmentWitness + Copy + 'static,
     ) -> (Segment<'a>, KnownMem<'a>) {
         let cx = self.cx;
         let b = self.b;
@@ -74,10 +73,6 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             );
             fetch_ports = Some(self.fetch.add_cycles(b, s.len));
         };
-        let advice_secrets: Vec<TSecretHandle<u64>> =
-            iter::repeat_with(|| b.secret().1).take(s.len).collect();
-        let stutter_secrets: Vec<TSecretHandle<bool>> =
-            iter::repeat_with(|| b.secret().1).take(s.len).collect();
 
         let mut states = Vec::new();
 
@@ -119,14 +114,20 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
                 instr = fp.instr;
 
                 // Stutter advice only makes sense in secret segments.
-                let stutter = stutter_secrets[i].wire().clone();
+                let stutter = b.secret_lazy(move |w: &MultiExecWitness| {
+                    let w = project_witness(w);
+                    w.stutter[i]
+                });
                 instr.opcode = b.mux(stutter, b.lit(Opcode::Stutter as u8), instr.opcode);
                 instr.opcode = b.mux(prev_state.live, instr.opcode, b.lit(Opcode::Stutter as u8));
             };
             let instr = instr;
 
             let mem_port = mem_ports.get(b, i);
-            let advice = advice_secrets[i].wire().clone();
+            let advice = b.secret_lazy(move |w: &MultiExecWitness| {
+                let w = project_witness(w);
+                w.advice[i]
+            });
 
             let (calc_state, calc_im) =
                 calc_step(cx, b, ev, i, instr, &mem_port, advice, &prev_state, &mut kmem);
@@ -148,8 +149,6 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             final_state: prev_state,
             fetch_ports,
             mem_ports,
-            advice_secrets,
-            stutter_secrets,
         };
         (seg, kmem)
     }
@@ -194,12 +193,8 @@ impl<'a> Segment<'a> {
                             });
                         }
                     },
-                    Advice::Stutter => {
-                        self.stutter_secrets[i].set(b, true);
-                    },
-                    Advice::Advise { advise } => {
-                        self.advice_secrets[i].set(b, advise);
-                    },
+                    Advice::Stutter => {},
+                    Advice::Advise { advise } => {},
                 }
             }
         }

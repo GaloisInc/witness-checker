@@ -493,15 +493,6 @@ impl<'a, C: CircuitTrait<'a> + 'a> Builder<'a> for BuilderImpl<C> {
     }
 }
 
-/*
-pub trait AsBuilder<'a> {
-    fn as_builder(&self) -> &Builder<'a>;
-}
-
-impl<'a> AsBuilder<'a> for Builder<'a> {
-    fn as_builder(&self) -> &Builder<'a> { self }
-}
-*/
 
 /// Typed wire, which carries a a representation of `T`.  This is useful for distinguishing wires
 /// with different high-level types, even when they share a low-level representation.

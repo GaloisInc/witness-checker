@@ -11,6 +11,7 @@ use crate::micro_ram::mem::{Memory, EquivSegments};
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use crate::micro_ram::trace::SegmentBuilder;
 use crate::micro_ram::types::{ExecBody, RamState};
+use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 
 
 #[derive(Migrate)]
@@ -40,7 +41,7 @@ impl<'a> ExecBuilder<'a> {
         mcx: &'a MigrateContext<'a>,
         cx: Context<'a>,
         exec: &ExecBody,
-        exec_name: &str,
+        exec_name: &'static str,
         equiv_segments: EquivSegments<'a>,
         init_state: RamState,
         check_steps: usize,
@@ -55,7 +56,7 @@ impl<'a> ExecBuilder<'a> {
             check_steps, expect_zero, debug_segment_graph_path,
         ));
         eb.open(mh).init(b, exec, exec_name);
-        ExecBuilder::run(&mut eb, mh, b, exec);
+        ExecBuilder::run(&mut eb, mh, b, exec, move |w| &w.execs[exec_name]);
         eb.take().finish(mh, b, exec)
     }
 
@@ -118,10 +119,12 @@ impl<'a> ExecBuilder<'a> {
         mh: &mut MigrateHandle<'a>,
         b: &impl Builder<'a>,
         exec: &ExecBody,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
         for item in this.open(mh).seg_graph_builder.get_order() {
             match item {
-                SegGraphItem::Segment(idx) => this.open(mh).add_segment(b, exec, idx),
+                SegGraphItem::Segment(idx) =>
+                    this.open(mh).add_segment(b, exec, idx, project_witness),
                 SegGraphItem::Network => {
                     unsafe { mh.erase_and_migrate(b.circuit()) };
                     info!("seg_graph_builder.build_network");
@@ -136,7 +139,13 @@ impl<'a> ExecBuilder<'a> {
         }
     }
 
-    fn add_segment(&mut self, b: &impl Builder<'a>, exec: &ExecBody, idx: usize) {
+    fn add_segment(
+        &mut self,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        idx: usize,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) {
         let mut segment_builder = SegmentBuilder {
             cx: &self.cx,
             b: b,
@@ -151,7 +160,10 @@ impl<'a> ExecBuilder<'a> {
         let seg_def = &exec.segments[idx];
         let prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
         let prev_kmem = self.seg_graph_builder.take_initial_mem(idx);
-        let (mut seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem);
+        let (mut seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem, move |w| {
+            let ew = project_witness(w);
+            &ew.segments[idx]
+        });
         self.seg_graph_builder.set_final(idx, seg.final_state().clone());
         self.seg_graph_builder.set_final_mem(idx, kmem);
 
