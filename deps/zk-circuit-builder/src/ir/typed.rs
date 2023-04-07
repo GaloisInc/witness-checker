@@ -1021,16 +1021,14 @@ macro_rules! integer_impls {
             ) -> $T {
                 let bits = bits.next().unwrap();
                 let mut bs = [0; mem::size_of::<$T>()];
-                for (i, &word) in bits.0.iter().enumerate() {
-                    let word_bytes = word.to_le_bytes();
-                    let j = i * word_bytes.len();
-                    let n = cmp::min(bs.len() - j, word_bytes.len());
-                    if n == 0 {
-                        // The evaluator may add extra zeros at the end for some types.
-                        debug_assert!(bits.0[i..].iter().all(|&x| x == 0));
-                        break;
-                    }
-                    bs[j .. j + n].copy_from_slice(&word_bytes);
+                for i in (0 .. bs.len()).step_by(4) {
+                    let word = match bits.0.get(i / 4) {
+                        Some(&x) => x,
+                        None => break,
+                    };
+                    let word_bytes: [u8; 4] = word.to_le_bytes();
+                    let n = cmp::min(bs.len() - i, word_bytes.len());
+                    bs[i .. i + n].copy_from_slice(&word_bytes[..n]);
                 }
                 <$T>::from_le_bytes(bs)
             }
@@ -1944,5 +1942,23 @@ mod test {
         });
         let v: Vec<u32> = ev.eval_typed(&c, w).unwrap();
         assert_eq!(v, vec![1, 23, 45]);
+    }
+
+    #[test]
+    fn small_secret_dep() {
+        let arenas = Arenas::new();
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+        let b = BuilderImpl::from_ref(&c);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+
+        let a = TWire::<(_, _)>::new((b.lit(12300_u16), b.lit(45_u8)));
+        let w = b.secret_derived(a, |(x, y)| {
+            assert_eq!(x, 12300);
+            assert_eq!(y, 45);
+            x + y as u16
+        });
+        assert!(matches!(w.kind, GateKind::Secret(..)));
+        let v: u16 = ev.eval_typed(&c, w).unwrap();
+        assert_eq!(v, 12345);
     }
 }
