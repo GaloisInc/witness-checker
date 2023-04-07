@@ -71,7 +71,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
                 s.len,
                 self.params.sparsity.mem_op,
             );
-            fetch_ports = Some(self.fetch.add_cycles(b, s.len));
+            fetch_ports = Some(self.fetch.add_cycles(b, s.len, project_witness));
         };
 
         let mut states = Vec::new();
@@ -173,14 +173,6 @@ impl<'a> Segment<'a> {
         let states_iter = iter::once(init_state).chain(states.iter()).take(self.len);
         for (i, state) in states_iter.enumerate() {
             let cycle = init_cycle + i as u32;
-
-            if let Some(ref mut fetch_ports) = self.fetch_ports {
-                let pc = state.pc;
-                let instr = prog.get(pc as usize).cloned().unwrap_or_else(|| panic!(
-                    "program executed out of bounds (pc = 0x{:x}) on cycle {}", pc, cycle,
-                ));
-                fetch_ports.set(b, i, pc, instr);
-            }
 
             let k = cycle as u64 + 1;
             let adv_list = advice.get(&k).map_or(&[] as &[_], |v| v as &[_]);

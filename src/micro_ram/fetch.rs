@@ -7,11 +7,12 @@ use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::circuit::CircuitTrait;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, EvaluatorExt};
+use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, EvaluatorExt};
 use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{
     FetchPort, FetchPortRepr, PackedFetchPort, RamInstr, CompareFetchPort,
 };
+use crate::micro_ram::witness::{MultiExecWitness, SegmentWitness};
 use zk_circuit_builder::routing::sort::{self, CompareLe};
 
 #[derive(Migrate)]
@@ -47,17 +48,34 @@ impl<'a> Fetch<'a> {
         &mut self,
         b: &impl Builder<'a>,
         len: usize,
+        project_witness: impl Fn(&MultiExecWitness) -> &SegmentWitness + Copy + 'static,
     ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
             ports: Vec::with_capacity(len),
         };
 
-        for _ in 0 .. len {
-            let (addr, addr_secret) = b.secret();
-            let (instr, instr_secret) = b.secret_default(self.default_instr.clone());
+        let default_instr = self.default_instr;
+
+        for i in 0 .. len {
+            let addr = b.secret_lazy(move |w: &MultiExecWitness| {
+                let w: &SegmentWitness = project_witness(w);
+                if w.live {
+                    w.fetches[i].0
+                } else {
+                    0
+                }
+            });
+            let instr = b.secret_lazy(move |w: &MultiExecWitness| {
+                let w: &SegmentWitness = project_witness(w);
+                if w.live {
+                    w.fetches[i].1
+                } else {
+                    default_instr
+                }
+            });
             let write = b.lit(false);
             let fp = TWire::new(FetchPortRepr { addr, instr, write });
-            cp.ports.push(CyclePort { fp, addr_secret, instr_secret });
+            cp.ports.push(CyclePort { fp });
         }
 
         self.ports.extend(cp.ports.iter().map(|p| p.fp));
@@ -101,6 +119,8 @@ impl<'a> Fetch<'a> {
         }, mh);
 
         // Debug logging, showing the state before and after sorting.
+        // TODO: need a way to run these prints during eval, with MultExecWitness available
+        /*
         {
             let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
             let mut cev = ContextEval::new(b.circuit().as_base(), &mut ev);
@@ -123,6 +143,7 @@ impl<'a> Fetch<'a> {
                 );
             }
         }
+        */
 
         // Run the consistency check.
         check_first_fetch(&cx.open(mh), b, sorted_ports.open(mh)[0]);
@@ -144,8 +165,6 @@ impl<'a> Fetch<'a> {
 #[derive(Migrate)]
 struct CyclePort<'a> {
     fp: TWire<'a, FetchPort>,
-    addr_secret: TSecretHandle<'a, u64>,
-    instr_secret: TSecretHandle<'a, RamInstr>,
 }
 
 #[derive(Migrate)]
@@ -164,11 +183,6 @@ impl<'a> CyclePorts<'a> {
 
     pub fn iter<'b>(&'b self) -> impl Iterator<Item = TWire<'a, FetchPort>> + 'b {
         self.ports.iter().map(|p| p.fp)
-    }
-
-    pub fn set(&self, b: &impl Builder<'a>, idx: usize, addr: u64, instr: RamInstr) {
-        self.ports[idx].addr_secret.set(b, addr);
-        self.ports[idx].instr_secret.set(b, instr);
     }
 }
 
