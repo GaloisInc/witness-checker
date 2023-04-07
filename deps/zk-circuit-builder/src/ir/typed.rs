@@ -1916,6 +1916,105 @@ impl<'a, A: SecretDep<'a>> SecretDep<'a> for Option<A> {
 }
 
 
+/// Wrapper type that flattens a value of type `T` into a single `Bits` value.  This is useful for
+/// temporary values used in the computation of secrets which would otherwise be inefficient to
+/// represent as separate wires.  You can build a lazy secret of type `TWire<FlatBits<T>>`, which
+/// will be computed only once, then derive further secrets from it.
+pub struct FlatBits<T>(pub T);
+
+impl<'a, T> Repr<'a> for FlatBits<T> {
+    type Repr = Wire<'a>;
+}
+
+impl<'a, T: LazySecret<'a>> Lit<'a> for FlatBits<T> {
+    fn lit(bld: &impl Builder<'a>, x: FlatBits<T>) -> Wire<'a> {
+        let mut words = Vec::with_capacity(T::word_len(&x.0));
+        T::push_words(&x.0, &mut words);
+        let bits = bld.circuit().as_base().intern_bits(&words);
+        bld.circuit().lit(Ty::raw_bits(), bits)
+    }
+}
+
+impl<'a, T: LazySecret<'a>> LazySecret<'a> for FlatBits<T> {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        build_wire(Ty::raw_bits())
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        T::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        T::word_len(&self.0)
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        T::push_words(&self.0, out);
+    }
+}
+
+impl<'a, T: SecretDep<'a>> SecretDep<'a> for FlatBits<T> {
+    type Decoded = FlatBits<T::Decoded>;
+    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(*x);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+    fn from_bits_iter(
+        _sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> FlatBits<T::Decoded> {
+        // Provide no sizes and exactly one `Bits` to `T::from_bits_iter`.
+        let bits = bits.next().unwrap();
+        let x = T::from_bits_iter(&mut iter::empty(), &mut iter::once(bits));
+        FlatBits(x)
+    }
+}
+
+// TODO: add a `SizedRawBits<T>` for use with `Vec<T>` etc
+
+
+/// Wire type used to obtain raw `Bits<'a>` for a dependency within `secret_derived`.
+pub struct RawBits;
+
+impl<'a> Repr<'a> for RawBits {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Lit<'a> for RawBits {
+    fn lit(bld: &impl Builder<'a>, _x: RawBits) -> Wire<'a> {
+        bld.circuit().gate(GateKind::Lit(Bits::zero(), Ty::raw_bits()))
+    }
+}
+
+impl<'a> SecretDep<'a> for RawBits {
+    type Decoded = Bits<'a>;
+    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(*x);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+    fn from_bits_iter(
+        _sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Bits<'a> {
+        bits.next().unwrap()
+    }
+}
+
+impl<'a, T> Cast<'a, RawBits> for FlatBits<T> {
+    fn cast(_bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+        x
+    }
+}
+
+
 pub trait EvaluatorExt<'a> {
     fn eval_typed<C: CircuitTrait<'a> + ?Sized, T: FromEval<'a>>(
         &mut self,
