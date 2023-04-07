@@ -629,7 +629,7 @@ impl<'a> SegGraphBuilder<'a> {
             StateSource::Network(id) => match self.network {
                 NetworkState::Before(_) =>
                     panic!("tried to access {:?} before building network", id),
-                NetworkState::After(ref net) => &net[id.into_raw()],
+                NetworkState::After(ref net) => &net[id.into_raw() as usize],
             },
             StateSource::CycleBreak(idx) =>
                 self.cycle_breaks[idx].secret.wire(),

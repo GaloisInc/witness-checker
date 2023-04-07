@@ -1,27 +1,148 @@
+use std::convert::TryFrom;
 use std::u32;
+use crate::ir::circuit::{CircuitTrait, Wire, Ty, Bits};
 use crate::ir::migrate::{self, Migrate};
-use crate::ir::typed::{TWire, Builder, BuilderExt, Repr, Lit, Mux};
+use crate::ir::typed::{
+    TWire, Builder, BuilderExt, Repr, Lit, Mux, RawBits, FlatBits, LazySecret, SecretDep,
+};
 
 mod benes;
 pub mod sort;
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
-pub struct InputId(usize);
+pub struct InputId(u32);
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
-pub struct OutputId(usize);
+pub struct OutputId(u32);
 
 impl InputId {
-    pub fn into_raw(self) -> usize {
+    pub fn from_raw(x: u32) -> InputId {
+        InputId(x)
+    }
+
+    pub fn into_raw(self) -> u32 {
         self.0
     }
 }
 
 impl OutputId {
-    pub fn into_raw(self) -> usize {
+    pub fn from_raw(x: u32) -> OutputId {
+        OutputId(x)
+    }
+
+    pub fn into_raw(self) -> u32 {
         self.0
     }
 }
+
+impl<'a> Repr<'a> for InputId {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Lit<'a> for InputId {
+    fn lit(bld: &impl Builder<'a>, a: InputId) -> Wire<'a> {
+        bld.lit(a.0).repr
+    }
+}
+
+impl<'a> LazySecret<'a> for InputId {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <u32 as LazySecret>::num_wires(sizes)
+    }
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        u32::build_repr_from_wires(c, sizes, build_wire)
+    }
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u32::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        u32::word_len(&self.0)
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        u32::push_words(&self.0, out);
+    }
+}
+
+impl<'a> SecretDep<'a> for InputId {
+    type Decoded = InputId;
+    fn num_wires(x: &Self::Repr) -> usize {
+        <u32 as SecretDep>::num_wires(x)
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        u32::for_each_wire(x, f);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        u32::num_sizes(x)
+    }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        u32::for_each_size(x, f);
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Self {
+        InputId(u32::from_bits_iter(sizes, bits))
+    }
+}
+
+impl<'a> Repr<'a> for OutputId {
+    type Repr = Wire<'a>;
+}
+
+impl<'a> Lit<'a> for OutputId {
+    fn lit(bld: &impl Builder<'a>, a: OutputId) -> Wire<'a> {
+        bld.lit(a.0).repr
+    }
+}
+
+impl<'a> LazySecret<'a> for OutputId {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <u32 as LazySecret>::num_wires(sizes)
+    }
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        u32::build_repr_from_wires(c, sizes, build_wire)
+    }
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u32::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        u32::word_len(&self.0)
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        u32::push_words(&self.0, out);
+    }
+}
+
+impl<'a> SecretDep<'a> for OutputId {
+    type Decoded = OutputId;
+    fn num_wires(x: &Self::Repr) -> usize {
+        <u32 as SecretDep>::num_wires(x)
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        u32::for_each_wire(x, f);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        u32::num_sizes(x)
+    }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        u32::for_each_size(x, f);
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Self {
+        OutputId(u32::from_bits_iter(sizes, bits))
+    }
+}
+
 
 /// A builder for constructing a routing network.  `T` is the type of values to route.  The caller
 /// must provide `TWire`s for all inputs; `TWire`s for all outputs become available only after
@@ -44,7 +165,7 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
     /// Add an input to the routing network.  The caller must provide a `TWire` carrying the input
     /// value.
     pub fn add_input(&mut self, inp: TWire<'a, T>) -> InputId {
-        let id = InputId(self.inputs.len());
+        let id = InputId(u32::try_from(self.inputs.len()).unwrap());
         self.inputs.push(inp);
         id
     }
@@ -52,15 +173,15 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
     /// Add an output to the routing network.  The `TWire` carrying the output value becomes
     /// available after calling `finish`.
     pub fn add_output(&mut self) -> OutputId {
-        let id = OutputId(self.num_outputs);
+        let id = OutputId(u32::try_from(self.num_outputs).unwrap());
         self.num_outputs += 1;
         id
     }
 
     pub fn connect(&mut self, inp: InputId, out: OutputId) {
         self.routes.push(benes::Route {
-            input: inp.0 as u32,
-            output: out.0 as u32,
+            input: inp.0,
+            output: out.0,
             public: false,
         });
     }
