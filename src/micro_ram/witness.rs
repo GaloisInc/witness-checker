@@ -51,6 +51,19 @@ impl ExecWitness {
             let seg_idx = tc.segment;
             let seg = &e.segments[seg_idx];
             let seg_w = &mut w.segments[seg_idx];
+
+            if let Some(ref debug) = tc.debug {
+                if let Some(debug_cycle) = debug.cycle {
+                    i = debug_cycle as u64;
+                }
+                if debug.clear_prev_segment {
+                    prev_seg_idx = None;
+                }
+                if let Some(debug_prev) = debug.prev_segment {
+                    prev_seg_idx = Some(debug_prev);
+                }
+            }
+
             for j in 0 .. seg.len {
                 if let Some(advs) = e.advice.get(&(i + 1)) {
                     for adv in advs {
