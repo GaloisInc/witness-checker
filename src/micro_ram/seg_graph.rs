@@ -11,7 +11,7 @@ use zk_circuit_builder::routing::{RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
-use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
+use crate::micro_ram::witness::{MultiExecWitness, ExecWitness, SegmentWitness};
 use crate::util::PanicOnDrop;
 
 
@@ -72,7 +72,7 @@ struct SegmentNode<'a> {
 #[derive(Migrate)]
 struct CycleBreakNode<'a> {
     preds: Vec<Predecessor>,
-    secret: TSecretHandle<'a, RamState>,
+    secret: TWire<'a, RamState>,
 }
 
 #[derive(Migrate)]
@@ -121,6 +121,7 @@ impl<'a> SegGraphBuilder<'a> {
         params: &Params,
         cpu_init_state: RamState,
         trace: &[TraceChunk],
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> SegGraphBuilder<'a> {
         let _g = b.scoped_label("seg_graph/new");
         let mut sg = SegGraphBuilder {
@@ -194,7 +195,7 @@ impl<'a> SegGraphBuilder<'a> {
             }
         }
 
-        sg.break_cycles(b, params);
+        sg.break_cycles(b, params, project_witness);
         sg.mark_unreachable();
         sg.count_final_mem_users();
 
@@ -251,7 +252,14 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     /// Break cycles in the graph by inserting `CycleBreakNodes`.
-    fn break_cycles(&mut self, b: &impl Builder<'a>, params: &Params) {
+    fn break_cycles(
+        &mut self,
+        b: &impl Builder<'a>,
+        params: &Params,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) {
+        let num_regs = params.num_regs;
+
         // If a segment's `good` flag is set, then there are no cycles involving that node or any
         // of its (transitive) predecessors.
         let mut good = vec![false; self.segments.len()];
@@ -311,9 +319,24 @@ impl<'a> SegGraphBuilder<'a> {
                     }
 
                     let cb_idx = self.cycle_breaks.len();
+                    let pred_src = pred.src;
                     self.cycle_breaks.push(CycleBreakNode {
                         preds: vec![*pred],
-                        secret: RamState::secret(b, params.num_regs).1,
+                        secret: b.secret_lazy_sized(&[num_regs], move |w| {
+                            let w: &ExecWitness = project_witness(w);
+                            let w: &SegmentWitness = &w.segments[i];
+                            let live = match pred_src {
+                                StateSource::CpuInit => true,
+                                StateSource::Segment(j) => w.pred == Some(j),
+                                StateSource::Network(_) => w.from_net,
+                                StateSource::CycleBreak(_) => unreachable!(),
+                            };
+                            if live {
+                                w.init_state.clone()
+                            } else {
+                                RamState::default_with_regs(num_regs)
+                            }
+                        }),
                     });
                     *pred = Predecessor {
                         src: StateSource::CycleBreak(cb_idx),
@@ -488,9 +511,7 @@ impl<'a> SegGraphBuilder<'a> {
                 }
                 match pred.src {
                     StateSource::CycleBreak(i) => {
-                        if set_cycle_breaks.insert(i) {
-                            self.cycle_breaks[i].secret.set(b, init_state.clone());
-                        }
+                        set_cycle_breaks.insert(i);
                     },
                     _ => {},
                 }
@@ -507,19 +528,11 @@ impl<'a> SegGraphBuilder<'a> {
                 }
                 match pred.src {
                     StateSource::Segment(j) => {
-                        if set_cycle_breaks.insert(i) {
-                            let state = trace[j].states.last().expect("empty chunk").clone();
-                            cbn.secret.set(b, state);
-                        }
+                        set_cycle_breaks.insert(i);
                     },
                     _ => {},
                 }
             }
-        }
-
-        // Use default values for all unused cycle-break nodes.
-        for cbn in &self.cycle_breaks {
-            cbn.secret.apply_default();
         }
     }
 
@@ -628,8 +641,7 @@ impl<'a> SegGraphBuilder<'a> {
                     panic!("tried to access {:?} before building network", id),
                 NetworkState::After(ref net) => &net[id.into_raw() as usize],
             },
-            StateSource::CycleBreak(idx) =>
-                self.cycle_breaks[idx].secret.wire(),
+            StateSource::CycleBreak(idx) => &self.cycle_breaks[idx].secret,
         }
     }
 
@@ -801,7 +813,7 @@ impl<'a> SegGraphBuilder<'a> {
                 count = b.add(count, b.cast(state.live));
                 cx.when(b, state.live, |cx| {
                     wire_assert!(
-                        cx, b, b.eq(cbn.secret.wire().clone(), state),
+                        cx, b, b.eq(cbn.secret.clone(), state),
                         "CycleBreak {} incoming edge {:?} is live, but state doesn't match {:?}",
                         i, pred.live, pred.src,
                     );
@@ -809,7 +821,7 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             // If the CycleBreakNode's secret state is live, then at least one input must be live.
-            cx.when(b, cbn.secret.wire().live, |cx| {
+            cx.when(b, cbn.secret.live, |cx| {
                 wire_assert!(
                     cx, b, b.ne(count, b.lit(0)),
                     "CycleBreak {} has live output but no live inputs",
