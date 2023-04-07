@@ -565,6 +565,30 @@ macro_rules! mk_named_enum {
             }
         }
 
+        impl<'a> LazySecret<'a> for $Name {
+            fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                <u8 as LazySecret>::num_wires(sizes)
+            }
+
+            fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+            ) -> Self::Repr {
+                TWire::new(u8::build_repr_from_wires(c, sizes, build_wire))
+            }
+
+            fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                u8::expected_word_len(sizes)
+            }
+            fn word_len(&self) -> usize {
+                (*self as u8).word_len()
+            }
+            fn push_words(&self, out: &mut Vec<u32>) {
+                (*self as u8).push_words(out);
+            }
+        }
+
         impl<'a> SecretDep<'a> for $Name {
             type Decoded = Self;
             fn num_wires(x: &Self::Repr) -> usize {
@@ -796,6 +820,27 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
+impl<'a> LazySecret<'a> for Label {
+    fn num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        build_wire(Self::wire_type(c))
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u8::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        u8::word_len(&self.0)
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        u8::push_words(&self.0, out);
+    }
+}
+
 impl<'a> SecretDep<'a> for Label {
     type Decoded = Label;
     fn num_wires(x: &Self::Repr) -> usize { 1 }
@@ -890,6 +935,30 @@ impl<'a> FromEval<'a> for WordLabel {
         a: Self::Repr,
     ) -> Option<Self> {
         Some(WordLabel(<[Label; WORD_BYTES]>::from_eval(c, ev, a)?))
+    }
+}
+
+impl<'a> LazySecret<'a> for WordLabel {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <[Label; WORD_BYTES] as LazySecret>::num_wires(sizes)
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        <[Label; WORD_BYTES]>::build_repr_from_wires(c, sizes, build_wire)
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <[Label; WORD_BYTES]>::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        self.0.word_len()
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        self.0.push_words(out);
     }
 }
 
@@ -1102,6 +1171,60 @@ impl<'a> Secret<'a> for MemPort {
         typed::set_secret_from_lit(&s.op, &val.op, force);
         typed::set_secret_from_lit(&s.width, &val.width, force);
         typed::set_secret_from_lit(&s.tainted, &val.tainted, force);
+    }
+}
+
+impl<'a> LazySecret<'a> for MemPort {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <u32 as LazySecret>::num_wires(sizes) +
+        <u64 as LazySecret>::num_wires(sizes) +
+        <u64 as LazySecret>::num_wires(sizes) +
+        <MemOpKind as LazySecret>::num_wires(sizes) +
+        <MemOpWidth as LazySecret>::num_wires(sizes) +
+        <IfMode<AnyTainted, WordLabel> as LazySecret>::num_wires(sizes)
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        MemPortRepr {
+            cycle: TWire::new(u32::build_repr_from_wires(c, sizes, build_wire)),
+            addr: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
+            value: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
+            op: TWire::new(MemOpKind::build_repr_from_wires(c, sizes, build_wire)),
+            width: TWire::new(MemOpWidth::build_repr_from_wires(c, sizes, build_wire)),
+            tainted: TWire::new(
+                IfMode::<AnyTainted, WordLabel>::build_repr_from_wires(c, sizes, build_wire)),
+        }
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <u32 as LazySecret>::expected_word_len(sizes) +
+        <u64 as LazySecret>::expected_word_len(sizes) +
+        <u64 as LazySecret>::expected_word_len(sizes) +
+        <MemOpKind as LazySecret>::expected_word_len(sizes) +
+        <MemOpWidth as LazySecret>::expected_word_len(sizes) +
+        <IfMode<AnyTainted, WordLabel> as LazySecret>::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        let MemPort { cycle, addr, value, op, width, ref tainted } = *self;
+        cycle.word_len() +
+        addr.word_len() +
+        value.word_len() +
+        op.word_len() +
+        width.word_len() +
+        tainted.word_len()
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        let MemPort { cycle, addr, value, op, width, ref tainted } = *self;
+        cycle.push_words(out);
+        addr.push_words(out);
+        value.push_words(out);
+        op.push_words(out);
+        width.push_words(out);
+        tainted.push_words(out);
     }
 }
 
