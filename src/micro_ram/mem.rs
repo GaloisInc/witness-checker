@@ -236,6 +236,8 @@ impl<'a> Memory<'a> {
         }, mh);
 
         // Debug logging, showing the state before and after sorting.
+        // TODO: need a way to run these prints during eval, with MultExecWitness available
+        /*
         {
             let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
             let mut cev = ContextEval::new(b.circuit().as_base(), &mut ev);
@@ -260,6 +262,7 @@ impl<'a> Memory<'a> {
                 );
             }
         }
+        */
 
         // Run the consistency check.
         // The first port has no previous port.  Supply a dummy port and set `prev_valid = false`.
