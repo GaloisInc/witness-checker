@@ -1,9 +1,13 @@
 use std::collections::HashMap;
-use crate::micro_ram::types::{MultiExec, ExecBody, Segment, Advice};
+use crate::micro_ram::types::{MultiExec, ExecBody, Segment, Advice, RamInstr};
 
 
 #[derive(Clone, Debug)]
 pub struct SegmentWitness {
+    pub init_cycle: u32,
+    pub live: bool,
+    pub fetches: Vec<(u64, RamInstr)>,
+
     pub advice: Vec<u64>,
     pub stutter: Vec<bool>,
 
@@ -45,7 +49,8 @@ impl ExecWitness {
             segments: e.segments.iter().map(|s| SegmentWitness::default_from_raw(s)).collect(),
         };
 
-        let mut i = 0;
+        let mut cycle = 0;
+        let mut pc = 0;
         let mut prev_seg_idx: Option<usize> = None;
         for tc in &e.trace {
             let seg_idx = tc.segment;
@@ -54,7 +59,10 @@ impl ExecWitness {
 
             if let Some(ref debug) = tc.debug {
                 if let Some(debug_cycle) = debug.cycle {
-                    i = debug_cycle as u64;
+                    cycle = debug_cycle;
+                }
+                if let Some(ref debug_state) = debug.prev_state {
+                    pc = debug_state.pc;
                 }
                 if debug.clear_prev_segment {
                     prev_seg_idx = None;
@@ -64,8 +72,13 @@ impl ExecWitness {
                 }
             }
 
-            for j in 0 .. seg.len {
-                if let Some(advs) = e.advice.get(&(i + 1)) {
+            seg_w.init_cycle = cycle;
+            seg_w.live = true;
+            seg_w.fetches.reserve(seg.len);
+
+            debug_assert_eq!(seg.len, tc.states.len());
+            for (j, post_state) in tc.states.iter().enumerate() {
+                if let Some(advs) = e.advice.get(&(cycle as u64 + 1)) {
                     for adv in advs {
                         match *adv {
                             Advice::MemOp { .. } => {},
@@ -74,7 +87,14 @@ impl ExecWitness {
                         }
                     }
                 }
-                i += 1;
+
+                let instr = e.program.get(pc as usize).cloned().unwrap_or_else(|| {
+                    panic!("program executed out of bounds (pc = 0x{:x}) on cycle {}", pc, cycle);
+                });
+                seg_w.fetches.push((pc, instr));
+
+                pc = post_state.pc;
+                cycle += 1;
             }
 
             if let Some(prev_seg_idx) = prev_seg_idx {
@@ -98,6 +118,10 @@ impl ExecWitness {
 impl SegmentWitness {
     pub fn default_from_raw(s: &Segment) -> SegmentWitness {
         SegmentWitness {
+            init_cycle: 0,
+            live: false,
+            fetches: Vec::new(),
+
             advice: vec![0; s.len],
             stutter: vec![false; s.len],
 
