@@ -275,10 +275,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let mcx_backend_guard = mcx.set_backend(&mut *backend);
 
 
-    // Hack: cast away the lifetime of the witness, pretending it's `'static`.   We do this to
+    // Hack: cast away the lifetime of the `MultiExec`, pretending it's `'static`.   We do this to
     // allow lazy secret callbacks to include `&'static str` names for executions.  This is okay as
-    // long as the witness outlives the circuit, which we ensure below.
-    let multi_exec_witness: &'static _ = unsafe { &*ptr::addr_of!(multi_exec_witness) };
+    // long as the value outlives the circuit, which we ensure below.
+    let multi_exec: &'static _ = unsafe { &*ptr::addr_of!(multi_exec) };
 
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
@@ -307,7 +307,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             .map(|s| s.to_owned());
 
         // Get a `&'static str` version of `name` from the witness.
-        let name: &'static str = multi_exec_witness.execs.get_key_value(name).unwrap().0;
         let (new_cx, new_equiv_segments) = ExecBuilder::build(
             b, &mcx, cx, &exec, name, equiv_segments, init_state,
             check_steps, expect_zero, debug_segment_graph_path);
@@ -339,7 +338,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         .chain(bugs.into_iter())
         .collect::<Vec<_>>();
 
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(multi_exec_witness);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&multi_exec_witness);
     {
         let flag_vals = flags.iter().map(|&w| {
             ev.eval_wire(c, w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()
@@ -369,8 +368,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // Unused in some configurations.
     let _ = num_asserts;
 
-    // Ensure `multi_exec_witness` is still valid.
-    let _ = &*multi_exec_witness;
+    // Ensure `multi_exec` is still valid.
+    let _ = &*multi_exec;
 
     Ok(())
 }
