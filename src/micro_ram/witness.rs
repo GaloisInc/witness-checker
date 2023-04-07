@@ -28,6 +28,8 @@ pub struct SegmentWitness {
 #[derive(Clone, Debug)]
 pub struct ExecWitness {
     pub segments: Vec<SegmentWitness>,
+    /// Data values for initial memory segments.
+    pub init_mem_values: Vec<Vec<u64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +52,12 @@ impl ExecWitness {
     pub fn from_raw(e: &ExecBody) -> ExecWitness {
         let mut w = ExecWitness {
             segments: e.segments.iter().map(|s| SegmentWitness::default_from_raw(s)).collect(),
+            init_mem_values: e.init_mem.iter().map(|ms| {
+                let mut data = ms.data.clone();
+                assert!(data.len() <= ms.len as usize);
+                data.resize(ms.len as usize, 0);
+                data
+            }).collect(),
         };
 
         let mut cycle = 0;
