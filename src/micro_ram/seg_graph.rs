@@ -6,7 +6,7 @@ use std::mem;
 use log::*;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, FlatBits};
+use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, FlatBits};
 use zk_circuit_builder::routing::{RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
@@ -99,9 +99,9 @@ pub struct SegGraphBuilder<'a> {
     network_inputs: Vec<NetworkInputNode>,
 
     // Edge liveness flags
-    edges: HashMap<(usize, usize), TSecretHandle<'a, bool>>,
-    from_net: HashMap<usize, TSecretHandle<'a, bool>>,
-    to_net: HashMap<usize, TSecretHandle<'a, bool>>,
+    edges: HashMap<(usize, usize), TWire<'a, bool>>,
+    from_net: HashMap<usize, TWire<'a, bool>>,
+    to_net: HashMap<usize, TWire<'a, bool>>,
 
     /// The state of routing network construction.
     network: NetworkState<'a>,
@@ -159,7 +159,10 @@ impl<'a> SegGraphBuilder<'a> {
 
             for &j in &seg_def.successors {
                 assert!(!sg.edges.contains_key(&(i, j)), "duplicate edge {} -> {}", i, j);
-                sg.edges.insert((i, j), b.secret().1);
+                sg.edges.insert((i, j), b.secret_lazy(move |w| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.segments[i].succ == Some(j)
+                }));
 
                 sg.segments[j].preds.push(Predecessor {
                     src: StateSource::Segment(i),
@@ -170,7 +173,10 @@ impl<'a> SegGraphBuilder<'a> {
             if seg_def.enter_from_network {
                 // Note that `enter_from_network` is ignored for segment 0.
                 assert!(!sg.from_net.contains_key(&i), "duplicate edge net -> {}", i);
-                sg.from_net.insert(i, b.secret().1);
+                sg.from_net.insert(i, b.secret_lazy(move |w| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.segments[i].from_net
+                }));
                 let output_id = network.add_output();
                 sg.segments[i].preds.push(Predecessor {
                     src: StateSource::Network(output_id),
@@ -181,7 +187,10 @@ impl<'a> SegGraphBuilder<'a> {
 
             if seg_def.exit_to_network {
                 assert!(!sg.to_net.contains_key(&i), "duplicate edge {} -> net", i);
-                sg.to_net.insert(i, b.secret().1);
+                sg.to_net.insert(i, b.secret_lazy(move |w| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.segments[i].to_net
+                }));
                 sg.network_inputs.push(NetworkInputNode {
                     pred: Predecessor {
                         src: StateSource::Segment(i),
@@ -460,7 +469,6 @@ impl<'a> SegGraphBuilder<'a> {
 
             if let Some(ref edge) = self.edges.get(&(src, dest)) {
                 // `edge` is the liveness flag for the direct edge from `src` to `dest`.
-                edge.set(b, true);
                 live_edges.insert(Liveness::Edge(src, dest));
             } else {
                 // There is no direct edge, so this connection must go through the routing network.
@@ -470,19 +478,9 @@ impl<'a> SegGraphBuilder<'a> {
                     .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
                 let dest_from_net = self.from_net.get(&dest)
                     .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
-                src_to_net.set(b, true);
-                dest_from_net.set(b, true);
                 live_edges.insert(Liveness::ToNetwork(src));
                 live_edges.insert(Liveness::FromNetwork(dest));
             }
-        }
-
-        // Use default values (`false`) for all unused edge liveness flags.
-        let it = self.edges.values()
-            .chain(self.from_net.values())
-            .chain(self.to_net.values());
-        for s in it {
-            s.apply_default();
         }
 
         // Set secrets for all CycleBreak nodes.  For `CycleBreak -> Segment` edges, set the secret
@@ -705,9 +703,9 @@ impl<'a> SegGraphBuilder<'a> {
     fn liveness_flag(&self, b: &impl Builder<'a>, l: Liveness) -> TWire<'a, bool> {
         match l {
             Liveness::Always => b.lit(true),
-            Liveness::Edge(a, b) => self.edges[&(a, b)].wire().clone(),
-            Liveness::FromNetwork(i) => self.from_net[&i].wire().clone(),
-            Liveness::ToNetwork(i) => self.to_net[&i].wire().clone(),
+            Liveness::Edge(a, b) => self.edges[&(a, b)],
+            Liveness::FromNetwork(i) => self.from_net[&i],
+            Liveness::ToNetwork(i) => self.to_net[&i],
         }
     }
 
@@ -729,7 +727,7 @@ impl<'a> SegGraphBuilder<'a> {
             // Force `state.live` to `false` if the edge leading to this network port is not live.
             // Note the edge can't be live unless the source segment is live (this is asserted in
             // `finish`).
-            state.live = *self.to_net[&inp.segment_index].wire();
+            state.live = self.to_net[&inp.segment_index];
             let id = routing.add_input(state);
             assert!(self.segments[inp.segment_index].to_net.is_none(),
                 "impossible: multiple to-net for segment {}?", inp.segment_index);
@@ -852,10 +850,10 @@ impl<'a> SegGraphBuilder<'a> {
 
             let mut wires = Vec::with_capacity(end - start + 1);
             for &(_, j) in &edge_list[start..end] {
-                wires.push(*self.edges[&(i, j)].wire());
+                wires.push(self.edges[&(i, j)]);
             }
-            if let Some(to_net_live) = self.to_net.get(&i) {
-                wires.push(*to_net_live.wire());
+            if let Some(&to_net_live) = self.to_net.get(&i) {
+                wires.push(to_net_live);
             }
             assert!(wires.len() <= u8::MAX as usize);
 
