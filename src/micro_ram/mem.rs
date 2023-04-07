@@ -13,9 +13,7 @@ use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::gadget::bit_pack;
 use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{
-    TWire, TSecretHandle, Builder, BuilderExt, Flatten, EvaluatorExt,
-};
+use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, Flatten, EvaluatorExt};
 use zk_circuit_builder::routing::sort::{self, CompareLt};
 use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{
@@ -23,6 +21,7 @@ use crate::micro_ram::types::{
     MemoryEquivalence, MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BOTTOM, WORD_BYTES,
     CompareMemPort,
 };
+use crate::micro_ram::witness::{MultiExecWitness, SegmentWitness};
 use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
 
@@ -117,12 +116,13 @@ impl<'a> Memory<'a> {
         b: &impl Builder<'a>,
         len: usize,
         sparsity: usize,
+        project_witness: impl Fn(&MultiExecWitness) -> &SegmentWitness + Copy + 'static,
     ) -> CyclePorts<'a> {
         let len = u32::try_from(len).unwrap();
         let sparsity_u8 = u8::try_from(sparsity).unwrap();
         self.add_cycles_common(cx, b, len, (0..len).step_by(sparsity).map(|start| {
             (start, (cmp::min(len, start + sparsity_u8 as u32) - start) as u8)
-        }))
+        }), project_witness)
     }
 
     pub fn add_cycles_irregular<'b>(
@@ -131,11 +131,12 @@ impl<'a> Memory<'a> {
         b: &impl Builder<'a>,
         len: usize,
         idxs: impl IntoIterator<Item = usize>,
+        project_witness: impl Fn(&MultiExecWitness) -> &SegmentWitness + Copy + 'static,
     ) -> CyclePorts<'a> {
         let len = u32::try_from(len).unwrap();
         self.add_cycles_common(cx, b, len, idxs.into_iter().map(|idx| {
             (u32::try_from(idx).unwrap(), 1)
-        }))
+        }), project_witness)
     }
 
     fn add_cycles_common<'b>(
@@ -144,6 +145,7 @@ impl<'a> Memory<'a> {
         b: &impl Builder<'a>,
         cycles_len: u32,
         ranges: impl IntoIterator<Item = (u32, u8)>,
+        project_witness: impl Fn(&MultiExecWitness) -> &SegmentWitness + Copy + 'static,
     ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
             port_starts: Vec::new(),
@@ -162,21 +164,36 @@ impl<'a> Memory<'a> {
             assert!(start.checked_add(port_len as u32).unwrap() <= cycles_len);
             cp.port_starts.push(start);
 
-            let (mp, mp_secret) = b.secret_default(MemPort {
-                cycle: MEM_PORT_UNUSED_CYCLE,
-                // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
-                // correspondence between `MemPort`s and steps.  We make unused ports distinct too,
-                // so we can just check that all ports are distinct.
-                addr: (self.ports.len() + i) as u64 * MemOpWidth::WORD.bytes() as u64,
-                value: 0,
-                op: MemOpKind::Write,
-                tainted: IfMode::new(|_fp| WORD_BOTTOM),
-                width: MemOpWidth::WORD,
+            let idx = self.ports.len() + i;
+            // We want all in-use `MemPort`s to be distinct, since it simplifies checking the
+            // correspondence between `MemPort`s and steps.  We make unused ports distinct too, so
+            // we can just check that all ports are distinct.
+            let default_addr = idx as u64 * MemOpWidth::WORD.bytes() as u64;
+            let (mp, user) = *b.secret_lazy(move |w: &MultiExecWitness| {
+                let w: &SegmentWitness = project_witness(w);
+                let mut out = None;
+                for i in start .. start + port_len as u32 {
+                    if let Some(mp) = w.mem_ports.get(i as usize).and_then(|opt| opt.as_ref()) {
+                        assert!(out.is_none(), "multiple mem ops require sparse port {}", idx);
+                        let user = u8::try_from(i - start).unwrap();
+                        out = Some((mp.clone(), user));
+                    }
+                }
+                out.unwrap_or_else(|| (
+                    MemPort {
+                        cycle: MEM_PORT_UNUSED_CYCLE,
+                        addr: default_addr,
+                        value: 0,
+                        op: MemOpKind::Write,
+                        tainted: IfMode::new(|_fp| WORD_BOTTOM),
+                        width: MemOpWidth::WORD,
+                    },
+                    0
+                ))
             });
-            let (user, user_secret) = b.secret_default(0);
             cp.ports.push(SparseMemPort {
-                mp, mp_secret,
-                user, user_secret,
+                mp,
+                user,
                 max_candidate_users: port_len,
                 public_non_users: 0,
                 is_set: false,
@@ -367,11 +384,9 @@ impl<'a, 'b> ExecSegments<'a, 'b> {
 #[derive(Clone, Migrate)]
 pub struct SparseMemPort<'a> {
     mp: TWire<'a, MemPort>,
-    /// Which of the steps actually uses this `MemPort`.  If no step uses it, the value will be out
-    /// of range (`>= sparsity`).
+    /// Which of the steps actually uses this `MemPort`.  If no step uses it, then `mp.cycle` will
+    /// be `MEM_PORT_UNUSED_CYCLE` and `user` will be ignored.
     user: TWire<'a, u8>,
-    mp_secret: TSecretHandle<'a, MemPort>,
-    user_secret: TSecretHandle<'a, u8>,
 
     /// Number of cycles that can use this port.  For secret segments, this is equal to the
     /// sparsity (or slightly less for the last port, if the sparsity doesn't evenly divide the
@@ -476,19 +491,6 @@ impl<'a> CyclePorts<'a> {
             smp.mp,
             b.lit(MemPort::default()),
         )
-    }
-
-    /// Initialize the `MemPort` for `i` with the values in `port`.  `i` is the index of a cycle,
-    /// not a port, so it can range up to `self.ports.len() * self.sparsity` (the number of cycles
-    /// covered by this `CyclePorts`), not just `self.ports.len()` (the number of actual ports).
-    pub fn set_port(&mut self, b: &impl Builder<'a>, i: usize, port: MemPort) {
-        let (idx, user) = self.index_to_port(u32::try_from(i).unwrap())
-            .unwrap_or_else(|| panic!("no memory port is available for index {}", i));
-        let smp = &mut self.ports[idx];
-        assert!(!smp.is_set, "multiple mem ops require sparse mem port {}", idx);
-        smp.mp_secret.set(b, port);
-        smp.user_secret.set(b, user);
-        smp.is_set = true;
     }
 
     /// Record that cycle `i` is publicly known not to use its `MemPort`.

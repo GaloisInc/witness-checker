@@ -63,6 +63,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
                 cx, b,
                 s.len,
                 (0 .. s.len).filter(|i| prog[init_pc as usize + i].opcode().is_mem()),
+                project_witness,
             );
             fetch_ports = None;
         } else {
@@ -70,6 +71,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
                 cx, b,
                 s.len,
                 self.params.sparsity.mem_op,
+                project_witness,
             );
             fetch_ports = Some(self.fetch.add_cycles(b, s.len, project_witness));
         };
@@ -178,13 +180,7 @@ impl<'a> Segment<'a> {
             let adv_list = advice.get(&k).map_or(&[] as &[_], |v| v as &[_]);
             for adv in adv_list {
                 match *adv {
-                    Advice::MemOp { addr, value, op, width, tainted } => {
-                        if self.mem_ports.has_port(i) {
-                            self.mem_ports.set_port(b, i, MemPort {
-                                cycle, addr, value, op, width, tainted,
-                            });
-                        }
-                    },
+                    Advice::MemOp { addr, value, op, width, tainted } => {},
                     Advice::Stutter => {},
                     Advice::Advise { advise } => {},
                 }

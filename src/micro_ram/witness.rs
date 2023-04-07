@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use crate::micro_ram::types::{MultiExec, ExecBody, Segment, Advice, RamInstr};
+use crate::micro_ram::types::{
+    MultiExec, ExecBody, Segment, Advice, RamInstr, MemPort, MEM_PORT_UNUSED_CYCLE,
+};
 
 
 #[derive(Clone, Debug)]
@@ -7,6 +9,7 @@ pub struct SegmentWitness {
     pub init_cycle: u32,
     pub live: bool,
     pub fetches: Vec<(u64, RamInstr)>,
+    pub mem_ports: Vec<Option<MemPort>>,
 
     pub advice: Vec<u64>,
     pub stutter: Vec<bool>,
@@ -75,13 +78,18 @@ impl ExecWitness {
             seg_w.init_cycle = cycle;
             seg_w.live = true;
             seg_w.fetches.reserve(seg.len);
+            seg_w.mem_ports.resize(seg.len, None);
 
             debug_assert_eq!(seg.len, tc.states.len());
             for (j, post_state) in tc.states.iter().enumerate() {
                 if let Some(advs) = e.advice.get(&(cycle as u64 + 1)) {
                     for adv in advs {
                         match *adv {
-                            Advice::MemOp { .. } => {},
+                            Advice::MemOp { addr, value, op, width, tainted } => {
+                                seg_w.mem_ports[j] = Some(MemPort {
+                                    cycle, addr, value, op, width, tainted
+                                });
+                            },
                             Advice::Stutter => { seg_w.stutter[j] = true; },
                             Advice::Advise { advise } => { seg_w.advice[j] = advise; },
                         }
@@ -121,6 +129,7 @@ impl SegmentWitness {
             init_cycle: 0,
             live: false,
             fetches: Vec::new(),
+            mem_ports: Vec::new(),
 
             advice: vec![0; s.len],
             stutter: vec![false; s.len],
