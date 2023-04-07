@@ -1,2 +1,7 @@
-invalid trace: segment 0 (live) has 2 live successors (expected 0 or 1)
-internal evaluator: 250 asserts passed, 1 failed; found 0 bugs; overall status: BAD
+invalid trace: segment 1: cycle 3 sets reg 0 to 10 (expected 2)
+invalid trace: segment 1: cycle 3 sets pc to 4 (expected 3)
+invalid trace: segment 1: cycle 4 sets reg 0 to 0 (expected 2)
+invalid trace: segment 1: cycle 4 sets pc to 5 (expected 3)
+invalid trace: segment 1: cycle 5 sets reg 0 to 0 (expected 2)
+invalid trace: segment 1: cycle 5 sets pc to 6 (expected 3)
+internal evaluator: 245 asserts passed, 6 failed; found 0 bugs; overall status: BAD
