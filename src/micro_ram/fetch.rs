@@ -9,7 +9,9 @@ use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
 use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, EvaluatorExt};
 use crate::micro_ram::context::{Context, ContextEval};
-use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
+use crate::micro_ram::types::{
+    FetchPort, FetchPortRepr, PackedFetchPort, RamInstr, CompareFetchPort,
+};
 use zk_circuit_builder::routing::sort::{self, CompareLe};
 
 #[derive(Migrate)]
@@ -82,7 +84,10 @@ impl<'a> Fetch<'a> {
                 let packed_ports = ports.open(mh).iter().map(|&fp| {
                     PackedFetchPort::from_unpacked(b, fp)
                 }).collect::<Vec<_>>();
-                sort::sort(b, &packed_ports, CompareLe)
+                sort::sort_by_key(b, &packed_ports, CompareLe, |w| {
+                    let w = w.unpack(b);
+                    b.cast::<_, CompareFetchPort>(w)
+                })
             }, mh);
 
             while !sort.open(mh).is_ready() {

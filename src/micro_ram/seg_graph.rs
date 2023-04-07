@@ -6,11 +6,12 @@ use std::mem;
 use log::*;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt};
+use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder, BuilderExt, FlatBits};
 use zk_circuit_builder::routing::{RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
+use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 use crate::util::PanicOnDrop;
 
 
@@ -85,7 +86,8 @@ enum NetworkState<'a> {
     /// We haven't built the network yet.  Final states for segments with `to_net` set can be fed
     /// directly to the routing network as inputs.
     Before(RoutingBuilder<'a, RamState>),
-    /// We have built the routing network.  
+    /// We have built the routing network.  These wires are the network's outputs, which should be
+    /// used as possible initial states for segments with `from_net`.
     After(Vec<TWire<'a, RamState>>),
 }
 
@@ -103,8 +105,6 @@ pub struct SegGraphBuilder<'a> {
 
     /// The state of routing network construction.
     network: NetworkState<'a>,
-    /// Paths that must be connected once the routing network has been constructed.
-    network_conns: Vec<(usize, usize)>,
 
     default_state: RamState,
     cpu_init_state: RamState,
@@ -132,8 +132,7 @@ impl<'a> SegGraphBuilder<'a> {
             from_net: HashMap::new(),
             to_net: HashMap::new(),
 
-            network: NetworkState::Before(RoutingBuilder::new()),
-            network_conns: Vec::new(),
+            network: NetworkState::Before(RoutingBuilder::new(b)),
 
             default_state: RamState::default_with_regs(params.num_regs),
             cpu_init_state: cpu_init_state.clone(),
@@ -452,8 +451,6 @@ impl<'a> SegGraphBuilder<'a> {
                 dest_from_net.set(b, true);
                 live_edges.insert(Liveness::ToNetwork(src));
                 live_edges.insert(Liveness::FromNetwork(dest));
-
-                self.network_conns.push((src, dest));
             }
         }
 
@@ -709,7 +706,12 @@ impl<'a> SegGraphBuilder<'a> {
         wire
     }
 
-    fn pre_build_network(&mut self, routing: &mut RoutingBuilder<'a, RamState>) {
+    fn pre_build_network(
+        &mut self,
+        b: &impl Builder<'a>,
+        routing: &mut RoutingBuilder<'a, RamState>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) {
         for inp in &self.network_inputs {
             let mut state = self.get_final(inp.pred.src).clone();
             // Force `state.live` to `false` if the edge leading to this network port is not live.
@@ -722,12 +724,41 @@ impl<'a> SegGraphBuilder<'a> {
             self.segments[inp.segment_index].to_net = Some(id);
         }
 
-        for &(src, dest) in &self.network_conns {
-            let src_input = self.segments[src].to_net
-                .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
-            let dest_output = self.segments[dest].from_net
-                .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
-            routing.connect(src_input, dest_output);
+        let seg_to_net_map = self.segments.iter().map(|seg| seg.to_net).collect::<Vec<_>>();
+        let seg_to_net_map = b.lit(seg_to_net_map);
+        let seg_from_net_map = self.segments.iter().map(|seg| seg.from_net).collect::<Vec<_>>();
+        let seg_from_net_map = b.lit(seg_from_net_map);
+
+        let n = self.segments.len();
+        let network_conns = b.secret_lazy_derived_sized(
+            &[n],
+            TWire::<(_, _)>::new((seg_to_net_map, seg_from_net_map)),
+            move |w: &MultiExecWitness, deps| {
+                let w = project_witness(w);
+                let (seg_to_net_map, seg_from_net_map) = deps;
+                let mut conns = Vec::with_capacity(n);
+                debug_assert_eq!(n, w.segments.len());
+                for (i, seg) in w.segments.iter().enumerate() {
+                    if seg.to_net {
+                        let src = i;
+                        let dest = seg.succ.unwrap();
+                        let inp = seg_to_net_map[src].unwrap_or_else(|| {
+                            panic!("no outgoing edge from {} to {}", src, dest)
+                        });
+                        let out = seg_from_net_map[dest].unwrap_or_else(|| {
+                            panic!("no incoming edge from {} to {}", src, dest)
+                        });
+                        conns.push((inp, out, true));
+                    } else {
+                        conns.push((InputId::from_raw(0), OutputId::from_raw(0), false));
+                    }
+                }
+                conns
+            });
+
+        for tw in network_conns.repr {
+            let (inp, out, cond) = tw.repr;
+            routing.maybe_connect(cond, inp, out);
         }
     }
 
@@ -735,14 +766,15 @@ impl<'a> SegGraphBuilder<'a> {
         this: &mut Rooted<'a, Projected<Self>>,
         mh: &mut MigrateHandle<'a>,
         b: &impl Builder<'a>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
         let _g = b.scoped_label("seg_graph/build_network");
         let mut routing = Rooted::new(match this.open(mh).network {
-            NetworkState::Before(ref mut rb) => mem::take(rb),
+            NetworkState::Before(ref mut rb) => mem::replace(rb, RoutingBuilder::new(b)),
             NetworkState::After(_) => panic!("already built the routing network"),
         }, mh);
 
-        this.open(mh).pre_build_network(&mut routing.open(mh));
+        this.open(mh).pre_build_network(b, &mut routing.open(mh), project_witness);
 
         let mut r = Rooted::new({
             let default = this.open(mh).default_state.clone();

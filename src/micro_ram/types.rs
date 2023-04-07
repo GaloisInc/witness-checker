@@ -14,6 +14,7 @@ use zk_circuit_builder::ir::typed::{
 };
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::primitive_binary_impl;
+use zk_circuit_builder::routing::sort::Sortable;
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
@@ -1175,6 +1176,12 @@ impl<'a> SecretDep<'a> for CompareMemPort {
     }
 }
 
+impl<'a> Sortable<'a> for CompareMemPort {
+    type Decoded = CompareMemPort;
+    type AsSecretDep = Self;
+    fn convert_vec(v: TWire<'a, Vec<Self>>) -> TWire<'a, Vec<Self>> { v }
+}
+
 impl<'a> Cast<'a, CompareMemPort> for MemPort {
     fn cast(_bld: &impl Builder<'a>, x: MemPortRepr<'a>) -> MemPortRepr<'a> {
         x
@@ -1585,6 +1592,12 @@ impl<'a> SecretDep<'a> for CompareFetchPort {
             write: bool::from_bits_iter(sizes, bits),
         })
     }
+}
+
+impl<'a> Sortable<'a> for CompareFetchPort {
+    type Decoded = CompareFetchPort;
+    type AsSecretDep = Self;
+    fn convert_vec(v: TWire<'a, Vec<Self>>) -> TWire<'a, Vec<Self>> { v }
 }
 
 impl<'a> Cast<'a, CompareFetchPort> for FetchPort {
