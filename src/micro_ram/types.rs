@@ -9,8 +9,7 @@ use zk_circuit_builder::ir::circuit::{
     CircuitBase, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize, Bits,
 };
 use zk_circuit_builder::ir::typed::{
-    self, Builder, BuilderExt, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
-    LazySecret, SecretDep,
+    self, Builder, BuilderExt, TWire, Repr, Flatten, Lit, Mux, FromEval, LazySecret, SecretDep,
 };
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::primitive_binary_impl;
@@ -112,26 +111,6 @@ impl<'a> Lit<'a> for RamInstr {
             op2: bld.lit(a.op2),
             imm: bld.lit(a.imm),
         }
-    }
-}
-
-impl<'a> Secret<'a> for RamInstr {
-    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-        RamInstrRepr {
-            opcode: bld.secret_uninit(),
-            dest: bld.secret_uninit(),
-            op1: bld.secret_uninit(),
-            op2: bld.secret_uninit(),
-            imm: bld.secret_uninit(),
-        }
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        typed::set_secret_from_lit(&s.opcode, &val.opcode, force);
-        typed::set_secret_from_lit(&s.dest, &val.dest, force);
-        typed::set_secret_from_lit(&s.op1, &val.op1, force);
-        typed::set_secret_from_lit(&s.op2, &val.op2, force);
-        typed::set_secret_from_lit(&s.imm, &val.imm, force);
     }
 }
 
@@ -339,27 +318,6 @@ impl<'a> Lit<'a> for RamState {
     }
 }
 
-impl<'a> Secret<'a> for RamState {
-    fn secret(_bld: &impl Builder<'a>) -> Self::Repr {
-        panic!("can't construct RamState via Builder::secret - use RamState::secret instead");
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        typed::set_secret_from_lit(&s.cycle, &val.cycle, force);
-        typed::set_secret_from_lit(&s.pc, &val.pc, force);
-        assert_eq!(s.regs.len(), val.regs.len());
-        for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
-            typed::set_secret_from_lit(s_reg, val_reg, force);
-        }
-        if let Some(pf) = check_mode::<AnyTainted>() {
-            for (s_reg, val_reg) in s.tainted_regs.get(&pf).iter().zip(val.tainted_regs.get(&pf).iter()) {
-                typed::set_secret_from_lit(s_reg, val_reg, force);
-            }
-        }
-        typed::set_secret_from_lit(&s.live, &val.live, force);
-    }
-}
-
 impl<'a> LazySecret<'a> for RamState {
     fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
         <u64 as LazySecret>::num_wires(sizes) +
@@ -406,49 +364,6 @@ impl<'a> LazySecret<'a> for RamState {
         tainted_regs.push_words(out);
         live.push_words(out);
         cycle.push_words(out);
-    }
-}
-
-impl RamState {
-    pub fn secret_with_value<'a>(bld: &impl Builder<'a>, a: Self) -> TWire<'a, RamState> {
-        TWire::new(RamStateRepr {
-            cycle: bld.secret_init(|| a.cycle),
-            pc: bld.secret_init(|| a.pc),
-            regs: a.regs.iter().map(|&x| bld.secret_init(|| x)).collect(),
-            live: bld.secret_init(|| a.live),
-            tainted_regs: a.tainted_regs.map(|v| v.iter().map(|&t| {
-                bld.secret_init(|| t)
-            }).collect()),
-        })
-    }
-
-    pub fn secret_with_len<'a>(bld: &impl Builder<'a>, len: usize) -> TWire<'a, RamState> {
-        TWire::new(RamStateRepr {
-            cycle: bld.secret_uninit(),
-            pc: bld.secret_uninit(),
-            regs: (0 .. len).map(|_| {
-                bld.secret_uninit()
-            }).collect(),
-            live: bld.secret_uninit(),
-            tainted_regs: IfMode::new(|_| (0 .. len).map(|_| {
-                bld.secret_uninit()
-            }).collect()),
-        })
-    }
-
-    pub fn secret<'a>(
-        bld: &impl Builder<'a>,
-        len: usize,
-    ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
-        let wire = Self::secret_with_len(bld, len);
-        let default = bld.lit(RamState {
-            cycle: 0,
-            pc: 0,
-            regs: vec![0; len],
-            live: false,
-            tainted_regs: IfMode::new(|_| vec![WORD_BOTTOM; len]),
-        });
-        (wire.clone(), TSecretHandle::new(wire, default))
     }
 }
 
@@ -569,16 +484,6 @@ macro_rules! mk_named_enum {
         impl<'a> Lit<'a> for $Name {
             fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
                 bld.lit(a as u8)
-            }
-        }
-
-        impl<'a> Secret<'a> for $Name {
-            fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-                bld.secret_uninit()
-            }
-
-            fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-                typed::set_secret_from_lit(s, val, force);
             }
         }
 
@@ -851,17 +756,6 @@ impl<'a> Mux<'a, bool, Label> for Label {
     }
 }
 
-impl<'a> Secret<'a> for Label {
-    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-        let ty = <Label as Flatten>::wire_type(bld.circuit());
-        bld.circuit().new_secret_wire_uninit(ty)
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        s.kind.as_secret().set_from_lit(*val, force);
-    }
-}
-
 primitive_binary_impl!(Eq::eq(Label, Label) -> bool);
 primitive_binary_impl!(Ne::ne(Label, Label) -> bool);
 primitive_binary_impl!(Lt::lt(Label, Label) -> bool);
@@ -950,16 +844,6 @@ where
         e: [TWire<'a, Label>; 8],
     ) -> [TWire<'a, Label>; 8] {
         <[Label; WORD_BYTES] as Mux<'a, C, [Label; WORD_BYTES]>>::mux(bld, c, t, e)
-    }
-}
-
-impl<'a> Secret<'a> for WordLabel {
-    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-        <[Label; WORD_BYTES]>::secret(bld)
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        <[Label; WORD_BYTES]>::set_from_lit(s, val, force)
     }
 }
 
@@ -1198,28 +1082,6 @@ impl<'a> Lit<'a> for MemPort {
             width: bld.lit(a.width),
             tainted: bld.lit(a.tainted),
         }
-    }
-}
-
-impl<'a> Secret<'a> for MemPort {
-    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-        MemPortRepr {
-            cycle: bld.secret_uninit(),
-            addr: bld.secret_uninit(),
-            value: bld.secret_uninit(),
-            op: bld.secret_uninit(),
-            width: bld.secret_uninit(),
-            tainted: bld.secret_uninit(),
-        }
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        typed::set_secret_from_lit(&s.cycle, &val.cycle, force);
-        typed::set_secret_from_lit(&s.addr, &val.addr, force);
-        typed::set_secret_from_lit(&s.value, &val.value, force);
-        typed::set_secret_from_lit(&s.op, &val.op, force);
-        typed::set_secret_from_lit(&s.width, &val.width, force);
-        typed::set_secret_from_lit(&s.tainted, &val.tainted, force);
     }
 }
 
@@ -1623,22 +1485,6 @@ impl<'a> Lit<'a> for FetchPort {
             instr: bld.lit(a.instr),
             write: bld.lit(a.write),
         }
-    }
-}
-
-impl<'a> Secret<'a> for FetchPort {
-    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-        FetchPortRepr {
-            addr: bld.secret_uninit(),
-            instr: bld.secret_uninit(),
-            write: bld.secret_uninit(),
-        }
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        typed::set_secret_from_lit(&s.addr, &val.addr, force);
-        typed::set_secret_from_lit(&s.instr, &val.instr, force);
-        typed::set_secret_from_lit(&s.write, &val.write, force);
     }
 }
 
