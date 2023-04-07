@@ -339,8 +339,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         .chain(bugs.into_iter())
         .collect::<Vec<_>>();
 
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(multi_exec_witness);
     {
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         let flag_vals = flags.iter().map(|&w| {
             ev.eval_wire(c, w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();
@@ -364,7 +364,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     drop(mcx_backend_guard);
     let accepted = flags[0];
     let validate = !args.is_present("skip-backend-validation");
-    let mut ev = CachingEvaluator::with_secret(&multi_exec_witness);
     backend.finish(c.as_base(), &mut ev, accepted, validate);
 
     // Unused in some configurations.
