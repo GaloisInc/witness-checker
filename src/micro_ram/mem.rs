@@ -21,7 +21,7 @@ use crate::micro_ram::types::{
     MemoryEquivalence, MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BOTTOM, WORD_BYTES,
     CompareMemPort,
 };
-use crate::micro_ram::witness::{MultiExecWitness, SegmentWitness};
+use crate::micro_ram::witness::{MultiExecWitness, ExecWitness, SegmentWitness};
 use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
 
@@ -49,29 +49,33 @@ impl<'a> Memory<'a> {
     pub fn init_segment(
         &mut self,
         b: &impl Builder<'a>,
+        seg_idx: usize,
         seg: &MemSegment,
         mut exec_equivs: ExecSegments<'a, '_>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> Vec<TWire<'a, u64>> {
         let mut unused = self.unused.0.borrow_mut();
         self.ports.reserve(seg.len as usize);
         unused.reserve(seg.len as usize);
         let mut value_wires = Vec::with_capacity(seg.len as usize);
-        
-        // Get the values of the word.  `data` is implicitly zero-padded out to
-        // `seg.len`, to support `.bss`-style zero-initialized segments.  For secret segments
-        // in verifier mode, `seg.data` is always empty, so the `value` is zero (but unused).
-        let values:Vec<u64> = (0..seg.len).map(|i| seg.data.get(i as usize).cloned().unwrap_or(0)).collect(); 
 
         // Then create the wires. Depends on whether the
         // segment is part of an qeuivalence class
+        let n = seg.len as usize;
         let mem_wires = match exec_equivs.get(&seg.name) {
             // If the segmetn is not in an equivalence class
             // just build new wires depending on whether the
             // segment is secret or not
             ExecSegment::NoEquiv => if seg.secret {
-                values.iter().map(|&value| b.secret_init(|| value)).collect()
+                b.secret_lazy_sized(&[n], move |w: &MultiExecWitness| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.init_mem_values[seg_idx].clone()
+                }).repr
             } else {
-                values.iter().map(|&value| b.lit(value)).collect()
+                let mut data = seg.data.clone();
+                assert!(data.len() <= seg.len as usize);
+                data.resize(seg.len as usize, 0);
+                b.lit(data).repr
             },
 
             //TODO: check equality with supplied values.
@@ -80,7 +84,10 @@ impl<'a> Memory<'a> {
             ExecSegment::NeedsInit(wires) => {
                 // all memory equivalences must be on secret segments
                 assert!(seg.secret);
-                *wires = values.iter().map(|&value| b.secret_init(|| value)).collect();
+                *wires = b.secret_lazy_sized(&[n], move |w: &MultiExecWitness| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.init_mem_values[seg_idx].clone()
+                }).repr;
                 wires.clone()
             },
         };
@@ -338,10 +345,10 @@ impl<'a> EquivSegments<'a> {
         es
     }
 
-    pub fn exec_segments(&mut self, seg_name: &str) -> ExecSegments<'a, '_> {
+    pub fn exec_segments(&mut self, exec_name: &str) -> ExecSegments<'a, '_> {
         ExecSegments {
             data: &mut self.data,
-            seg_map: self.equivs.get(seg_name),
+            seg_map: self.equivs.get(exec_name),
         }
     }
 }
