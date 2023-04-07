@@ -1819,6 +1819,103 @@ where
 }
 
 
+impl<'a, A: Repr<'a>> Repr<'a> for Option<A> {
+    type Repr = Option<TWire<'a, A>>;
+}
+
+impl<'a, A: Lit<'a>> Lit<'a> for Option<A> {
+    fn lit(bld: &impl Builder<'a>, a: Option<A>) -> Option<TWire<'a, A>> {
+        a.map(|x| bld.lit(x))
+    }
+}
+
+impl<'a, A: FromEval<'a>> FromEval<'a> for Option<A> {
+    fn from_eval<E: Evaluator<'a> + ?Sized>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Option<TWire<'a, A>>,
+    ) -> Option<Option<A>> {
+        a.map(|x| A::from_eval(c, ev, x.repr))
+    }
+}
+
+// No `impl Secret for Option<A>`, since we can't determine how many wires to create in the case
+// where the value is unknown.
+
+impl<'a, A: LazySecret<'a>> LazySecret<'a> for Option<A> {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        let n = sizes.next().unwrap();
+        if n == 0 {
+            0
+        } else {
+            A::num_wires(sizes)
+        }
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        let n = sizes.next().unwrap();
+        if n == 0 {
+            None
+        } else {
+            Some(TWire::new(A::build_repr_from_wires(c, sizes, build_wire)))
+        }
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        let n = sizes.next().unwrap();
+        if n == 0 {
+            0
+        } else {
+            A::expected_word_len(sizes)
+        }
+    }
+    fn word_len(&self) -> usize {
+        self.as_ref().map_or(0, A::word_len)
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        if let Some(x) = self.as_ref() {
+            x.push_words(out);
+        }
+    }
+}
+
+impl<'a, A: SecretDep<'a>> SecretDep<'a> for Option<A> {
+    type Decoded = Option<A::Decoded>;
+    fn num_wires(x: &Self::Repr) -> usize {
+        x.as_ref().map_or(0, |tw| A::num_wires(&tw.repr))
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        if let Some(tw) = x.as_ref() {
+            A::for_each_wire(&tw.repr, |w| f(w))
+        }
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        1 + x.as_ref().map_or(0, |tw| A::num_sizes(&tw.repr))
+    }
+    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+        f(x.is_some() as usize);
+        if let Some(tw) = x.as_ref() {
+            A::for_each_size(&tw.repr, |s| f(s))
+        }
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Option<A::Decoded> {
+        let n = sizes.next().unwrap();
+        if n == 0 {
+            None
+        } else {
+            Some(A::from_bits_iter(sizes, bits))
+        }
+    }
+}
+
+
 pub trait EvaluatorExt<'a> {
     fn eval_typed<C: CircuitTrait<'a> + ?Sized, T: FromEval<'a>>(
         &mut self,
