@@ -932,6 +932,22 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         })
     }
 
+    fn new_secret_lazy_derived<S, F>(
+        &self,
+        ty: Ty<'a>,
+        deps: &'a [Wire<'a>],
+        init: F,
+    ) -> Secret<'a>
+    where
+        S: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.as_base().alloc_lazy_secret(ty, deps, move |c, secret, dep_vals| {
+            init(c, secret, dep_vals)
+        })
+    }
+
     fn new_secret_derived<F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
     where
         F: for<'b> Fn(&CircuitBase<'b>, &[Bits<'b>]) -> Bits<'b>,
@@ -949,6 +965,15 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         F: Sized + Copy + 'static,
     {
         self.secret(self.new_secret_lazy(ty, init))
+    }
+
+    fn secret_lazy_derived<S, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Wire<'a>
+    where
+        S: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.secret(self.new_secret_lazy_derived(ty, deps, init))
     }
 
     fn secret_derived<F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Wire<'a>

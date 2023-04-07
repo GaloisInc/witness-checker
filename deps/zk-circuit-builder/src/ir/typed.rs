@@ -1,3 +1,4 @@
+use std::any;
 use std::cmp;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -101,6 +102,37 @@ pub trait BuilderExt<'a>: Builder<'a> {
         })
     }
 
+    fn secret_lazy_derived<T, S, D, F>(&self, deps: TWire<'a, D>, init: F) -> TWire<'a, T>
+    where
+        T: for<'b> LazySecret<'b>,
+        S: 'static,
+        D: for<'b> SecretDep<'b>,
+        F: for <'b> Fn(&S, <D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
+    {
+        self.secret_lazy_derived_sized(&[], deps, init)
+    }
+
+    fn secret_lazy_derived_sized<T, S, D, F>(
+        &self,
+        sizes: &[usize],
+        deps: TWire<'a, D>,
+        init: F,
+    ) -> TWire<'a, T>
+    where
+        T: for<'b> LazySecret<'b>,
+        S: 'static,
+        D: for<'b> SecretDep<'b>,
+        F: for <'b> Fn(&S, <D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
+    {
+        let (dep_wires, fixed_size) = lazy_secret_build_dep_wires::<_, D>(self.circuit(), deps);
+        lazy_secret_common::<Self, T, _>(self, sizes, move |ty, expected_word_len| {
+            self.circuit().secret_lazy_derived(ty, dep_wires, move |c, s, bs| {
+                let dep_val = lazy_secret_deps_from_bits::<D>(fixed_size, bs);
+                lazy_secret_init_bits(c, init(s, dep_val), expected_word_len)
+            })
+        })
+    }
+
     fn secret_derived<T, D, F>(&self, deps: TWire<'a, D>, init: F) -> TWire<'a, T>
     where
         T: for<'b> LazySecret<'b>,
@@ -121,43 +153,10 @@ pub trait BuilderExt<'a>: Builder<'a> {
         D: for<'b> SecretDep<'b>,
         F: for <'b> Fn(<D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
     {
-        let expect_num_wires = D::num_wires(&deps.repr);
-        let expect_num_sizes = D::num_sizes(&deps.repr);
-        let fixed_size = expect_num_sizes == 0;
-
-        let mut dep_wires: Vec<Wire>;
-        if fixed_size {
-            dep_wires = Vec::with_capacity(expect_num_wires);
-        } else {
-            // For non-fixed-size `D`, we collect the `sizes` list from `deps` and add it as an
-            // extra `RawBits` literal in order to pass it into the closure (which must be `Copy`
-            // and `'static`, forbidding normal means of passing it in).
-            dep_wires = Vec::with_capacity(1 + expect_num_wires);
-            let mut sizes = Vec::with_capacity(expect_num_sizes);
-            D::for_each_size(&deps.repr, |s| sizes.push(u32::try_from(s).unwrap()));
-            debug_assert_eq!(sizes.len(), expect_num_sizes);
-            let sizes = self.circuit().as_base().intern_bits(&sizes);
-            let sizes_wire = self.circuit().gate(GateKind::Lit(sizes, Ty::raw_bits()));
-            dep_wires.push(sizes_wire);
-        }
-
-        D::for_each_wire(&deps.repr, |w| dep_wires.push(w));
-        debug_assert_eq!(dep_wires.len(), expect_num_wires + (if fixed_size { 0 } else { 1 }));
-        let dep_wires = self.circuit().wire_list(&dep_wires);
-
+        let (dep_wires, fixed_size) = lazy_secret_build_dep_wires::<_, D>(self.circuit(), deps);
         lazy_secret_common::<Self, T, _>(self, sizes, move |ty, expected_word_len| {
             self.circuit().secret_derived(ty, dep_wires, move |c, bs| {
-                let mut it = bs.iter().copied();
-                let dep_val = if fixed_size {
-                    D::from_bits_iter(&mut iter::empty(), &mut it)
-                } else {
-                    let sizes = it.next().unwrap();
-                    D::from_bits_iter(
-                        &mut sizes.0.iter().map(|&x| usize::try_from(x).unwrap()),
-                        &mut it,
-                    )
-                };
-                debug_assert!(it.next().is_none());
+                let dep_val = lazy_secret_deps_from_bits::<D>(fixed_size, bs);
                 lazy_secret_init_bits(c, init(dep_val), expected_word_len)
             })
         })
@@ -460,10 +459,60 @@ fn lazy_secret_init_bits<'b, T: LazySecret<'b>>(
     expected_word_len: usize,
 ) -> Bits<'b> {
     let word_len = x.word_len();
-    debug_assert_eq!(word_len, expected_word_len);
+    debug_assert_eq!(word_len, expected_word_len,
+        "callback produced wrong number of words, with T = {}", any::type_name::<T>());
     let mut words = Vec::with_capacity(word_len);
     x.push_words(&mut words);
     c.intern_bits(&words)
+}
+
+fn lazy_secret_build_dep_wires<'b, C: CircuitTrait<'b> + ?Sized, D: SecretDep<'b>>(
+    c: &C,
+    deps: TWire<'b, D>,
+) -> (&'b [Wire<'b>], bool) {
+    let expect_num_wires = D::num_wires(&deps.repr);
+    let expect_num_sizes = D::num_sizes(&deps.repr);
+    let fixed_size = expect_num_sizes == 0;
+
+    let mut dep_wires: Vec<Wire>;
+    if fixed_size {
+        dep_wires = Vec::with_capacity(expect_num_wires);
+    } else {
+        // For non-fixed-size `D`, we collect the `sizes` list from `deps` and add it as an
+        // extra `RawBits` literal in order to pass it into the closure (which must be `Copy`
+        // and `'static`, forbidding normal means of passing it in).
+        dep_wires = Vec::with_capacity(1 + expect_num_wires);
+        let mut sizes = Vec::with_capacity(expect_num_sizes);
+        D::for_each_size(&deps.repr, |s| sizes.push(u32::try_from(s).unwrap()));
+        debug_assert_eq!(sizes.len(), expect_num_sizes);
+        let sizes = c.as_base().intern_bits(&sizes);
+        let sizes_wire = c.gate(GateKind::Lit(sizes, Ty::raw_bits()));
+        dep_wires.push(sizes_wire);
+    }
+
+    D::for_each_wire(&deps.repr, |w| dep_wires.push(w));
+    debug_assert_eq!(dep_wires.len(), expect_num_wires + (if fixed_size { 0 } else { 1 }));
+    let dep_wires = c.wire_list(&dep_wires);
+
+    (dep_wires, fixed_size)
+}
+
+fn lazy_secret_deps_from_bits<'b, D: SecretDep<'b>>(
+    fixed_size: bool,
+    bs: &[Bits<'b>],
+) -> D::Decoded {
+    let mut it = bs.iter().copied();
+    let dep_val = if fixed_size {
+        D::from_bits_iter(&mut iter::empty(), &mut it)
+    } else {
+        let sizes = it.next().unwrap();
+        D::from_bits_iter(
+            &mut sizes.0.iter().map(|&x| usize::try_from(x).unwrap()),
+            &mut it,
+        )
+    };
+    debug_assert!(it.next().is_none());
+    dep_val
 }
 
 
