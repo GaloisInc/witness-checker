@@ -59,7 +59,7 @@ impl<'a> Fetch<'a> {
         for i in 0 .. len {
             let addr = b.secret_lazy(move |w: &MultiExecWitness| {
                 let w: &SegmentWitness = project_witness(w);
-                if w.live {
+                if w.live() {
                     w.fetches[i].0
                 } else {
                     0
@@ -67,7 +67,7 @@ impl<'a> Fetch<'a> {
             });
             let instr = b.secret_lazy(move |w: &MultiExecWitness| {
                 let w: &SegmentWitness = project_witness(w);
-                if w.live {
+                if w.live() {
                     w.fetches[i].1
                 } else {
                     default_instr

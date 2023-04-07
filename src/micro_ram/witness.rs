@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use crate::micro_ram::types::{
-    MultiExec, ExecBody, Segment, Advice, RamInstr, MemPort, MEM_PORT_UNUSED_CYCLE,
+    MultiExec, ExecBody, Segment, Advice, RamInstr, RamState, MemPort, MEM_PORT_UNUSED_CYCLE,
 };
 
 
 #[derive(Clone, Debug)]
 pub struct SegmentWitness {
-    pub init_cycle: u32,
-    pub live: bool,
+    pub init_state: RamState,
     pub fetches: Vec<(u64, RamInstr)>,
     pub mem_ports: Vec<Option<MemPort>>,
 
@@ -39,19 +38,25 @@ pub struct MultiExecWitness {
 
 
 impl MultiExecWitness {
-    pub fn from_raw(me: &MultiExec) -> MultiExecWitness {
+    pub fn from_raw(
+        me: &MultiExec,
+        provided_initial_state: &Option<RamState>,
+    ) -> MultiExecWitness {
         MultiExecWitness {
             execs: me.execs.iter().map(|(k, v)| {
-                (k.clone(), ExecWitness::from_raw(v))
+                (k.clone(), ExecWitness::from_raw(v, provided_initial_state))
             }).collect(),
         }
     }
 }
 
 impl ExecWitness {
-    pub fn from_raw(e: &ExecBody) -> ExecWitness {
+    pub fn from_raw(e: &ExecBody, provided_initial_state: &Option<RamState>) -> ExecWitness {
+        let default_init_state = RamState::default_with_regs(e.params.num_regs);
         let mut w = ExecWitness {
-            segments: e.segments.iter().map(|s| SegmentWitness::default_from_raw(s)).collect(),
+            segments: e.segments.iter().map(|s| {
+                SegmentWitness::from_raw(s, default_init_state.clone())
+            }).collect(),
             init_mem_values: e.init_mem.iter().map(|ms| {
                 let mut data = ms.data.clone();
                 assert!(data.len() <= ms.len as usize);
@@ -60,8 +65,9 @@ impl ExecWitness {
             }).collect(),
         };
 
-        let mut cycle = 0;
         let mut pc = 0;
+        let mut cycle = 0;
+        let mut prev_state = provided_initial_state.clone().unwrap_or_else(|| e.initial_state());
         let mut prev_seg_idx: Option<usize> = None;
         for tc in &e.trace {
             let seg_idx = tc.segment;
@@ -74,6 +80,7 @@ impl ExecWitness {
                 }
                 if let Some(ref debug_state) = debug.prev_state {
                     pc = debug_state.pc;
+                    prev_state = debug_state.clone();
                 }
                 if debug.clear_prev_segment {
                     prev_seg_idx = None;
@@ -83,8 +90,7 @@ impl ExecWitness {
                 }
             }
 
-            seg_w.init_cycle = cycle;
-            seg_w.live = true;
+            seg_w.init_state = RamState { cycle, live:true, .. prev_state };
             seg_w.fetches.reserve(seg.len);
             seg_w.mem_ports.resize(seg.len, None);
 
@@ -125,6 +131,7 @@ impl ExecWitness {
             }
 
             prev_seg_idx = Some(seg_idx);
+            prev_state = tc.states.last().unwrap().clone();
         }
 
         w
@@ -132,10 +139,9 @@ impl ExecWitness {
 }
 
 impl SegmentWitness {
-    pub fn default_from_raw(s: &Segment) -> SegmentWitness {
+    pub fn from_raw(s: &Segment, init_state: RamState) -> SegmentWitness {
         SegmentWitness {
-            init_cycle: 0,
-            live: false,
+            init_state,
             fetches: Vec::new(),
             mem_ports: Vec::new(),
 
@@ -147,5 +153,9 @@ impl SegmentWitness {
             from_net: false,
             to_net: false,
         }
+    }
+
+    pub fn live(&self) -> bool {
+        self.init_state.live
     }
 }

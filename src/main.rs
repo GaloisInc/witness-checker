@@ -187,7 +187,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         }
     }
 
-    let multi_exec_witness = MultiExecWitness::from_raw(&multi_exec.inner);
+    let multi_exec_witness = MultiExecWitness::from_raw(&multi_exec.inner, &provided_init_state);
 
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
 
@@ -285,15 +285,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // for equivalent mem segments. 
     for (name,exec) in multi_exec.inner.execs.iter(){
         // Generate IR code to check the trace.
-        let init_state = provided_init_state.clone().unwrap_or_else(|| {
-            let mut regs = vec![0; exec.params.num_regs];
-            regs[0] = exec.init_mem.iter()
-                .filter(|ms| ms.heap_init == false)
-                .map(|ms| ms.start + ms.len)
-                .max().unwrap_or(0);
-            let tainted_regs = IfMode::new(|_| vec![WORD_BOTTOM; exec.params.num_regs]);
-            RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
-        });
+        let init_state = provided_init_state.clone().unwrap_or_else(|| exec.initial_state());
         if provided_init_state.is_some() {
             let init_state_wire = b.lit(init_state.clone());
             check_first(&cx, b, &init_state_wire);
