@@ -3,7 +3,7 @@ use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, Ty, Wire, Bits}
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{
     self, Builder, BuilderExt, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire,
-    SecretDep,
+    LazySecret, SecretDep,
 };
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
@@ -393,11 +393,51 @@ where
 }
 
 
+impl<'a, M: ModePred, T: LazySecret<'a>> LazySecret<'a> for IfMode<M, T> {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        if let Some(pf) = check_mode::<M>() {
+            <T as LazySecret>::num_wires(sizes)
+        } else {
+            0
+        }
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        IfMode::new(|_pf| {
+            TWire::new(T::build_repr_from_wires(c, sizes, build_wire))
+        })
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        if let Some(pf) = check_mode::<M>() {
+            <T as LazySecret>::expected_word_len(sizes)
+        } else {
+            0
+        }
+    }
+    fn word_len(&self) -> usize {
+        if let Some(pf) = check_mode() {
+            <T as LazySecret>::word_len(self.get(&pf))
+        } else {
+            0
+        }
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        if let Some(pf) = check_mode() {
+            <T as LazySecret>::push_words(self.get(&pf), out);
+        }
+    }
+}
+
 impl<'a, M: ModePred, T: SecretDep<'a>> SecretDep<'a> for IfMode<M, T> {
     type Decoded = IfMode<M, T::Decoded>;
     fn num_wires(x: &Self::Repr) -> usize {
         if let Some(pf) = check_mode() {
-            T::num_wires(x.get(&pf))
+            <T as SecretDep>::num_wires(x.get(&pf))
         } else {
             0
         }
