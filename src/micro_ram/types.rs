@@ -1835,6 +1835,15 @@ pub struct ExecBody {
 }
 
 impl ExecBody {
+    pub fn initial_state(&self) -> RamState {
+        let mut regs = vec![0; self.params.num_regs];
+        regs[0] = self.init_mem.iter()
+            .filter(|ms| ms.heap_init == false)
+            .map(|ms| ms.start + ms.len)
+            .max().unwrap_or(0);
+        let tainted_regs = IfMode::new(|_| vec![WORD_BOTTOM; self.params.num_regs]);
+        RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
+    }
 
     pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
         let params = &self.params;
