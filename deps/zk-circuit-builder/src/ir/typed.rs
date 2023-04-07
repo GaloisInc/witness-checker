@@ -42,35 +42,6 @@ pub trait BuilderExt<'a>: Builder<'a> {
         TWire::new(Lit::lit(self, x))
     }
 
-    fn secret<T: Secret<'a> + Default>(&self) -> (TWire<'a, T>, TSecretHandle<'a, T>)
-    where T::Repr: Clone {
-        self.secret_default(T::default())
-    }
-
-    fn secret_default<T: Secret<'a>>(
-        &self,
-        default: T,
-    ) -> (TWire<'a, T>, TSecretHandle<'a, T>)
-    where T::Repr: Clone {
-        let w = self.secret_uninit::<T>();
-        let sh = TSecretHandle::new(w.clone(), self.lit(default));
-        (w, sh)
-    }
-
-    fn secret_init<T: Secret<'a>, F>(&self, mk_val: F) -> TWire<'a, T>
-    where F: FnOnce() -> T {
-        let w = self.secret_uninit::<T>();
-        if self.is_prover() {
-            let lit = self.lit(mk_val());
-            set_secret_from_lit(&w, &lit, true);
-        }
-        w
-    }
-
-    fn secret_uninit<T: Secret<'a>>(&self) -> TWire<'a, T> {
-        TWire::new(<T as Secret>::secret(self))
-    }
-
     fn secret_lazy<T, S, F>(&self, init: F) -> TWire<'a, T>
     where
         T: for<'b> LazySecret<'b>,
@@ -516,11 +487,6 @@ fn lazy_secret_deps_from_bits<'b, D: SecretDep<'b>>(
 }
 
 
-pub fn set_secret_from_lit<'a, T: Secret<'a>>(s: &TWire<'a, T>, val: &TWire<'a, T>, force: bool) {
-    <T as Secret>::set_from_lit(&s.repr, &val.repr, force);
-}
-
-
 #[repr(transparent)]
 pub struct BuilderImpl<C>(C);
 
@@ -607,76 +573,6 @@ impl<'a, T: Repr<'a>> DerefMut for TWire<'a, T> {
 }
 
 
-/// Typed analogue to `circuit::SecretHandle`.  Call `set()` to initialize the secret value, or
-/// drop it to apply the default, if one was provided at construction time.
-pub struct TSecretHandle<'a, T: Repr<'a> + Secret<'a> + ?Sized> {
-    /// `TSecretHandle` doesn't actually store any `SecretHandle`s, since that would require `T` to
-    /// provide a second `Repr`-like type that's built up from `SecretHandle`s instead of `Wire`s.
-    /// Instead, we store the `TWire` of the `Secret` gate, and use `<T as Secret>::set_from_lit`
-    /// to copy a `Lit` `TWire` into the `Secret` `TWire`.
-    secret: TWire<'a, T>,
-    default: TWire<'a, T>,
-}
-
-impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> TSecretHandle<'a, T> {
-    pub fn new(secret: TWire<'a, T>, default: TWire<'a, T>) -> TSecretHandle<'a, T> {
-        TSecretHandle { secret, default }
-    }
-
-    pub fn set(&self, bld: &impl Builder<'a>, val: T) {
-        let lit = bld.lit(val);
-        T::set_from_lit(&self.secret.repr, &lit.repr, true);
-    }
-
-    pub fn apply_default(&self) {
-        T::set_from_lit(&self.secret.repr, &self.default.repr, false);
-    }
-
-    pub fn wire(&self) -> &TWire<'a, T> {
-        &self.secret
-    }
-}
-
-impl<'a, T: Repr<'a> + Secret<'a> + ?Sized> Drop for TSecretHandle<'a, T> {
-    fn drop(&mut self) {
-        self.apply_default();
-    }
-}
-
-impl<'a, T> Clone for TSecretHandle<'a, T>
-where T: Repr<'a> + Secret<'a>, T::Repr: Clone {
-    fn clone(&self) -> Self {
-        TSecretHandle {
-            secret: self.secret.clone(),
-            default: self.default.clone(),
-        }
-    }
-}
-
-impl<'a, 'b, T> Migrate<'a, 'b> for TSecretHandle<'a, T>
-where
-    T: for<'c> Repr<'c>,
-    T: for<'c> Secret<'c>,
-    <T as Repr<'a>>::Repr: Migrate<'a, 'b, Output = <T as Repr<'b>>::Repr>,
-{
-    type Output = TSecretHandle<'b, T>;
-
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> TSecretHandle<'b, T> {
-        // Since `TSecretHandle` implements `Drop`, we can't safely move out of its fields.
-        unsafe {
-            let this = MaybeUninit::new(self);
-            // Avoid `*this.as_ptr()` after we start moving out of the fields.
-            let secret_ptr = &(*this.as_ptr()).secret as *const _;
-            let default_ptr = &(*this.as_ptr()).default as *const _;
-            TSecretHandle {
-                secret: v.visit(ptr::read(secret_ptr)),
-                default: v.visit(ptr::read(default_ptr)),
-            }
-        }
-    }
-}
-
-
 pub trait Repr<'a> {
     type Repr;
 }
@@ -697,12 +593,6 @@ where <Self as Repr<'a>>::Repr: Sized {
 pub trait Lit<'a>
 where Self: Repr<'a> {
     fn lit(bld: &impl Builder<'a>, x: Self) -> Self::Repr;
-}
-
-pub trait Secret<'a>
-where Self: Repr<'a> + Lit<'a> + Sized {
-    fn secret(bld: &impl Builder<'a>) -> Self::Repr;
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool);
 }
 
 pub trait FromEval<'a>
@@ -899,16 +789,6 @@ impl<'a> Lit<'a> for bool {
     }
 }
 
-impl<'a> Secret<'a> for bool {
-    fn secret(bld: &impl Builder<'a>) -> Wire<'a> {
-        bld.circuit().new_secret_wire_uninit(bld.circuit().ty(TyKind::BOOL))
-    }
-
-    fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
-        s.kind.as_secret().set_from_lit(*val, force);
-    }
-}
-
 impl<'a> FromEval<'a> for bool {
     fn from_eval<E: Evaluator<'a> + ?Sized>(
         c: &CircuitBase<'a>,
@@ -1001,16 +881,6 @@ macro_rules! integer_impls {
         impl<'a> Lit<'a> for $T {
             fn lit(bld: &impl Builder<'a>, x: $T) -> Wire<'a> {
                 bld.circuit().lit(bld.circuit().ty(TyKind::$K), x as u64)
-            }
-        }
-
-        impl<'a> Secret<'a> for $T {
-            fn secret(bld: &impl Builder<'a>) -> Wire<'a> {
-                bld.circuit().new_secret_wire_uninit(bld.circuit().ty(TyKind::$K))
-            }
-
-            fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
-                s.kind.as_secret().set_from_lit(*val, force);
             }
         }
 
@@ -1203,16 +1073,6 @@ macro_rules! field_impls {
             }
         }
 
-        impl<'a> Secret<'a> for $T {
-            fn secret(bld: &impl Builder<'a>) -> Wire<'a> {
-                bld.circuit().new_secret_wire_uninit(bld.circuit().ty(TyKind::GF(Field::$K)))
-            }
-
-            fn set_from_lit(s: &Wire<'a>, val: &Wire<'a>, force: bool) {
-                s.kind.as_secret().set_from_lit(*val, force);
-            }
-        }
-
         impl<'a> FromEval<'a> for $T {
             fn from_eval<E: Evaluator<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
@@ -1369,27 +1229,6 @@ macro_rules! tuple_impl {
                 #![allow(unused)]       // `bld` in the zero-element case
                 let ($($A,)*) = x;
                 ($(bld.lit($A),)*)
-            }
-        }
-
-        impl<'a, $($A: Secret<'a>,)*> Secret<'a> for ($($A,)*) {
-            fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-                #![allow(unused)]       // `bld` in the zero-element case
-                ($(bld.secret_uninit::<$A>(),)*)
-            }
-
-            fn set_from_lit(
-                s: &($(TWire<'a, $A>,)*),
-                val: &($(TWire<'a, $A>,)*),
-                force: bool,
-            ) {
-                #![allow(bad_style)]    // Capitalized variable names $A
-                #![allow(unused)]       // `ev` in the zero-element case
-                let &($(ref $A,)*) = s;
-                let &($(ref $B,)*) = val;
-                $(
-                    <$A as Secret>::set_from_lit(&$A.repr, &$B.repr, force);
-                )*
             }
         }
 
@@ -1583,33 +1422,6 @@ macro_rules! array_impls {
                         }
 
                         o.assume_init()
-                    }
-                }
-            }
-
-            impl<'a, A: Secret<'a>> Secret<'a> for [A; $n] {
-                fn secret(bld: &impl Builder<'a>) -> [TWire<'a, A>; $n] {
-                    // Can't `collect()` or `into_iter()` an array yet, which makes this difficult
-                    // to implement without unnecessary allocation.
-                    unsafe {
-                        let mut o = MaybeUninit::uninit();
-
-                        for i in 0 .. $n {
-                            let o_val = bld.secret_uninit::<A>();
-                            (o.as_mut_ptr() as *mut TWire<A>).add(i).write(o_val);
-                        }
-
-                        o.assume_init()
-                    }
-                }
-
-                fn set_from_lit(
-                    s: &[TWire<'a, A>; $n],
-                    val: &[TWire<'a, A>; $n],
-                    force: bool,
-                ) {
-                    for (s, val) in s.iter().zip(val.iter()) {
-                        <A as Secret>::set_from_lit(&s.repr, &val.repr, force);
                     }
                 }
             }

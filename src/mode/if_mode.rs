@@ -2,8 +2,8 @@ use zk_circuit_builder::eval::Evaluator;
 use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, Ty, Wire, Bits};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{
-    self, Builder, BuilderExt, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire,
-    LazySecret, SecretDep,
+    self, Builder, BuilderExt, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, TWire, LazySecret,
+    SecretDep,
 };
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
@@ -357,20 +357,6 @@ impl<'a, M: ModePred, A: Flatten<'a>> Flatten<'a> for IfMode<M, A> {
 impl<'a, M: ModePred, A: Lit<'a>> Lit<'a> for IfMode<M, A> {
     fn lit(bld: &impl Builder<'a>, x: IfMode<M, A>) -> IfMode<M, TWire<'a, A>> {
         x.map(|x| bld.lit(x))
-    }
-}
-
-impl<'a, M: ModePred, A: Secret<'a>> Secret<'a> for IfMode<M, A> {
-    fn secret(bld: &impl Builder<'a>) -> Self::Repr {
-        IfMode::new(|_pf| bld.with_label("IfMode", || bld.secret_uninit()))
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        if let Some(pf) = check_mode() {
-            let s = s.get(&pf);
-            let val = val.get(&pf);
-            typed::set_secret_from_lit(&s, &val, force);
-        }
     }
 }
 
