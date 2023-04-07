@@ -1,3 +1,4 @@
+use std::cmp::{self, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
@@ -5,10 +6,11 @@ use serde::{de, Deserialize};
 use zk_circuit_builder::eval::Evaluator;
 use zk_circuit_builder::gadget::bit_pack;
 use zk_circuit_builder::ir::circuit::{
-    CircuitBase, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize,
+    CircuitBase, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize, Bits,
 };
 use zk_circuit_builder::ir::typed::{
     self, Builder, BuilderExt, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
+    SecretDep,
 };
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::primitive_binary_impl;
@@ -173,6 +175,54 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
             acc = bld.and(acc, part);
         }
         acc.repr
+    }
+}
+
+impl<'a> SecretDep<'a> for RamInstr {
+    type Decoded = RamInstr;
+    fn num_wires(x: &Self::Repr) -> usize {
+        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
+        u8::num_wires(opcode) +
+        u8::num_wires(dest) +
+        u8::num_wires(op1) +
+        u64::num_wires(op2) +
+        bool::num_wires(imm)
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
+        u8::for_each_wire(opcode, |w| f(w));
+        u8::for_each_wire(dest, |w| f(w));
+        u8::for_each_wire(op1, |w| f(w));
+        u64::for_each_wire(op2, |w| f(w));
+        bool::for_each_wire(imm, |w| f(w));
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
+        u8::num_sizes(opcode) +
+        u8::num_sizes(dest) +
+        u8::num_sizes(op1) +
+        u64::num_sizes(op2) +
+        bool::num_sizes(imm)
+    }
+    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
+        u8::for_each_size(opcode, |s| f(s));
+        u8::for_each_size(dest, |s| f(s));
+        u8::for_each_size(op1, |s| f(s));
+        u64::for_each_size(op2, |s| f(s));
+        bool::for_each_size(imm, |s| f(s));
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> RamInstr {
+        RamInstr {
+            opcode: u8::from_bits_iter(sizes, bits),
+            dest: u8::from_bits_iter(sizes, bits),
+            op1: u8::from_bits_iter(sizes, bits),
+            op2: u64::from_bits_iter(sizes, bits),
+            imm: bool::from_bits_iter(sizes, bits),
+        }
     }
 }
 
@@ -465,6 +515,29 @@ macro_rules! mk_named_enum {
                 result
             }
         }
+
+        impl<'a> SecretDep<'a> for $Name {
+            type Decoded = Self;
+            fn num_wires(x: &Self::Repr) -> usize {
+                u8::num_wires(x)
+            }
+            fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+                u8::for_each_wire(x, f);
+            }
+            fn num_sizes(x: &Self::Repr) -> usize {
+                u8::num_sizes(x)
+            }
+            fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+                u8::for_each_size(x, f);
+            }
+            fn from_bits_iter(
+                sizes: &mut impl Iterator<Item = usize>,
+                bits: &mut impl Iterator<Item = Bits<'a>>,
+            ) -> $Name {
+                let raw = u8::from_bits_iter(sizes, bits);
+                $Name::from_raw(raw).unwrap()
+            }
+        }
     };
 }
 
@@ -674,6 +747,24 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
+impl<'a> SecretDep<'a> for Label {
+    type Decoded = Label;
+    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(*x)
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+    fn from_bits_iter(
+        _sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Label {
+        let bits = bits.next().unwrap();
+        let raw = bits.0.get(0).copied().unwrap_or(0) & ((1 << LABEL_BITS) - 1);
+        Label(raw as u8)
+    }
+}
+
 impl fmt::Debug for WordLabel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -752,6 +843,29 @@ impl<'a> FromEval<'a> for WordLabel {
         Some(WordLabel(<[Label; WORD_BYTES]>::from_eval(c, ev, a)?))
     }
 }
+
+impl<'a> SecretDep<'a> for WordLabel {
+    type Decoded = WordLabel;
+    fn num_wires(x: &Self::Repr) -> usize {
+        <[Label; WORD_BYTES]>::num_wires(x)
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        <[Label; WORD_BYTES]>::for_each_wire(x, f)
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        <[Label; WORD_BYTES]>::num_sizes(x)
+    }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        <[Label; WORD_BYTES]>::for_each_size(x, f)
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> WordLabel {
+        WordLabel(<[Label; WORD_BYTES]>::from_bits_iter(sizes, bits))
+    }
+}
+
 
 #[derive(Clone, Copy, Debug)]
 pub struct MemPort {
@@ -969,6 +1083,107 @@ where
             width: bld.mux(c.clone(), t.width, e.width),
             tainted: bld.mux(c.clone(), t.tainted, e.tainted),
         }
+    }
+}
+
+
+#[derive(Debug)]
+pub struct CompareMemPort(MemPort);
+
+impl PartialEq for CompareMemPort {
+    fn eq(&self, other: &CompareMemPort) -> bool {
+        let self_addr_masked = self.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        let other_addr_masked = other.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        self_addr_masked == other_addr_masked &&
+        self.0.cycle == other.0.cycle
+    }
+}
+
+impl cmp::Eq for CompareMemPort {}
+
+impl PartialOrd for CompareMemPort {
+    fn partial_cmp(&self, other: &CompareMemPort) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompareMemPort {
+    fn cmp(&self, other: &CompareMemPort) -> Ordering {
+        let self_addr_masked = self.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        let other_addr_masked = other.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        let self_cycle_adj = self.0.cycle.wrapping_add(1);
+        let other_cycle_adj = other.0.cycle.wrapping_add(1);
+        self_addr_masked.cmp(&other_addr_masked)
+            .then(self_cycle_adj.cmp(&other_cycle_adj))
+    }
+}
+
+impl<'a> Repr<'a> for CompareMemPort {
+    type Repr = MemPortRepr<'a>;
+}
+
+impl<'a> SecretDep<'a> for CompareMemPort {
+    type Decoded = CompareMemPort;
+    fn num_wires(x: &Self::Repr) -> usize {
+        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
+        u32::num_wires(cycle) +
+        u64::num_wires(addr) +
+        u64::num_wires(value) +
+        MemOpKind::num_wires(op) +
+        MemOpWidth::num_wires(width) +
+        IfMode::<AnyTainted, WordLabel>::num_wires(tainted)
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
+        u32::for_each_wire(cycle, |w| f(w));
+        u64::for_each_wire(addr, |w| f(w));
+        u64::for_each_wire(value, |w| f(w));
+        MemOpKind::for_each_wire(op, |w| f(w));
+        MemOpWidth::for_each_wire(width, |w| f(w));
+        IfMode::<AnyTainted, WordLabel>::for_each_wire(tainted, |w| f(w));
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
+        u32::num_sizes(cycle) +
+        u64::num_sizes(addr) +
+        u64::num_sizes(value) +
+        MemOpKind::num_sizes(op) +
+        MemOpWidth::num_sizes(width) +
+        IfMode::<AnyTainted, WordLabel>::num_sizes(tainted)
+    }
+    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
+        u32::for_each_size(cycle, |s| f(s));
+        u64::for_each_size(addr, |s| f(s));
+        u64::for_each_size(value, |s| f(s));
+        MemOpKind::for_each_size(op, |s| f(s));
+        MemOpWidth::for_each_size(width, |s| f(s));
+        IfMode::<AnyTainted, WordLabel>::for_each_size(tainted, |s| f(s));
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> CompareMemPort {
+        CompareMemPort(MemPort {
+            cycle: u32::from_bits_iter(sizes, bits),
+            addr: u64::from_bits_iter(sizes, bits),
+            value: u64::from_bits_iter(sizes, bits),
+            op: MemOpKind::from_bits_iter(sizes, bits),
+            width: MemOpWidth::from_bits_iter(sizes, bits),
+            tainted: IfMode::<AnyTainted, WordLabel>::from_bits_iter(sizes, bits),
+        })
+    }
+}
+
+impl<'a> Cast<'a, CompareMemPort> for MemPort {
+    fn cast(_bld: &impl Builder<'a>, x: MemPortRepr<'a>) -> MemPortRepr<'a> {
+        x
+    }
+}
+
+impl<'a> Cast<'a, MemPort> for CompareMemPort {
+    fn cast(_bld: &impl Builder<'a>, x: MemPortRepr<'a>) -> MemPortRepr<'a> {
+        x
     }
 }
 
@@ -1302,6 +1517,85 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
     fn le(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().le(a.key, b.key)
+    }
+}
+
+
+pub struct CompareFetchPort(FetchPort);
+
+impl PartialEq for CompareFetchPort {
+    fn eq(&self, other: &CompareFetchPort) -> bool {
+        self.0.addr == other.0.addr &&
+        self.0.write == other.0.write
+    }
+}
+
+impl cmp::Eq for CompareFetchPort {}
+
+impl PartialOrd for CompareFetchPort {
+    fn partial_cmp(&self, other: &CompareFetchPort) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompareFetchPort {
+    fn cmp(&self, other: &CompareFetchPort) -> Ordering {
+        self.0.addr.cmp(&other.0.addr)
+            .then(self.0.write.cmp(&other.0.write).reverse())
+    }
+}
+
+impl<'a> Repr<'a> for CompareFetchPort {
+    type Repr = FetchPortRepr<'a>;
+}
+
+impl<'a> SecretDep<'a> for CompareFetchPort {
+    type Decoded = CompareFetchPort;
+    fn num_wires(x: &Self::Repr) -> usize {
+        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
+        u64::num_wires(addr) +
+        RamInstr::num_wires(instr) +
+        bool::num_wires(write)
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
+        u64::for_each_wire(addr, |w| f(w));
+        RamInstr::for_each_wire(instr, |w| f(w));
+        bool::for_each_wire(write, |w| f(w));
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
+        u64::num_sizes(addr) +
+        RamInstr::num_sizes(instr) +
+        bool::num_sizes(write)
+    }
+    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
+        u64::for_each_size(addr, |s| f(s));
+        RamInstr::for_each_size(instr, |s| f(s));
+        bool::for_each_size(write, |s| f(s));
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> CompareFetchPort {
+        CompareFetchPort(FetchPort {
+            addr: u64::from_bits_iter(sizes, bits),
+            instr: RamInstr::from_bits_iter(sizes, bits),
+            write: bool::from_bits_iter(sizes, bits),
+        })
+    }
+}
+
+impl<'a> Cast<'a, CompareFetchPort> for FetchPort {
+    fn cast(_bld: &impl Builder<'a>, x: FetchPortRepr<'a>) -> FetchPortRepr<'a> {
+        x
+    }
+}
+
+impl<'a> Cast<'a, FetchPort> for CompareFetchPort {
+    fn cast(_bld: &impl Builder<'a>, x: FetchPortRepr<'a>) -> FetchPortRepr<'a> {
+        x
     }
 }
 
