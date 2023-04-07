@@ -208,8 +208,6 @@ impl<'a> SegGraphBuilder<'a> {
         sg.mark_unreachable();
         sg.count_final_mem_users();
 
-        sg.init_secrets(b, trace);
-
         sg
     }
 
@@ -446,92 +444,6 @@ impl<'a> SegGraphBuilder<'a> {
             }
             !dead
         });
-    }
-
-    /// Initialize secrets needed for evaluation of intermediate values.
-    fn init_secrets(&mut self, b: &impl Builder<'a>, trace: &[TraceChunk]) {
-        // Initialize edge liveness flags.
-
-        // Keep the set of live edges for use when setting CycleBreak states.
-        let mut live_edges = HashSet::new();
-        live_edges.insert(Liveness::Always);
-        for (pred, succ) in trace.iter().zip(trace[1..].iter()) {
-            let mut src = pred.segment;
-            if let Some(ref d) = succ.debug {
-                if d.clear_prev_segment {
-                    continue;
-                }
-                if let Some(prev_segment) = d.prev_segment {
-                    src = prev_segment;
-                }
-            }
-            let dest = succ.segment;
-
-            if let Some(ref edge) = self.edges.get(&(src, dest)) {
-                // `edge` is the liveness flag for the direct edge from `src` to `dest`.
-                live_edges.insert(Liveness::Edge(src, dest));
-            } else {
-                // There is no direct edge, so this connection must go through the routing network.
-                // We set the liveness flags for both sides, and record the input/output indices so
-                // the path through the network can be enabled once the network is constructed.
-                let src_to_net = self.to_net.get(&src)
-                    .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
-                let dest_from_net = self.from_net.get(&dest)
-                    .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
-                live_edges.insert(Liveness::ToNetwork(src));
-                live_edges.insert(Liveness::FromNetwork(dest));
-            }
-        }
-
-        // Set secrets for all CycleBreak nodes.  For `CycleBreak -> Segment` edges, set the secret
-        // to the segment's initial state; for `Segment -> CycleBreak`, set it to the final state.
-        // Every CycleBreak should be covered by one of these cases; if this doesn't hold, the
-        // trace will likely be marked invalid due to a CycleBreak state being defaulted to the
-        // wrong value.
-
-        let mut set_cycle_breaks = HashSet::new();
-
-        let mut prev_state = self.cpu_init_state.clone();
-        for chunk in trace {
-            let mut init_state = prev_state;
-            if let Some(ref d) = chunk.debug {
-                if let Some(ref state) = d.prev_state {
-                    init_state = state.clone();
-                }
-                if let Some(cycle) = d.cycle {
-                    init_state.cycle = cycle;
-                }
-            }
-
-            for pred in &self.segments[chunk.segment].preds {
-                if !live_edges.contains(&pred.live) {
-                    continue;
-                }
-                match pred.src {
-                    StateSource::CycleBreak(i) => {
-                        set_cycle_breaks.insert(i);
-                    },
-                    _ => {},
-                }
-            }
-
-            prev_state = chunk.states.last().expect("empty chunk").clone();
-            prev_state.cycle = init_state.cycle + chunk.states.len() as u32;
-        }
-
-        for (i, cbn) in self.cycle_breaks.iter().enumerate() {
-            for pred in &cbn.preds {
-                if !live_edges.contains(&pred.live) {
-                    continue;
-                }
-                match pred.src {
-                    StateSource::Segment(j) => {
-                        set_cycle_breaks.insert(i);
-                    },
-                    _ => {},
-                }
-            }
-        }
     }
 
     /// Get the order in which to construct the segment circuits.  This ordering is guaranteed to
