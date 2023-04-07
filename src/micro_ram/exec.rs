@@ -54,6 +54,7 @@ impl<'a> ExecBuilder<'a> {
         let mut eb = mh.root(ExecBuilder::new(
             b, cx, exec, equiv_segments, init_state,
             check_steps, expect_zero, debug_segment_graph_path,
+            move |w| &w.execs[exec_name],
         ));
         eb.open(mh).init(b, exec, exec_name);
         ExecBuilder::run(&mut eb, mh, b, exec, move |w| &w.execs[exec_name]);
@@ -69,6 +70,7 @@ impl<'a> ExecBuilder<'a> {
         check_steps: usize,
         expect_zero: bool,
         debug_segment_graph_path: Option<String>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> ExecBuilder<'a> {
         ExecBuilder {
             init_state: init_state.clone(),
@@ -80,7 +82,7 @@ impl<'a> ExecBuilder<'a> {
             mem: Memory::new(),
             fetch: Fetch::new(b, &exec.program),
             seg_graph_builder: SegGraphBuilder::new(
-                b, &exec.segments, &exec.params, init_state, &exec.trace),
+                b, &exec.segments, &exec.params, init_state, &exec.trace, project_witness),
             seg_user_map: HashMap::new(),
 
             cx,
