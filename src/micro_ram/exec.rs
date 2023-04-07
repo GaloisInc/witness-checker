@@ -88,15 +88,20 @@ impl<'a> ExecBuilder<'a> {
         }
     }
 
-    fn init(&mut self, b: &impl Builder<'a>, exec: &ExecBody, exec_name: &str) {
+    fn init(&mut self, b: &impl Builder<'a>, exec: &ExecBody, exec_name: &'static str) {
         if let Some(ref out_path) = self.debug_segment_graph_path {
             std::fs::write(out_path, self.seg_graph_builder.dump()).unwrap();
         }
 
         let mut kmem = KnownMem::with_default(b.lit(0));
-        for seg in &exec.init_mem {
+        for (i, seg) in exec.init_mem.iter().enumerate() {
             let values = self.mem.init_segment(
-                b, seg, self.equiv_segments.exec_segments(exec_name));
+                b,
+                i,
+                seg,
+                self.equiv_segments.exec_segments(exec_name),
+                move |w| &w.execs[exec_name],
+            );
             kmem.init_segment(seg, &values);
         }
         self.seg_graph_builder.set_cpu_init_mem(kmem);
