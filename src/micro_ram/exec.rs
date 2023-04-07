@@ -177,7 +177,6 @@ impl<'a> ExecBuilder<'a> {
             } else {
                 exec.trace[chunk_idx - 1].states.last().expect("empty chunk")
             };
-            seg.set_states(b, &exec.program, cycle, prev_state, &chunk.states, &exec.advice);
             seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
 
             if chunk_idx == exec.trace.len() - 1 {
