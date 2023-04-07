@@ -1,8 +1,9 @@
 use zk_circuit_builder::eval::Evaluator;
-use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, Ty, Wire};
+use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, Ty, Wire, Bits};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{
     self, Builder, BuilderExt, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, Secret, TWire,
+    SecretDep,
 };
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
@@ -391,3 +392,39 @@ where
     }
 }
 
+
+impl<'a, M: ModePred, T: SecretDep<'a>> SecretDep<'a> for IfMode<M, T> {
+    type Decoded = IfMode<M, T::Decoded>;
+    fn num_wires(x: &Self::Repr) -> usize {
+        if let Some(pf) = check_mode() {
+            T::num_wires(x.get(&pf))
+        } else {
+            0
+        }
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        if let Some(pf) = check_mode() {
+            T::for_each_wire(x.get(&pf), f)
+        }
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        if let Some(pf) = check_mode() {
+            T::num_sizes(x.get(&pf))
+        } else {
+            0
+        }
+    }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        if let Some(pf) = check_mode() {
+            T::for_each_size(x.get(&pf), f)
+        }
+    }
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> IfMode<M, T::Decoded> {
+        IfMode::new(|_pf| {
+            T::from_bits_iter(sizes, bits)
+        })
+    }
+}
