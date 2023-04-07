@@ -129,7 +129,7 @@ impl<'a> ExecBuilder<'a> {
                     unsafe { mh.erase_and_migrate(b.circuit()) };
                     info!("seg_graph_builder.build_network");
                     let mut seg_graph_builder = this.project(mh, |eb| &mut eb.seg_graph_builder);
-                    SegGraphBuilder::build_network(&mut seg_graph_builder, mh, b);
+                    SegGraphBuilder::build_network(&mut seg_graph_builder, mh, b, project_witness);
                     unsafe { mh.erase_and_migrate(b.circuit()) };
                     continue;
                 },

@@ -425,7 +425,7 @@ impl BenesNetwork {
         bn
     }
 
-    fn node_index(&self, layer: usize, index: usize) -> usize {
+    pub fn node_index(&self, layer: usize, index: usize) -> usize {
         self.layer_size * layer + index
     }
 

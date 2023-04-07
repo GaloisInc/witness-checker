@@ -21,6 +21,7 @@ use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{
     MemPort, MemOpKind, MemOpWidth, PackedMemPort, MemSegment, ByteOffset, WordAddr,
     MemoryEquivalence, MEM_PORT_PRELOAD_CYCLE, MEM_PORT_UNUSED_CYCLE, WORD_BOTTOM, WORD_BYTES,
+    CompareMemPort,
 };
 use crate::mode::if_mode::IfMode;
 use crate::mode::tainted;
@@ -218,7 +219,10 @@ impl<'a> Memory<'a> {
                     .collect::<Vec<_>>();
                 // Using `lt` instead of `le` for the comparison here means the sortedness check will
                 // also ensure that every `MemPort` is distinct.
-                sort::sort(b, &packed_ports, CompareLt)
+                sort::sort_by_key(b, &packed_ports, CompareLt, |w| {
+                    let w = w.unpack(b);
+                    b.cast::<_, CompareMemPort>(w)
+                })
             }, mh);
 
             while !sort.open(mh).is_ready() {
