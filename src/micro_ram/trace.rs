@@ -161,33 +161,6 @@ impl<'a> Segment<'a> {
         &self.final_state
     }
 
-    pub fn set_states(
-        &mut self,
-        b: &impl Builder<'a>,
-        prog: &[RamInstr],
-        init_cycle: u32,
-        init_state: &RamState,
-        states: &[RamState],
-        advice: &HashMap<u64, Vec<Advice>>,
-    ) {
-        let _g = b.scoped_label("trace");
-        assert_eq!(states.len(), self.len);
-        let states_iter = iter::once(init_state).chain(states.iter()).take(self.len);
-        for (i, state) in states_iter.enumerate() {
-            let cycle = init_cycle + i as u32;
-
-            let k = cycle as u64 + 1;
-            let adv_list = advice.get(&k).map_or(&[] as &[_], |v| v as &[_]);
-            for adv in adv_list {
-                match *adv {
-                    Advice::MemOp { addr, value, op, width, tainted } => {},
-                    Advice::Stutter => {},
-                    Advice::Advise { advise } => {},
-                }
-            }
-        }
-    }
-
     pub fn check_states(
         &self,
         cx: &Context<'a>,
