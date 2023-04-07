@@ -360,6 +360,55 @@ impl<'a> Secret<'a> for RamState {
     }
 }
 
+impl<'a> LazySecret<'a> for RamState {
+    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <u64 as LazySecret>::num_wires(sizes) +
+        <Vec<u64> as LazySecret>::num_wires(sizes) +
+        <IfMode<AnyTainted, Vec<WordLabel>> as LazySecret>::num_wires(sizes) +
+        <bool as LazySecret>::num_wires(sizes) +
+        <u32 as LazySecret>::num_wires(sizes)
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        RamStateRepr {
+            pc: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
+            regs: Vec::<u64>::build_repr_from_wires(c, sizes, build_wire),
+            tainted_regs: IfMode::<AnyTainted, Vec<WordLabel>>::build_repr_from_wires(
+                c, sizes, build_wire).map(|tw| tw.repr),
+            live: TWire::new(bool::build_repr_from_wires(c, sizes, build_wire)),
+            cycle: TWire::new(u32::build_repr_from_wires(c, sizes, build_wire)),
+        }
+    }
+
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <u64 as LazySecret>::expected_word_len(sizes) +
+        <Vec<u64> as LazySecret>::expected_word_len(sizes) +
+        <IfMode<AnyTainted, Vec<WordLabel>> as LazySecret>::expected_word_len(sizes) +
+        <bool as LazySecret>::expected_word_len(sizes) +
+        <u32 as LazySecret>::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        let RamState { cycle, pc, ref regs, live, ref tainted_regs } = *self;
+        pc.word_len() +
+        regs.word_len() +
+        tainted_regs.word_len() +
+        live.word_len() +
+        cycle.word_len()
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        let RamState { cycle, pc, ref regs, live, ref tainted_regs } = *self;
+        pc.push_words(out);
+        regs.push_words(out);
+        tainted_regs.push_words(out);
+        live.push_words(out);
+        cycle.push_words(out);
+    }
+}
+
 impl RamState {
     pub fn secret_with_value<'a>(bld: &impl Builder<'a>, a: Self) -> TWire<'a, RamState> {
         TWire::new(RamStateRepr {
