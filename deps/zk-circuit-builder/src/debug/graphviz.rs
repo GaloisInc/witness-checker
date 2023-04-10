@@ -77,7 +77,7 @@ pub fn make_graph<'a>(
             GateKind::Pack(_) => write!(label, "Pack")?,
             GateKind::Extract(_, idx) => write!(label, "Extract {}", idx)?,
             GateKind::Gadget(gk, _) => write!(label, "Gadget {}", gk.name())?,
-            GateKind::Call(f, _, _) => write!(label, "Call {}", f.name)?,
+            GateKind::Call(call) => write!(label, "Call {}", call.func.name)?,
         }
         write!(label, " (")?;
         write_ty(&mut label, w.ty)?;
@@ -113,8 +113,8 @@ pub fn make_graph<'a>(
             GateKind::Compare(_, a, b) => write_edges(&[a, b])?,
             GateKind::Mux(a, b, c) => write_edges(&[a, b, c])?,
             GateKind::Pack(ws) |
-            GateKind::Gadget(_, ws) |
-            GateKind::Call(_, ws, _) => write_edges(ws)?,
+            GateKind::Gadget(_, ws) => write_edges(ws)?,
+            GateKind::Call(call) => write_edges(call.args)?,
         }
     }
 
