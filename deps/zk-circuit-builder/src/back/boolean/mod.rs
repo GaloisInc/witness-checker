@@ -890,7 +890,7 @@ mod test {
                 };
                 let val = x & ((1 << n) - 1);
                 x >>= n;
-                inputs.push(c.new_secret_wire_init(ty, || val));
+                inputs.push(c.secret_immediate(ty, val));
             }
             let inputs = *<&[_; N]>::try_from(&inputs as &[_]).unwrap();
             let out = f(c, inputs);

@@ -504,7 +504,7 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 #[test]
 fn test_zkif() -> Result<()> {
     use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
+    use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt, Ty};
     use super::num::_scalar_from_unsigned;
 
     let mut b = Backend::new(Path::new("local/test"), true);
@@ -515,8 +515,8 @@ fn test_zkif() -> Result<()> {
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let sec1 = c.new_secret_wire_init(c.ty(TyKind::I64), || 12);
-    let sec2 = c.new_secret_wire_init(c.ty(TyKind::I64), || 13);
+    let sec1 = c.secret_immediate(Ty::int(64), 12_i64);
+    let sec2 = c.secret_immediate(Ty::int(64), 13_i64);
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);

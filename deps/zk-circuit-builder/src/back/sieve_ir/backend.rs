@@ -492,7 +492,7 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
     use super::field::_scalar_from_unsigned;
     use super::ir_builder::IRBuilder;
     use crate::eval::{self, CachingEvaluator};
-    use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
+    use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt, Ty};
     use zki_sieve::consumers::evaluator::{Evaluator, PlaintextBackend};
     use zki_sieve::producers::sink::MemorySink;
     use zki_sieve::Source;
@@ -512,16 +512,8 @@ fn test_backend_sieve_ir() -> zki_sieve::Result<()> {
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let sec1 = {
-        let (wire, handle) = c.new_secret_wire(c.ty(TyKind::I64));
-        handle.set(&c, 12);
-        wire
-    };
-    let sec2 = {
-        let (wire, handle) = c.new_secret_wire(c.ty(TyKind::I64));
-        handle.set(&c, 13);
-        wire
-    };
+    let sec1 = c.secret_immediate(Ty::int(64), 12_i64);
+    let sec2 = c.secret_immediate(Ty::int(64), 13_i64);
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);
