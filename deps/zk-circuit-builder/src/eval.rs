@@ -285,7 +285,7 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { x } else { x % y }
 }
 
-trait EvalContext<'a> {
+trait EvalContext<'a, 'b> {
     /// Get the value of `w` as `Bits` and a flag indicating whether the value is derived from
     /// secrets.
     fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>>;
@@ -301,7 +301,7 @@ trait EvalContext<'a> {
 
     type FunctionContext: Evaluator<'a>;
     fn enter_function(
-        &self,
+        &'b self,
         func: Function<'a>,
         args: Vec<(Bits<'a>, bool)>,
         secret_args: Vec<Option<Bits<'a>>>,
@@ -417,7 +417,7 @@ where S: SecretEvaluator<'a> + Default {
     }
 }
 
-impl<'a, 's, S> EvalContext<'a> for CachingEvaluator<'a, 's, S>
+impl<'a, 'b, 's, S> EvalContext<'a, 'b> for CachingEvaluator<'a, 's, S>
 where S: SecretEvaluator<'a> + Default {
     fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
         self.cache.get(&w).cloned().ok_or(Error::UnevalInput)
@@ -477,17 +477,15 @@ where S: SecretEvaluator<'a> + Default {
         }
     }
 
-    type FunctionContext = Self;
+    type FunctionContext = CachingEvaluator<'a, 'b, S>;
 
     fn enter_function(
-        &self,
+        &'b self,
         func: Function<'a>,
         args: Vec<(Bits<'a>, bool)>,
         secrets: Vec<Option<Bits<'a>>>,
     ) -> Self::FunctionContext {
-        // FIXME: awful lifetime hack.  This works as long as `self` outlives the returned
-        // `FunctionContext`.
-        let secret: &'static dyn Any = unsafe { &*ptr::addr_of!(*self.secret) };
+        let secret = CowBox::from(&*self.secret);
         CachingEvaluator {
             secret_eval: S::default(),
             secret: CowBox::from(secret),
@@ -676,9 +674,9 @@ pub fn eval_cmp_galois_field<'a>(
     }
 }
 
-fn eval_gate_inner<'a>(
+fn eval_gate_inner<'a, 'b>(
     c: &CircuitBase<'a>,
-    ecx: &impl EvalContext<'a>,
+    ecx: &'b impl EvalContext<'a, 'b>,
     ty: Ty<'a>,
     gk: GateKind<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
@@ -825,9 +823,9 @@ fn eval_gate_inner<'a>(
     })
 }
 
-fn eval_call<'a>(
+fn eval_call<'a, 'b>(
     c: &CircuitBase<'a>,
-    outer_ecx: &impl EvalContext<'a>,
+    outer_ecx: &'b impl EvalContext<'a, 'b>,
     call: Call<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let func = call.func;
