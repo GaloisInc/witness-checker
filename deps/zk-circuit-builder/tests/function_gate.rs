@@ -65,8 +65,8 @@ fn function_gate_secret() {
         c.lit(ty_i32, 1),
     ];
     let secrets1 = [
-        (y_id, c.new_secret_init(ty_i32, || 2)),
-        (z_id, c.new_secret_init(ty_i32, || 3)),
+        (y_id, c.new_secret_immediate(ty_i32, 2)),
+        (z_id, c.new_secret_immediate(ty_i32, 3)),
     ];
     let result1 = c.call(func, &args1, &secrets1);
 
@@ -74,8 +74,8 @@ fn function_gate_secret() {
         c.lit(ty_i32, 4),
     ];
     let secrets2 = [
-        (y_id, c.new_secret_init(ty_i32, || 5)),
-        (z_id, c.new_secret_init(ty_i32, || 6)),
+        (y_id, c.new_secret_immediate(ty_i32, 5)),
+        (z_id, c.new_secret_immediate(ty_i32, 6)),
     ];
     let result2 = c.call(func, &args2, &secrets2);
 
