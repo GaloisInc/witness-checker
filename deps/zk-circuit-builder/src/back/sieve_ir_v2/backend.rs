@@ -444,7 +444,7 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
                 }
             }
 
-            GateKind::Call(_, _, _) => unimplemented!("Call"),
+            GateKind::Call(_) => unimplemented!("Call"),
         };
 
         self.representer.new_repr(repr)

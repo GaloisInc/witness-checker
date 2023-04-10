@@ -12,6 +12,7 @@ use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
     GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, SecretValue, SecretInputId,
+    Call,
 };
 use crate::util::CowBox;
 
@@ -820,27 +821,26 @@ fn eval_gate_inner<'a>(
             (bits, sec)
         },
 
-        GateKind::Call(func, args, secrets) => eval_call(c, ecx, func, args, secrets)?,
+        GateKind::Call(call) => eval_call(c, ecx, call)?,
     })
 }
 
 fn eval_call<'a>(
     c: &CircuitBase<'a>,
     outer_ecx: &impl EvalContext<'a>,
-    func: Function<'a>,
-    args: &[Wire<'a>],
-    secret_args: &[(SecretInputId, Secret<'a>)],
+    call: Call<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    assert_eq!(secret_args.len(), func.secret_inputs.len());
+    let func = call.func;
+    assert_eq!(call.secret_args.len(), func.secret_inputs.len());
 
-    let arg_bits = args.iter().map(|&w| {
+    let arg_bits = call.args.iter().map(|&w| {
         outer_ecx.get_value(w)
     }).collect::<Result<Vec<_>, _>>()?;
 
     let mut num_secrets = func.secret_inputs.iter().map(|&(id, _)| id.0).max()
         .map_or(0, |i| i + 1);
     let mut secrets = vec![None; num_secrets];
-    for &(id, s) in secret_args {
+    for &(id, s) in call.secret_args {
         secrets[id.0] = Some(outer_ecx.eval_secret(c, s)?);
     }
 

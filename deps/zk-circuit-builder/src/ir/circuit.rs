@@ -231,6 +231,10 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
+    fn alloc_call(&self, call: CallData<'a>) -> Call<'a> {
+        Call(self.arena().alloc(call))
+    }
+
 
     fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         // Forbid constructing gates that violate type-safety invariants.
@@ -279,8 +283,8 @@ impl<'a> CircuitBase<'a> {
         // Forbid using a single `Secret` in multiple gates.
         match kind {
             GateKind::Secret(s) => { s.set_used(); },
-            GateKind::Call(_, _, ss) => {
-                for &(_, s) in ss {
+            GateKind::Call(c) => {
+                for &(_, s) in c.secret_args {
                     s.set_used();
                 }
             },
@@ -1071,7 +1075,12 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         secrets: &[(SecretInputId, Secret<'a>)],
     ) -> Wire<'a> {
         let secrets = self.as_base().arena().alloc_slice_copy(secrets);
-        self.gate(GateKind::Call(func, args, secrets))
+        let call = self.as_base().alloc_call(CallData {
+            func,
+            args,
+            secret_args: secrets,
+        });
+        self.gate(GateKind::Call(call))
     }
 
 
@@ -1464,8 +1473,8 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
         GateKind::Compare(_, a, b) => WireDeps::two(a, b),
         GateKind::Mux(c, t, e) => WireDeps::three(c, t, e),
         GateKind::Pack(ws) |
-        GateKind::Gadget(_, ws) |
-        GateKind::Call(_, ws, _) => WireDeps::many(ws),
+        GateKind::Gadget(_, ws) => WireDeps::many(ws),
+        GateKind::Call(c) => WireDeps::many(c.args),
     }
 }
 
@@ -2001,7 +2010,7 @@ pub enum GateKind<'a> {
     /// function are provided as a list of pairs, giving a value for each `SecretInputId` used in
     /// the function.  (This would be a `HashMap`, but `Gate` is arena-allocated and thus never
     /// gets dropped, so putting a `HashMap` here would leak memory.)
-    Call(Function<'a>, &'a [Wire<'a>], &'a [(SecretInputId, Secret<'a>)]),
+    Call(Call<'a>),
 }
 
 impl<'a> Gate<'a> {
@@ -2032,7 +2041,7 @@ impl<'a> GateKind<'a> {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
                 k.typecheck(c.as_base(), &tys)
             },
-            GateKind::Call(f, _, _) => f.result_wire.ty,
+            GateKind::Call(c) => c.func.result_wire.ty,
         }
     }
 
@@ -2095,7 +2104,7 @@ impl<'a> GateKind<'a> {
             Pack(_) => "Pack",
             Extract(_, _) => "Extract",
             Gadget(_, _) => "Gadget",
-            Call(_, _, _) => "Call",
+            Call(_) => "Call",
         }
     }
 }
@@ -2160,14 +2169,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 let ws = v.new_circuit().intern_wire_list(&ws);
                 Gadget(gk, ws)
             },
-            Call(f, ws, ss) => {
-                let f = v.visit(f);
-                let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
-                let ws = v.new_circuit().intern_wire_list(&ws);
-                let ss = ss.iter().map(|&s| v.visit(s)).collect::<Vec<_>>();
-                let ss = v.new_circuit().arena().alloc_slice_copy(&ss);
-                Call(f, ws, ss)
-            },
+            Call(c) => Call(v.visit(c)),
         }
     }
 }
@@ -2668,6 +2670,44 @@ impl<'a, 'b> Migrate<'a, 'b> for Erased<'a> {
 
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Erased<'b> {
         v.visit_erased(self)
+    }
+}
+
+
+declare_interned_pointer! {
+    /// A call to a circuit function.
+    #[derive(Debug)]
+    pub struct Call<'a> => CallData<'a>;
+}
+
+#[derive(Clone, Debug)]
+pub struct CallData<'a> {
+    pub func: Function<'a>,
+    pub args: &'a [Wire<'a>],
+    pub secret_args: &'a [(SecretInputId, Secret<'a>)],
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for CallData<'a> {
+    type Output = CallData<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> CallData<'b> {
+        let args = self.args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let args = v.new_circuit().intern_wire_list(&args);
+        let secret_args = self.secret_args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let secret_args = v.new_circuit().arena().alloc_slice_copy(&secret_args);
+        CallData {
+            func: v.visit(self.func),
+            args,
+            secret_args,
+        }
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Call<'a> {
+    type Output = Call<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Call<'b> {
+        let new = v.visit((*self).clone());
+        v.new_circuit().alloc_call(new)
     }
 }
 

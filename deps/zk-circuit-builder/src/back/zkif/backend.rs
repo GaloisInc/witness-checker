@@ -458,7 +458,7 @@ impl<'a> Backend<'a> {
                 }
             }
 
-            GateKind::Call(_, _, _) => unimplemented!("Call"),
+            GateKind::Call(_) => unimplemented!("Call"),
         };
 
         self.representer.new_repr(repr)
