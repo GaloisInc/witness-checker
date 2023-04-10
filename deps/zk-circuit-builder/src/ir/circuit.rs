@@ -953,8 +953,15 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         F: for<'b> Fn(&CircuitBase<'b>, &[Bits<'b>]) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
-        self.as_base().alloc_lazy_secret::<(), _>(ty, deps, move |c, _secret, dep_vals| {
+        self.as_base().alloc_lazy_secret(ty, deps, move |c, &(), dep_vals| {
             init(c, dep_vals)
+        })
+    }
+
+    fn new_secret_immediate<T: AsBits + Copy + 'static>(&self, ty: Ty<'a>, val: T) -> Secret<'a> {
+        let sz = ty.integer_size();
+        self.as_base().alloc_lazy_secret(ty, &[], move |c, &(), _dep_vals| {
+            val.as_bits(c, sz)
         })
     }
 
@@ -982,6 +989,11 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         F: Sized + Copy + 'static,
     {
         self.secret(self.new_secret_derived(ty, deps, init))
+    }
+
+    /// Create a secret wire with a fixed value.  This is mainly for use in tests.
+    fn secret_immediate<T: AsBits + Copy + 'static>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
+        self.secret(self.new_secret_immediate(ty, val))
     }
 
 
