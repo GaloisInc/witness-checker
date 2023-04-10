@@ -302,9 +302,11 @@ trait EvalContext<'a, 'b> {
     type FunctionContext: Evaluator<'a>;
     fn enter_function(
         &'b self,
-        func: Function<'a>,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
         args: Vec<(Bits<'a>, bool)>,
-        secret_args: Vec<Option<Bits<'a>>>,
+        secrets: Vec<Option<Bits<'a>>>,
+        project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext;
 }
 
@@ -481,11 +483,17 @@ where S: SecretEvaluator<'a> + Default {
 
     fn enter_function(
         &'b self,
-        func: Function<'a>,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
         args: Vec<(Bits<'a>, bool)>,
         secrets: Vec<Option<Bits<'a>>>,
+        project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext {
-        let secret = CowBox::from(&*self.secret);
+        let secret = if call.has_project_secret() {
+            call.project_secret(c, &*self.secret, project_deps)
+        } else {
+            CowBox::from(&*self.secret)
+        };
         CachingEvaluator {
             secret_eval: S::default(),
             secret: CowBox::from(secret),
@@ -834,6 +842,9 @@ fn eval_call<'a, 'b>(
     let arg_bits = call.args.iter().map(|&w| {
         outer_ecx.get_value(w)
     }).collect::<Result<Vec<_>, _>>()?;
+    let dep_bits = call.project_deps.iter().map(|&w| {
+        outer_ecx.get_value(w).map(|(bits, sec)| bits)
+    }).collect::<Result<Vec<_>, _>>()?;
 
     let mut num_secrets = func.secret_inputs.iter().map(|&(id, _)| id.0).max()
         .map_or(0, |i| i + 1);
@@ -842,7 +853,7 @@ fn eval_call<'a, 'b>(
         secrets[id.0] = Some(outer_ecx.eval_secret(c, s)?);
     }
 
-    let mut inner_eval = outer_ecx.enter_function(func, arg_bits, secrets);
+    let mut inner_eval = outer_ecx.enter_function(c, call, arg_bits, secrets, &dep_bits);
     Evaluator::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 

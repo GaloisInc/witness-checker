@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::iter;
 use std::marker::PhantomData;
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
@@ -57,7 +58,7 @@ pub struct CircuitBase<'a> {
     current_label: Cell<&'a str>,
     is_prover: bool,
     functions: RefCell<Vec<Function<'a>>>,
-    secret_type: TypeId,
+    secret_type: Cell<TypeId>,
 }
 
 struct FunctionScope<'a> {
@@ -79,7 +80,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(""),
             is_prover,
             functions: RefCell::new(Vec::new()),
-            secret_type: TypeId::of::<S>(),
+            secret_type: Cell::new(TypeId::of::<S>()),
         };
         c.preload_common();
         c
@@ -118,7 +119,7 @@ impl<'a> CircuitBase<'a> {
 
     pub fn with_secret_type<S: 'static>(&self) -> Option<&CircuitBaseWithSecretType<'a, S>> {
         unsafe {
-            if self.secret_type == TypeId::of::<S>() {
+            if self.secret_type.get() == TypeId::of::<S>() {
                 Some(self.with_secret_type_unchecked())
             } else {
                 None
@@ -334,6 +335,46 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
+    fn alloc_secret_project_fn<S: 'static, T: 'static, F>(&self, f: F) -> SecretProjectFn<'a>
+    where
+        F: for<'b, 's> Fn(&CircuitBase<'b>, &'s S, &[Bits<'b>]) -> CowBox<'s, T>,
+        F: Sized + Copy + 'static,
+    {
+        fn erase<S, T: 'static>(
+            f: impl for<'b, 's> Fn(
+                &CircuitBase<'b>,
+                &'s S,
+                &[Bits<'b>],
+            ) -> CowBox<'s, T> + Copy + 'static,
+        ) -> impl for<'b> Fn(
+            &CircuitBase<'b>,
+            *const (),
+            &[Bits<'b>],
+        ) -> CowBox<'static, dyn Any> + Copy + 'static {
+            move |c, secret, dep_vals| {
+                unsafe {
+                    let secret = &*(secret as *const S);
+                    let out = f(c, secret, dep_vals);
+                    // Cast away the lifetime
+                    match out {
+                        CowBox::Owned(b) => {
+                            CowBox::Owned(b as Box<dyn Any>)
+                        },
+                        CowBox::Borrowed(r) => {
+                            let r: *const dyn Any = r;
+                            CowBox::Borrowed(&*r)
+                        },
+                    }
+                }
+            }
+        }
+
+        unsafe {
+            let r = self.arena().alloc(erase::<S, T>(f));
+            SecretProjectFn::new(IsCopy::new_ref(r) as _)
+        }
+    }
+
     fn alloc_lazy_secret<S, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
     where
         S: 'static,
@@ -344,7 +385,7 @@ impl<'a> CircuitBase<'a> {
         // essentially means that the `&S` input will be ignored.  We don't allow other ZSTs here
         // because some ZSTs are used as markers, where having a value of that type means that some
         // property holds.
-        assert!(TypeId::of::<S>() == self.secret_type ||
+        assert!(TypeId::of::<S>() == self.secret_type.get() ||
             TypeId::of::<S>() == TypeId::of::<()>());
         let sd = if self.is_prover {
             let init = self.alloc_secret_init_fn::<S, F>(init);
@@ -410,7 +451,7 @@ impl<'a> CircuitBase<'a> {
             ref current_label,
             is_prover,
             ref functions,
-            secret_type,
+            ref secret_type,
         } = *self;
 
         let old_arenas = Box::new(arenas.take());
@@ -429,7 +470,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(current_label.replace("")),
             is_prover,
             functions: RefCell::new(functions.take()),
-            secret_type,
+            secret_type: Cell::new(secret_type.get()),
         };
 
         self.preload_common();
@@ -550,6 +591,7 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
             arg_tys: self.ty_list(arg_tys),
             secret_inputs: self.as_base().arena().alloc_slice_copy(&new_scope.secrets),
             result_wire,
+            secret_type: TypeId::of::<()>(),
         }));
         self.as_base().functions.borrow_mut().push(func);
         (func, extra)
@@ -562,6 +604,55 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
             arg_tys,
             |c, args| (f(c, args), ()),
         );
+        func
+    }
+
+    /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
+    /// returns a wire representing the output of the function.
+    ///
+    /// Within the function, lazy secrets use a secret type of `S2` rather than the secret type of
+    /// the enclosing circuit.  Calls to the function will need to provide a `SecretProjectFn` to
+    /// convert from the outer secret type to the inner one.
+    ///
+    /// Concretely, the `Circuit` passed to the callback is `self` and uses the same lifetime `'a`,
+    /// but we hide this fact from the caller so that `rustc` will report an error if wires from
+    /// outside the function are used inside the callback or vice versa.
+    //
+    // This function is defined on the concrete `Circuit` type instead of the generic `CircuitExt`
+    // trait because this lets it provide a more precise circuit type to the callback, which
+    // simplifies its usage with `typed::Builder`.  However, it should be easy to copy into
+    // `CircuitExt` if it's needed in the future.
+    pub fn define_function2<S2: 'static, F2>(
+        &self,
+        name: &str,
+        arg_tys: &[Ty<'a>],
+        f: F2,
+    ) -> Function<'a>
+    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> Wire<'b> {
+        let inner_secret_type = TypeId::of::<S2>();
+        let old_secret_type = self.as_base().secret_type.replace(inner_secret_type);
+
+        let function_scope = &self.base.function_scope;
+        let old_scope = mem::replace(&mut *function_scope.borrow_mut(), Some(FunctionScope {
+            secrets: Vec::new(),
+        }));
+
+        let arg_wires = arg_tys.iter().enumerate()
+            .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
+            .collect::<Vec<_>>();
+        let result_wire = f(self, &arg_wires);
+
+        let new_scope = mem::replace(&mut *function_scope.borrow_mut(), old_scope).unwrap();
+        let func = Function(self.as_base().arena().alloc(FunctionDef {
+            name: self.as_base().intern_str(name),
+            arg_tys: self.ty_list(arg_tys),
+            secret_inputs: self.as_base().arena().alloc_slice_copy(&new_scope.secrets),
+            result_wire,
+            secret_type: inner_secret_type,
+        }));
+        self.as_base().functions.borrow_mut().push(func);
+
+        self.as_base().secret_type.set(old_secret_type);
         func
     }
 }
@@ -1079,6 +1170,35 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
             func,
             args,
             secret_args: secrets,
+            project_secret: None,
+            project_deps: &[],
+            outer_secret_type: self.as_base().secret_type.get(),
+        });
+        self.gate(GateKind::Call(call))
+    }
+
+    fn call2<S, S2, F>(
+        &self,
+        func: Function<'a>,
+        args: &'a [Wire<'a>],
+        project_deps: &'a [Wire<'a>],
+        project_secret: F,
+    ) -> Wire<'a>
+    where
+        S: 'static,
+        S2: 'static,
+        F: for<'b, 's> Fn(&CircuitBase<'b>, &'s S, &[Bits<'b>]) -> CowBox<'s, S2>,
+        F: Sized + Copy + 'static,
+    {
+        debug_assert_eq!(TypeId::of::<S>(), self.as_base().secret_type.get());
+        let project_secret = self.as_base().alloc_secret_project_fn(project_secret);
+        let call = self.as_base().alloc_call(CallData {
+            func,
+            args,
+            secret_args: &[],
+            project_secret: Some(project_secret),
+            project_deps,
+            outer_secret_type: self.as_base().secret_type.get(),
         });
         self.gate(GateKind::Call(call))
     }
@@ -1385,6 +1505,7 @@ pub struct WireDeps<'a> {
 enum WireDepsInner<'a> {
     Small(Range<u8>, [Option<Wire<'a>>; 3]),
     Large(slice::Iter<'a, Wire<'a>>),
+    Large2(iter::Chain<slice::Iter<'a, Wire<'a>>, slice::Iter<'a, Wire<'a>>>),
 }
 
 impl<'a> WireDeps<'a> {
@@ -1415,6 +1536,12 @@ impl<'a> WireDeps<'a> {
             inner: WireDepsInner::Large(ws.iter()),
         }
     }
+
+    fn many2(ws1: &'a [Wire<'a>], ws2: &'a [Wire<'a>]) -> WireDeps<'a> {
+        WireDeps {
+            inner: WireDepsInner::Large2(ws1.iter().chain(ws2.iter())),
+        }
+    }
 }
 
 impl<'a> Iterator for WireDepsInner<'a> {
@@ -1426,6 +1553,7 @@ impl<'a> Iterator for WireDepsInner<'a> {
                 arr.get(i).and_then(|&x| x)
             },
             WireDepsInner::Large(ref mut it) => it.next().cloned(),
+            WireDepsInner::Large2(ref mut it) => it.next().cloned(),
         }
     }
 }
@@ -1438,6 +1566,7 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
                 arr.get(i).and_then(|&x| x)
             },
             WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
+            WireDepsInner::Large2(ref mut it) => it.next_back().cloned(),
         }
     }
 }
@@ -1485,6 +1614,7 @@ pub fn wire_and_secret_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
 pub fn gate_and_secret_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
     match gk {
         GateKind::Secret(s) => WireDeps::many(s.deps),
+        GateKind::Call(c) => WireDeps::many2(c.args, c.project_deps),
         _ => gate_deps(gk),
     }
 }
@@ -2476,6 +2606,13 @@ impl<'a, T: ?Sized> Deref for ArenaDyn<'a, T> {
 type SecretInitFn<'a> = ArenaDyn<'a,
     dyn for<'b> Fn(&CircuitBase<'b>, *const (), &[Bits<'b>]) -> Bits<'b> + 'static>;
 
+type SecretProjectFn<'a> = ArenaDyn<'a,
+    dyn for<'b> Fn(
+        &CircuitBase<'b>,
+        *const (),
+        &[Bits<'b>],
+    ) -> CowBox<'static, dyn Any> + 'static>;
+
 #[derive(Clone, Debug)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
@@ -2685,6 +2822,10 @@ pub struct CallData<'a> {
     pub func: Function<'a>,
     pub args: &'a [Wire<'a>],
     pub secret_args: &'a [(SecretInputId, Secret<'a>)],
+
+    project_secret: Option<SecretProjectFn<'a>>,
+    pub project_deps: &'a [Wire<'a>],
+    outer_secret_type: TypeId,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for CallData<'a> {
@@ -2694,10 +2835,15 @@ impl<'a, 'b> Migrate<'a, 'b> for CallData<'a> {
         let args = v.new_circuit().intern_wire_list(&args);
         let secret_args = self.secret_args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
         let secret_args = v.new_circuit().arena().alloc_slice_copy(&secret_args);
+        let project_deps = self.project_deps.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let project_deps = v.new_circuit().arena().alloc_slice_copy(&project_deps);
         CallData {
             func: v.visit(self.func),
             args,
             secret_args,
+            project_secret: v.visit(self.project_secret),
+            project_deps,
+            outer_secret_type: self.outer_secret_type,
         }
     }
 }
@@ -2708,6 +2854,28 @@ impl<'a, 'b> Migrate<'a, 'b> for Call<'a> {
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Call<'b> {
         let new = v.visit((*self).clone());
         v.new_circuit().alloc_call(new)
+    }
+}
+
+impl<'a> CallData<'a> {
+    pub fn has_project_secret(&self) -> bool {
+        self.project_secret.is_some()
+    }
+
+    pub fn project_secret<'s>(
+        &self,
+        c: &CircuitBase<'a>,
+        secret: &'s dyn Any,
+        dep_vals: &[Bits<'a>],
+    ) -> CowBox<'s, dyn Any> {
+        assert!(self.outer_secret_type == secret.type_id() ||
+            self.outer_secret_type == TypeId::of::<()>());
+        let project_secret = self.project_secret.unwrap();
+        let new_secret: CowBox<'s, dyn Any> = unsafe {
+            project_secret(c, secret as *const dyn Any as *const (), dep_vals)
+        };
+        debug_assert_eq!((*new_secret).type_id(), self.func.secret_type);
+        new_secret
     }
 }
 
@@ -2896,6 +3064,7 @@ pub struct FunctionDef<'a> {
     /// `Argument` gates.  For functions that need to return multiple values, this wire can have a
     /// `Bundle` type.
     pub result_wire: Wire<'a>,
+    secret_type: TypeId,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
@@ -2909,6 +3078,7 @@ impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
             arg_tys: v.new_circuit().intern_ty_list(&arg_tys),
             secret_inputs: v.new_circuit().arena().alloc_slice_copy(&secret_inputs),
             result_wire: v.visit(self.result_wire),
+            secret_type: self.secret_type,
         }
     }
 }
