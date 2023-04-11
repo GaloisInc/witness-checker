@@ -498,7 +498,7 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
     // trait because this lets it provide a more precise circuit type to the callback, which
     // simplifies its usage with `typed::Builder`.  However, it should be easy to copy into
     // `CircuitExt` if it's needed in the future.
-    pub fn define_function2<S2: 'static, F2>(
+    pub fn define_function<S2: 'static, F2>(
         &self,
         name: &str,
         arg_tys: &[Ty<'a>],
@@ -1021,7 +1021,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gadget(kind, &args)
     }
 
-    fn call2<S, S2, F>(
+    fn call<S, S2, F>(
         &self,
         func: Function<'a>,
         args: &'a [Wire<'a>],
