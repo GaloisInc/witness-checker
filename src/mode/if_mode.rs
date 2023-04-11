@@ -3,7 +3,7 @@ use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, Ty, Wire, Bits}
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{
     self, Builder, BuilderExt, EvaluatorExt, Flatten, FromEval, Lit, Mux, Repr, TWire, LazySecret,
-    SecretDep,
+    SecretDep, FromWireList, ToWireList,
 };
 use serde::{Deserialize, Deserializer};
 use std::any::type_name;
@@ -379,10 +379,10 @@ where
 }
 
 
-impl<'a, M: ModePred, T: LazySecret<'a>> LazySecret<'a> for IfMode<M, T> {
-    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+impl<'a, M: ModePred, T: FromWireList<'a>> FromWireList<'a> for IfMode<M, T> {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
         if let Some(pf) = check_mode::<M>() {
-            <T as LazySecret>::num_wires(sizes)
+            T::expected_num_wires(sizes)
         } else {
             0
         }
@@ -398,32 +398,34 @@ impl<'a, M: ModePred, T: LazySecret<'a>> LazySecret<'a> for IfMode<M, T> {
         })
     }
 
+}
+
+impl<'a, M: ModePred, T: LazySecret<'a>> LazySecret<'a> for IfMode<M, T> {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
         if let Some(pf) = check_mode::<M>() {
-            <T as LazySecret>::expected_word_len(sizes)
+            T::expected_word_len(sizes)
         } else {
             0
         }
     }
     fn word_len(&self) -> usize {
         if let Some(pf) = check_mode() {
-            <T as LazySecret>::word_len(self.get(&pf))
+            T::word_len(self.get(&pf))
         } else {
             0
         }
     }
     fn push_words(&self, out: &mut Vec<u32>) {
         if let Some(pf) = check_mode() {
-            <T as LazySecret>::push_words(self.get(&pf), out);
+            T::push_words(self.get(&pf), out);
         }
     }
 }
 
-impl<'a, M: ModePred, T: SecretDep<'a>> SecretDep<'a> for IfMode<M, T> {
-    type Decoded = IfMode<M, T::Decoded>;
+impl<'a, M: ModePred, T: ToWireList<'a>> ToWireList<'a> for IfMode<M, T> {
     fn num_wires(x: &Self::Repr) -> usize {
         if let Some(pf) = check_mode() {
-            <T as SecretDep>::num_wires(x.get(&pf))
+            T::num_wires(x.get(&pf))
         } else {
             0
         }
@@ -445,6 +447,10 @@ impl<'a, M: ModePred, T: SecretDep<'a>> SecretDep<'a> for IfMode<M, T> {
             T::for_each_size(x.get(&pf), f)
         }
     }
+}
+
+impl<'a, M: ModePred, T: SecretDep<'a>> SecretDep<'a> for IfMode<M, T> {
+    type Decoded = IfMode<M, T::Decoded>;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,

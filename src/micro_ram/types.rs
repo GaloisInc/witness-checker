@@ -10,6 +10,7 @@ use zk_circuit_builder::ir::circuit::{
 };
 use zk_circuit_builder::ir::typed::{
     self, Builder, BuilderExt, TWire, Repr, Flatten, Lit, Mux, FromEval, LazySecret, SecretDep,
+    FromWireList, ToWireList,
 };
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::primitive_binary_impl;
@@ -114,13 +115,13 @@ impl<'a> Lit<'a> for RamInstr {
     }
 }
 
-impl<'a> LazySecret<'a> for RamInstr {
-    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <u8 as LazySecret>::num_wires(sizes) +
-        <u8 as LazySecret>::num_wires(sizes) +
-        <u8 as LazySecret>::num_wires(sizes) +
-        <u64 as LazySecret>::num_wires(sizes) +
-        <bool as LazySecret>::num_wires(sizes)
+impl<'a> FromWireList<'a> for RamInstr {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u8::expected_num_wires(sizes) +
+        u8::expected_num_wires(sizes) +
+        u8::expected_num_wires(sizes) +
+        u64::expected_num_wires(sizes) +
+        bool::expected_num_wires(sizes)
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
@@ -136,7 +137,9 @@ impl<'a> LazySecret<'a> for RamInstr {
             imm: TWire::new(bool::build_repr_from_wires(c, sizes, build_wire)),
         }
     }
+}
 
+impl<'a> LazySecret<'a> for RamInstr {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
         u8::expected_word_len(sizes) +
         u8::expected_word_len(sizes) +
@@ -206,15 +209,14 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
     }
 }
 
-impl<'a> SecretDep<'a> for RamInstr {
-    type Decoded = RamInstr;
+impl<'a> ToWireList<'a> for RamInstr {
     fn num_wires(x: &Self::Repr) -> usize {
         let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
-        <u8 as SecretDep>::num_wires(opcode) +
-        <u8 as SecretDep>::num_wires(dest) +
-        <u8 as SecretDep>::num_wires(op1) +
-        <u64 as SecretDep>::num_wires(op2) +
-        <bool as SecretDep>::num_wires(imm)
+        u8::num_wires(opcode) +
+        u8::num_wires(dest) +
+        u8::num_wires(op1) +
+        u64::num_wires(op2) +
+        bool::num_wires(imm)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
@@ -240,6 +242,10 @@ impl<'a> SecretDep<'a> for RamInstr {
         u64::for_each_size(op2, |s| f(s));
         bool::for_each_size(imm, |s| f(s));
     }
+}
+
+impl<'a> SecretDep<'a> for RamInstr {
+    type Decoded = RamInstr;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
@@ -318,13 +324,13 @@ impl<'a> Lit<'a> for RamState {
     }
 }
 
-impl<'a> LazySecret<'a> for RamState {
-    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <u64 as LazySecret>::num_wires(sizes) +
-        <Vec<u64> as LazySecret>::num_wires(sizes) +
-        <IfMode<AnyTainted, Vec<WordLabel>> as LazySecret>::num_wires(sizes) +
-        <bool as LazySecret>::num_wires(sizes) +
-        <u32 as LazySecret>::num_wires(sizes)
+impl<'a> FromWireList<'a> for RamState {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u64::expected_num_wires(sizes) +
+        Vec::<u64>::expected_num_wires(sizes) +
+        IfMode::<AnyTainted, Vec<WordLabel>>::expected_num_wires(sizes) +
+        bool::expected_num_wires(sizes) +
+        u32::expected_num_wires(sizes)
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
@@ -341,13 +347,15 @@ impl<'a> LazySecret<'a> for RamState {
             cycle: TWire::new(u32::build_repr_from_wires(c, sizes, build_wire)),
         }
     }
+}
 
+impl<'a> LazySecret<'a> for RamState {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <u64 as LazySecret>::expected_word_len(sizes) +
-        <Vec<u64> as LazySecret>::expected_word_len(sizes) +
-        <IfMode<AnyTainted, Vec<WordLabel>> as LazySecret>::expected_word_len(sizes) +
-        <bool as LazySecret>::expected_word_len(sizes) +
-        <u32 as LazySecret>::expected_word_len(sizes)
+        u64::expected_word_len(sizes) +
+        Vec::<u64>::expected_word_len(sizes) +
+        IfMode::<AnyTainted, Vec<WordLabel>>::expected_word_len(sizes) +
+        bool::expected_word_len(sizes) +
+        u32::expected_word_len(sizes)
     }
     fn word_len(&self) -> usize {
         let RamState { cycle, pc, ref regs, live, ref tainted_regs } = *self;
@@ -519,9 +527,9 @@ macro_rules! mk_named_enum {
             }
         }
 
-        impl<'a> LazySecret<'a> for $Name {
-            fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-                <u8 as LazySecret>::num_wires(sizes)
+        impl<'a> FromWireList<'a> for $Name {
+            fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                u8::expected_num_wires(sizes)
             }
 
             fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
@@ -531,7 +539,9 @@ macro_rules! mk_named_enum {
             ) -> Self::Repr {
                 TWire::new(u8::build_repr_from_wires(c, sizes, build_wire))
             }
+        }
 
+        impl<'a> LazySecret<'a> for $Name {
             fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
                 u8::expected_word_len(sizes)
             }
@@ -543,10 +553,9 @@ macro_rules! mk_named_enum {
             }
         }
 
-        impl<'a> SecretDep<'a> for $Name {
-            type Decoded = Self;
+        impl<'a> ToWireList<'a> for $Name {
             fn num_wires(x: &Self::Repr) -> usize {
-                <u8 as SecretDep>::num_wires(x)
+                u8::num_wires(x)
             }
             fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
                 u8::for_each_wire(x, f);
@@ -557,6 +566,10 @@ macro_rules! mk_named_enum {
             fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
                 u8::for_each_size(x, f);
             }
+        }
+
+        impl<'a> SecretDep<'a> for $Name {
+            type Decoded = Self;
             fn from_bits_iter(
                 sizes: &mut impl Iterator<Item = usize>,
                 bits: &mut impl Iterator<Item = Bits<'a>>,
@@ -763,8 +776,8 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
-impl<'a> LazySecret<'a> for Label {
-    fn num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+impl<'a> FromWireList<'a> for Label {
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
         _sizes: &mut impl Iterator<Item = usize>,
@@ -772,7 +785,9 @@ impl<'a> LazySecret<'a> for Label {
     ) -> Self::Repr {
         build_wire(Self::wire_type(c))
     }
+}
 
+impl<'a> LazySecret<'a> for Label {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
         u8::expected_word_len(sizes)
     }
@@ -784,14 +799,17 @@ impl<'a> LazySecret<'a> for Label {
     }
 }
 
-impl<'a> SecretDep<'a> for Label {
-    type Decoded = Label;
+impl<'a> ToWireList<'a> for Label {
     fn num_wires(x: &Self::Repr) -> usize { 1 }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         f(*x)
     }
     fn num_sizes(x: &Self::Repr) -> usize { 0 }
     fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+}
+
+impl<'a> SecretDep<'a> for Label {
+    type Decoded = Label;
     fn from_bits_iter(
         _sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
@@ -871,9 +889,9 @@ impl<'a> FromEval<'a> for WordLabel {
     }
 }
 
-impl<'a> LazySecret<'a> for WordLabel {
-    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <[Label; WORD_BYTES] as LazySecret>::num_wires(sizes)
+impl<'a> FromWireList<'a> for WordLabel {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <[Label; WORD_BYTES]>::expected_num_wires(sizes)
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
@@ -883,7 +901,9 @@ impl<'a> LazySecret<'a> for WordLabel {
     ) -> Self::Repr {
         <[Label; WORD_BYTES]>::build_repr_from_wires(c, sizes, build_wire)
     }
+}
 
+impl<'a> LazySecret<'a> for WordLabel {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
         <[Label; WORD_BYTES]>::expected_word_len(sizes)
     }
@@ -895,10 +915,9 @@ impl<'a> LazySecret<'a> for WordLabel {
     }
 }
 
-impl<'a> SecretDep<'a> for WordLabel {
-    type Decoded = WordLabel;
+impl<'a> ToWireList<'a> for WordLabel {
     fn num_wires(x: &Self::Repr) -> usize {
-        <[Label; WORD_BYTES] as SecretDep>::num_wires(x)
+        <[Label; WORD_BYTES]>::num_wires(x)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         <[Label; WORD_BYTES]>::for_each_wire(x, f)
@@ -909,6 +928,10 @@ impl<'a> SecretDep<'a> for WordLabel {
     fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
         <[Label; WORD_BYTES]>::for_each_size(x, f)
     }
+}
+
+impl<'a> SecretDep<'a> for WordLabel {
+    type Decoded = WordLabel;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
@@ -1085,14 +1108,14 @@ impl<'a> Lit<'a> for MemPort {
     }
 }
 
-impl<'a> LazySecret<'a> for MemPort {
-    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <u32 as LazySecret>::num_wires(sizes) +
-        <u64 as LazySecret>::num_wires(sizes) +
-        <u64 as LazySecret>::num_wires(sizes) +
-        <MemOpKind as LazySecret>::num_wires(sizes) +
-        <MemOpWidth as LazySecret>::num_wires(sizes) +
-        <IfMode<AnyTainted, WordLabel> as LazySecret>::num_wires(sizes)
+impl<'a> FromWireList<'a> for MemPort {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u32::expected_num_wires(sizes) +
+        u64::expected_num_wires(sizes) +
+        u64::expected_num_wires(sizes) +
+        MemOpKind::expected_num_wires(sizes) +
+        MemOpWidth::expected_num_wires(sizes) +
+        IfMode::<AnyTainted, WordLabel>::expected_num_wires(sizes)
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
@@ -1110,14 +1133,16 @@ impl<'a> LazySecret<'a> for MemPort {
                 IfMode::<AnyTainted, WordLabel>::build_repr_from_wires(c, sizes, build_wire)),
         }
     }
+}
 
+impl<'a> LazySecret<'a> for MemPort {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <u32 as LazySecret>::expected_word_len(sizes) +
-        <u64 as LazySecret>::expected_word_len(sizes) +
-        <u64 as LazySecret>::expected_word_len(sizes) +
-        <MemOpKind as LazySecret>::expected_word_len(sizes) +
-        <MemOpWidth as LazySecret>::expected_word_len(sizes) +
-        <IfMode<AnyTainted, WordLabel> as LazySecret>::expected_word_len(sizes)
+        u32::expected_word_len(sizes) +
+        u64::expected_word_len(sizes) +
+        u64::expected_word_len(sizes) +
+        MemOpKind::expected_word_len(sizes) +
+        MemOpWidth::expected_word_len(sizes) +
+        IfMode::<AnyTainted, WordLabel>::expected_word_len(sizes)
     }
     fn word_len(&self) -> usize {
         let MemPort { cycle, addr, value, op, width, ref tainted } = *self;
@@ -1205,16 +1230,15 @@ impl<'a> Repr<'a> for CompareMemPort {
     type Repr = MemPortRepr<'a>;
 }
 
-impl<'a> SecretDep<'a> for CompareMemPort {
-    type Decoded = CompareMemPort;
+impl<'a> ToWireList<'a> for CompareMemPort {
     fn num_wires(x: &Self::Repr) -> usize {
         let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
-        <u32 as SecretDep>::num_wires(cycle) +
-        <u64 as SecretDep>::num_wires(addr) +
-        <u64 as SecretDep>::num_wires(value) +
-        <MemOpKind as SecretDep>::num_wires(op) +
-        <MemOpWidth as SecretDep>::num_wires(width) +
-        <IfMode<AnyTainted, WordLabel> as SecretDep>::num_wires(tainted)
+        u32::num_wires(cycle) +
+        u64::num_wires(addr) +
+        u64::num_wires(value) +
+        MemOpKind::num_wires(op) +
+        MemOpWidth::num_wires(width) +
+        IfMode::<AnyTainted, WordLabel>::num_wires(tainted)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
@@ -1243,6 +1267,10 @@ impl<'a> SecretDep<'a> for CompareMemPort {
         MemOpWidth::for_each_size(width, |s| f(s));
         IfMode::<AnyTainted, WordLabel>::for_each_size(tainted, |s| f(s));
     }
+}
+
+impl<'a> SecretDep<'a> for CompareMemPort {
+    type Decoded = CompareMemPort;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
@@ -1622,13 +1650,12 @@ impl<'a> Repr<'a> for CompareFetchPort {
     type Repr = FetchPortRepr<'a>;
 }
 
-impl<'a> SecretDep<'a> for CompareFetchPort {
-    type Decoded = CompareFetchPort;
+impl<'a> ToWireList<'a> for CompareFetchPort {
     fn num_wires(x: &Self::Repr) -> usize {
         let FetchPortRepr { ref addr, ref instr, ref write } = *x;
-        <u64 as SecretDep>::num_wires(addr) +
-        <RamInstr as SecretDep>::num_wires(instr) +
-        <bool as SecretDep>::num_wires(write)
+        u64::num_wires(addr) +
+        RamInstr::num_wires(instr) +
+        bool::num_wires(write)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         let FetchPortRepr { ref addr, ref instr, ref write } = *x;
@@ -1648,6 +1675,10 @@ impl<'a> SecretDep<'a> for CompareFetchPort {
         RamInstr::for_each_size(instr, |s| f(s));
         bool::for_each_size(write, |s| f(s));
     }
+}
+
+impl<'a> SecretDep<'a> for CompareFetchPort {
+    type Decoded = CompareFetchPort;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,

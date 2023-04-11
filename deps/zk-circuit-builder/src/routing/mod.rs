@@ -4,6 +4,7 @@ use crate::ir::circuit::{CircuitTrait, Wire, Ty, Bits};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{
     TWire, Builder, BuilderExt, Repr, Lit, Mux, RawBits, FlatBits, LazySecret, SecretDep,
+    FromWireList, ToWireList,
 };
 
 mod benes;
@@ -45,9 +46,9 @@ impl<'a> Lit<'a> for InputId {
     }
 }
 
-impl<'a> LazySecret<'a> for InputId {
-    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <u32 as LazySecret>::num_wires(sizes)
+impl<'a> FromWireList<'a> for InputId {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u32::expected_num_wires(sizes)
     }
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
@@ -56,6 +57,9 @@ impl<'a> LazySecret<'a> for InputId {
     ) -> Self::Repr {
         u32::build_repr_from_wires(c, sizes, build_wire)
     }
+}
+
+impl<'a> LazySecret<'a> for InputId {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
         u32::expected_word_len(sizes)
     }
@@ -67,10 +71,9 @@ impl<'a> LazySecret<'a> for InputId {
     }
 }
 
-impl<'a> SecretDep<'a> for InputId {
-    type Decoded = InputId;
+impl<'a> ToWireList<'a> for InputId {
     fn num_wires(x: &Self::Repr) -> usize {
-        <u32 as SecretDep>::num_wires(x)
+        u32::num_wires(x)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
@@ -81,6 +84,10 @@ impl<'a> SecretDep<'a> for InputId {
     fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
         u32::for_each_size(x, f);
     }
+}
+
+impl<'a> SecretDep<'a> for InputId {
+    type Decoded = InputId;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
@@ -99,9 +106,9 @@ impl<'a> Lit<'a> for OutputId {
     }
 }
 
-impl<'a> LazySecret<'a> for OutputId {
-    fn num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        <u32 as LazySecret>::num_wires(sizes)
+impl<'a> FromWireList<'a> for OutputId {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u32::expected_num_wires(sizes)
     }
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
@@ -110,6 +117,9 @@ impl<'a> LazySecret<'a> for OutputId {
     ) -> Self::Repr {
         u32::build_repr_from_wires(c, sizes, build_wire)
     }
+}
+
+impl<'a> LazySecret<'a> for OutputId {
     fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
         u32::expected_word_len(sizes)
     }
@@ -121,10 +131,9 @@ impl<'a> LazySecret<'a> for OutputId {
     }
 }
 
-impl<'a> SecretDep<'a> for OutputId {
-    type Decoded = OutputId;
+impl<'a> ToWireList<'a> for OutputId {
     fn num_wires(x: &Self::Repr) -> usize {
-        <u32 as SecretDep>::num_wires(x)
+        u32::num_wires(x)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
@@ -135,6 +144,10 @@ impl<'a> SecretDep<'a> for OutputId {
     fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
         u32::for_each_size(x, f);
     }
+}
+
+impl<'a> SecretDep<'a> for OutputId {
+    type Decoded = OutputId;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
