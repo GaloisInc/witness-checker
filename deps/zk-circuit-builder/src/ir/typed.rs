@@ -19,6 +19,8 @@ use crate::ir::circuit::{
 };
 use crate::ir::migrate::{self, Migrate};
 
+pub use cheesecloth_derive_ir_typed::FromWireList;
+
 
 pub trait Builder<'a>: 'a + Sized {
     type Circuit: ?Sized + CircuitTrait<'a>;

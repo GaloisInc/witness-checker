@@ -22,7 +22,7 @@ use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug, Default, Migrate)]
+#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u8,
@@ -111,30 +111,6 @@ impl<'a> Lit<'a> for RamInstr {
             op1: bld.lit(a.op1),
             op2: bld.lit(a.op2),
             imm: bld.lit(a.imm),
-        }
-    }
-}
-
-impl<'a> FromWireList<'a> for RamInstr {
-    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        u8::expected_num_wires(sizes) +
-        u8::expected_num_wires(sizes) +
-        u8::expected_num_wires(sizes) +
-        u64::expected_num_wires(sizes) +
-        bool::expected_num_wires(sizes)
-    }
-
-    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
-        c: &C,
-        sizes: &mut impl Iterator<Item = usize>,
-        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
-    ) -> Self::Repr {
-        RamInstrRepr {
-            opcode: TWire::new(u8::build_repr_from_wires(c, sizes, build_wire)),
-            dest: TWire::new(u8::build_repr_from_wires(c, sizes, build_wire)),
-            op1: TWire::new(u8::build_repr_from_wires(c, sizes, build_wire)),
-            op2: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
-            imm: TWire::new(bool::build_repr_from_wires(c, sizes, build_wire)),
         }
     }
 }
@@ -262,7 +238,7 @@ impl<'a> SecretDep<'a> for RamInstr {
 
 
 
-#[derive(Clone, Debug, Deserialize, Migrate)]
+#[derive(Clone, Debug, Deserialize, Migrate, FromWireList)]
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
@@ -320,31 +296,6 @@ impl<'a> Lit<'a> for RamState {
             regs: bld.lit(a.regs),
             live: bld.lit(a.live),
             tainted_regs: TWire::new(a.tainted_regs.map(|regs| bld.lit(regs))),
-        }
-    }
-}
-
-impl<'a> FromWireList<'a> for RamState {
-    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        u64::expected_num_wires(sizes) +
-        Vec::<u64>::expected_num_wires(sizes) +
-        IfMode::<AnyTainted, Vec<WordLabel>>::expected_num_wires(sizes) +
-        bool::expected_num_wires(sizes) +
-        u32::expected_num_wires(sizes)
-    }
-
-    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
-        c: &C,
-        sizes: &mut impl Iterator<Item = usize>,
-        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
-    ) -> Self::Repr {
-        RamStateRepr {
-            pc: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
-            regs: TWire::new(Vec::<u64>::build_repr_from_wires(c, sizes, build_wire)),
-            tainted_regs: TWire::new(IfMode::<AnyTainted, Vec<WordLabel>>::build_repr_from_wires(
-                c, sizes, build_wire)),
-            live: TWire::new(bool::build_repr_from_wires(c, sizes, build_wire)),
-            cycle: TWire::new(u32::build_repr_from_wires(c, sizes, build_wire)),
         }
     }
 }
@@ -935,7 +886,7 @@ impl<'a> SecretDep<'a> for WordLabel {
 }
 
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromWireList)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -1098,33 +1049,6 @@ impl<'a> Lit<'a> for MemPort {
             op: bld.lit(a.op),
             width: bld.lit(a.width),
             tainted: bld.lit(a.tainted),
-        }
-    }
-}
-
-impl<'a> FromWireList<'a> for MemPort {
-    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        u32::expected_num_wires(sizes) +
-        u64::expected_num_wires(sizes) +
-        u64::expected_num_wires(sizes) +
-        MemOpKind::expected_num_wires(sizes) +
-        MemOpWidth::expected_num_wires(sizes) +
-        IfMode::<AnyTainted, WordLabel>::expected_num_wires(sizes)
-    }
-
-    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
-        c: &C,
-        sizes: &mut impl Iterator<Item = usize>,
-        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
-    ) -> Self::Repr {
-        MemPortRepr {
-            cycle: TWire::new(u32::build_repr_from_wires(c, sizes, build_wire)),
-            addr: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
-            value: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
-            op: TWire::new(MemOpKind::build_repr_from_wires(c, sizes, build_wire)),
-            width: TWire::new(MemOpWidth::build_repr_from_wires(c, sizes, build_wire)),
-            tainted: TWire::new(
-                IfMode::<AnyTainted, WordLabel>::build_repr_from_wires(c, sizes, build_wire)),
         }
     }
 }
