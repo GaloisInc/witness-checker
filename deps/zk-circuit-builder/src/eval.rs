@@ -12,7 +12,7 @@ use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
     GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, SecretValue, SecretInputId,
-    Call,
+    Call, SecretProjectFn,
 };
 use crate::util::CowBox;
 
@@ -303,9 +303,9 @@ trait EvalContext<'a, 'b> {
     fn enter_function(
         &'b self,
         c: &CircuitBase<'a>,
-        call: Call<'a>,
         args: Vec<(Bits<'a>, bool)>,
         secrets: Vec<Option<Bits<'a>>>,
+        project_secret: Option<SecretProjectFn<'a>>,
         project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext;
 }
@@ -430,11 +430,11 @@ where S: SecretEvaluator<'a> + Default {
             return Err(Error::Secret);
         }
 
-        if s.has_init() {
+        if let Some(init) = s.init {
             let dep_vals = s.deps.iter().map(|&w| {
                 self.get_value(w).map(|(b, _)| b)
             }).collect::<Result<Vec<_>, _>>()?;
-            let bits = s.init(c, &*self.secret, &dep_vals);
+            let bits = init.call(c, &*self.secret, &dep_vals);
             return Ok(bits);
         }
 
@@ -484,13 +484,13 @@ where S: SecretEvaluator<'a> + Default {
     fn enter_function(
         &'b self,
         c: &CircuitBase<'a>,
-        call: Call<'a>,
         args: Vec<(Bits<'a>, bool)>,
         secrets: Vec<Option<Bits<'a>>>,
+        project_secret: Option<SecretProjectFn<'a>>,
         project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext {
-        let secret = if call.has_project_secret() {
-            call.project_secret(c, &*self.secret, project_deps)
+        let secret = if let Some(project_secret) = project_secret {
+            project_secret.call(c, &*self.secret, project_deps)
         } else {
             CowBox::from(&*self.secret)
         };
@@ -853,7 +853,8 @@ fn eval_call<'a, 'b>(
         secrets[id.0] = Some(outer_ecx.eval_secret(c, s)?);
     }
 
-    let mut inner_eval = outer_ecx.enter_function(c, call, arg_bits, secrets, &dep_bits);
+    let mut inner_eval = outer_ecx.enter_function(
+        c, arg_bits, secrets, call.project_secret, &dep_bits);
     Evaluator::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
