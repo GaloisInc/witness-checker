@@ -318,21 +318,8 @@ impl<'a> CircuitBase<'a> {
         F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
-        fn erase<W>(
-            f: impl for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b> + Copy + 'static,
-        ) -> impl for<'b> Fn(&CircuitBase<'b>, *const (), &[Bits<'b>]) -> Bits<'b> + Copy + 'static {
-            move |c, witness, dep_vals| {
-                unsafe {
-                    let witness = &*(witness as *const W);
-                    f(c, witness, dep_vals)
-                }
-            }
-        }
-
-        unsafe {
-            let r = self.arena().alloc(erase::<W>(f));
-            SecretInitFn::new(IsCopy::new_ref(r) as _)
-        }
+        let f = self.arena().alloc(SecretInitFnImpl::new(f));
+        SecretInitFn::new(f)
     }
 
     fn alloc_secret_project_fn<W: 'static, T: 'static, F>(&self, f: F) -> SecretProjectFn<'a>
@@ -340,39 +327,8 @@ impl<'a> CircuitBase<'a> {
         F: for<'b, 'w> Fn(&CircuitBase<'b>, &'w W, &[Bits<'b>]) -> CowBox<'w, T>,
         F: Sized + Copy + 'static,
     {
-        fn erase<W, T: 'static>(
-            f: impl for<'b, 'w> Fn(
-                &CircuitBase<'b>,
-                &'w W,
-                &[Bits<'b>],
-            ) -> CowBox<'w, T> + Copy + 'static,
-        ) -> impl for<'b> Fn(
-            &CircuitBase<'b>,
-            *const (),
-            &[Bits<'b>],
-        ) -> CowBox<'static, dyn Any> + Copy + 'static {
-            move |c, witness, dep_vals| {
-                unsafe {
-                    let witness = &*(witness as *const W);
-                    let out = f(c, witness, dep_vals);
-                    // Cast away the lifetime
-                    match out {
-                        CowBox::Owned(b) => {
-                            CowBox::Owned(b as Box<dyn Any>)
-                        },
-                        CowBox::Borrowed(r) => {
-                            let r: *const dyn Any = r;
-                            CowBox::Borrowed(&*r)
-                        },
-                    }
-                }
-            }
-        }
-
-        unsafe {
-            let r = self.arena().alloc(erase::<W, T>(f));
-            SecretProjectFn::new(IsCopy::new_ref(r) as _)
-        }
+        let f = self.arena().alloc(SecretProjectFnImpl::new(f));
+        SecretProjectFn::new(f)
     }
 
     fn alloc_lazy_secret<W, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
@@ -1172,7 +1128,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
             secret_args: secrets,
             project_witness: None,
             project_deps: &[],
-            outer_witness_type: self.as_base().witness_type.get(),
         });
         self.gate(GateKind::Call(call))
     }
@@ -1191,6 +1146,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         F: Sized + Copy + 'static,
     {
         debug_assert_eq!(TypeId::of::<W>(), self.as_base().witness_type.get());
+        debug_assert_eq!(TypeId::of::<W2>(), func.witness_type);
         let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
         let call = self.as_base().alloc_call(CallData {
             func,
@@ -1198,7 +1154,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
             secret_args: &[],
             project_witness: Some(project_witness),
             project_deps,
-            outer_witness_type: self.as_base().witness_type.get(),
         });
         self.gate(GateKind::Call(call))
     }
@@ -2602,15 +2557,200 @@ impl<'a, T: ?Sized> Deref for ArenaDyn<'a, T> {
 }
 
 
-type SecretInitFn<'a> = ArenaDyn<'a,
-    dyn for<'b> Fn(&CircuitBase<'b>, *const (), &[Bits<'b>]) -> Bits<'b> + 'static>;
+trait SecretInitFnTrait<'b> {
+    /// Get the required type of the `witness` argument to `Self::call`.  If this is
+    /// `TypeId::of::<()>()`, then all types are allowed (because the argument is ignored).
+    fn witness_type(&self) -> TypeId;
+    /// Call the function.  The `witness` argument must be a valid pointer to a value of the type
+    /// indicated by `self.witness_type()`.
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> Bits<'b>;
+}
 
-type SecretProjectFn<'a> = ArenaDyn<'a,
-    dyn for<'b> Fn(
-        &CircuitBase<'b>,
-        *const (),
-        &[Bits<'b>],
-    ) -> CowBox<'static, dyn Any> + 'static>;
+struct SecretInitFnImpl<F, W> {
+    f: F,
+    _marker: PhantomData<fn(&W)>,
+}
+
+impl<F: Clone, W> Clone for SecretInitFnImpl<F, W> {
+    fn clone(&self) -> Self {
+        SecretInitFnImpl {
+            f: self.f.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<F: Copy, W> Copy for SecretInitFnImpl<F, W> {}
+
+impl<F, W> SecretInitFnImpl<F, W> {
+    pub fn new(f: F) -> SecretInitFnImpl<F, W> {
+        SecretInitFnImpl {
+            f,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'b, F, W> SecretInitFnTrait<'b> for SecretInitFnImpl<F, W>
+where
+    W: 'static,
+    F: Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
+{
+    fn witness_type(&self) -> TypeId {
+        TypeId::of::<W>()
+    }
+
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> Bits<'b> {
+        let witness = &*(witness as *const W);
+        (self.f)(c, witness, dep_vals)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Migrate)]
+pub struct SecretInitFn<'a> {
+    inner: ArenaDyn<'a, dyn for<'b> SecretInitFnTrait<'b> + 'static>,
+}
+
+impl<'a> SecretInitFn<'a> {
+    fn new<T>(x: &'a T) -> SecretInitFn<'a>
+    where T: for<'b> SecretInitFnTrait<'b> + Copy + 'static {
+        SecretInitFn {
+            inner: ArenaDyn::new(IsCopy::<T>::new_ref(x)),
+        }
+    }
+
+    pub fn call(
+        &self,
+        c: &CircuitBase<'a>,
+        witness: &dyn Any,
+        dep_vals: &[Bits<'a>],
+    ) -> Bits<'a> {
+        unsafe {
+            assert!(witness.type_id() == self.inner.witness_type() ||
+                self.inner.witness_type() == TypeId::of::<()>());
+            self.inner.call(c, witness as *const dyn Any as *const (), dep_vals)
+        }
+    }
+}
+
+
+trait SecretProjectFnTrait<'b> {
+    /// Get the required type of the `witness` argument to `Self::call`.  If this is
+    /// `TypeId::of::<()>()`, then all types are allowed (because the argument is ignored).
+    fn input_witness_type(&self) -> TypeId;
+    /// Get the type of the new witness returned by `Self::call`.
+    fn output_witness_type(&self) -> TypeId;
+    /// Call the function.  The `witness` argument must be a valid pointer to a value of the type
+    /// indicated by `self.input_witness_type()`.  Returns a pointer to a new witness and a boolean
+    /// indicating if the output pointer is owned (boxed) as opposed to borrowed.
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> (*mut dyn Any, bool);
+}
+
+struct SecretProjectFnImpl<F, W1, W2> {
+    f: F,
+    _marker: PhantomData<fn(&W1) -> CowBox<W2>>,
+}
+
+impl<F: Clone, W1, W2> Clone for SecretProjectFnImpl<F, W1, W2> {
+    fn clone(&self) -> Self {
+        SecretProjectFnImpl {
+            f: self.f.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<F: Copy, W1, W2> Copy for SecretProjectFnImpl<F, W1, W2> {}
+
+impl<F, W1, W2> SecretProjectFnImpl<F, W1, W2> {
+    pub fn new(f: F) -> SecretProjectFnImpl<F, W1, W2> {
+        SecretProjectFnImpl {
+            f,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'b, F, W1, W2> SecretProjectFnTrait<'b> for SecretProjectFnImpl<F, W1, W2>
+where
+    W1: 'static,
+    W2: 'static,
+    F: for<'s> Fn(&CircuitBase<'b>, &'s W1, &[Bits<'b>]) -> CowBox<'s, W2>,
+{
+    fn input_witness_type(&self) -> TypeId {
+        TypeId::of::<W1>()
+    }
+
+    fn output_witness_type(&self) -> TypeId {
+        TypeId::of::<W2>()
+    }
+
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> (*mut dyn Any, bool) {
+        let witness = &*(witness as *const W1);
+        match (self.f)(c, witness, dep_vals) {
+            CowBox::Owned(b) => {
+                (Box::into_raw(b) as *mut dyn Any, true)
+            },
+            CowBox::Borrowed(r) => {
+                (r as *const W2 as *const dyn Any as *mut dyn Any, false)
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Migrate)]
+pub struct SecretProjectFn<'a> {
+    inner: ArenaDyn<'a, dyn for<'b> SecretProjectFnTrait<'b> + 'static>,
+}
+
+impl<'a> SecretProjectFn<'a> {
+    fn new<T>(x: &'a T) -> SecretProjectFn<'a>
+    where T: for<'b> SecretProjectFnTrait<'b> + Copy + 'static {
+        SecretProjectFn {
+            inner: ArenaDyn::new(IsCopy::<T>::new_ref(x)),
+        }
+    }
+
+    pub fn call<'s>(
+        &self,
+        c: &CircuitBase<'a>,
+        witness: &'s dyn Any,
+        dep_vals: &[Bits<'a>],
+    ) -> CowBox<'s, dyn Any> {
+        unsafe {
+            assert!(witness.type_id() == self.inner.input_witness_type() ||
+                self.inner.input_witness_type() == TypeId::of::<()>());
+            let (ptr, owned) = self.inner.call(
+                c, witness as *const dyn Any as *const (), dep_vals);
+            if owned {
+                CowBox::Owned(Box::from_raw(ptr))
+            } else {
+                CowBox::Borrowed(&*ptr)
+            }
+        }
+    }
+}
+
 
 #[derive(Clone, Debug)]
 pub struct SecretData<'a> {
@@ -2623,11 +2763,10 @@ pub struct SecretData<'a> {
     /// used anywhere.
     used: Cell<bool>,
 
-    init: Option<SecretInitFn<'a>>,
+    pub init: Option<SecretInitFn<'a>>,
     /// Dependencies for computing derived secrets.  The values on these wires (represented as
     /// `Bits`) will be passed to `init`.
     pub deps: &'a [Wire<'a>],
-    witness_type: TypeId,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
@@ -2641,7 +2780,6 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
             used: v.visit(self.used),
             init: v.visit(self.init),
             deps,
-            witness_type: self.witness_type,
         }
     }
 }
@@ -2654,7 +2792,6 @@ impl<'a> SecretData<'a> {
             used: Cell::new(false),
             init: None,
             deps: &[],
-            witness_type: TypeId::of::<()>(),
         }
     }
 
@@ -2669,7 +2806,6 @@ impl<'a> SecretData<'a> {
             used: Cell::new(false),
             init: Some(init),
             deps,
-            witness_type: TypeId::of::<W>(),
         }
     }
 
@@ -2719,21 +2855,6 @@ impl<'a> SecretData<'a> {
 
     pub fn has_init(&self) -> bool {
         self.init.is_some()
-    }
-
-    /// Run the lazy initialization function to calculate the value of this secret.
-    ///
-    /// Note that this does not call `self.set`.
-    pub fn init(
-        &self,
-        c: &CircuitBase<'a>,
-        witness: &dyn Any,
-        dep_vals: &[Bits<'a>],
-    ) -> Bits<'a> {
-        assert!(self.witness_type == witness.type_id() || self.witness_type == TypeId::of::<()>());
-        let init = self.init.unwrap();
-        let bits = unsafe { init(c, witness as *const dyn Any as *const (), dep_vals) };
-        bits
     }
 }
 
@@ -2822,9 +2943,8 @@ pub struct CallData<'a> {
     pub args: &'a [Wire<'a>],
     pub secret_args: &'a [(SecretInputId, Secret<'a>)],
 
-    project_witness: Option<SecretProjectFn<'a>>,
+    pub project_witness: Option<SecretProjectFn<'a>>,
     pub project_deps: &'a [Wire<'a>],
-    outer_witness_type: TypeId,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for CallData<'a> {
@@ -2842,7 +2962,6 @@ impl<'a, 'b> Migrate<'a, 'b> for CallData<'a> {
             secret_args,
             project_witness: v.visit(self.project_witness),
             project_deps,
-            outer_witness_type: self.outer_witness_type,
         }
     }
 }
@@ -2853,28 +2972,6 @@ impl<'a, 'b> Migrate<'a, 'b> for Call<'a> {
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Call<'b> {
         let new = v.visit((*self).clone());
         v.new_circuit().alloc_call(new)
-    }
-}
-
-impl<'a> CallData<'a> {
-    pub fn has_project_witness(&self) -> bool {
-        self.project_witness.is_some()
-    }
-
-    pub fn project_witness<'w>(
-        &self,
-        c: &CircuitBase<'a>,
-        witness: &'w dyn Any,
-        dep_vals: &[Bits<'a>],
-    ) -> CowBox<'w, dyn Any> {
-        assert!(self.outer_witness_type == witness.type_id() ||
-            self.outer_witness_type == TypeId::of::<()>());
-        let project_witness = self.project_witness.unwrap();
-        let new_witness: CowBox<'w, dyn Any> = unsafe {
-            project_witness(c, witness as *const dyn Any as *const (), dep_vals)
-        };
-        debug_assert_eq!((*new_witness).type_id(), self.func.witness_type);
-        new_witness
     }
 }
 
@@ -2892,7 +2989,6 @@ impl fmt::Debug for EvalHookFn<'_> {
         write!(f, "EvalHookFn(..)")
     }
 }
-
 
 
 declare_interned_pointer! {
