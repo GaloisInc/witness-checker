@@ -57,3 +57,48 @@ pub fn derive_from_wire_list(input: proc_macro::TokenStream) -> proc_macro::Toke
     //eprintln!("result: {}", result);
     result.into()
 }
+
+#[proc_macro_derive(ToWireList)]
+pub fn derive_to_wire_list(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let name = &input.ident;
+    let repr_name = Ident::new(&format!("{}Repr", name), name.span());
+
+    let (_impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let impl_params = &input.generics.params;
+
+    let s = match input.data {
+        Data::Struct(ref s) => s,
+        _ => panic!("#[derive(ToWireList)] is supported only on structs"),
+    };
+
+    let field_names = s.fields.iter().enumerate().map(|(i, f)| {
+        match f.ident.clone() {
+            Some(ident) => Member::Named(ident),
+            None => Member::Unnamed(i.into()),
+        }
+    }).collect::<Vec<_>>();
+    let field_tys = s.fields.iter().map(|f| &f.ty).collect::<Vec<_>>();
+
+    let result = quote! {
+        impl<'a, #impl_params> ToWireList<'a> for #name #ty_generics #where_clause {
+            fn num_wires(x: &Self::Repr) -> usize {
+                #( <#field_tys as ToWireList<'a>>::num_wires(&x.#field_names) + )*
+                0
+            }
+            fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+                #( <#field_tys as ToWireList<'a>>::for_each_wire(&x.#field_names, |w| f(w)); )*
+            }
+            fn num_sizes(x: &Self::Repr) -> usize {
+                #( <#field_tys as ToWireList<'a>>::num_sizes(&x.#field_names) + )*
+                0
+            }
+            fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+                #( <#field_tys as ToWireList<'a>>::for_each_size(&x.#field_names, |s| f(s)); )*
+            }
+        }
+    };
+    //eprintln!("result: {}", result);
+    result.into()
+}
