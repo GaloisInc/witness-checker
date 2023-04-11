@@ -303,7 +303,7 @@ trait EvalContext<'a, 'b> {
         &'b self,
         c: &CircuitBase<'a>,
         args: Vec<(Bits<'a>, bool)>,
-        project_witness: Option<SecretProjectFn<'a>>,
+        project_witness: SecretProjectFn<'a>,
         project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext;
 }
@@ -423,15 +423,11 @@ where S: SecretEvaluator<'a> + Default {
             return Err(Error::Secret);
         }
 
-        if let Some(init) = s.init {
-            let dep_vals = s.deps.iter().map(|&w| {
-                self.get_value(w).map(|(b, _)| b)
-            }).collect::<Result<Vec<_>, _>>()?;
-            let bits = init.call(c, &*self.witness, &dep_vals);
-            return Ok(bits);
-        }
-
-        Err(Error::UnknownSecret(s))
+        let dep_vals = s.deps.iter().map(|&w| {
+            self.get_value(w).map(|(b, _)| b)
+        }).collect::<Result<Vec<_>, _>>()?;
+        let bits = s.init.call(c, &*self.witness, &dep_vals);
+        Ok(bits)
     }
 
     fn get_erased(&self, e: Erased<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
@@ -464,14 +460,10 @@ where S: SecretEvaluator<'a> + Default {
         &'b self,
         c: &CircuitBase<'a>,
         args: Vec<(Bits<'a>, bool)>,
-        project_witness: Option<SecretProjectFn<'a>>,
+        project_witness: SecretProjectFn<'a>,
         project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext {
-        let witness = if let Some(project_witness) = project_witness {
-            project_witness.call(c, &*self.witness, project_deps)
-        } else {
-            CowBox::from(&*self.witness)
-        };
+        let witness = project_witness.call(c, &*self.witness, project_deps);
         CachingEvaluator {
             secret_eval: S::default(),
             witness,
