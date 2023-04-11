@@ -303,9 +303,9 @@ impl RamState {
 pub struct RamStateRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub pc: TWire<'a, u64>,
-    pub regs: Vec<TWire<'a, u64>>,
+    pub regs: TWire<'a, Vec<u64>>,
     pub live: TWire<'a, bool>,
-    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, WordLabel>>>,
+    pub tainted_regs: TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -317,9 +317,9 @@ impl<'a> Lit<'a> for RamState {
         RamStateRepr {
             cycle: bld.lit(a.cycle),
             pc: bld.lit(a.pc),
-            regs: bld.lit(a.regs).repr,
+            regs: bld.lit(a.regs),
             live: bld.lit(a.live),
-            tainted_regs: a.tainted_regs.map(|regs| bld.lit(regs).repr),
+            tainted_regs: TWire::new(a.tainted_regs.map(|regs| bld.lit(regs))),
         }
     }
 }
@@ -340,9 +340,9 @@ impl<'a> FromWireList<'a> for RamState {
     ) -> Self::Repr {
         RamStateRepr {
             pc: TWire::new(u64::build_repr_from_wires(c, sizes, build_wire)),
-            regs: Vec::<u64>::build_repr_from_wires(c, sizes, build_wire),
-            tainted_regs: IfMode::<AnyTainted, Vec<WordLabel>>::build_repr_from_wires(
-                c, sizes, build_wire).map(|tw| tw.repr),
+            regs: TWire::new(Vec::<u64>::build_repr_from_wires(c, sizes, build_wire)),
+            tainted_regs: TWire::new(IfMode::<AnyTainted, Vec<WordLabel>>::build_repr_from_wires(
+                c, sizes, build_wire)),
             live: TWire::new(bool::build_repr_from_wires(c, sizes, build_wire)),
             cycle: TWire::new(u32::build_repr_from_wires(c, sizes, build_wire)),
         }
@@ -400,15 +400,9 @@ where
         RamStateRepr {
             cycle: bld.mux(c.clone(), t.cycle, e.cycle),
             pc: bld.mux(c.clone(), t.pc, e.pc),
-            regs: t.regs.iter().zip(e.regs.iter())
-                .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
-                .collect(),
+            regs: bld.mux(c.clone(), t.regs, e.regs),
             live: bld.mux(c.clone(), t.live, e.live),
-            tainted_regs: IfMode::new(|pf| {
-                t.tainted_regs.unwrap(&pf).iter().zip(e.tainted_regs.unwrap(&pf).iter())
-                    .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
-                    .collect()
-            }),
+            tainted_regs: bld.mux(c.clone(), t.tainted_regs, e.tainted_regs),
         }
     }
 }
