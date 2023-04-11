@@ -22,7 +22,7 @@ use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList, ToWireList)]
+#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList, ToWireList, LazySecret)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u8,
@@ -115,32 +115,6 @@ impl<'a> Lit<'a> for RamInstr {
     }
 }
 
-impl<'a> LazySecret<'a> for RamInstr {
-    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        u8::expected_word_len(sizes) +
-        u8::expected_word_len(sizes) +
-        u8::expected_word_len(sizes) +
-        u64::expected_word_len(sizes) +
-        bool::expected_word_len(sizes)
-    }
-    fn word_len(&self) -> usize {
-        let RamInstr { opcode, dest, op1, op2, imm } = *self;
-        opcode.word_len() +
-        dest.word_len() +
-        op1.word_len() +
-        op2.word_len() +
-        imm.word_len()
-    }
-    fn push_words(&self, out: &mut Vec<u32>) {
-        let RamInstr { opcode, dest, op1, op2, imm } = *self;
-        opcode.push_words(out);
-        dest.push_words(out);
-        op1.push_words(out);
-        op2.push_words(out);
-        imm.push_words(out);
-    }
-}
-
 impl<'a, C: Repr<'a>> Mux<'a, C, RamInstr> for RamInstr
 where
     C::Repr: Clone,
@@ -203,7 +177,7 @@ impl<'a> SecretDep<'a> for RamInstr {
 
 
 
-#[derive(Clone, Debug, Deserialize, Migrate, FromWireList)]
+#[derive(Clone, Debug, Deserialize, Migrate, FromWireList, LazySecret)]
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
@@ -262,32 +236,6 @@ impl<'a> Lit<'a> for RamState {
             live: bld.lit(a.live),
             tainted_regs: TWire::new(a.tainted_regs.map(|regs| bld.lit(regs))),
         }
-    }
-}
-
-impl<'a> LazySecret<'a> for RamState {
-    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        u64::expected_word_len(sizes) +
-        Vec::<u64>::expected_word_len(sizes) +
-        IfMode::<AnyTainted, Vec<WordLabel>>::expected_word_len(sizes) +
-        bool::expected_word_len(sizes) +
-        u32::expected_word_len(sizes)
-    }
-    fn word_len(&self) -> usize {
-        let RamState { cycle, pc, ref regs, live, ref tainted_regs } = *self;
-        pc.word_len() +
-        regs.word_len() +
-        tainted_regs.word_len() +
-        live.word_len() +
-        cycle.word_len()
-    }
-    fn push_words(&self, out: &mut Vec<u32>) {
-        let RamState { cycle, pc, ref regs, live, ref tainted_regs } = *self;
-        pc.push_words(out);
-        regs.push_words(out);
-        tainted_regs.push_words(out);
-        live.push_words(out);
-        cycle.push_words(out);
     }
 }
 
@@ -851,7 +799,7 @@ impl<'a> SecretDep<'a> for WordLabel {
 }
 
 
-#[derive(Clone, Copy, Debug, FromWireList, ToWireList)]
+#[derive(Clone, Copy, Debug, FromWireList, ToWireList, LazySecret)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -1015,35 +963,6 @@ impl<'a> Lit<'a> for MemPort {
             width: bld.lit(a.width),
             tainted: bld.lit(a.tainted),
         }
-    }
-}
-
-impl<'a> LazySecret<'a> for MemPort {
-    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        u32::expected_word_len(sizes) +
-        u64::expected_word_len(sizes) +
-        u64::expected_word_len(sizes) +
-        MemOpKind::expected_word_len(sizes) +
-        MemOpWidth::expected_word_len(sizes) +
-        IfMode::<AnyTainted, WordLabel>::expected_word_len(sizes)
-    }
-    fn word_len(&self) -> usize {
-        let MemPort { cycle, addr, value, op, width, ref tainted } = *self;
-        cycle.word_len() +
-        addr.word_len() +
-        value.word_len() +
-        op.word_len() +
-        width.word_len() +
-        tainted.word_len()
-    }
-    fn push_words(&self, out: &mut Vec<u32>) {
-        let MemPort { cycle, addr, value, op, width, ref tainted } = *self;
-        cycle.push_words(out);
-        addr.push_words(out);
-        value.push_words(out);
-        op.push_words(out);
-        width.push_words(out);
-        tainted.push_words(out);
     }
 }
 
