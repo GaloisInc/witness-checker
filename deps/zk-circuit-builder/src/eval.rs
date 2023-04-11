@@ -432,17 +432,7 @@ where S: SecretEvaluator<'a> + Default {
             return Ok(bits);
         }
 
-        if self.in_function {
-            match s.secret_value() {
-                v => unreachable!("found non-FunctionInput ({:?}) inside a function?", v),
-            }
-        } else {
-            match s.secret_value() {
-                SecretValue::ProverInit(b) => Ok(b),
-                SecretValue::ProverUninit => Err(Error::UnknownSecret(s)),
-                SecretValue::VerifierUnknown =>  Err(Error::UnknownSecret(s)),
-            }
-        }
+        Err(Error::UnknownSecret(s))
     }
 
     fn get_erased(&self, e: Erased<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
