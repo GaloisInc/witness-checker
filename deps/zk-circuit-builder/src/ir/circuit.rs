@@ -1020,7 +1020,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let call = self.as_base().alloc_call(CallData {
             func,
             args,
-            project_secret: Some(project_secret),
+            project_secret,
             project_deps,
         });
         self.gate(GateKind::Call(call))
@@ -1054,7 +1054,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let mut v = MigrateVisitor::new(&old.circuit, new_circuit);
 
         // Transfer parts of `old_circuit` into `self`, which has been cleared.
-        assert!(old.circuit.in_function.get(),
+        assert!(!old.circuit.in_function.get(),
             "can't migrate inside define_function");
         let current_label = new_circuit.intern_str(old.circuit.current_label.get());
         new_circuit.current_label.set(current_label);
@@ -2533,7 +2533,7 @@ pub struct SecretData<'a> {
     /// used anywhere.
     used: Cell<bool>,
 
-    pub init: Option<SecretInitFn<'a>>,
+    pub init: SecretInitFn<'a>,
     /// Dependencies for computing derived secrets.  The values on these wires (represented as
     /// `Bits`) will be passed to `init`.
     pub deps: &'a [Wire<'a>],
@@ -2562,7 +2562,7 @@ impl<'a> SecretData<'a> {
         SecretData {
             ty,
             used: Cell::new(false),
-            init: Some(init),
+            init,
             deps,
         }
     }
@@ -2656,7 +2656,7 @@ declare_interned_pointer! {
 pub struct CallData<'a> {
     pub func: Function<'a>,
     pub args: &'a [Wire<'a>],
-    pub project_secret: Option<SecretProjectFn<'a>>,
+    pub project_secret: SecretProjectFn<'a>,
     pub project_deps: &'a [Wire<'a>],
 }
 
