@@ -11,8 +11,8 @@ use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
-    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, SecretValue, SecretInputId,
-    Call, SecretProjectFn,
+    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, SecretValue, Call,
+    SecretProjectFn,
 };
 use crate::util::CowBox;
 
@@ -304,7 +304,6 @@ trait EvalContext<'a, 'b> {
         &'b self,
         c: &CircuitBase<'a>,
         args: Vec<(Bits<'a>, bool)>,
-        secrets: Vec<Option<Bits<'a>>>,
         project_secret: Option<SecretProjectFn<'a>>,
         project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext;
@@ -318,9 +317,6 @@ pub struct CachingEvaluator<'a, 's, S> {
     cache: HashMap<Wire<'a>, (Bits<'a>, bool)>,
     in_function: bool,
     args: Vec<(Bits<'a>, bool)>,
-    /// The value of each secret used by the current function.  `None` means the value is not known
-    /// at this time.
-    secrets: Vec<Option<Bits<'a>>>,
 }
 
 impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
@@ -347,7 +343,6 @@ impl<'a, 's, S: Default> CachingEvaluator<'a, 's, S> {
             cache: HashMap::new(),
             in_function: false,
             args: Vec::new(),
-            secrets: Vec::new(),
         }
     }
 }
@@ -369,7 +364,6 @@ impl<'a, 'b, 's, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, 's
             }).collect(),
             in_function: self.in_function,
             args: v.visit(self.args),
-            secrets: v.visit(self.secrets),
         }
     }
 }
@@ -440,9 +434,6 @@ where S: SecretEvaluator<'a> + Default {
 
         if self.in_function {
             match s.secret_value() {
-                SecretValue::FunctionInput(id) => {
-                    self.secrets[id.0].ok_or(Error::UnknownSecret(s))
-                },
                 v => unreachable!("found non-FunctionInput ({:?}) inside a function?", v),
             }
         } else {
@@ -450,7 +441,6 @@ where S: SecretEvaluator<'a> + Default {
                 SecretValue::ProverInit(b) => Ok(b),
                 SecretValue::ProverUninit => Err(Error::UnknownSecret(s)),
                 SecretValue::VerifierUnknown =>  Err(Error::UnknownSecret(s)),
-                SecretValue::FunctionInput(_) => unreachable!("found FunctionInput at top level?"),
             }
         }
     }
@@ -485,7 +475,6 @@ where S: SecretEvaluator<'a> + Default {
         &'b self,
         c: &CircuitBase<'a>,
         args: Vec<(Bits<'a>, bool)>,
-        secrets: Vec<Option<Bits<'a>>>,
         project_secret: Option<SecretProjectFn<'a>>,
         project_deps: &[Bits<'a>],
     ) -> Self::FunctionContext {
@@ -500,7 +489,6 @@ where S: SecretEvaluator<'a> + Default {
             cache: HashMap::new(),
             in_function: true,
             args,
-            secrets,
         }
     }
 }
@@ -837,7 +825,6 @@ fn eval_call<'a, 'b>(
     call: Call<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let func = call.func;
-    assert_eq!(call.secret_args.len(), func.secret_inputs.len());
 
     let arg_bits = call.args.iter().map(|&w| {
         outer_ecx.get_value(w)
@@ -846,15 +833,8 @@ fn eval_call<'a, 'b>(
         outer_ecx.get_value(w).map(|(bits, sec)| bits)
     }).collect::<Result<Vec<_>, _>>()?;
 
-    let mut num_secrets = func.secret_inputs.iter().map(|&(id, _)| id.0).max()
-        .map_or(0, |i| i + 1);
-    let mut secrets = vec![None; num_secrets];
-    for &(id, s) in call.secret_args {
-        secrets[id.0] = Some(outer_ecx.eval_secret(c, s)?);
-    }
-
     let mut inner_eval = outer_ecx.enter_function(
-        c, arg_bits, secrets, call.project_secret, &dep_bits);
+        c, arg_bits, call.project_secret, &dep_bits);
     Evaluator::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
