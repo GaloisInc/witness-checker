@@ -53,16 +53,11 @@ pub struct CircuitBase<'a> {
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
 
-    function_scope: RefCell<Option<FunctionScope<'a>>>,
-
     current_label: Cell<&'a str>,
     is_prover: bool,
     functions: RefCell<Vec<Function<'a>>>,
     secret_type: Cell<TypeId>,
-}
-
-struct FunctionScope<'a> {
-    _marker: PhantomData<&'a ()>,
+    in_function: Cell<bool>,
 }
 
 impl<'a> CircuitBase<'a> {
@@ -76,11 +71,11 @@ impl<'a> CircuitBase<'a> {
             intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
-            function_scope: RefCell::new(None),
             current_label: Cell::new(""),
             is_prover,
             functions: RefCell::new(Vec::new()),
             secret_type: Cell::new(TypeId::of::<S>()),
+            in_function: Cell::new(false),
         };
         c.preload_common();
         c
@@ -362,12 +357,14 @@ impl<'a> CircuitBase<'a> {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
             ref intern_gadget_kind, ref intern_str, ref intern_bits,
-            ref function_scope,
             ref current_label,
             is_prover,
             ref functions,
             ref secret_type,
+            ref in_function,
         } = *self;
+
+        assert!(!in_function.get());
 
         let old_arenas = Box::new(arenas.take());
 
@@ -381,11 +378,11 @@ impl<'a> CircuitBase<'a> {
             intern_gadget_kind: RefCell::new(intern_gadget_kind.take()),
             intern_str: RefCell::new(intern_str.take()),
             intern_bits: RefCell::new(intern_bits.take()),
-            function_scope: RefCell::new(function_scope.take()),
             current_label: Cell::new(current_label.replace("")),
             is_prover,
             functions: RefCell::new(functions.take()),
             secret_type: Cell::new(secret_type.get()),
+            in_function: Cell::new(false),
         };
 
         self.preload_common();
@@ -494,18 +491,13 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
     where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> Wire<'b> {
         let inner_secret_type = TypeId::of::<S2>();
         let old_secret_type = self.as_base().secret_type.replace(inner_secret_type);
-
-        let function_scope = &self.base.function_scope;
-        let old_scope = mem::replace(&mut *function_scope.borrow_mut(), Some(FunctionScope {
-            _marker: PhantomData,
-        }));
+        let old_in_function = self.as_base().in_function.replace(true);
 
         let arg_wires = arg_tys.iter().enumerate()
             .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
             .collect::<Vec<_>>();
         let result_wire = f(self, &arg_wires);
 
-        let new_scope = mem::replace(&mut *function_scope.borrow_mut(), old_scope).unwrap();
         let func = Function(self.as_base().arena().alloc(FunctionDef {
             name: self.as_base().intern_str(name),
             arg_tys: self.ty_list(arg_tys),
@@ -515,6 +507,7 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
         self.as_base().functions.borrow_mut().push(func);
 
         self.as_base().secret_type.set(old_secret_type);
+        self.as_base().in_function.set(old_in_function);
         func
     }
 }
@@ -1061,7 +1054,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let mut v = MigrateVisitor::new(&old.circuit, new_circuit);
 
         // Transfer parts of `old_circuit` into `self`, which has been cleared.
-        assert!(old.circuit.function_scope.borrow().is_none(),
+        assert!(old.circuit.in_function.get(),
             "can't migrate inside define_function");
         let current_label = new_circuit.intern_str(old.circuit.current_label.get());
         new_circuit.current_label.set(current_label);
