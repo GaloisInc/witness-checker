@@ -22,7 +22,7 @@ use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList, ToWireList, LazySecret)]
+#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList, ToWireList, LazySecret, SecretDep)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u8,
@@ -156,22 +156,6 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
             acc = bld.and(acc, part);
         }
         acc.repr
-    }
-}
-
-impl<'a> SecretDep<'a> for RamInstr {
-    type Decoded = RamInstr;
-    fn from_bits_iter(
-        sizes: &mut impl Iterator<Item = usize>,
-        bits: &mut impl Iterator<Item = Bits<'a>>,
-    ) -> RamInstr {
-        RamInstr {
-            opcode: u8::from_bits_iter(sizes, bits),
-            dest: u8::from_bits_iter(sizes, bits),
-            op1: u8::from_bits_iter(sizes, bits),
-            op2: u64::from_bits_iter(sizes, bits),
-            imm: bool::from_bits_iter(sizes, bits),
-        }
     }
 }
 
@@ -799,7 +783,7 @@ impl<'a> SecretDep<'a> for WordLabel {
 }
 
 
-#[derive(Clone, Copy, Debug, FromWireList, ToWireList, LazySecret)]
+#[derive(Clone, Copy, Debug, FromWireList, ToWireList, LazySecret, SecretDep)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -1053,14 +1037,7 @@ impl<'a> SecretDep<'a> for CompareMemPort {
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
     ) -> CompareMemPort {
-        CompareMemPort(MemPort {
-            cycle: u32::from_bits_iter(sizes, bits),
-            addr: u64::from_bits_iter(sizes, bits),
-            value: u64::from_bits_iter(sizes, bits),
-            op: MemOpKind::from_bits_iter(sizes, bits),
-            width: MemOpWidth::from_bits_iter(sizes, bits),
-            tainted: IfMode::<AnyTainted, WordLabel>::from_bits_iter(sizes, bits),
-        })
+        CompareMemPort(MemPort::from_bits_iter(sizes, bits))
     }
 }
 
@@ -1266,7 +1243,7 @@ impl<'a> typed::Le<'a, PackedMemPort> for PackedMemPort {
 /// A simplified version of `MemPort` used for instruction fetch.  Since all accesses after
 /// initialization are reads, we don't need to track the cycle number - we sort by `(addr, !write)`
 /// instead of `(addr, cycle)`.
-#[derive(Clone, Copy, Default, ToWireList)]
+#[derive(Clone, Copy, Default, ToWireList, SecretDep)]
 pub struct FetchPort {
     pub addr: u64,
     pub instr: RamInstr,
@@ -1449,11 +1426,7 @@ impl<'a> SecretDep<'a> for CompareFetchPort {
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
     ) -> CompareFetchPort {
-        CompareFetchPort(FetchPort {
-            addr: u64::from_bits_iter(sizes, bits),
-            instr: RamInstr::from_bits_iter(sizes, bits),
-            write: bool::from_bits_iter(sizes, bits),
-        })
+        CompareFetchPort(FetchPort::from_bits_iter(sizes, bits))
     }
 }
 
