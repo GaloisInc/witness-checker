@@ -338,22 +338,9 @@ impl<'a> CircuitBase<'a> {
         // property holds.
         assert!(TypeId::of::<S>() == self.secret_type.get() ||
             TypeId::of::<S>() == TypeId::of::<()>());
-        let sd = if self.is_prover {
-            let init = self.alloc_secret_init_fn::<S, F>(init);
-            SecretData::new_lazy_prover::<S>(ty, init, deps)
-        } else {
-            SecretData::new(ty, SecretValue::VerifierUnknown)
-        };
+        let init = self.alloc_secret_init_fn::<S, F>(init);
+        let sd = SecretData::new_lazy::<S>(ty, init, deps);
         Secret(self.arena().alloc(sd))
-    }
-
-
-    fn alloc_secret(&self, ty: Ty<'a>, val: SecretValue<'a>) -> Secret<'a> {
-        assert!(
-            self.function_scope.borrow().is_none(),
-            "can't use alloc_secret inside a function body",
-        );
-        Secret(self.arena().alloc(SecretData::new(ty, val)))
     }
 
 
@@ -2626,7 +2613,6 @@ impl<'a> SecretProjectFn<'a> {
 #[derive(Clone, Debug)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
-    val: Cell<PackedSecretValue<'a>>,
     /// Indicates whether this `Secret` has been used to construct a gate.  Each `Secret` can only
     /// be used in one place in the circuit.  This flag is `false` on construction and becomes
     /// `true` at the first use; if it is used again after that, a panic occurs.  Note that
@@ -2647,7 +2633,6 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
         let deps = v.new_circuit().intern_wire_list(&deps);
         SecretData {
             ty: v.visit(self.ty),
-            val: v.visit(self.val),
             used: v.visit(self.used),
             init: v.visit(self.init),
             deps,
@@ -2656,71 +2641,22 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
 }
 
 impl<'a> SecretData<'a> {
-    fn new(ty: Ty<'a>, val: SecretValue<'a>) -> SecretData<'a> {
-        SecretData {
-            ty,
-            val: Cell::new(val.pack()),
-            used: Cell::new(false),
-            init: None,
-            deps: &[],
-        }
-    }
-
-    fn new_lazy_prover<S: 'static>(
+    fn new_lazy<S: 'static>(
         ty: Ty<'a>,
         init: SecretInitFn<'a>,
         deps: &'a [Wire<'a>],
     ) -> SecretData<'a> {
         SecretData {
             ty,
-            val: Cell::new(SecretValue::ProverUninit.pack()),
             used: Cell::new(false),
             init: Some(init),
             deps,
         }
     }
 
-    pub fn secret_value(&self) -> SecretValue<'a> {
-        self.val.get().unpack()
-    }
-
     pub fn set_used(&self) {
         assert!(!self.used.get(), "this secret has already been used");
         self.used.set(true);
-    }
-
-    pub fn has_val(&self) -> bool {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(_) => true,
-            SecretValue::ProverUninit => false,
-            SecretValue::VerifierUnknown => false,
-        }
-    }
-
-    pub fn set(&self, bits: Bits<'a>) {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(_) =>
-                panic!("secret value has already been set"),
-            SecretValue::ProverUninit => {
-                self.val.set(SecretValue::ProverInit(bits).pack());
-            },
-            SecretValue::VerifierUnknown =>
-                panic!("can't provide secret values when running in verifier mode"),
-        }
-    }
-
-    pub fn set_default(&self, bits: Bits<'a>) {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(_) => {},
-            SecretValue::ProverUninit => {
-                self.val.set(SecretValue::ProverInit(bits).pack());
-            },
-            SecretValue::VerifierUnknown => {},
-        }
-    }
-
-    pub fn has_init(&self) -> bool {
-        self.init.is_some()
     }
 }
 
