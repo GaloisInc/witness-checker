@@ -19,7 +19,7 @@ use crate::ir::circuit::{
 };
 use crate::ir::migrate::{self, Migrate};
 
-pub use cheesecloth_derive_ir_typed::{FromWireList, ToWireList};
+pub use cheesecloth_derive_ir_typed::{FromWireList, ToWireList, LazySecret};
 
 
 pub trait Builder<'a>: 'a + Sized {

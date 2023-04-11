@@ -102,3 +102,45 @@ pub fn derive_to_wire_list(input: proc_macro::TokenStream) -> proc_macro::TokenS
     //eprintln!("result: {}", result);
     result.into()
 }
+
+#[proc_macro_derive(LazySecret)]
+pub fn derive_lazy_secret(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let name = &input.ident;
+    let repr_name = Ident::new(&format!("{}Repr", name), name.span());
+
+    let (_impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let impl_params = &input.generics.params;
+
+    let s = match input.data {
+        Data::Struct(ref s) => s,
+        _ => panic!("#[derive(LazySecret)] is supported only on structs"),
+    };
+
+    let field_names = s.fields.iter().enumerate().map(|(i, f)| {
+        match f.ident.clone() {
+            Some(ident) => Member::Named(ident),
+            None => Member::Unnamed(i.into()),
+        }
+    }).collect::<Vec<_>>();
+    let field_tys = s.fields.iter().map(|f| &f.ty).collect::<Vec<_>>();
+
+    let result = quote! {
+        impl<'a, #impl_params> LazySecret<'a> for #name #ty_generics #where_clause {
+            fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                #( <#field_tys as LazySecret<'a>>::expected_word_len(sizes) + )*
+                0
+            }
+            fn word_len(&self) -> usize {
+                #( <#field_tys as LazySecret<'a>>::word_len(&self.#field_names) + )*
+                0
+            }
+            fn push_words(&self, out: &mut Vec<u32>) {
+                #( <#field_tys as LazySecret<'a>>::push_words(&self.#field_names, out); )*
+            }
+        }
+    };
+    //eprintln!("result: {}", result);
+    result.into()
+}
