@@ -22,7 +22,7 @@ use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList)]
+#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList, ToWireList)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u8,
@@ -182,41 +182,6 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
             acc = bld.and(acc, part);
         }
         acc.repr
-    }
-}
-
-impl<'a> ToWireList<'a> for RamInstr {
-    fn num_wires(x: &Self::Repr) -> usize {
-        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
-        u8::num_wires(opcode) +
-        u8::num_wires(dest) +
-        u8::num_wires(op1) +
-        u64::num_wires(op2) +
-        bool::num_wires(imm)
-    }
-    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
-        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
-        u8::for_each_wire(opcode, |w| f(w));
-        u8::for_each_wire(dest, |w| f(w));
-        u8::for_each_wire(op1, |w| f(w));
-        u64::for_each_wire(op2, |w| f(w));
-        bool::for_each_wire(imm, |w| f(w));
-    }
-    fn num_sizes(x: &Self::Repr) -> usize {
-        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
-        u8::num_sizes(opcode) +
-        u8::num_sizes(dest) +
-        u8::num_sizes(op1) +
-        u64::num_sizes(op2) +
-        bool::num_sizes(imm)
-    }
-    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
-        let RamInstrRepr { ref opcode, ref dest, ref op1, ref op2, ref imm } = *x;
-        u8::for_each_size(opcode, |s| f(s));
-        u8::for_each_size(dest, |s| f(s));
-        u8::for_each_size(op1, |s| f(s));
-        u64::for_each_size(op2, |s| f(s));
-        bool::for_each_size(imm, |s| f(s));
     }
 }
 
@@ -886,7 +851,7 @@ impl<'a> SecretDep<'a> for WordLabel {
 }
 
 
-#[derive(Clone, Copy, Debug, FromWireList)]
+#[derive(Clone, Copy, Debug, FromWireList, ToWireList)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -1150,40 +1115,16 @@ impl<'a> Repr<'a> for CompareMemPort {
 
 impl<'a> ToWireList<'a> for CompareMemPort {
     fn num_wires(x: &Self::Repr) -> usize {
-        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
-        u32::num_wires(cycle) +
-        u64::num_wires(addr) +
-        u64::num_wires(value) +
-        MemOpKind::num_wires(op) +
-        MemOpWidth::num_wires(width) +
-        IfMode::<AnyTainted, WordLabel>::num_wires(tainted)
+        MemPort::num_wires(x)
     }
-    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
-        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
-        u32::for_each_wire(cycle, |w| f(w));
-        u64::for_each_wire(addr, |w| f(w));
-        u64::for_each_wire(value, |w| f(w));
-        MemOpKind::for_each_wire(op, |w| f(w));
-        MemOpWidth::for_each_wire(width, |w| f(w));
-        IfMode::<AnyTainted, WordLabel>::for_each_wire(tainted, |w| f(w));
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
+        MemPort::for_each_wire(x, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
-        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
-        u32::num_sizes(cycle) +
-        u64::num_sizes(addr) +
-        u64::num_sizes(value) +
-        MemOpKind::num_sizes(op) +
-        MemOpWidth::num_sizes(width) +
-        IfMode::<AnyTainted, WordLabel>::num_sizes(tainted)
+        MemPort::num_sizes(x)
     }
-    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
-        let MemPortRepr { ref cycle, ref addr, ref value, ref op, ref width, ref tainted } = *x;
-        u32::for_each_size(cycle, |s| f(s));
-        u64::for_each_size(addr, |s| f(s));
-        u64::for_each_size(value, |s| f(s));
-        MemOpKind::for_each_size(op, |s| f(s));
-        MemOpWidth::for_each_size(width, |s| f(s));
-        IfMode::<AnyTainted, WordLabel>::for_each_size(tainted, |s| f(s));
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        MemPort::for_each_size(x, f);
     }
 }
 
@@ -1406,7 +1347,7 @@ impl<'a> typed::Le<'a, PackedMemPort> for PackedMemPort {
 /// A simplified version of `MemPort` used for instruction fetch.  Since all accesses after
 /// initialization are reads, we don't need to track the cycle number - we sort by `(addr, !write)`
 /// instead of `(addr, cycle)`.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, ToWireList)]
 pub struct FetchPort {
     pub addr: u64,
     pub instr: RamInstr,
@@ -1570,28 +1511,16 @@ impl<'a> Repr<'a> for CompareFetchPort {
 
 impl<'a> ToWireList<'a> for CompareFetchPort {
     fn num_wires(x: &Self::Repr) -> usize {
-        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
-        u64::num_wires(addr) +
-        RamInstr::num_wires(instr) +
-        bool::num_wires(write)
+        FetchPort::num_wires(x)
     }
-    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
-        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
-        u64::for_each_wire(addr, |w| f(w));
-        RamInstr::for_each_wire(instr, |w| f(w));
-        bool::for_each_wire(write, |w| f(w));
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
+        FetchPort::for_each_wire(x, f)
     }
     fn num_sizes(x: &Self::Repr) -> usize {
-        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
-        u64::num_sizes(addr) +
-        RamInstr::num_sizes(instr) +
-        bool::num_sizes(write)
+        FetchPort::num_sizes(x)
     }
-    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
-        let FetchPortRepr { ref addr, ref instr, ref write } = *x;
-        u64::for_each_size(addr, |s| f(s));
-        RamInstr::for_each_size(instr, |s| f(s));
-        bool::for_each_size(write, |s| f(s));
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        FetchPort::for_each_size(x, f)
     }
 }
 
