@@ -229,6 +229,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cheesecloth-derive-ir-typed"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "cheesecloth-derive-migrate"
 version = "0.1.0"
 dependencies = [
@@ -1425,6 +1434,7 @@ dependencies = [
  "bitvec 0.18.4",
  "bumpalo",
  "byteorder",
+ "cheesecloth-derive-ir-typed",
  "cheesecloth-derive-migrate",
  "ff",
  "generic-array",
