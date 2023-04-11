@@ -15,11 +15,11 @@ pub fn calc_step<'a>(
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
-    regs0: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    regs0: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
     concrete_x: TWire<'a, u64>,
     concrete_y: TWire<'a, u64>,
     concrete_dest: TWire<'a, u8>,
-) -> (IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
+) -> (TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         let regs0 = regs0.as_ref().unwrap(&pf);
         let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", idx));
@@ -127,10 +127,10 @@ pub fn calc_step<'a>(
             label_result: result,
             addr_offset: offset,
         };
-        (IfMode::some(&pf, regs), IfMode::some(&pf, timm))
+        (TWire::new(IfMode::some(&pf, TWire::new(regs))), IfMode::some(&pf, timm))
     } else {
         // JP: Better combinator for this? map_with_or?
-        (IfMode::none(), IfMode::none())
+        (TWire::new(IfMode::none()), IfMode::none())
     }
 }
 
@@ -342,8 +342,8 @@ pub fn check_state<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     cycle: u32,
-    calc_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
-    trace_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    calc_regs: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
+    trace_regs: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
         let _g = b.scoped_label(format_args!("tainted::check_state/cycle {}", cycle));
@@ -364,7 +364,7 @@ pub fn check_state<'a>(
 pub fn check_first<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
-    init_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    init_regs: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
 ) {
     if let Some(init_regs) = init_regs.try_get() {
         for (i, &r) in init_regs.iter().enumerate() {

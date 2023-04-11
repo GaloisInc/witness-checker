@@ -399,13 +399,14 @@ fn calc_step<'a>(
         *b.mux_multi(&cases, b.lit((0, REG_NONE)))
     };
 
-    let mut regs = Vec::with_capacity(s1.regs.len());
+    let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
     for (i, &v_old) in s1.regs.iter().enumerate() {
         let is_dest = b.eq(b.lit(i as u8), dest);
         regs.push(b.mux(is_dest, result, v_old));
     }
 
-    let (tainted_regs, tainted_im) = tainted::calc_step(cx, b, idx, instr, mem_port, &s1.tainted_regs, x, y, dest);
+    let (tainted_regs, tainted_im) = tainted::calc_step(
+        cx, b, idx, instr, mem_port, &s1.tainted_regs, x, y, dest);
 
     let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
