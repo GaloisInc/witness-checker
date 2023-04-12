@@ -109,7 +109,7 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    pub fn new<C: CircuitTrait<'a> + ?Sized>(c: &'a C) -> Context<'a> {
+    pub fn new<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Context<'a> {
         Context {
             asserts: RefCell::new(Vec::new()),
             bugs: RefCell::new(Vec::new()),
