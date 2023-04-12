@@ -466,52 +466,6 @@ impl<'a, F> Circuit<'a, F> {
     }
 }
 
-impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
-    /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
-    /// returns a wire representing the output of the function.
-    ///
-    /// Within the function, lazy secrets use a secret type of `S2` rather than the secret type of
-    /// the enclosing circuit.  Calls to the function will need to provide a `SecretProjectFn` to
-    /// convert from the outer secret type to the inner one.
-    ///
-    /// Concretely, the `Circuit` passed to the callback is `self` and uses the same lifetime `'a`,
-    /// but we hide this fact from the caller so that `rustc` will report an error if wires from
-    /// outside the function are used inside the callback or vice versa.
-    //
-    // This function is defined on the concrete `Circuit` type instead of the generic `CircuitExt`
-    // trait because this lets it provide a more precise circuit type to the callback, which
-    // simplifies its usage with `typed::Builder`.  However, it should be easy to copy into
-    // `CircuitExt` if it's needed in the future.
-    pub fn define_function<S2: 'static, F2>(
-        &self,
-        name: &str,
-        arg_tys: &[Ty<'a>],
-        f: F2,
-    ) -> Function<'a>
-    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> Wire<'b> {
-        let inner_secret_type = TypeId::of::<S2>();
-        let old_secret_type = self.as_base().secret_type.replace(inner_secret_type);
-        let old_in_function = self.as_base().in_function.replace(true);
-
-        let arg_wires = arg_tys.iter().enumerate()
-            .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
-            .collect::<Vec<_>>();
-        let result_wire = f(self, &arg_wires);
-
-        let func = Function(self.as_base().arena().alloc(FunctionDef {
-            name: self.as_base().intern_str(name),
-            arg_tys: self.ty_list(arg_tys),
-            result_wire,
-            secret_type: inner_secret_type,
-        }));
-        self.as_base().functions.borrow_mut().push(func);
-
-        self.as_base().secret_type.set(old_secret_type);
-        self.as_base().in_function.set(old_in_function);
-        func
-    }
-}
-
 /// A reference to a `Circuit`, separated into base and filter components.  This is mainly used in
 /// filter chains, to allow working with a subset of the full filter chain.
 pub struct CircuitRef<'a, 'c, F: ?Sized> {
@@ -1027,6 +981,47 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
+    /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
+    /// returns a wire representing the output of the function.
+    ///
+    /// Within the function, lazy secrets use a secret type of `S2` rather than the secret type of
+    /// the enclosing circuit.  Calls to the function will need to provide a `SecretProjectFn` to
+    /// convert from the outer secret type to the inner one.
+    ///
+    /// Concretely, the `Circuit` passed to the callback is `self` and uses the same lifetime `'a`,
+    /// but we hide this fact from the caller so that `rustc` will report an error if wires from
+    /// outside the function are used inside the callback or vice versa.
+    fn define_function<S2: 'static, F2>(
+        &self,
+        name: &str,
+        arg_tys: &[Ty<'a>],
+        f: F2,
+    ) -> Function<'a>
+    where Self: Sized, F2: DefineFunction {
+        let inner_secret_type = TypeId::of::<S2>();
+        let old_secret_type = self.as_base().secret_type.replace(inner_secret_type);
+        let old_in_function = self.as_base().in_function.replace(true);
+
+        let arg_wires = arg_tys.iter().enumerate()
+            .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
+            .collect::<Vec<_>>();
+        let result_wire = f.build_body(self, &arg_wires);
+
+        let func = Function(self.as_base().arena().alloc(FunctionDef {
+            name: self.as_base().intern_str(name),
+            arg_tys: self.ty_list(arg_tys),
+            result_wire,
+            secret_type: inner_secret_type,
+        }));
+        self.as_base().functions.borrow_mut().push(func);
+
+        self.as_base().secret_type.set(old_secret_type);
+        self.as_base().in_function.set(old_in_function);
+        func
+    }
+
+
+
     fn current_label(&self) -> &'a str {
         self.as_base().current_label()
     }
@@ -1140,6 +1135,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 }
 
 impl<'a, C: CircuitTrait<'a> + ?Sized> CircuitExt<'a> for C {}
+
+pub trait DefineFunction {
+    fn build_body<'b, C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b>;
+}
 
 
 pub struct MigrateVisitor<'a, 'b, 'c> {
