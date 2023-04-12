@@ -23,7 +23,7 @@ pub use cheesecloth_derive_ir_typed::{FromWireList, ToWireList, LazySecret, Secr
 
 
 pub trait Builder<'a>: Sized {
-    type Circuit: ?Sized + CircuitTrait<'a>;
+    type Circuit: CircuitTrait<'a>;
     fn circuit(&self) -> &Self::Circuit;
 }
 
