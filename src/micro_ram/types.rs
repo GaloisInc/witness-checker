@@ -161,7 +161,7 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 
 
 
-#[derive(Clone, Debug, Deserialize, Migrate, FromWireList, LazySecret)]
+#[derive(Clone, Debug, Deserialize, Migrate, FromWireList, ToWireList, LazySecret)]
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
@@ -1152,6 +1152,43 @@ impl<'a> FromEval<'a> for ByteOffset {
         let val = FromEval::from_eval(c, ev, a)?;
         Some(ByteOffset(val))
     }
+}
+
+impl<'a> FromWireList<'a> for ByteOffset {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(Self::wire_type(c));
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Wire<'a> {
+        build_wire(Self::wire_type(c))
+    }
+}
+
+impl<'a> LazySecret<'a> for ByteOffset {
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn word_len(&self) -> usize { 1 }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        out.push(self.0 as u32)
+    }
+}
+
+impl<'a> ToWireList<'a> for ByteOffset {
+    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(*x);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
 }
 
 pub struct WordAddr;
