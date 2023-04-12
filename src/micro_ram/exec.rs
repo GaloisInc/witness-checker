@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use log::info;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::ir::circuit::Function;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
@@ -9,7 +10,7 @@ use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{Memory, EquivSegments};
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
-use crate::micro_ram::trace::SegmentBuilder;
+use crate::micro_ram::trace::{self, SegmentBuilder};
 use crate::micro_ram::types::{ExecBody, RamState};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 
@@ -19,6 +20,7 @@ pub struct ExecBuilder<'a> {
     init_state: RamState,
     check_steps: usize,
     expect_zero: bool,
+    calc_step_func: Function<'a>,
     debug_segment_graph_path: Option<String>,
 
     equiv_segments: EquivSegments<'a>,
@@ -76,6 +78,7 @@ impl<'a> ExecBuilder<'a> {
             init_state: init_state.clone(),
             check_steps,
             expect_zero,
+            calc_step_func: trace::define_calc_step_function(b, exec.params.num_regs),
             debug_segment_graph_path,
 
             equiv_segments,
@@ -157,6 +160,7 @@ impl<'a> ExecBuilder<'a> {
             cx: &self.cx,
             b: b,
             ev: &mut self.ev,
+            calc_step_func: self.calc_step_func,
             mem: &mut self.mem,
             fetch: &mut self.fetch,
             params: &exec.params,
