@@ -388,6 +388,16 @@ impl<'a, M: ModePred, T: FromWireList<'a>> FromWireList<'a> for IfMode<M, T> {
         }
     }
 
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        f: impl FnMut(Ty<'a>),
+    ) {
+        if let Some(pf) = check_mode::<M>() {
+            T::for_each_expected_wire_type(c, sizes, f);
+        }
+    }
+
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
         sizes: &mut impl Iterator<Item = usize>,

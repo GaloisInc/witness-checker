@@ -50,6 +50,13 @@ impl<'a> FromWireList<'a> for InputId {
     fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
         u32::expected_num_wires(sizes)
     }
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        f: impl FnMut(Ty<'a>),
+    ) {
+        u32::for_each_expected_wire_type(c, sizes, f);
+    }
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
         sizes: &mut impl Iterator<Item = usize>,
@@ -109,6 +116,13 @@ impl<'a> Lit<'a> for OutputId {
 impl<'a> FromWireList<'a> for OutputId {
     fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
         u32::expected_num_wires(sizes)
+    }
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        f: impl FnMut(Ty<'a>),
+    ) {
+        u32::for_each_expected_wire_type(c, sizes, f);
     }
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
