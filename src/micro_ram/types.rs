@@ -374,6 +374,14 @@ macro_rules! mk_named_enum {
                 u8::expected_num_wires(sizes)
             }
 
+            fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                f: impl FnMut(Ty<'a>),
+            ) {
+                u8::for_each_expected_wire_type(c, sizes, f);
+            }
+
             fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
                 c: &C,
                 sizes: &mut impl Iterator<Item = usize>,
@@ -620,6 +628,13 @@ primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
 impl<'a> FromWireList<'a> for Label {
     fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(Self::wire_type(c));
+    }
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
         _sizes: &mut impl Iterator<Item = usize>,
@@ -734,6 +749,14 @@ impl<'a> FromEval<'a> for WordLabel {
 impl<'a> FromWireList<'a> for WordLabel {
     fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
         <[Label; WORD_BYTES]>::expected_num_wires(sizes)
+    }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        f: impl FnMut(Ty<'a>),
+    ) {
+        <[Label; WORD_BYTES]>::for_each_expected_wire_type(c, sizes, f);
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(

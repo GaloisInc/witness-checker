@@ -38,6 +38,15 @@ pub fn derive_from_wire_list(input: proc_macro::TokenStream) -> proc_macro::Toke
                 0
             }
 
+            fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                mut f: impl FnMut(Ty<'a>),
+            ) {
+                #( <#field_tys as FromWireList<'a>>::for_each_expected_wire_type(
+                    c, sizes, |t| f(t)); )*
+            }
+
             fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
                 c: &C,
                 sizes: &mut impl Iterator<Item = usize>,
