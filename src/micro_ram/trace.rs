@@ -2,19 +2,24 @@ use std::collections::HashMap;
 use std::iter;
 use zk_circuit_builder::gadget::arith::BuilderExt as _;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
-use zk_circuit_builder::ir::circuit::CircuitTrait;
+use zk_circuit_builder::ir::circuit::{
+    CircuitTrait, CircuitExt, CircuitBase, Circuit, CircuitFilter, Wire, Function, DefineFunction,
+};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
-use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, EvaluatorExt};
+use zk_circuit_builder::ir::typed::{
+    TWire, Builder, BuilderExt, BuilderImpl, EvaluatorExt, FromWireList, ToWireList,
+};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{self, Memory, extract_bytes_at_offset, extract_low_bytes};
 use crate::micro_ram::types::{
-    self, CalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort, Opcode, MemOpKind,
-    MemOpWidth, Advice, REG_NONE, REG_PC, MEM_PORT_UNUSED_CYCLE
+    self, CalcIntermediate, TaintCalcIntermediate, RamState, RamStateRepr, RamInstr, MemPort,
+    Opcode, MemOpKind, MemOpWidth, Advice, WordLabel, Label, ByteOffset, REG_NONE, REG_PC,
+    MEM_PORT_UNUSED_CYCLE
 };
 use crate::micro_ram::witness::{MultiExecWitness, SegmentWitness};
-use crate::mode::if_mode::{AnyTainted, is_mode};
+use crate::mode::if_mode::{IfMode, AnyTainted, is_mode};
 use crate::mode::tainted;
 
 
@@ -34,6 +39,7 @@ pub struct SegmentBuilder<'a, 'b, B> {
     pub cx: &'b Context<'a>,
     pub b: &'b B,
     pub ev: &'b mut CachingEvaluator<'a, 'static, eval::Public>,
+    pub calc_step_func: Function<'a>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
@@ -132,7 +138,8 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             });
 
             let (calc_state, calc_im) =
-                calc_step(cx, b, ev, i, instr, &mem_port, advice, &prev_state, &mut kmem);
+                calc_step(cx, b, ev, self.calc_step_func,
+                    i, instr, &mem_port, advice, &prev_state, &mut kmem);
             if calc_im.mem_port_unused {
                 mem_ports.set_unused(i);
             }
@@ -212,10 +219,43 @@ fn operand_value<'a>(
     b.mux(imm, op, reg_val)
 }
 
+fn to_wire_list<'a, T: ToWireList<'a>>(x: &TWire<'a, T>) -> (Vec<Wire<'a>>, Vec<usize>) {
+    let mut wires = Vec::with_capacity(T::num_wires(&x.repr));
+    T::for_each_wire(&x.repr, |w| wires.push(w));
+    let mut sizes = Vec::with_capacity(T::num_sizes(&x.repr));
+    T::for_each_size(&x.repr, |s| sizes.push(s));
+    (wires, sizes)
+}
+
+fn from_wire_list<'a, T: FromWireList<'a>>(
+    c: &CircuitBase<'a>,
+    wires: &[Wire<'a>],
+    sizes: &[usize],
+) -> TWire<'a, T> {
+    let mut it = wires.iter().copied();
+    let repr = T::build_repr_from_wires(
+        c, &mut sizes.iter().copied(), &mut |_| it.next().unwrap());
+    assert!(it.next().is_none());
+    TWire::new(repr)
+}
+
+type CalcStepArgs = (RamInstr, MemPort, u64, RamState);
+
+type CalcStepResult = (
+    RamState,
+    u64, u64, u64,
+    IfMode<AnyTainted, WordLabel>,
+    IfMode<AnyTainted, Label>,
+    IfMode<AnyTainted, WordLabel>,
+    IfMode<AnyTainted, ByteOffset>,
+    bool, bool,
+);
+
 fn calc_step<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    calc_step_func: Function<'a>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
@@ -223,9 +263,122 @@ fn calc_step<'a>(
     s1: &TWire<'a, RamState>,
     kmem: &mut KnownMem<'a>,
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
-    let _g = b.scoped_label("calc_step");
-
     let opcode = ev.eval_typed(b.circuit(), instr.opcode).and_then(Opcode::from_raw);
+    if opcode.is_some() {
+        return calc_step_inner(cx, b, ev, idx, opcode, instr, mem_port, advice, s1, kmem);
+    }
+
+    // The opcode is unknown, so it could be performing any store at any address.
+    kmem.clear();
+
+    let c = b.circuit();
+    let args_typed = TWire::<CalcStepArgs>::new((instr, mem_port.clone(), advice, s1.clone()));
+    let num_regs = s1.regs.len();
+    let (args_wires, args_sizes) = to_wire_list(&args_typed);
+    let w = c.call(
+        calc_step_func, c.wire_list(&args_wires), &[], |_, s: &MultiExecWitness, _| s.into());
+
+    let num_result_wires = CalcStepResult::expected_num_wires(&mut args_sizes.iter().copied());
+    let result_wires = (0..num_result_wires).map(|i| c.extract(w, i)).collect::<Vec<_>>();
+    // There are no variable-sized data structures in any of the input or output types except
+    // `RamState`, and there is one `RamState` in the input and one in the output, so the output
+    // sizes should be the same as the input sizes.
+    let result = from_wire_list::<CalcStepResult>(c.as_base(), &result_wires, &args_sizes);
+
+    let (
+        s2, x, y, result, label_x, label_y_joined, label_result, addr_offset, asserts_ok,
+        found_bug,
+    ) = result.repr;
+    let ci = CalcIntermediate {
+        x, y, result,
+        tainted: IfMode::new(|pf| TaintCalcIntermediate {
+            label_x: label_x.unwrap(&pf),
+            label_y_joined: label_y_joined.unwrap(&pf),
+            label_result: label_result.unwrap(&pf),
+            addr_offset: addr_offset.unwrap(&pf),
+        }),
+        mem_port_unused: false,
+    };
+    wire_assert!(cx, b, asserts_ok, "assert failed in step {}", idx);
+    wire_bug_if!(cx, b, found_bug, "found bug in step {}", idx);
+
+    (s2, ci)
+}
+
+pub fn define_calc_step_function<'a>(
+    b: &impl Builder<'a>,
+    num_regs: usize,
+) -> Function<'a> {
+    struct CalcStepFunction {
+        num_regs: usize,
+    }
+
+    impl DefineFunction for CalcStepFunction {
+        fn build_body<'b, C>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b>
+        where C: CircuitTrait<'b> {
+            let sizes = [self.num_regs, self.num_regs];
+            let args = from_wire_list::<CalcStepArgs>(c.as_base(), &args_wires, &sizes);
+            let (instr, mem_port, advice, s1) = args.repr;
+
+            let cx = Context::new(c);
+            let b = BuilderImpl::from_ref(c);
+            let mut ev = CachingEvaluator::<eval::Public>::new();
+            let idx = 0;
+            let mut kmem = KnownMem::with_default(b.lit(0));
+
+            let (s2, ci) = calc_step_inner(
+                &cx,
+                b,
+                &mut ev,
+                idx,
+                None,
+                instr,
+                &mem_port,
+                advice,
+                &s1,
+                &mut kmem,
+            );
+
+            let (asserts, bugs) = cx.finish(c);
+            let result = (
+                s2,
+                ci.x,
+                ci.y,
+                ci.result,
+                TWire::new(ci.tainted.as_ref().map(|t| t.label_x.clone())),
+                TWire::new(ci.tainted.as_ref().map(|t| t.label_y_joined.clone())),
+                TWire::new(ci.tainted.as_ref().map(|t| t.label_result.clone())),
+                TWire::new(ci.tainted.as_ref().map(|t| t.addr_offset.clone())),
+                TWire::new(c.all_true(asserts.iter().map(|tw| tw.repr))),
+                TWire::new(c.any_true(bugs.iter().map(|tw| tw.repr))),
+            );
+            let (result_wires, _result_sizes) = to_wire_list(&TWire::<CalcStepResult>::new(result));
+
+            c.pack(&result_wires)
+        }
+    }
+
+    let c = b.circuit();
+    let sizes = [num_regs, num_regs];
+    let num_args = CalcStepArgs::expected_num_wires(&mut sizes.iter().copied());
+    let mut arg_tys = Vec::with_capacity(num_args);
+    CalcStepArgs::for_each_expected_wire_type(c, &mut sizes.iter().copied(), |t| arg_tys.push(t));
+    c.define_function::<MultiExecWitness, _>("calc_step", &arg_tys, CalcStepFunction { num_regs })
+}
+
+fn calc_step_inner<'a>(
+    cx: &Context<'a>,
+    b: &impl Builder<'a>,
+    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    idx: usize,
+    opcode: Option<Opcode>,
+    instr: TWire<'a, RamInstr>,
+    mem_port: &TWire<'a, MemPort>,
+    advice: TWire<'a, u64>,
+    s1: &TWire<'a, RamState>,
+    kmem: &mut KnownMem<'a>,
+) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
+    let _g = b.scoped_label("calc_step");
 
     let mut cases = Vec::new();
     // This has to be defined outside the macro so it's visible to the body expressions passed to
