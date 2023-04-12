@@ -22,7 +22,7 @@ use crate::ir::migrate::{self, Migrate};
 pub use cheesecloth_derive_ir_typed::{FromWireList, ToWireList, LazySecret, SecretDep};
 
 
-pub trait Builder<'a>: 'a + Sized {
+pub trait Builder<'a>: Sized {
     type Circuit: ?Sized + CircuitTrait<'a>;
     fn circuit(&self) -> &Self::Circuit;
 }
@@ -502,7 +502,7 @@ impl<C> BuilderImpl<C> {
     }
 }
 
-impl<'a, C: CircuitTrait<'a> + 'a> Builder<'a> for BuilderImpl<C> {
+impl<'a, C: CircuitTrait<'a>> Builder<'a> for BuilderImpl<C> {
     type Circuit = C;
 
     fn circuit(&self) -> &C {
