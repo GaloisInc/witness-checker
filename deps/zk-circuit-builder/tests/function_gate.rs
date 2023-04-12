@@ -2,6 +2,7 @@ use std::convert::TryInto;
 use zk_circuit_builder::eval;
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, Wire, Ty, FilterNil, GateValue, AsBits, IntSize,
+    DefineFunction,
 };
 use zk_circuit_builder::util::CowBox;
 
@@ -19,10 +20,14 @@ fn function_gate_basic() {
     init_circuit!(c);
 
     let ty_i32 = Ty::int(32);
-    let func = c.define_function::<(), _>("f", &[ty_i32, ty_i32, ty_i32], |c, args| {
-        let &[x, y, z]: &[Wire; 3] = args.try_into().unwrap();
-        c.add(c.mul(x, y), z)
-    });
+    struct MyFunc;
+    impl DefineFunction for MyFunc {
+        fn build_body<'b, C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+            let &[x, y, z]: &[Wire; 3] = args.try_into().unwrap();
+            c.add(c.mul(x, y), z)
+        }
+    }
+    let func = c.define_function::<(), _>("f", &[ty_i32, ty_i32, ty_i32], MyFunc);
 
     let args1 = [
         c.lit(ty_i32, 1),
@@ -54,11 +59,15 @@ fn function_gate_lazy_secret() {
     init_circuit!(c);
 
     let ty_i32 = Ty::int(32);
-    let func = c.define_function::<i32, _>("f", &[ty_i32], |c, args| {
-        let &[x]: &[Wire; 1] = args.try_into().unwrap();
-        let y = c.secret_lazy(ty_i32, |c, &y: &i32| y.as_bits(c, IntSize(32)));
-        c.add(x, y)
-    });
+    struct MyFunc;
+    impl DefineFunction for MyFunc {
+        fn build_body<'b, C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+            let &[x]: &[Wire; 1] = args.try_into().unwrap();
+            let y = c.secret_lazy(Ty::int(32), |c, &y: &i32| y.as_bits(c, IntSize(32)));
+            c.add(x, y)
+        }
+    }
+    let func = c.define_function::<i32, _>("f", &[ty_i32], MyFunc);
 
     // Call, with projection function returning `&'static i32`
     let args1 = [
