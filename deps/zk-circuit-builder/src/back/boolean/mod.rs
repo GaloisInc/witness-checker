@@ -11,8 +11,8 @@ use crate::eval::{self, Evaluator, CachingEvaluator, RevealSecrets};
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
-    self, CircuitTrait, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, Ty,
-    EraseVisitor, MigrateVisitor, Bits, AsBits,
+    self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
+    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits,
 };
 
 
@@ -66,8 +66,9 @@ impl AssertNoWrap {
 pub trait Sink {
     fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId;
     /// Obtain `n` private/witness inputs, storing them in the `n` wires starting at `out`.  In
-    /// prover mode, `value` should be set to the witness value.
-    fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId;
+    /// prover mode, the caller should also call `private_value` to provide the actual value.
+    fn private(&mut self, expire: Time, n: u64) -> WireId;
+    fn private_value(&mut self, n: u64, value: Bits);
     fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId;
     fn concat_chunks(&mut self, expire: Time, entries: &[(Source, u64)]) -> WireId;
 
@@ -245,8 +246,12 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
             GateKind::Secret(_secret) => {
                 assert!(w.ty.is_integer());
-                let opt_bits = ev.eval_wire_bits(c.as_base(), w).ok().map(|(b, _)| b);
-                self.sink.private(expire, n, opt_bits)
+                let out = self.sink.private(expire, n);
+                if c.is_prover() {
+                    let bits = ev.eval_wire_bits(c.as_base(), w).unwrap().0;
+                    self.sink.private_value(n, bits);
+                }
+                out
             },
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
@@ -275,34 +280,31 @@ impl<'w, S: Sink> Backend<'w, S> {
                             unimplemented!("{:?} for {:?}", op, aw.ty);
                         }
 
-                        let sz = aw.ty.integer_size();
-                        let a_val = ev.eval_wire(c.as_base(), aw).ok();
-                        let b_val = ev.eval_wire(c.as_base(), bw).ok();
-                        let (quot_bits, rem_bits) = match (a_val.as_ref(), b_val.as_ref()) {
-                            (Some(a_val), Some(b_val)) => {
-                                let a_uint = a_val.as_single().unwrap();
-                                let b_uint = b_val.as_single().unwrap();
-                                let (quot_uint, rem_uint) = if !b_uint.is_zero() {
-                                    (a_uint / b_uint, a_uint % b_uint)
-                                } else {
-                                    (Zero::zero(), a_uint.clone())
-                                };
-                                (
-                                    Some(quot_uint.as_bits(c.as_base(), sz)),
-                                    Some(rem_uint.as_bits(c.as_base(), sz)),
-                                )
-                            },
-                            _ => (None, None),
-                        };
-
                         // Add witness variables for quotient and remainder.
                         let (quot_expire, rem_expire) = match op {
                             BinOp::Div => (expire, TEMP),
                             BinOp::Mod => (TEMP, expire),
                             _ => unreachable!(),
                         };
-                        let quot = self.sink.private(quot_expire, n, quot_bits);
-                        let rem = self.sink.private(rem_expire, n, rem_bits);
+                        let quot = self.sink.private(quot_expire, n);
+                        let rem = self.sink.private(rem_expire, n);
+
+                        if c.is_prover() {
+                            let sz = aw.ty.integer_size();
+                            let a_val = ev.eval_wire(c.as_base(), aw).unwrap();
+                            let b_val = ev.eval_wire(c.as_base(), bw).unwrap();
+                            let a_uint = a_val.as_single().unwrap();
+                            let b_uint = b_val.as_single().unwrap();
+                            let (quot_uint, rem_uint) = if !b_uint.is_zero() {
+                                (a_uint / b_uint, a_uint % b_uint)
+                            } else {
+                                (Zero::zero(), a_uint.clone())
+                            };
+                            let quot_bits = quot_uint.as_bits(c.as_base(), sz);
+                            let rem_bits = rem_uint.as_bits(c.as_base(), sz);
+                            self.sink.private_value(n, quot_bits);
+                            self.sink.private_value(n, rem_bits);
+                        }
 
                         // Assert: a == quot * b + rem
                         {
@@ -590,7 +592,15 @@ mod test {
 
     #[derive(Default)]
     pub struct TestSink {
+        /// Values of ordinary wires.
         pub m: HashMap<WireId, bool>,
+        /// Indices of secret wires.  The index gives the position of the wire's value in
+        /// `secret_values`.
+        ///
+        /// No `WireId` should appear in both `m` and `secret_map`.
+        pub secret_map: HashMap<WireId, usize>,
+        pub secret_values: Vec<bool>,
+        pub next_secret_idx: usize,
         pub next: WireId,
         pub expire_map: BTreeMap<Time, Vec<WireId>>,
         pub count_and: u64,
@@ -601,8 +611,14 @@ mod test {
 
     impl TestSink {
         pub fn get(&self, w: WireId) -> bool {
-            self.m.get(&w).cloned()
-                .unwrap_or_else(|| panic!("accessed wire {} before definition", w))
+            if let Some(&x) = self.m.get(&w) {
+                x
+            } else if let Some(&idx) = self.secret_map.get(&w) {
+                self.secret_values.get(idx).cloned()
+                    .unwrap_or_else(|| panic!("secret value has not yet been provided"))
+            } else {
+                panic!("accessed wire {} before definition", w);
+            }
         }
 
         pub fn get_uint(&self, n: u64, w: WireId) -> BigUint {
@@ -627,8 +643,18 @@ mod test {
         }
 
         fn set(&mut self, w: WireId, val: bool) {
+            assert!(!self.secret_map.contains_key(&w));
             let old = self.m.insert(w, val);
             assert!(old.is_none());
+        }
+
+        fn set_secret(&mut self, w: WireId) -> usize {
+            assert!(!self.m.contains_key(&w));
+            let idx = self.next_secret_idx;
+            self.next_secret_idx += 1;
+            let old = self.secret_map.insert(w, idx);
+            assert!(old.is_none());
+            idx
         }
 
         pub fn init(
@@ -646,6 +672,20 @@ mod test {
             }
             w
         }
+
+        pub fn init_secret(
+            &mut self,
+            expire: Time,
+            n: u64,
+            desc: std::fmt::Arguments,
+        ) -> WireId {
+            let w = self.alloc(expire, n);
+            for i in 0 .. n {
+                let idx = self.set_secret(w + i);
+                trace!("{} = {}[{}] = <secret #{}>", w + i, desc, i, idx);
+            }
+            w
+        }
     }
 
     impl Sink for TestSink {
@@ -653,10 +693,13 @@ mod test {
             self.init(expire, n, |_, i| bits.get(i as usize),
                 format_args!("lit({:?})", bits))
         }
-        fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
-            let bits = value.unwrap();
-            self.init(expire, n, |_, i| bits.get(i as usize),
-                format_args!("private({:?})", bits))
+        fn private(&mut self, expire: Time, n: u64) -> WireId {
+            self.init_secret(expire, n, format_args!("private"))
+        }
+        fn private_value(&mut self, n: u64, value: Bits) {
+            for i in 0..n {
+                self.secret_values.push(value.get(i as usize));
+            }
         }
         fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             self.init(expire, n, |slf, i| slf.get(a + i),
@@ -779,8 +822,9 @@ mod test {
             for k in keys {
                 for w in self.expire_map.remove(&k).unwrap() {
                     trace!("expired: {}", w);
-                    let old = self.m.remove(&w);
-                    assert!(old.is_some());
+                    let old1 = self.m.remove(&w);
+                    let old2 = self.secret_map.remove(&w);
+                    assert!(old1.is_some() || old2.is_some());
                 }
             }
         }
@@ -800,8 +844,11 @@ mod test {
         fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
             self.inner.lit(expire, n, bits)
         }
-        fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
-            self.inner.private(expire, n, value)
+        fn private(&mut self, expire: Time, n: u64) -> WireId {
+            self.inner.private(expire, n)
+        }
+        fn private_value(&mut self, n: u64, value: Bits) {
+            self.inner.private_value(n, value);
         }
         fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             self.inner.copy(expire, n, a)

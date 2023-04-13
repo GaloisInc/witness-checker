@@ -432,15 +432,17 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
         w
     }
-    fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
+    fn private(&mut self, expire: Time, n: u64) -> WireId {
         let w = self.alloc_wires(expire, n);
         for i in 0 .. n {
             self.gates.push(IR::gate_private(w + i));
-            if let Some(v) = value.as_ref() {
-                self.private_bits.push(v.get(i as usize));
-            }
         }
         w
+    }
+    fn private_value(&mut self, n: u64, value: Bits) {
+        for i in 0 .. n {
+            self.private_bits.push(value.get(i as usize));
+        }
     }
     fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
         let w = self.alloc_wires(expire, n);
