@@ -568,8 +568,10 @@ mod test {
         let mut sink = TestArithSink::default();
 
         const MAX: u64 = 64;
-        let a = sink.private(TEMP, MAX, Some(Bits::zero()));
-        let b = sink.private(TEMP, MAX, Some(Bits::zero()));
+        let a = sink.private(TEMP, MAX);
+        sink.private_value(MAX, Bits::zero());
+        let b = sink.private(TEMP, MAX);
+        sink.private_value(MAX, Bits::zero());
 
         // The Karatsuba algorithm is not usable for `n < 4` (it would recurse infinitely).
         for n in 4 ..= MAX {
@@ -685,8 +687,11 @@ mod test {
         fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
             self.inner.lit(expire, n, bits)
         }
-        fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
-            self.inner.private(expire, n, value)
+        fn private(&mut self, expire: Time, n: u64) -> WireId {
+            self.inner.private(expire, n)
+        }
+        fn private_value(&mut self, n: u64, value: Bits) {
+            self.inner.private_value(n, value);
         }
         fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             self.inner.copy(expire, n, a)
