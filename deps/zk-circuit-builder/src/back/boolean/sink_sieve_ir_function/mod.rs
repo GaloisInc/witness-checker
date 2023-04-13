@@ -5,6 +5,7 @@ use std::io;
 use std::iter;
 use std::marker::PhantomData;
 use std::mem;
+use log::*;
 use num_bigint::BigUint;
 use zki_sieve;
 use zki_sieve_v3;
@@ -206,6 +207,55 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
+    /// Get a sub-sink for building function definitions.
+    ///
+    /// This calls `mem::take` on some fileds of `self`, so `self` should not be used while the
+    /// sub-sink is alive.  Call `self.finish_sub_sink(sub_sink)` to restore the taken fields.
+    fn sub_sink(&mut self) -> SieveIrFunctionSink<VecSink<IR>, IR> {
+        SieveIrFunctionSink::<_, IR> {
+            sink: VecSink::default(),
+            alloc: WireAlloc::new(vec![]),
+            gates: Vec::new(),
+            private_bits: Vec::new(),
+            functions: Vec::new(),
+            // Move `func_info` and `func_map` into `sub_sink`, so it can access functions defined
+            // previously.
+            func_info: mem::take(&mut self.func_info),
+            func_map: mem::take(&mut self.func_map),
+            emitted_relation: false,
+            use_plugin_mux_v0: self.use_plugin_mux_v0,
+            _marker: PhantomData,
+        }
+    }
+
+    fn finish_sub_sink(
+        &mut self,
+        mut sub_sink: SieveIrFunctionSink<VecSink<IR>, IR>,
+    ) -> VecSink<IR> {
+        // Move `func_map` and `func_info` from `sub_sink` back into `self`, so in the future we
+        // can use any extra functions that happened to be defined by this `sub_sink`.
+        self.func_map = mem::take(&mut sub_sink.func_map);
+        self.func_info = mem::take(&mut sub_sink.func_info);
+
+        sub_sink.finish()
+    }
+
+    fn collect_sub_gates(&mut self, zki_sink: VecSink<IR>) -> Vec<IR::Gate> {
+        assert_eq!(zki_sink.private_inputs.len(), 0);
+        assert_eq!(zki_sink.public_inputs.len(), 0);
+        let mut gates = Vec::with_capacity(
+            zki_sink.relations.iter().map(IR::relation_gate_count_approx).sum());
+        let functions = &mut self.functions;
+        for r in zki_sink.relations {
+            IR::visit_relation(
+                r,
+                |g| gates.push(g),
+                |f| functions.push(f),
+            );
+        }
+        gates
+    }
+
     fn add_func_info(
         &mut self,
         desc: FunctionDesc,
@@ -220,6 +270,24 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             counts: output_count.iter().cloned().chain(input_count.iter().cloned()).collect(),
             num_outputs: output_count.len(),
         });
+        trace!("add_func_info({:?}) = ({:?}, {:?})", desc, idx, name);
+        (idx, name)
+    }
+
+    fn add_user_func_info(
+        &mut self,
+        user_name: &str,
+        output_count: &[u64],
+        input_count: &[u64],
+    ) -> (usize, String) {
+        let idx = self.func_info.len();
+        let name = format!("f{}_{}", idx, user_name);
+        self.func_info.push(FunctionInfo {
+            name: name.clone(),
+            counts: output_count.iter().cloned().chain(input_count.iter().cloned()).collect(),
+            num_outputs: output_count.len(),
+        });
+        trace!("add_user_func_info({:?}) = ({:?}, {:?})", user_name, idx, name);
         (idx, name)
     }
 
@@ -254,20 +322,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             }
         }
 
-        let mut sub_sink = SieveIrFunctionSink::<_, IR> {
-            sink: VecSink::default(),
-            alloc: WireAlloc::new(vec![]),
-            gates: Vec::new(),
-            private_bits: Vec::new(),
-            functions: Vec::new(),
-            // Move `func_info` and `func_map` into `sub_sink`, so it can access functions defined
-            // previously.
-            func_info: mem::take(&mut self.func_info),
-            func_map: mem::take(&mut self.func_map),
-            emitted_relation: false,
-            use_plugin_mux_v0: self.use_plugin_mux_v0,
-            _marker: PhantomData,
-        };
+        let mut sub_sink = self.sub_sink();
 
         let (output_count, input_count) = match desc {
             FunctionDesc::Copy(n) => {
@@ -352,10 +407,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             },
         };
 
-        // Move `func_map` and `func_info` from `sub_sink` back into `self`, so in the future we
-        // can use any extra functions that happened to be defined by this `sub_sink`.
-        self.func_map = mem::take(&mut sub_sink.func_map);
-        self.func_info = mem::take(&mut sub_sink.func_info);
+        let zki_sink = self.finish_sub_sink(sub_sink);
         let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
 
         // For functions with no outputs (e.g. `And(0)`), we record an entry in `self.func_info`
@@ -364,19 +416,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             return idx;
         }
 
-        let zki_sink = sub_sink.finish();
-        assert_eq!(zki_sink.private_inputs.len(), 0);
-        assert_eq!(zki_sink.public_inputs.len(), 0);
-        let mut gates = Vec::with_capacity(
-            zki_sink.relations.iter().map(IR::relation_gate_count_approx).sum());
-        let functions = &mut self.functions;
-        for r in zki_sink.relations {
-            IR::visit_relation(
-                r,
-                |g| gates.push(g),
-                |f| functions.push(f),
-            );
-        }
+        let gates = self.collect_sub_gates(zki_sink);
 
         self.functions.push(IR::new_function(
             name.clone(),
@@ -395,6 +435,15 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         args: &[WireId],
     ) -> WireId {
         let idx = self.get_function(desc);
+        self.emit_call_idx(expire, idx, args)
+    }
+
+    fn emit_call_idx(
+        &mut self,
+        expire: Time,
+        idx: usize,
+        args: &[WireId],
+    ) -> WireId {
         let total_out = self.func_info[idx].outputs().iter().cloned().sum();
         if total_out == 0 {
             // Function has no outputs, so there's no need to emit a call, and we can just return a
@@ -531,6 +580,50 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         if self.gates.len() >= GATE_PAGE_SIZE {
             self.flush(false);
         }
+    }
+
+    type FunctionId = usize;
+    type FunctionSink = SieveIrFunctionSink<VecSink<IR>, IR>;
+    fn define_function(
+        &mut self,
+        name: String,
+        arg_ns: &[u64],
+        return_n: u64,
+        build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+    ) -> Self::FunctionId {
+        let mut sub_sink = self.sub_sink();
+        let [return_wire] = sub_sink.alloc.preallocate([return_n]);
+        let arg_wires = sub_sink.alloc.preallocate_slice(arg_ns);
+
+        let (mut sub_sink, out_wire) = build(sub_sink, &arg_wires);
+        if return_n > 0 {
+            eprintln!("self: {} func_info, {} func_map", self.func_info.len(), self.func_map.len());
+            eprintln!("sub_sink: {} func_info, {} func_map", sub_sink.func_info.len(), sub_sink.func_map.len());
+            let idx = sub_sink.get_function(FunctionDesc::Copy(return_n));
+            let info = &sub_sink.func_info[idx];
+            sub_sink.gates.push(IR::gate_call(
+                info.name.clone(),
+                iter::once((return_wire, return_wire + return_n - 1)),
+                iter::once((out_wire, out_wire + return_n - 1)),
+            ));
+        }
+
+        let zki_sink = self.finish_sub_sink(sub_sink);
+
+        let (idx, name) = self.add_user_func_info(&name, &[return_n], arg_ns);
+        let gates = self.collect_sub_gates(zki_sink);
+
+        self.functions.push(IR::new_function(
+            name.clone(),
+            iter::once(return_n),
+            arg_ns.iter().cloned(),
+            gates,
+        ));
+
+        idx
+    }
+    fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+        self.emit_call_idx(expire, *func, args)
     }
 }
 
