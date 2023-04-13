@@ -12,7 +12,7 @@ use generic_array::typenum::{Sum, Quot, U3, U4};
 use num_traits::Zero;
 #[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
-use crate::eval::Evaluator;
+use crate::eval::EvalWire;
 use crate::ir::circuit::{
     AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize,
     Wire, Ty, TyKind, CellResetGuard, GateKind,
@@ -599,7 +599,7 @@ where Self: Repr<'a> {
 
 pub trait FromEval<'a>
 where Self: Repr<'a> + Sized {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
@@ -808,7 +808,7 @@ impl<'a> Lit<'a> for bool {
 }
 
 impl<'a> FromEval<'a> for bool {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
@@ -916,7 +916,7 @@ macro_rules! integer_impls {
         }
 
         impl<'a> FromEval<'a> for $T {
-            fn from_eval<E: Evaluator<'a> + ?Sized>(
+            fn from_eval<E: EvalWire<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: Self::Repr,
@@ -1118,7 +1118,7 @@ macro_rules! field_impls {
         }
 
         impl<'a> FromEval<'a> for $T {
-            fn from_eval<E: Evaluator<'a> + ?Sized>(
+            fn from_eval<E: EvalWire<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: Self::Repr,
@@ -1290,7 +1290,7 @@ macro_rules! tuple_impl {
         }
 
         impl<'a, $($A: FromEval<'a>,)*> FromEval<'a> for ($($A,)*) {
-            fn from_eval<E: Evaluator<'a> + ?Sized>(
+            fn from_eval<E: EvalWire<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: ($(TWire<'a, $A>,)*),
@@ -1499,7 +1499,7 @@ macro_rules! array_impls {
             }
 
             impl<'a, A: FromEval<'a>> FromEval<'a> for [A; $n] {
-                fn from_eval<E: Evaluator<'a> + ?Sized>(
+                fn from_eval<E: EvalWire<'a> + ?Sized>(
                     c: &CircuitBase<'a>,
                     ev: &mut E,
                     a: [TWire<'a, A>; $n],
@@ -1673,7 +1673,7 @@ impl<'a, A: Lit<'a>> Lit<'a> for Vec<A> {
 }
 
 impl<'a, A: FromEval<'a>> FromEval<'a> for Vec<A> {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Vec<TWire<'a, A>>,
@@ -1796,7 +1796,7 @@ impl<'a, A: Lit<'a>> Lit<'a> for Option<A> {
 }
 
 impl<'a, A: FromEval<'a>> FromEval<'a> for Option<A> {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Option<TWire<'a, A>>,
@@ -2021,7 +2021,7 @@ pub trait EvaluatorExt<'a> {
     ) -> Option<T>;
 }
 
-impl<'a, E: Evaluator<'a> + ?Sized> EvaluatorExt<'a> for E {
+impl<'a, E: EvalWire<'a> + ?Sized> EvaluatorExt<'a> for E {
     fn eval_typed<C: CircuitTrait<'a> + ?Sized, T: FromEval<'a>>(
         &mut self,
         c: &C,

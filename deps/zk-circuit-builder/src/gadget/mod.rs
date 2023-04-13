@@ -1,4 +1,4 @@
-use crate::eval::{self, Evaluator, CachingEvaluator};
+use crate::eval::{self, EvalWire, CachingEvaluator};
 use crate::ir::circuit::{self, CircuitTrait, CircuitExt, Wire, GateKind};
 
 pub mod arith;

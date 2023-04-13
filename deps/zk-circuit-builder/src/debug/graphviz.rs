@@ -1,6 +1,6 @@
 use std::fmt::{self, Write};
 use crate::ir::circuit::{self, CircuitBase, Field, Wire, GateKind, Ty, TyKind};
-use crate::eval::{self, Evaluator, CachingEvaluator, Value};
+use crate::eval::{self, EvalWire, CachingEvaluator, Value};
 
 fn write_val(s: &mut String, v: Value) -> Result<(), fmt::Error> {
     match v {

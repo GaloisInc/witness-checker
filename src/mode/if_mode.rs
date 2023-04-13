@@ -1,4 +1,4 @@
-use zk_circuit_builder::eval::Evaluator;
+use zk_circuit_builder::eval::EvalWire;
 use zk_circuit_builder::ir::circuit::{CircuitBase, CircuitTrait, Ty, Wire, Bits};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{
@@ -312,7 +312,7 @@ impl<'de, M: ModePred, A: Deserialize<'de>> Deserialize<'de> for IfMode<M, A> {
 }
 
 impl<'a, M: ModePred, A: FromEval<'a> + Repr<'a>> FromEval<'a> for IfMode<M, A> {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,

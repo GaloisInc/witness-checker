@@ -131,7 +131,7 @@ impl Value {
     }
 }
 
-pub trait Evaluator<'a> {
+pub trait EvalWire<'a> {
     fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a>;
 
     fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
@@ -163,11 +163,21 @@ pub trait Evaluator<'a> {
     }
 }
 
+pub trait Evaluator<'a>: EvalWire<'a> {
+    type FunctionEvaluator<'b>: Evaluator<'a> where Self: 'b;
+
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> Self::FunctionEvaluator<'b>;
+}
+
 pub trait SecretEvaluator<'a> {
     const REVEAL_SECRETS: bool;
 }
 
-impl<'a, E: Evaluator<'a>> Evaluator<'a> for &'_ mut E {
+impl<'a, E: EvalWire<'a>> EvalWire<'a> for &'_ mut E {
     fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
         E::eval_wire(self, c, w)
     }
@@ -197,6 +207,18 @@ impl<'a, E: Evaluator<'a>> Evaluator<'a> for &'_ mut E {
     }
 }
 
+impl<'a, E: Evaluator<'a>> Evaluator<'a> for &'_ mut E {
+    type FunctionEvaluator<'b> = E::FunctionEvaluator<'b> where Self: 'b;
+
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> Self::FunctionEvaluator<'b> {
+        E::enter_call(self, c, call)
+    }
+}
+
 /// Object-safe version of `Evaluator`.
 pub trait EvaluatorObj<'a> {
     fn eval_wire(&mut self, c: &CircuitBase<'a>, w: Wire<'a>) -> EvalResult<'a>;
@@ -209,7 +231,7 @@ pub trait EvaluatorObj<'a> {
 
 impl<'a, E: Evaluator<'a>> EvaluatorObj<'a> for E {
     fn eval_wire(&mut self, c: &CircuitBase<'a>, w: Wire<'a>) -> EvalResult<'a> {
-        <Self as Evaluator>::eval_wire(self, c, w)
+        <Self as EvalWire>::eval_wire(self, c, w)
     }
 
     fn eval_wire_bits(
@@ -217,11 +239,11 @@ impl<'a, E: Evaluator<'a>> EvaluatorObj<'a> for E {
         c: &CircuitBase<'a>,
         w: Wire<'a>,
     ) -> Result<(Bits<'a>, bool), Error<'a>> {
-        <Self as Evaluator>::eval_wire_bits(self, c, w)
+        <Self as EvalWire>::eval_wire_bits(self, c, w)
     }
 }
 
-impl<'a> Evaluator<'a> for dyn EvaluatorObj<'a> + '_ {
+impl<'a> EvalWire<'a> for dyn EvaluatorObj<'a> + '_ {
     fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
         EvaluatorObj::eval_wire(self, c.as_base(), w)
     }
@@ -281,9 +303,9 @@ impl<'a> SecretEvaluator<'a> for LiteralEvaluator {
     const REVEAL_SECRETS: bool = false;
 }
 
-impl<'a> Evaluator<'a> for LiteralEvaluator {
+impl<'a> EvalWire<'a> for LiteralEvaluator {
     fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
-        let (bits, sec) = Evaluator::eval_wire_bits(self, c, w)?;
+        let (bits, sec) = EvalWire::eval_wire_bits(self, c, w)?;
         debug_assert!(!sec);
         let val = Value::from_bits(w.ty, bits);
         Ok(val)
@@ -298,6 +320,18 @@ impl<'a> Evaluator<'a> for LiteralEvaluator {
             GateKind::Lit(bits, _ty) => Ok((bits, false)),
             _ => Err(Error::Other),
         }
+    }
+}
+
+impl<'a> Evaluator<'a> for LiteralEvaluator {
+    type FunctionEvaluator<'b> = LiteralEvaluator;
+
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> Self::FunctionEvaluator<'b> {
+        LiteralEvaluator
     }
 }
 
@@ -401,10 +435,10 @@ impl<'a, 's, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a
     const REVEAL_SECRETS: bool = S::REVEAL_SECRETS;
 }
 
-impl<'a, 's, S> Evaluator<'a> for CachingEvaluator<'a, 's, S>
+impl<'a, 's, S> EvalWire<'a> for CachingEvaluator<'a, 's, S>
 where S: SecretEvaluator<'a> + Default {
     fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
-        let (bits, sec) = Evaluator::eval_wire_bits(self, c, w)?;
+        let (bits, sec) = EvalWire::eval_wire_bits(self, c, w)?;
         debug_assert!(S::REVEAL_SECRETS || !sec);
         let val = Value::from_bits(w.ty, bits);
         Ok(val)
@@ -439,6 +473,29 @@ where S: SecretEvaluator<'a> + Default {
 
         let bits = *self.cache.get(&w).unwrap();
         Ok(bits)
+    }
+}
+
+impl<'a, 's, S> Evaluator<'a> for CachingEvaluator<'a, 's, S>
+where S: SecretEvaluator<'a> + Default {
+    type FunctionEvaluator<'b> = CachingEvaluator<'a, 'b, S>
+        where Self: 'b;
+
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> CachingEvaluator<'a, 'b, S> {
+        let func = call.func;
+
+        let arg_bits = call.args.iter().map(|&w| {
+            EvalWire::eval_wire_bits(self, c, w)
+        }).collect::<Result<Vec<_>, _>>().unwrap();
+        let dep_bits = call.project_deps.iter().map(|&w| {
+            EvalWire::eval_wire_bits(self, c, w).map(|(bits, sec)| bits)
+        }).collect::<Result<Vec<_>, _>>().unwrap();
+
+        self.enter_function(c, arg_bits, call.project_secret, &dep_bits)
     }
 }
 
@@ -846,7 +903,7 @@ fn eval_call<'a, 'b>(
 
     let mut inner_eval = outer_ecx.enter_function(
         c, arg_bits, call.project_secret, &dep_bits);
-    Evaluator::eval_wire_bits(&mut inner_eval, c, func.result_wire)
+    EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
 
@@ -857,7 +914,7 @@ pub fn eval_gate<'a, S: SecretEvaluator<'a> + Default>(
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let mut ev = CachingEvaluator::<S>::new();
     for w in circuit::gate_deps(gk) {
-        let _ = Evaluator::eval_wire(&mut ev, c, w)?;
+        let _ = EvalWire::eval_wire(&mut ev, c, w)?;
     }
     eval_gate_inner(c, &ev, ty, gk)
 }
@@ -878,7 +935,7 @@ pub fn eval_wire<'a, S: SecretEvaluator<'a> + Default>(
     w: Wire<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let mut ev = CachingEvaluator::<S>::new();
-    Evaluator::eval_wire_bits(&mut ev, c, w)
+    EvalWire::eval_wire_bits(&mut ev, c, w)
 }
 
 pub fn eval_wire_public<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {

@@ -27,7 +27,7 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use crate::eval::{self, Evaluator, CachingEvaluator};
+use crate::eval::{self, EvalWire, CachingEvaluator};
 use crate::ir::migrate::{self, Migrate, Visitor as _};
 use crate::util::CowBox;
 

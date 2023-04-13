@@ -2,7 +2,7 @@
 #![cfg(feature = "gf_scuttlebutt")]
 
 use scuttlebutt::field::{FiniteField, SmallBinaryField, Gf40, Gf45, F56b, F63b, F64b};
-use zk_circuit_builder::eval::{self, CachingEvaluator, Evaluator};
+use zk_circuit_builder::eval::{self, CachingEvaluator, EvalWire};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitFilter, DynCircuit, FilterNil, TyKind, Wire,
 };
