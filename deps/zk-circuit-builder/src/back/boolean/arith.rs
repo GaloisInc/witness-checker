@@ -765,6 +765,21 @@ mod test {
         fn free_expired(&mut self, now: Time) {
             self.inner.free_expired(now);
         }
+
+        type FunctionId = <TestSink as Sink>::FunctionId;
+        type FunctionSink = <TestSink as Sink>::FunctionSink;
+        fn define_function(
+            &mut self,
+            name: String,
+            arg_ns: &[u64],
+            return_n: u64,
+            build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+        ) -> Self::FunctionId {
+            self.inner.define_function(name, arg_ns, return_n, build)
+        }
+        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+            self.inner.call(expire, func, args)
+        }
     }
 
     #[test]

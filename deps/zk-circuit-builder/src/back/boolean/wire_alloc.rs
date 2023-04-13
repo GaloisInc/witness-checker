@@ -73,6 +73,24 @@ impl WireAlloc {
         ws
     }
 
+    pub fn preallocate_slice(&mut self, ns: &[u64]) -> Vec<WireId> {
+        let bucket = &mut self.buckets[0];
+        // We require that no normal allocations have been performed yet.
+        assert_eq!(bucket.next, bucket.page_start);
+
+        let mut next = bucket.next;
+        let mut ws = Vec::with_capacity(ns.len());
+        for &n in ns {
+            ws.push(next);
+            next += n;
+        }
+        let end = bucket.end;
+
+        *bucket = WireBucket::new(next, end);
+
+        ws
+    }
+
     pub fn alloc(
         &mut self,
         expire: Time,

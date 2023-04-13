@@ -12,8 +12,9 @@ use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
-    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits,
+    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call,
 };
+use crate::ir::migrate::{self, Migrate};
 
 
 mod arith;
@@ -63,7 +64,7 @@ impl AssertNoWrap {
     }
 }
 
-pub trait Sink {
+pub trait Sink: Sized {
     fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId;
     /// Obtain `n` private/witness inputs, storing them in the `n` wires starting at `out`.  In
     /// prover mode, the caller should also call `private_value` to provide the actual value.
@@ -96,6 +97,17 @@ pub trait Sink {
 
     /// Try to free wires that were allocated with `expire <= now`
     fn free_expired(&mut self, now: Time);
+
+    type FunctionId: for<'a, 'b> Migrate<'a, 'b, Output = Self::FunctionId>;
+    type FunctionSink: Sink<FunctionId = Self::FunctionId>;
+    fn define_function(
+        &mut self,
+        name: String,
+        arg_ns: &[u64],
+        return_n: u64,
+        build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+    ) -> Self::FunctionId;
+    fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId;
 
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -161,6 +173,13 @@ trait PrivateOps<'a> {
         numer: Wire<'a>,
         denom: Wire<'a>,
     );
+    fn emit_call(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        call: Call<'a>,
+    );
 }
 
 struct PrivateDirect<E> {
@@ -208,14 +227,95 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         sink.private_value(n, quot_bits);
         sink.private_value(n, rem_bits);
     }
+
+    fn emit_call(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        call: Call<'a>,
+    ) {
+        let sub_ev = self.ev.enter_call(c, call);
+        let mut sub_ops = PrivateDirect::new(sub_ev);
+
+        for op in get_log(call.func) {
+            match op {
+                PrivateOp::Emit(w) => sub_ops.emit(c, sink, w),
+                PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
+                PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Migrate)]
+enum PrivateOp<'a> {
+    Emit(Wire<'a>),
+    QuotRem(Wire<'a>, Wire<'a>),
+    Call(Call<'a>),
+}
+
+struct PrivateLog<'a> {
+    log: Vec<PrivateOp<'a>>,
+}
+
+impl<'a> PrivateLog<'a> {
+    pub fn new() -> PrivateLog<'a> {
+        PrivateLog { log: Vec::new() }
+    }
+
+    pub fn into_inner(self) -> Vec<PrivateOp<'a>> {
+        self.log
+    }
+}
+
+impl<'a> PrivateOps<'a> for PrivateLog<'a> {
+    fn emit(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::Emit(w));
+    }
+
+    fn emit_quot_rem(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        numer: Wire<'a>,
+        denom: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::QuotRem(numer, denom));
+    }
+
+    fn emit_call(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        _get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        call: Call<'a>,
+    ) {
+        self.log.push(PrivateOp::Call(call));
+    }
 }
 
 
-pub struct Backend<'w, S> {
+
+
+#[derive(Migrate)]
+struct FunctionInfo<'w, T> {
+    id: T,
+    private_log: Vec<PrivateOp<'w>>,
+}
+
+pub struct Backend<'w, S: Sink> {
     sink: S,
     /// Maps each high-level `Wire` to the `WireId` of the first bit in its representation.  The
     /// number of bits in the representation can be computed from the wire type.
     wire_map: BTreeMap<Wire<'w>, WireId>,
+    function_map: BTreeMap<Function<'w>, FunctionInfo<'w, S::FunctionId>>,
+    args: Vec<WireId>,
 }
 
 impl<'w, S: Sink> Backend<'w, S> {
@@ -223,6 +323,8 @@ impl<'w, S: Sink> Backend<'w, S> {
         Backend {
             sink,
             wire_map: BTreeMap::new(),
+            function_map: BTreeMap::new(),
+            args: Vec::new(),
         }
     }
 
@@ -245,6 +347,12 @@ impl<'w, S: Sink> Backend<'w, S> {
         for (i, &w) in order.iter().enumerate() {
             for v in circuit::wire_deps(w) {
                 last_use_map.insert(v, i);
+            }
+
+            if let GateKind::Call(call) = w.kind {
+                if !self.function_map.contains_key(&call.func) {
+                    self.define_function(c.as_base(), call.func);
+                }
             }
         }
 
@@ -314,6 +422,15 @@ impl<'w, S: Sink> Backend<'w, S> {
                 }).collect::<Vec<_>>();
                 return self.sink.concat_chunks(expire, &entries);
             },
+            GateKind::Call(call) => {
+                let function_map = &self.function_map;
+                let func_id = &function_map[&call.func].id;
+                let args = call.args.iter().map(|&w| self.wire_map[&w]).collect::<Vec<_>>();
+                let out = self.sink.call(expire, func_id, &args);
+                let mut get_log = |func| function_map[&func].private_log.clone();
+                private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
+                return out;
+            },
             _ => {},
         }
 
@@ -334,7 +451,12 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
-            GateKind::Argument(_, _) => unimplemented!("Argument"),
+
+            GateKind::Argument(i, _) => {
+                assert!(i < self.args.len(),
+                    "saw Argument({}), but there are only {} args here", i, self.args.len());
+                self.args[i]
+            },
 
             GateKind::Unary(op, aw) => {
                 let a = self.wire_map[&aw];
@@ -604,6 +726,43 @@ impl<'w, S: Sink> Backend<'w, S> {
         }
     }
 
+    fn define_function(&mut self, c: &CircuitBase<'w>, f: Function<'w>) {
+        let arg_ns = f.arg_tys.iter().map(|&ty| type_bits(ty)).collect::<Vec<_>>();
+        let return_ty = f.result_wire.ty;
+        let return_n = match *return_ty {
+            TyKind::Bundle(tys) => tys.iter().map(|&ty| type_bits(ty)).sum(),
+            _ => type_bits(return_ty),
+        };
+
+        eprintln!("define_function({:?})", f.name);
+        let self_function_map = &mut self.function_map;
+        let mut private_log = PrivateLog::new();
+        let func_id = self.sink.define_function(
+            f.name.to_owned(), &arg_ns, return_n,
+            |sink, args| {
+                let mut backend = Backend {
+                    sink,
+                    wire_map: BTreeMap::new(),
+                    function_map: mem::take(self_function_map),
+                    args: args.to_owned(),
+                };
+                let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+
+                let out_wires = backend.convert_wires(c, &mut private_log, &[f.result_wire]);
+                let out_wire = out_wires[0];
+
+                *self_function_map = backend.function_map;
+
+                (backend.sink, out_wire)
+            },
+        );
+        eprintln!("finished defining {:?}", f.name);
+        self.function_map.insert(f, FunctionInfo {
+            id: func_id,
+            private_log: private_log.into_inner(),
+        });
+    }
+
     pub fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
         use crate::ir::migrate::Visitor as _;
         // Each entry `(old, new)` in `v.erased()` indicates that wire `old` was replaced with the
@@ -622,7 +781,6 @@ impl<'w, S: Sink> Backend<'w, S> {
         use crate::ir::migrate::Visitor as _;
 
         let old_wire_map = mem::take(&mut self.wire_map);
-
         for (old_wire, old_repr) in old_wire_map {
             let new_wire = match v.visit_wire_weak(old_wire) {
                 Some(x) => x,
@@ -633,6 +791,12 @@ impl<'w, S: Sink> Backend<'w, S> {
                 },
             };
             self.wire_map.insert(new_wire, old_repr);
+        }
+
+        let old_function_map = mem::take(&mut self.function_map);
+        for (old_func, old_info) in old_function_map {
+            let new_func = v.visit(old_func);
+            self.function_map.insert(new_func, v.visit(old_info));
         }
     }
 
@@ -903,6 +1067,21 @@ mod test {
                 }
             }
         }
+
+        type FunctionId = usize;
+        type FunctionSink = Self;
+        fn define_function(
+            &mut self,
+            name: String,
+            arg_ns: &[u64],
+            return_n: u64,
+            build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+        ) -> Self::FunctionId {
+            unimplemented!("define_function not supported in TestSink");
+        }
+        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+            unimplemented!("call not supported in TestSink");
+        }
     }
 
 
@@ -989,6 +1168,21 @@ mod test {
 
         fn free_expired(&mut self, now: Time) {
             self.inner.free_expired(now);
+        }
+
+        type FunctionId = <TestSink as Sink>::FunctionId;
+        type FunctionSink = <TestSink as Sink>::FunctionSink;
+        fn define_function(
+            &mut self,
+            name: String,
+            arg_ns: &[u64],
+            return_n: u64,
+            build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+        ) -> Self::FunctionId {
+            self.inner.define_function(name, arg_ns, return_n, build)
+        }
+        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+            self.inner.call(expire, func, args)
         }
     }
 
