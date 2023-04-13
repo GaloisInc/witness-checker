@@ -305,6 +305,19 @@ impl<'w, S: Sink> Backend<'w, S> {
         expire: Time,
         w: Wire<'w>,
     ) -> WireId {
+        // Check for (potentially) non-integer cases first.
+        match w.kind {
+            GateKind::Pack(ws) => {
+                // We only allow single-level bundles.
+                let entries = ws.iter().map(|&w| {
+                    (Source::Wires(self.wire_map[&w]), type_bits(w.ty))
+                }).collect::<Vec<_>>();
+                return self.sink.concat_chunks(expire, &entries);
+            },
+            _ => {},
+        }
+
+        // Only integer types should remain, so we can safely get the bit width in advance.
         let n = type_bits(w.ty);
         match w.kind {
             GateKind::Lit(val, ty) => {
@@ -549,7 +562,15 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
 
             GateKind::Pack(..) => unimplemented!("Pack"),
-            GateKind::Extract(..) => unimplemented!("Extract"),
+
+            GateKind::Extract(bw, i) => {
+                let tys = match *bw.ty {
+                    TyKind::Bundle(tys) => tys,
+                    _ => unreachable!("GateKind::Extract bundle wire had non-bundle type?"),
+                };
+                let offset = tys[..i].iter().map(|&ty| type_bits(ty)).sum::<u64>();
+                self.sink.copy(expire, n, self.wire_map[&bw] + offset)
+            },
 
             GateKind::Gadget(gk, ws) => {
                 if let Some(_) = gk.cast::<ConcatBits>() {
