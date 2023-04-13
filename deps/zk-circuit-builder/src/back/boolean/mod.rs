@@ -144,6 +144,73 @@ pub trait Sink {
 }
 
 
+/// Trait for emitting private values.  This is used to abstract over "top-level" mode, where
+/// values are emitted directly into the witness, and "function body" mode, where we simply record
+/// the sequence of operations to be played back when the function is called.
+trait PrivateOps<'a> {
+    fn emit(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    );
+    fn emit_quot_rem(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        numer: Wire<'a>,
+        denom: Wire<'a>,
+    );
+}
+
+struct PrivateDirect<E> {
+    ev: E,
+}
+
+impl<E> PrivateDirect<E> {
+    pub fn new(ev: E) -> PrivateDirect<E> {
+        PrivateDirect { ev }
+    }
+}
+
+impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
+    fn emit(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        let n = type_bits(w.ty);
+        let bits = self.ev.eval_wire_bits(c, w).unwrap().0;
+        sink.private_value(n, bits);
+    }
+
+    fn emit_quot_rem(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        numer: Wire<'a>,
+        denom: Wire<'a>,
+    ) {
+        let sz = numer.ty.integer_size();
+        let n = sz.bits() as u64;
+        let numer_val = self.ev.eval_wire(c, numer).unwrap();
+        let denom_val = self.ev.eval_wire(c, denom).unwrap();
+        let numer_uint = numer_val.as_single().unwrap();
+        let denom_uint = denom_val.as_single().unwrap();
+        let (quot_uint, rem_uint) = if !denom_uint.is_zero() {
+            (numer_uint / denom_uint, numer_uint % denom_uint)
+        } else {
+            (Zero::zero(), numer_uint.clone())
+        };
+        let quot_bits = quot_uint.as_bits(c, sz);
+        let rem_bits = rem_uint.as_bits(c, sz);
+        sink.private_value(n, quot_bits);
+        sink.private_value(n, rem_bits);
+    }
+}
+
+
 pub struct Backend<'w, S> {
     sink: S,
     /// Maps each high-level `Wire` to the `WireId` of the first bit in its representation.  The
@@ -165,7 +232,7 @@ impl<'w, S: Sink> Backend<'w, S> {
     fn convert_wires(
         &mut self,
         c: &impl CircuitTrait<'w>,
-        ev: &mut impl Evaluator<'w>,
+        private: &mut impl PrivateOps<'w>,
         wires: &[Wire<'w>],
     ) -> Vec<WireId> {
         let order = circuit::walk_wires_filtered(
@@ -206,7 +273,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 
         // Convert each gate.
         for (i, (&w, &j)) in order.iter().zip(last_use.iter()).enumerate() {
-            let wire_id = self.convert_wire(c, ev, j as Time, w);
+            let wire_id = self.convert_wire(c, private, j as Time, w);
             trace!("converted: {} = {:?}", wire_id, crate::ir::circuit::DebugDepth(0, &w.kind));
             self.wire_map.insert(w, wire_id);
 
@@ -234,7 +301,7 @@ impl<'w, S: Sink> Backend<'w, S> {
     fn convert_wire(
         &mut self,
         c: &impl CircuitTrait<'w>,
-        ev: &mut impl Evaluator<'w>,
+        private: &mut impl PrivateOps<'w>,
         expire: Time,
         w: Wire<'w>,
     ) -> WireId {
@@ -248,8 +315,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 assert!(w.ty.is_integer());
                 let out = self.sink.private(expire, n);
                 if c.is_prover() {
-                    let bits = ev.eval_wire_bits(c.as_base(), w).unwrap().0;
-                    self.sink.private_value(n, bits);
+                    private.emit(c.as_base(), &mut self.sink, w);
                 }
                 out
             },
@@ -290,20 +356,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                         let rem = self.sink.private(rem_expire, n);
 
                         if c.is_prover() {
-                            let sz = aw.ty.integer_size();
-                            let a_val = ev.eval_wire(c.as_base(), aw).unwrap();
-                            let b_val = ev.eval_wire(c.as_base(), bw).unwrap();
-                            let a_uint = a_val.as_single().unwrap();
-                            let b_uint = b_val.as_single().unwrap();
-                            let (quot_uint, rem_uint) = if !b_uint.is_zero() {
-                                (a_uint / b_uint, a_uint % b_uint)
-                            } else {
-                                (Zero::zero(), a_uint.clone())
-                            };
-                            let quot_bits = quot_uint.as_bits(c.as_base(), sz);
-                            let rem_bits = rem_uint.as_bits(c.as_base(), sz);
-                            self.sink.private_value(n, quot_bits);
-                            self.sink.private_value(n, rem_bits);
+                            private.emit_quot_rem(c.as_base(), &mut self.sink, aw, bw);
                         }
 
                         // Assert: a == quot * b + rem
@@ -536,7 +589,8 @@ impl<'w, S: Sink> Backend<'w, S> {
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_map[new]` as well.
         let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter().cloned().unzip();
-        let old_reprs = self.convert_wires(v.new_circuit(), &mut *v.evaluator(), &old_wires);
+        let old_reprs = self.convert_wires(
+            v.new_circuit(), &mut PrivateDirect::new(&mut *v.evaluator()), &old_wires);
         for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
             assert!(!self.wire_map.contains_key(&new_wire));
             self.wire_map.insert(new_wire, old_repr);
@@ -567,7 +621,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         ev: &mut impl Evaluator<'w>,
         w: Wire<'w>,
     ) {
-        let wire_ids = self.convert_wires(c, ev, &[w]);
+        let wire_ids = self.convert_wires(c, &mut PrivateDirect::new(ev), &[w]);
         let w = wire_ids[0];
         let w_inv = self.sink.not(TEMP, 1, w);
         self.sink.assert_zero(1, w_inv);
