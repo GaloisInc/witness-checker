@@ -1,7 +1,7 @@
 #![cfg(feature = "bellman")]
 
 use num_bigint::BigInt;
-use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
+use zk_circuit_builder::eval::{self, EvalWire, CachingEvaluator};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };

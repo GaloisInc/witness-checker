@@ -1,6 +1,6 @@
 #![cfg(feature = "sieve_ir")]
 
-use zk_circuit_builder::eval::{self, CachingEvaluator, Evaluator};
+use zk_circuit_builder::eval::{self, CachingEvaluator, EvalWire};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };

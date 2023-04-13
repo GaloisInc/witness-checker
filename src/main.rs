@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use num_traits::One;
 
 use zk_circuit_builder::back::{self, UsePlugins};
-use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
+use zk_circuit_builder::eval::{self, EvalWire, CachingEvaluator};
 use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
     Circuit, Arenas, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, GadgetKindRef,

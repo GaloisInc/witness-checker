@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use serde::{de, Deserialize};
-use zk_circuit_builder::eval::Evaluator;
+use zk_circuit_builder::eval::EvalWire;
 use zk_circuit_builder::gadget::bit_pack;
 use zk_circuit_builder::ir::circuit::{
     CircuitBase, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize, Bits,
@@ -352,7 +352,7 @@ macro_rules! mk_named_enum {
         }
 
         impl<'a> FromEval<'a> for $Name {
-            fn from_eval<E: Evaluator<'a> + ?Sized>(
+            fn from_eval<E: EvalWire<'a> + ?Sized>(
                 c: &CircuitBase<'a>,
                 ev: &mut E,
                 a: Self::Repr,
@@ -571,7 +571,7 @@ impl<'a> Flatten<'a> for Label {
 }
 
 impl<'a> FromEval<'a> for Label {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
@@ -737,7 +737,7 @@ impl<'a> Flatten<'a> for WordLabel {
 }
 
 impl<'a> FromEval<'a> for WordLabel {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
@@ -1144,7 +1144,7 @@ impl<'a> Cast<'a, u8> for ByteOffset {
 }
 
 impl<'a> FromEval<'a> for ByteOffset {
-    fn from_eval<E: Evaluator<'a> + ?Sized>(
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
         c: &CircuitBase<'a>,
         ev: &mut E,
         a: Self::Repr,
