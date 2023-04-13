@@ -167,6 +167,36 @@ pub trait SecretEvaluator<'a> {
     const REVEAL_SECRETS: bool;
 }
 
+impl<'a, E: Evaluator<'a>> Evaluator<'a> for &'_ mut E {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        E::eval_wire(self, c, w)
+    }
+
+    fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
+        &mut self,
+        c: &C,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
+        E::eval_wire_bits(self, c, w)
+    }
+
+    fn eval_single_integer_wire(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<BigInt, Error<'a>> {
+        E::eval_single_integer_wire(self, c, w)
+    }
+
+    fn eval_single_field_wire(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<Vec<u32>, Error<'a>> {
+        E::eval_single_field_wire(self, c, w)
+    }
+}
+
 /// Object-safe version of `Evaluator`.
 pub trait EvaluatorObj<'a> {
     fn eval_wire(&mut self, c: &CircuitBase<'a>, w: Wire<'a>) -> EvalResult<'a>;
