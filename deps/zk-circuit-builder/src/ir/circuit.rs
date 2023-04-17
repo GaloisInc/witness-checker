@@ -975,7 +975,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         F: for<'b, 's> Fn(&CircuitBase<'b>, &'s S, &[Bits<'b>]) -> CowBox<'s, S2>,
         F: Sized + Copy + 'static,
     {
-        debug_assert_eq!(TypeId::of::<S>(), self.as_base().secret_type.get());
+        debug_assert!(TypeId::of::<S>() == self.as_base().secret_type.get() ||
+            TypeId::of::<S>() == TypeId::of::<()>());
         debug_assert_eq!(TypeId::of::<S2>(), func.secret_type);
         let project_secret = self.as_base().alloc_secret_project_fn(project_secret);
         let call = self.as_base().alloc_call(CallData {
