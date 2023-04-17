@@ -50,7 +50,7 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
 }
 
 pub fn make_graph<'a>(
-    c: &'a CircuitBase<'a>,
+    c: &CircuitBase<'a>,
     ws: impl Iterator<Item = Wire<'a>>,
 ) -> Result<String, fmt::Error> {
     let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
