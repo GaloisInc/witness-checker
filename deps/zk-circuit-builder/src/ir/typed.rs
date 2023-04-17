@@ -2032,6 +2032,27 @@ impl<'a, E: EvalWire<'a> + ?Sized> EvaluatorExt<'a> for E {
 }
 
 
+pub fn to_wire_list<'a, T: ToWireList<'a>>(x: &TWire<'a, T>) -> (Vec<Wire<'a>>, Vec<usize>) {
+    let mut wires = Vec::with_capacity(T::num_wires(&x.repr));
+    T::for_each_wire(&x.repr, |w| wires.push(w));
+    let mut sizes = Vec::with_capacity(T::num_sizes(&x.repr));
+    T::for_each_size(&x.repr, |s| sizes.push(s));
+    (wires, sizes)
+}
+
+pub fn from_wire_list<'a, T: FromWireList<'a>>(
+    c: &CircuitBase<'a>,
+    wires: &[Wire<'a>],
+    sizes: &[usize],
+) -> TWire<'a, T> {
+    let mut it = wires.iter().copied();
+    let repr = T::build_repr_from_wires(
+        c, &mut sizes.iter().copied(), &mut |_| it.next().unwrap());
+    assert!(it.next().is_none());
+    TWire::new(repr)
+}
+
+
 #[cfg(test)]
 mod test {
     use crate::eval::{self, CachingEvaluator};

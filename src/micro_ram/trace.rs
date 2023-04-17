@@ -7,7 +7,7 @@ use zk_circuit_builder::ir::circuit::{
 };
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::typed::{
-    TWire, Builder, BuilderExt, BuilderImpl, EvaluatorExt, FromWireList, ToWireList,
+    self, TWire, Builder, BuilderExt, BuilderImpl, EvaluatorExt, FromWireList, ToWireList,
 };
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::{self, Fetch};
@@ -219,26 +219,6 @@ fn operand_value<'a>(
     b.mux(imm, op, reg_val)
 }
 
-fn to_wire_list<'a, T: ToWireList<'a>>(x: &TWire<'a, T>) -> (Vec<Wire<'a>>, Vec<usize>) {
-    let mut wires = Vec::with_capacity(T::num_wires(&x.repr));
-    T::for_each_wire(&x.repr, |w| wires.push(w));
-    let mut sizes = Vec::with_capacity(T::num_sizes(&x.repr));
-    T::for_each_size(&x.repr, |s| sizes.push(s));
-    (wires, sizes)
-}
-
-fn from_wire_list<'a, T: FromWireList<'a>>(
-    c: &CircuitBase<'a>,
-    wires: &[Wire<'a>],
-    sizes: &[usize],
-) -> TWire<'a, T> {
-    let mut it = wires.iter().copied();
-    let repr = T::build_repr_from_wires(
-        c, &mut sizes.iter().copied(), &mut |_| it.next().unwrap());
-    assert!(it.next().is_none());
-    TWire::new(repr)
-}
-
 type CalcStepArgs = (RamInstr, MemPort, u64, RamState);
 
 type CalcStepResult = (
@@ -274,7 +254,7 @@ fn calc_step<'a>(
     let c = b.circuit();
     let args_typed = TWire::<CalcStepArgs>::new((instr, mem_port.clone(), advice, s1.clone()));
     let num_regs = s1.regs.len();
-    let (args_wires, args_sizes) = to_wire_list(&args_typed);
+    let (args_wires, args_sizes) = typed::to_wire_list(&args_typed);
     let w = c.call(
         calc_step_func, c.wire_list(&args_wires), &[], |_, s: &MultiExecWitness, _| s.into());
 
@@ -283,7 +263,7 @@ fn calc_step<'a>(
     // There are no variable-sized data structures in any of the input or output types except
     // `RamState`, and there is one `RamState` in the input and one in the output, so the output
     // sizes should be the same as the input sizes.
-    let result = from_wire_list::<CalcStepResult>(c.as_base(), &result_wires, &args_sizes);
+    let result = typed::from_wire_list::<CalcStepResult>(c.as_base(), &result_wires, &args_sizes);
 
     let (
         s2, x, y, result, label_x, label_y_joined, label_result, addr_offset, asserts_ok,
@@ -317,7 +297,7 @@ pub fn define_calc_step_function<'a>(
         fn build_body<C>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b>
         where C: CircuitTrait<'b> {
             let sizes = [self.num_regs, self.num_regs];
-            let args = from_wire_list::<CalcStepArgs>(c.as_base(), &args_wires, &sizes);
+            let args = typed::from_wire_list::<CalcStepArgs>(c.as_base(), &args_wires, &sizes);
             let (instr, mem_port, advice, s1) = args.repr;
 
             let cx = Context::new(c);
@@ -352,7 +332,8 @@ pub fn define_calc_step_function<'a>(
                 TWire::new(c.all_true(asserts.iter().map(|tw| tw.repr))),
                 TWire::new(c.any_true(bugs.iter().map(|tw| tw.repr))),
             );
-            let (result_wires, _result_sizes) = to_wire_list(&TWire::<CalcStepResult>::new(result));
+            let (result_wires, _result_sizes) =
+                typed::to_wire_list(&TWire::<CalcStepResult>::new(result));
 
             c.pack(&result_wires)
         }
