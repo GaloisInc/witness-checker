@@ -1299,6 +1299,42 @@ impl<'a> typed::Le<'a, PackedMemPort> for PackedMemPort {
     }
 }
 
+impl<'a> ToWireList<'a> for PackedMemPort {
+    fn num_wires(x: &Self::Repr) -> usize { 2 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(x.key);
+        f(x.data);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+}
+
+impl<'a> FromWireList<'a> for PackedMemPort {
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 2 }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(c.ty(TyKind::Uint(IntSize(93))));
+        let tainted = if let Some(_) = check_mode::<AnyTainted>() { 16 } else { 0 };
+        f(c.ty(TyKind::Uint(IntSize(64 + 8 + 8 + tainted + 3))));
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        let tainted = if let Some(_) = check_mode::<AnyTainted>() { 16 } else { 0 };
+        PackedMemPortRepr {
+            key: build_wire(c.ty(TyKind::Uint(IntSize(93)))),
+            data: build_wire(c.ty(TyKind::Uint(IntSize(64 + 8 + 8 + tainted + 3)))),
+        }
+    }
+}
+
 
 /// A simplified version of `MemPort` used for instruction fetch.  Since all accesses after
 /// initialization are reads, we don't need to track the cycle number - we sort by `(addr, !write)`
@@ -1433,6 +1469,40 @@ impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
     fn le(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().le(a.key, b.key)
+    }
+}
+
+impl<'a> ToWireList<'a> for PackedFetchPort {
+    fn num_wires(x: &Self::Repr) -> usize { 2 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(x.key);
+        f(x.data);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+}
+
+impl<'a> FromWireList<'a> for PackedFetchPort {
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 2 }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(c.ty(TyKind::Uint(IntSize(65))));
+        f(c.ty(TyKind::Uint(IntSize(89))));
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        PackedFetchPortRepr {
+            key: build_wire(c.ty(TyKind::Uint(IntSize(65)))),
+            data: build_wire(c.ty(TyKind::Uint(IntSize(89)))),
+        }
     }
 }
 
