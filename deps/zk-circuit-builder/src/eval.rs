@@ -872,7 +872,7 @@ fn eval_gate_inner<'a, 'b>(
                 tys.push(w.ty);
                 match ecx.get_value(w) {
                     Ok((w_bits, w_sec)) => {
-                        vals.push(Ok(Value::from_bits(w.ty, w_bits)));
+                        vals.push(Ok(w_bits));
                         sec |= w_sec;
                     },
                     Err(e) => {
@@ -881,8 +881,7 @@ fn eval_gate_inner<'a, 'b>(
                 }
             }
 
-            let v = k.eval(&tys, &vals)?;
-            let bits = v.to_bits(c, ty);
+            let bits = k.eval_bits(c, &tys, &vals, ty)?;
             (bits, sec)
         },
 
