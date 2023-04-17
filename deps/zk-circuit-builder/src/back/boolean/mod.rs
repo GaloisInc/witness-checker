@@ -756,7 +756,6 @@ impl<'w, S: Sink> Backend<'w, S> {
                 (backend.sink, out_wire)
             },
         );
-        eprintln!("finished defining {:?}", f.name);
         self.function_map.insert(f, FunctionInfo {
             id: func_id,
             private_log: private_log.into_inner(),
