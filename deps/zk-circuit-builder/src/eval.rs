@@ -837,9 +837,12 @@ fn eval_gate_inner<'a, 'b>(
             let mut sec = false;
             for &w in ws {
                 let (w_bits, w_sec) = ecx.get_value(w)?;
-                digits.extend_from_slice(w_bits.0);
+                let w_bits = &w_bits.0[.. cmp::min(w_bits.0.len(), w.ty.digits())];
+                // Truncate if `bits` is too long.  This can happen sometimes due to values being
+                // zero-extended.
+                digits.extend_from_slice(w_bits);
                 // Pad with zeros if `bits` is short.
-                for _ in w_bits.0.len() .. w.ty.digits() {
+                for _ in w_bits.len() .. w.ty.digits() {
                     digits.push(0);
                 }
                 sec |= w_sec;
