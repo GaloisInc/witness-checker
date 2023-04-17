@@ -608,8 +608,6 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         let (mut sub_sink, out_wire) = build(sub_sink, &arg_wires);
         if return_n > 0 {
-            eprintln!("self: {} func_info, {} func_map", self.func_info.len(), self.func_map.len());
-            eprintln!("sub_sink: {} func_info, {} func_map", sub_sink.func_info.len(), sub_sink.func_map.len());
             let idx = sub_sink.get_function(FunctionDesc::Copy(return_n));
             let info = &sub_sink.func_info[idx];
             sub_sink.gates.push(IR::gate_call(
