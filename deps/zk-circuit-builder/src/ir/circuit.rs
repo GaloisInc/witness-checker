@@ -276,9 +276,16 @@ impl<'a> CircuitBase<'a> {
             _ => {},
         }
 
-        // Forbid using a single `Secret` in multiple gates.
         match kind {
+            // Forbid using a single `Secret` in multiple gates.
             GateKind::Secret(s) => { s.set_used(); },
+            // Require argument counts and types to match.
+            GateKind::Call(c) => {
+                assert_eq!(c.func.arg_tys.len(), c.args.len());
+                for (&ty, &arg) in c.func.arg_tys.iter().zip(c.args.iter()) {
+                    assert_eq!(ty, arg.ty);
+                }
+            }
             _ => {},
         }
 
