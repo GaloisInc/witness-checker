@@ -1,3 +1,3 @@
 invalid trace: Invalid jump. Cannot branch on tainted data with label 1 at cycle 0
 invalid trace: assert failed in step 1
-internal evaluator: 79 asserts passed, 1 failed; found 0 bugs; overall status: BAD
+internal evaluator: 64 asserts passed, 1 failed; found 0 bugs; overall status: BAD

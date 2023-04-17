@@ -1,2 +1,3 @@
 found bug: access of poisoned address 0 on cycle 5
-internal evaluator: 420 asserts passed, 0 failed; found 1 bugs; overall status: GOOD
+found bug: found bug in memory check 1
+internal evaluator: 366 asserts passed, 0 failed; found 1 bugs; overall status: GOOD
