@@ -49,6 +49,7 @@ pub trait SieveIrFormat {
         name: String,
         outs: impl IntoIterator<Item = u64>,
         ins: impl IntoIterator<Item = u64>,
+        private_count: u64,
         gates: Vec<Self::Gate>,
     ) -> Self::Function;
 
@@ -96,6 +97,7 @@ pub type SieveIrV2Sink<S> = SieveIrFunctionSink<S, SieveIrV2>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum FunctionDesc {
+    Private(u64),
     Copy(u64),
     And(u64),
     Or(u64),
@@ -180,6 +182,12 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn lit_one_into(&mut self, out: WireId, n: u64) {
         for i in 0 .. n {
             self.gates.push(IR::gate_constant(out + i, vec![1]));
+        }
+    }
+
+    fn private_into(&mut self, out: WireId, n: u64) {
+        for i in 0 .. n {
+            self.gates.push(IR::gate_private(out + i));
         }
     }
 
@@ -324,7 +332,15 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         let mut sub_sink = self.sub_sink();
 
+        let mut private_count = 0;
         let (output_count, input_count) = match desc {
+            FunctionDesc::Private(n) => {
+                let [out] = sub_sink.alloc.preallocate([n]);
+                sub_sink.private_into(out, n);
+                private_count = n;
+                (vec![n], vec![])
+            },
+
             FunctionDesc::Copy(n) => {
                 let [out, a] = sub_sink.alloc.preallocate([n, n]);
                 sub_sink.copy_into(out, n, a);
@@ -422,6 +438,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             name.clone(),
             output_count,
             input_count,
+            private_count,
             gates,
         ));
 
@@ -482,11 +499,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         w
     }
     fn private(&mut self, expire: Time, n: u64) -> WireId {
-        let w = self.alloc_wires(expire, n);
-        for i in 0 .. n {
-            self.gates.push(IR::gate_private(w + i));
-        }
-        w
+        self.emit_call(expire, FunctionDesc::Private(n), &[])
     }
     fn private_value(&mut self, n: u64, value: Bits) {
         for i in 0 .. n {
@@ -494,9 +507,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
     fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
-        let w = self.alloc_wires(expire, n);
-        self.copy_into(w, n, a);
-        w
+        self.emit_call(expire, FunctionDesc::Copy(n), &[a])
     }
     fn concat_chunks(&mut self, expire: Time, entries: &[(Source, u64)]) -> WireId {
         let total = entries.iter().map(|&(_, n)| n).sum();
@@ -617,6 +628,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             name.clone(),
             iter::once(return_n),
             arg_ns.iter().cloned(),
+            // TODO: properly compute private count (needed for SIEVE IR V1)
+            0,
             gates,
         ));
 
