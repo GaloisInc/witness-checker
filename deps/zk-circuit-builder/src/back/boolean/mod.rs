@@ -397,7 +397,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 
         // Handle the final cleanup block.
         if order.len() > 0 {
-            for w in mem::take(&mut cleanup_blocks[order.len() / CLEANUP_BLOCK_SIZE]) {
+            for w in mem::take(&mut cleanup_blocks[(order.len() - 1) / CLEANUP_BLOCK_SIZE]) {
                 self.wire_map.remove(&w);
             }
         }
