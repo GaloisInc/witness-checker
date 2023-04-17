@@ -21,8 +21,8 @@ fn function_gate_basic() {
 
     let ty_i32 = Ty::int(32);
     struct MyFunc;
-    impl DefineFunction for MyFunc {
-        fn build_body<'b, C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+    impl<'b> DefineFunction<'b> for MyFunc {
+        fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
             let &[x, y, z]: &[Wire; 3] = args.try_into().unwrap();
             c.add(c.mul(x, y), z)
         }
@@ -60,8 +60,8 @@ fn function_gate_lazy_secret() {
 
     let ty_i32 = Ty::int(32);
     struct MyFunc;
-    impl DefineFunction for MyFunc {
-        fn build_body<'b, C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+    impl<'b> DefineFunction<'b> for MyFunc {
+        fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
             let &[x]: &[Wire; 1] = args.try_into().unwrap();
             let y = c.secret_lazy(Ty::int(32), |c, &y: &i32| y.as_bits(c, IntSize(32)));
             c.add(x, y)

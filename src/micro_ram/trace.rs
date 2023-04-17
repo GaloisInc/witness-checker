@@ -313,8 +313,8 @@ pub fn define_calc_step_function<'a>(
         num_regs: usize,
     }
 
-    impl DefineFunction for CalcStepFunction {
-        fn build_body<'b, C>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b>
+    impl<'b> DefineFunction<'b> for CalcStepFunction {
+        fn build_body<C>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b>
         where C: CircuitTrait<'b> {
             let sizes = [self.num_regs, self.num_regs];
             let args = from_wire_list::<CalcStepArgs>(c.as_base(), &args_wires, &sizes);

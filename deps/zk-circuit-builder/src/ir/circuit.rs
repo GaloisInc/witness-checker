@@ -1004,7 +1004,20 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         arg_tys: &[Ty<'a>],
         f: F2,
     ) -> Function<'a>
-    where Self: Sized, F2: DefineFunction {
+    where Self: Sized, F2: for<'b> DefineFunction<'b> {
+        self.define_function_unchecked::<S2, F2>(name, arg_tys, f)
+    }
+
+    /// Like `define_function`, but the callback can use existing values from the circuit.
+    ///
+    /// If the function body uses wires from the outer circuit, the behavior may be unpredictable.
+    fn define_function_unchecked<S2: 'static, F2>(
+        &self,
+        name: &str,
+        arg_tys: &[Ty<'a>],
+        f: F2,
+    ) -> Function<'a>
+    where Self: Sized, F2: DefineFunction<'a> {
         let inner_secret_type = TypeId::of::<S2>();
         let old_secret_type = self.as_base().secret_type.replace(inner_secret_type);
         let old_in_function = self.as_base().in_function.replace(true);
@@ -1026,7 +1039,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.as_base().in_function.set(old_in_function);
         func
     }
-
 
 
     fn current_label(&self) -> &'a str {
@@ -1143,8 +1155,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
 impl<'a, C: CircuitTrait<'a> + ?Sized> CircuitExt<'a> for C {}
 
-pub trait DefineFunction {
-    fn build_body<'b, C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b>;
+pub trait DefineFunction<'a> {
+    fn build_body<C: CircuitTrait<'a>>(self, c: &C, args: &[Wire<'a>]) -> Wire<'a>;
 }
 
 
