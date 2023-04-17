@@ -67,6 +67,7 @@ impl SieveIrFormat for SieveIrV2 {
         name: String,
         outs: impl IntoIterator<Item = u64>,
         ins: impl IntoIterator<Item = u64>,
+        _private_count: u64,
         gates: Vec<Gate>,
     ) -> Function {
         Function::new(
