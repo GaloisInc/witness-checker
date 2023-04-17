@@ -1,7 +1,7 @@
-invalid trace: unaligned access of 7 with width W2 on cycle 1
-invalid trace: unaligned access of 7 with width W4 on cycle 2
-invalid trace: unaligned access of 7 with width W8 on cycle 3
-invalid trace: unaligned access of 7 with width W2 on cycle 5
-invalid trace: unaligned access of 7 with width W4 on cycle 6
-invalid trace: unaligned access of 7 with width W8 on cycle 7
-internal evaluator: 245 asserts passed, 6 failed; found 0 bugs; overall status: BAD
+invalid trace: assert failed in memory check 8
+invalid trace: assert failed in memory check 7
+invalid trace: assert failed in memory check 6
+invalid trace: assert failed in memory check 4
+invalid trace: assert failed in memory check 3
+invalid trace: assert failed in memory check 2
+internal evaluator: 197 asserts passed, 6 failed; found 0 bugs; overall status: BAD

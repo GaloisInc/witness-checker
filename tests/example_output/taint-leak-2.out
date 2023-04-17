@@ -1,2 +1,2 @@
 found bug: leak of tainted data from register 0 (byte 0) with label 1 does not match output channel label 0 on cycle 0,2
-internal evaluator: 108 asserts passed, 0 failed; found 1 bugs; overall status: GOOD
+internal evaluator: 93 asserts passed, 0 failed; found 1 bugs; overall status: GOOD

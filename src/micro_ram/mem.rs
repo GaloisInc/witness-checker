@@ -11,9 +11,11 @@ use std::rc::Rc;
 use log::*;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::gadget::bit_pack;
-use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt};
+use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt, Wire, Function, DefineFunction};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, Flatten, EvaluatorExt};
+use zk_circuit_builder::ir::typed::{
+    self, TWire, Builder, BuilderExt, BuilderImpl, Flatten, EvaluatorExt, FromWireList,
+};
 use zk_circuit_builder::routing::sort::{self, CompareLt};
 use crate::micro_ram::context::{Context, ContextEval};
 use crate::micro_ram::types::{
@@ -288,22 +290,26 @@ impl<'a> Memory<'a> {
         }
         */
 
+        let mut check_mem_func = mh.root(define_check_mem_function(b));
+
         // Run the consistency check.
         // The first port has no previous port.  Supply a dummy port and set `prev_valid = false`.
         if sorted_ports.open(mh).len() > 0 {
             let cx = cx.open(mh);
             let sorted_ports = sorted_ports.open(mh);
-            check_mem(&cx, b, &sorted_ports[0], b.lit(false), sorted_ports[0]);
+            let check_mem_func = check_mem_func.open(mh);
+            check_mem(&cx, b, *check_mem_func, 0, &sorted_ports[0], b.lit(false), sorted_ports[0]);
         }
 
         for i in 1 .. sorted_ports.open(mh).len() {
             let cx = cx.open(mh);
             let sorted_ports = sorted_ports.open(mh);
+            let check_mem_func = check_mem_func.open(mh);
             let prev = &sorted_ports[i - 1];
             let port = sorted_ports[i];
 
             let prev_valid = b.eq(word_addr(b, prev.addr), word_addr(b, port.addr));
-            check_mem(&cx, b, prev, prev_valid, port);
+            check_mem(&cx, b, *check_mem_func, i, prev, prev_valid, port);
 
             unsafe { mh.erase_and_migrate(b.circuit()) };
         }
@@ -592,7 +598,77 @@ fn addr_misalignment<'a>(
     offset
 }
 
+type CheckMemArgs = (MemPort, bool, MemPort);
+type CheckMemResult = (bool, bool);
+
 fn check_mem<'a>(
+    cx: &Context<'a>,
+    b: &impl Builder<'a>,
+    check_mem_func: Function<'a>,
+    idx: usize,
+    prev: &TWire<'a, MemPort>,
+    prev_valid: TWire<'a, bool>,
+    port: TWire<'a, MemPort>,
+) {
+    let c = b.circuit();
+    let args_typed = TWire::<CheckMemArgs>::new((prev.clone(), prev_valid, port));
+    let (args_wires, args_sizes) = typed::to_wire_list(&args_typed);
+    let w = c.call(check_mem_func, c.wire_list(&args_wires), &[], |_, s: &(), _| s.into());
+
+    let num_result_wires = CheckMemResult::expected_num_wires(&mut args_sizes.iter().copied());
+    let result_wires = (0..num_result_wires).map(|i| c.extract(w, i)).collect::<Vec<_>>();
+    // There are no variable-sized data structures in any of the input or output types except
+    // `RamState`, and there is one `RamState` in the input and one in the output, so the output
+    // sizes should be the same as the input sizes.
+    let result = typed::from_wire_list::<CheckMemResult>(c.as_base(), &result_wires, &args_sizes);
+
+    let (asserts_ok, found_bug) = result.repr;
+    wire_assert!(cx, b, asserts_ok, "assert failed in memory check {}", idx);
+    wire_bug_if!(cx, b, found_bug, "found bug in memory check {}", idx);
+}
+
+pub fn define_check_mem_function<'a>(
+    b: &impl Builder<'a>,
+) -> Function<'a> {
+    struct CheckMemFunction;
+
+    impl<'b> DefineFunction<'b> for CheckMemFunction {
+        fn build_body<C>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b>
+        where C: CircuitTrait<'b> {
+            let args = typed::from_wire_list::<CheckMemArgs>(c.as_base(), &args_wires, &[]);
+            let (prev, prev_valid, port) = args.repr;
+
+            let cx = Context::new(c);
+            let b = BuilderImpl::from_ref(c);
+
+            check_mem_inner(
+                &cx,
+                b,
+                &prev,
+                prev_valid,
+                port,
+            );
+
+            let (asserts, bugs) = cx.finish(c);
+            let result = (
+                TWire::new(c.all_true(asserts.iter().map(|tw| tw.repr))),
+                TWire::new(c.any_true(bugs.iter().map(|tw| tw.repr))),
+            );
+            let (result_wires, _result_sizes) =
+                typed::to_wire_list(&TWire::<CheckMemResult>::new(result));
+
+            c.pack(&result_wires)
+        }
+    }
+
+    let c = b.circuit();
+    let num_args = CheckMemArgs::expected_num_wires(&mut iter::empty());
+    let mut arg_tys = Vec::with_capacity(num_args);
+    CheckMemArgs::for_each_expected_wire_type(c, &mut iter::empty(), |t| arg_tys.push(t));
+    c.define_function::<(), _>("check_mem", &arg_tys, CheckMemFunction)
+}
+
+fn check_mem_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     prev: &TWire<'a, MemPort>,
