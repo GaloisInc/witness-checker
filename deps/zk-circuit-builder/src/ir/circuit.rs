@@ -2809,7 +2809,25 @@ pub trait GadgetKind<'a>: GadgetKindSupport<'a> + 'a {
     ) -> Wire<'a>;
 
     /// Evaluate this gadget on the provided inputs.
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a>;
+    fn eval_bits(
+        &self,
+        c: &CircuitBase<'a>,
+        arg_tys: &[Ty<'a>],
+        args: &[Result<Bits<'a>, eval::Error<'a>>],
+        result_ty: Ty<'a>,
+    ) -> Result<Bits<'a>, eval::Error<'a>> {
+        let mut args_vals = Vec::with_capacity(args.len());
+        for (&ty, &arg) in arg_tys.iter().zip(args.iter()) {
+            args_vals.push(arg.map(|b| eval::Value::from_bits(ty, b)));
+        }
+        let result_val = self.eval(arg_tys, &args_vals)?;
+        Ok(result_val.to_bits(c, result_ty))
+    }
+
+    /// Evaluate this gadget on the provided inputs.
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a> {
+        unimplemented!()
+    }
 }
 
 declare_interned_pointer! {
