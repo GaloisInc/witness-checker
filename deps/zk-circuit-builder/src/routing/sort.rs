@@ -2,7 +2,10 @@ use std::cmp::Ordering;
 use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::CircuitTrait;
 use crate::ir::migrate::{self, Migrate};
-use crate::ir::typed::{Builder, BuilderExt, TWire, Repr, Mux, Le, Lt, EvaluatorExt, SecretDep};
+use crate::ir::typed::{
+    Builder, BuilderExt, TWire, Repr, Mux, Le, Lt, EvaluatorExt, SecretDep, ToWireList,
+    FromWireList,
+};
 use crate::routing::{RoutingBuilder, FinishRouting, InputId, OutputId};
 
 
@@ -45,6 +48,7 @@ pub fn sort<'a, T, C: Compare<'a, T>>(
 ) -> Sort<'a, T, C>
 where
     T: Repr<'a>,
+    T: ToWireList<'a> + FromWireList<'a>,
     T: Mux<'a, bool, T, Output = T>,
     <T as Repr<'a>>::Repr: Clone,
     T: Sortable<'a>,
@@ -64,6 +68,7 @@ pub fn sort_by_key<'a, T, U, C: Compare<'a, T>, F>(
 ) -> Sort<'a, T, C>
 where
     T: Repr<'a>,
+    T: ToWireList<'a> + FromWireList<'a>,
     T: Mux<'a, bool, T, Output = T>,
     <T as Repr<'a>>::Repr: Clone,
     U: Repr<'a>,
@@ -144,6 +149,7 @@ pub struct Sort<'a, T: Repr<'a>, C> {
 impl<'a, T, C> Sort<'a, T, C>
 where
     T: Mux<'a, bool, T, Output = T>,
+    T: ToWireList<'a> + FromWireList<'a>,
     T::Repr: Clone,
     C: Compare<'a, T>,
 {

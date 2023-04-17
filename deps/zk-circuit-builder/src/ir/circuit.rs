@@ -2826,6 +2826,7 @@ pub trait GadgetKind<'a>: GadgetKindSupport<'a> + 'a {
 
     /// Evaluate this gadget on the provided inputs.
     fn eval(&self, arg_tys: &[Ty<'a>], args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a> {
+        // Provided in case the user would prefer to implement only `eval_bits`.
         unimplemented!()
     }
 }
