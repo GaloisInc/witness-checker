@@ -975,7 +975,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         F: for<'b, 's> Fn(&CircuitBase<'b>, &'s W, &[Bits<'b>]) -> CowBox<'s, W2>,
         F: Sized + Copy + 'static,
     {
-        debug_assert_eq!(TypeId::of::<W>(), self.as_base().witness_type.get());
+        debug_assert!(TypeId::of::<W>() == self.as_base().witness_type.get() ||
+            TypeId::of::<W>() == TypeId::of::<()>());
         debug_assert_eq!(TypeId::of::<W2>(), func.witness_type);
         let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
         let call = self.as_base().alloc_call(CallData {
