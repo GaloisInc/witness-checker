@@ -1737,6 +1737,7 @@ pub type MemoryEquivalence = Vec<(String, String)>;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CodeSegment {
+    #[serde(default)]
     pub name: String,
     pub start: u64,
     pub len: u64,
