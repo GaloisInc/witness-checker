@@ -4,6 +4,6 @@ warning: trace is trivially invalid: segment 1: cycle 2 sets reg 0 to 7 (expecte
 warning: trace is trivially invalid: segment 1: cycle 3 sets reg 0 to 7 (expected 0)
 warning: trace is trivially invalid: segment 3: cycle 4 sets reg 0 to 7 (expected 0)
 warning: trace is trivially invalid: segment 3: cycle 5 sets reg 0 to 0 (expected 18446744073709551609)
-invalid trace: segment 1: step 0's mem port stores value 7 at 400 (expected value 0)
-invalid trace: segment 3: step 0's mem port stores value 7 at 410 (expected value 0)
-internal evaluator: 84 asserts passed, 8 failed; found 0 bugs; overall status: BAD
+invalid trace: assert failed in segment 1, step 0
+invalid trace: assert failed in segment 3, step 0
+internal evaluator: 49 asserts passed, 8 failed; found 0 bugs; overall status: BAD

@@ -40,6 +40,7 @@ pub struct SegmentBuilder<'a, 'b, B> {
     pub b: &'b B,
     pub ev: &'b mut CachingEvaluator<'a, 'static, eval::Public>,
     pub calc_step_func: Function<'a>,
+    pub check_step_func: Function<'a>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
     pub params: &'b types::Params,
@@ -143,7 +144,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             if calc_im.mem_port_unused {
                 mem_ports.set_unused(i);
             }
-            check_step(cx, b, idx, i,
+            check_step(cx, b, self.check_step_func, idx, i,
                 prev_state.cycle, prev_state.live, instr, mem_port, &calc_im);
             if self.check_steps > 0 {
                 states.push(calc_state.clone());
@@ -219,15 +220,19 @@ fn operand_value<'a>(
     b.mux(imm, op, reg_val)
 }
 
-type CalcStepArgs = (RamInstr, MemPort, u64, RamState);
-
-type CalcStepResult = (
-    RamState,
+type CalcIntermediateTypes = (
     u64, u64, u64,
     IfMode<AnyTainted, WordLabel>,
     IfMode<AnyTainted, Label>,
     IfMode<AnyTainted, WordLabel>,
     IfMode<AnyTainted, ByteOffset>,
+);
+
+type CalcStepArgs = (RamInstr, MemPort, u64, RamState);
+
+type CalcStepResult = (
+    RamState,
+    CalcIntermediateTypes,
     bool, bool,
 );
 
@@ -266,9 +271,11 @@ fn calc_step<'a>(
     let result = typed::from_wire_list::<CalcStepResult>(c.as_base(), &result_wires, &args_sizes);
 
     let (
-        s2, x, y, result, label_x, label_y_joined, label_result, addr_offset, asserts_ok,
-        found_bug,
+        s2,
+        ci,
+        asserts_ok, found_bug,
     ) = result.repr;
+    let (x, y, result, label_x, label_y_joined, label_result, addr_offset) = ci.repr;
     let ci = CalcIntermediate {
         x, y, result,
         tainted: IfMode::new(|pf| TaintCalcIntermediate {
@@ -322,13 +329,15 @@ pub fn define_calc_step_function<'a>(
             let (asserts, bugs) = cx.finish(c);
             let result = (
                 s2,
-                ci.x,
-                ci.y,
-                ci.result,
-                TWire::new(ci.tainted.as_ref().map(|t| t.label_x.clone())),
-                TWire::new(ci.tainted.as_ref().map(|t| t.label_y_joined.clone())),
-                TWire::new(ci.tainted.as_ref().map(|t| t.label_result.clone())),
-                TWire::new(ci.tainted.as_ref().map(|t| t.addr_offset.clone())),
+                TWire::new((
+                    ci.x,
+                    ci.y,
+                    ci.result,
+                    TWire::new(ci.tainted.as_ref().map(|t| t.label_x.clone())),
+                    TWire::new(ci.tainted.as_ref().map(|t| t.label_y_joined.clone())),
+                    TWire::new(ci.tainted.as_ref().map(|t| t.label_result.clone())),
+                    TWire::new(ci.tainted.as_ref().map(|t| t.addr_offset.clone())),
+                )),
                 TWire::new(c.all_true(asserts.iter().map(|tw| tw.repr))),
                 TWire::new(c.any_true(bugs.iter().map(|tw| tw.repr))),
             );
@@ -604,7 +613,114 @@ fn check_state<'a>(
     tainted::check_state(cx, b, cycle, &calc_s.tainted_regs, &trace_s.tainted_regs);
 }
 
+type CheckStepArgs = (
+    u32, bool, RamInstr, MemPort,
+    CalcIntermediateTypes,
+);
+
+type CheckStepResult = (
+    bool, bool,
+);
+
 fn check_step<'a>(
+    cx: &Context<'a>,
+    b: &impl Builder<'a>,
+    check_step_func: Function<'a>,
+    seg_idx: usize,
+    idx: usize,
+    cycle: TWire<'a, u32>,
+    live: TWire<'a, bool>,
+    instr: TWire<'a, RamInstr>,
+    mem_port: TWire<'a, MemPort>,
+    calc_im: &CalcIntermediate<'a>,
+) {
+    //return check_step_inner(cx, b, seg_idx, idx, cycle, live, instr, mem_port, calc_im);
+
+    let c = b.circuit();
+    let args_typed = TWire::<CheckStepArgs>::new((
+        cycle, live, instr, mem_port,
+        TWire::new((
+            calc_im.x,
+            calc_im.y,
+            calc_im.result,
+            TWire::new(calc_im.tainted.as_ref().map(|t| t.label_x.clone())),
+            TWire::new(calc_im.tainted.as_ref().map(|t| t.label_y_joined.clone())),
+            TWire::new(calc_im.tainted.as_ref().map(|t| t.label_result.clone())),
+            TWire::new(calc_im.tainted.as_ref().map(|t| t.addr_offset.clone())),
+        )),
+    ));
+    let (args_wires, args_sizes) = typed::to_wire_list(&args_typed);
+    let w = c.call(
+        check_step_func, c.wire_list(&args_wires), &[], |_, s: &(), _| s.into());
+
+    let num_result_wires = CheckStepResult::expected_num_wires(&mut iter::empty());
+    let result_wires = (0..num_result_wires).map(|i| c.extract(w, i)).collect::<Vec<_>>();
+    let result = typed::from_wire_list::<CheckStepResult>(c.as_base(), &result_wires, &args_sizes);
+
+    let (asserts_ok, found_bug) = result.repr;
+    wire_assert!(cx, b, asserts_ok, "assert failed in segment {}, step {}", seg_idx, idx);
+    wire_bug_if!(cx, b, found_bug, "found bug in segment {}, step {}", seg_idx, idx);
+}
+
+pub fn define_check_step_function<'a>(
+    b: &impl Builder<'a>,
+) -> Function<'a> {
+    struct CheckStepFunction;
+
+    impl<'b> DefineFunction<'b> for CheckStepFunction {
+        fn build_body<C>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b>
+        where C: CircuitTrait<'b> {
+            let args = typed::from_wire_list::<CheckStepArgs>(c.as_base(), &args_wires, &[]);
+            let (cycle, live, instr, mem_port, ci) = args.repr;
+            let (x, y, result, label_x, label_y_joined, label_result, addr_offset) = ci.repr;
+            let ci = CalcIntermediate {
+                x, y, result,
+                tainted: IfMode::new(|pf| TaintCalcIntermediate {
+                    label_x: label_x.unwrap(&pf),
+                    label_y_joined: label_y_joined.unwrap(&pf),
+                    label_result: label_result.unwrap(&pf),
+                    addr_offset: addr_offset.unwrap(&pf),
+                }),
+                mem_port_unused: false,
+            };
+
+            let cx = Context::new(c);
+            let b = BuilderImpl::from_ref(c);
+            let seg_idx = 0;
+            let idx = 0;
+
+            check_step_inner(
+                &cx,
+                b,
+                seg_idx,
+                idx,
+                cycle,
+                live,
+                instr,
+                mem_port,
+                &ci,
+            );
+
+            let (asserts, bugs) = cx.finish(c);
+            let result = (
+                TWire::new(c.all_true(asserts.iter().map(|tw| tw.repr))),
+                TWire::new(c.any_true(bugs.iter().map(|tw| tw.repr))),
+            );
+            let (result_wires, _result_sizes) =
+                typed::to_wire_list(&TWire::<CheckStepResult>::new(result));
+
+            c.pack(&result_wires)
+        }
+    }
+
+    let c = b.circuit();
+    let num_args = CheckStepArgs::expected_num_wires(&mut iter::empty());
+    let mut arg_tys = Vec::with_capacity(num_args);
+    CheckStepArgs::for_each_expected_wire_type(c, &mut iter::empty(), |t| arg_tys.push(t));
+    c.define_function::<(), _>("check_step", &arg_tys, CheckStepFunction)
+}
+
+fn check_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     seg_idx: usize,

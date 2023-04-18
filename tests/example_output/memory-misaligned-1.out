@@ -4,4 +4,4 @@ invalid trace: assert failed in memory check 6
 invalid trace: assert failed in memory check 4
 invalid trace: assert failed in memory check 3
 invalid trace: assert failed in memory check 2
-internal evaluator: 197 asserts passed, 6 failed; found 0 bugs; overall status: BAD
+internal evaluator: 93 asserts passed, 6 failed; found 0 bugs; overall status: BAD
