@@ -400,22 +400,16 @@ fn calc_step_inner<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
-    let y_mem_addr: TWire<u64>;
-    let y_jump_addr: TWire<u64>;
+    let y_addr: TWire<u64>;
 
     #[cfg(feature = "privilege-levels")] {
-        // Masks for jump and load/store addresses.  All bits are one except for the high bit, which
-        // matches the high bit of the PC.  Note that code addresses can't exceed 2^32, even though
-        // the PC's type is `u64`.
-        let jump_addr_mask_32 = b.or(b.cast::<u64, u32>(s1.pc), b.lit(0x7fff_ffff_u32));
-        let jump_addr_mask: TWire<u64> = b.cast(jump_addr_mask_32);
-        let mem_addr_mask = b.or(b.lit(0xffff_ffff_u64), b.shl(jump_addr_mask, b.lit(32_u8)));
-        y_jump_addr = b.and(y, jump_addr_mask);
-        y_mem_addr = b.and(y, mem_addr_mask);
+        // Mask for jump and load/store addresses.  All bits are one except for bit 31, which
+        // matches bit 31 of the PC.
+        let addr_mask = b.or(s1.pc, b.lit(0xffff_ffff_7fff_ffff_u64));
+        y_addr = b.and(y, addr_mask);
     }
     #[cfg(not(feature = "privilege-levels"))] {
-        y_jump_addr = y;
-        y_mem_addr = y;
+        y_addr = y;
     }
 
     // This flag is set if the `MemPort` is publicly known to be unused.  `Load*` ops may set this
@@ -460,24 +454,24 @@ fn calc_step_inner<'a>(
 
     case!(Opcode::Jmp, {
         dest = b.lit(REG_PC);
-        y_jump_addr
+        y_addr
     });
     // TODO: Double check. Is this `x`?
     // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
     case!(Opcode::Cjmp, {
         dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
-        y_jump_addr
+        y_addr
     });
     case!(Opcode::Cnjmp, {
         dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
-        y_jump_addr
+        y_addr
     });
 
     // Load1, Load2, Load4, Load8
     for w in MemOpWidth::iter() {
         case!(w.load_opcode(), {
             let known_value = if opcode == Some(w.load_opcode()) {
-                kmem.load(b, ev, y_mem_addr, w)
+                kmem.load(b, ev, y_addr, w)
             } else {
                 None
             };
@@ -494,7 +488,7 @@ fn calc_step_inner<'a>(
         case!(w.store_opcode(), {
             dest = b.lit(REG_NONE);
             if opcode == Some(w.store_opcode()) {
-                let (addr, value) = (y_mem_addr, x);
+                let (addr, value) = (y_addr, x);
                 kmem.store(b, ev, addr, value, w);
             }
             b.lit(0)
@@ -503,7 +497,7 @@ fn calc_step_inner<'a>(
     case!(Opcode::Poison8, {
         dest = b.lit(REG_NONE);
         if opcode == Some(Opcode::Poison8) {
-            let (addr, value) = (y_mem_addr, x);
+            let (addr, value) = (y_addr, x);
             kmem.poison(b, ev, addr, value, MemOpWidth::W8);
         }
         b.lit(0)
@@ -592,7 +586,7 @@ fn calc_step_inner<'a>(
         x, y, result,
         tainted: tainted_im,
         mem_port_unused,
-        mem_op_addr: y_mem_addr,
+        mem_op_addr: y_addr,
     };
     (TWire::new(s2), im)
 }
