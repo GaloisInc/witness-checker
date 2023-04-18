@@ -330,8 +330,7 @@ impl<'a, T: Repr<'a>> RoutingBuilder<'a, T> {
 
         let c = b.circuit();
         let gk = c.intern_gadget_kind(Permute {
-            inputs: n,
-            outputs: n,
+            items: n,
             wires_per_item,
         });
         let w_bundle = c.gadget(gk, &wires);

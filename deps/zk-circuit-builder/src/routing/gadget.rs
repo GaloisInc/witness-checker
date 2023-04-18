@@ -9,8 +9,7 @@ use crate::ir::typed::{Builder, BuilderExt as _, Repr, TWire};
 /// Add two unsigned integers and check for overflow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Permute {
-    pub inputs: usize,
-    pub outputs: usize,
+    pub items: usize,
     /// Number of wires in each input item.
     pub wires_per_item: usize,
 }
@@ -22,14 +21,14 @@ impl<'a> GadgetKind<'a> for Permute {
     }
 
     fn typecheck(&self, c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
-        // We expect a permutation argument, followed by `inputs` groups of `wires_per_item` wires.
+        // We expect a permutation argument, followed by `items` groups of `wires_per_item` wires.
         let perm_ty = arg_tys[0];
         assert_eq!(*perm_ty, TyKind::RawBits);
 
         let arg_tys = &arg_tys[1..];
 
         assert!(arg_tys.len() > 0, "expected at least one argument");
-        assert_eq!(arg_tys.len(), self.inputs * self.wires_per_item);
+        assert_eq!(arg_tys.len(), self.items * self.wires_per_item);
 
         // Each block of input wires should have the same wire types.
         for (i, ty) in arg_tys.iter().copied().enumerate() {
@@ -37,8 +36,8 @@ impl<'a> GadgetKind<'a> for Permute {
                 "type mismatch at index {}", i);
         }
 
-        let mut result_tys = Vec::with_capacity(self.outputs * self.wires_per_item);
-        for _ in 0 .. self.outputs {
+        let mut result_tys = Vec::with_capacity(self.items * self.wires_per_item);
+        for _ in 0 .. self.items {
             result_tys.extend_from_slice(&arg_tys[..self.wires_per_item]);
         }
 
@@ -62,8 +61,8 @@ impl<'a> GadgetKind<'a> for Permute {
 
         let digits_per_item = arg_tys[..self.wires_per_item].iter()
             .map(|&ty| ty.digits()).sum::<usize>();
-        let mut result_digits = Vec::with_capacity(self.outputs * digits_per_item);
-        for i in 0..self.outputs {
+        let mut result_digits = Vec::with_capacity(self.items * digits_per_item);
+        for i in 0..self.items {
             let idx = perm.0.get(i).copied().unwrap_or(0) as usize;
             let range = idx * self.wires_per_item .. (idx + 1) * self.wires_per_item;
             let input_tys = &arg_tys[range.clone()];
@@ -81,7 +80,7 @@ impl<'a> GadgetKind<'a> for Permute {
                 }
             }
         }
-        debug_assert_eq!(result_digits.len(), self.outputs * digits_per_item);
+        debug_assert_eq!(result_digits.len(), self.items * digits_per_item);
 
         let bits = c.intern_bits(&result_digits);
         Ok(bits)
