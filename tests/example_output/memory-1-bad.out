@@ -1,4 +1,5 @@
-invalid trace: segment 0: step 12's mem port has address 40 (expected 32)
+invalid trace: segment 0: step 0's mem port has address 40 (expected 32)
+invalid trace: assert failed in segment 0, step 12
 invalid trace: segment 0: cycle 7 sets reg 0 to 20 (expected 21)
 invalid trace: segment 0: cycle 8 sets reg 0 to 20 (expected 21)
 invalid trace: segment 0: cycle 8 sets reg 2 to 30 (expected 31)
@@ -25,7 +26,7 @@ invalid trace: segment 0: cycle 25 sets reg 2 to 100 (expected 101)
 invalid trace: segment 0: cycle 26 sets reg 2 to 100 (expected 101)
 invalid trace: segment 0: cycle 27 sets reg 0 to 0 (expected 1)
 invalid trace: segment 0: cycle 27 sets reg 2 to 100 (expected 101)
-invalid trace: assert failed in memory check 7
-invalid trace: assert failed in memory check 6
 invalid trace: assert failed in memory check 3
-internal evaluator: 700 asserts passed, 30 failed; found 0 bugs; overall status: BAD
+invalid trace: assert failed in memory check 6
+invalid trace: assert failed in memory check 7
+internal evaluator: 336 asserts passed, 30 failed; found 0 bugs; overall status: BAD

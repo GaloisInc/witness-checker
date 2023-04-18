@@ -1,5 +1,5 @@
+found bug: access of poisoned address 400 on cycle 3
 invalid trace: double poison of address 400 on cycle 2
 invalid trace: assert failed in memory check 1
-found bug: access of poisoned address 400 on cycle 3
 found bug: found bug in memory check 2
-internal evaluator: 77 asserts passed, 1 failed; found 1 bugs; overall status: BAD
+internal evaluator: 40 asserts passed, 1 failed; found 1 bugs; overall status: BAD

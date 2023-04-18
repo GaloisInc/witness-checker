@@ -1,2 +1,2 @@
 found bug: found bug in memory check 6
-internal evaluator: 730 asserts passed, 0 failed; found 1 bugs; overall status: GOOD
+internal evaluator: 366 asserts passed, 0 failed; found 1 bugs; overall status: GOOD

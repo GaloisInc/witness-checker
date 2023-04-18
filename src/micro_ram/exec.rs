@@ -21,6 +21,7 @@ pub struct ExecBuilder<'a> {
     check_steps: usize,
     expect_zero: bool,
     calc_step_func: Function<'a>,
+    check_step_func: Function<'a>,
     debug_segment_graph_path: Option<String>,
 
     equiv_segments: EquivSegments<'a>,
@@ -79,6 +80,7 @@ impl<'a> ExecBuilder<'a> {
             check_steps,
             expect_zero,
             calc_step_func: trace::define_calc_step_function(b, exec.params.num_regs),
+            check_step_func: trace::define_check_step_function(b),
             debug_segment_graph_path,
 
             equiv_segments,
@@ -161,6 +163,7 @@ impl<'a> ExecBuilder<'a> {
             b: b,
             ev: &mut self.ev,
             calc_step_func: self.calc_step_func,
+            check_step_func: self.check_step_func,
             mem: &mut self.mem,
             fetch: &mut self.fetch,
             params: &exec.params,

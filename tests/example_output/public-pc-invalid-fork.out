@@ -4,4 +4,4 @@ invalid trace: segment 1: cycle 4 sets reg 0 to 0 (expected 2)
 invalid trace: segment 1: cycle 4 sets pc to 5 (expected 3)
 invalid trace: segment 1: cycle 5 sets reg 0 to 0 (expected 2)
 invalid trace: segment 1: cycle 5 sets pc to 6 (expected 3)
-internal evaluator: 227 asserts passed, 6 failed; found 0 bugs; overall status: BAD
+internal evaluator: 110 asserts passed, 6 failed; found 0 bugs; overall status: BAD

@@ -2,4 +2,4 @@ invalid trace: segment 1: cycle 10 sets cycle to 11 (expected 17)
 invalid trace: segment 1: cycle 11 sets cycle to 12 (expected 18)
 invalid trace: segment 1: cycle 12 sets cycle to 13 (expected 19)
 invalid trace: CycleBreak 0 incoming edge Edge(1, 2) is live, but state doesn't match Segment(1)
-internal evaluator: 309 asserts passed, 4 failed; found 0 bugs; overall status: BAD
+internal evaluator: 153 asserts passed, 4 failed; found 0 bugs; overall status: BAD
