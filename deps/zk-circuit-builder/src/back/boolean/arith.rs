@@ -780,6 +780,20 @@ mod test {
         fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
             self.inner.call(expire, func, args)
         }
+
+        const HAS_PERMUTE: bool = <TestSink as Sink>::HAS_PERMUTE;
+        fn permute(
+            &mut self,
+            expire: Time,
+            wires_per_item: u64,
+            num_items: u64,
+            inputs: WireId,
+        ) -> WireId {
+            self.inner.permute(expire, wires_per_item, num_items, inputs)
+        }
+        fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
+            self.inner.permute_private_values(num_items, perm)
+        }
     }
 
     #[test]
