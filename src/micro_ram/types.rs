@@ -1739,6 +1739,7 @@ pub type MemoryEquivalence = Vec<(String, String)>;
 pub struct CodeSegment {
     #[serde(default)]
     pub name: String,
+    #[serde(alias = "addr")]
     pub start: u64,
     pub len: u64,
     #[serde(default)]
