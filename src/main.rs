@@ -197,19 +197,25 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let mcx = zk_circuit_builder::ir::migrate::handle::MigrateContext::new(&multi_exec_witness);
 
     let arg_test_gadget_eval = args.is_present("test-gadget-eval");
+    let arg_stats = args.is_present("stats");
     let arg_zkif_out = args.is_present("zkif-out");
     let arg_sieve_out = args.is_present("sieve-ir-out") || args.is_present("sieve-ir-v2-out");
     let arg_boolean_out =
         args.is_present("boolean-sieve-ir-out") || args.is_present("boolean-sieve-ir-v2-out");
     let gadget_supported = move |g: GadgetKindRef| {
+        use zk_circuit_builder::gadget::arith::WideMul;
         use zk_circuit_builder::gadget::bit_pack::{ConcatBits, ExtractBits};
+        use zk_circuit_builder::routing::gadget::Permute;
         let mut ok = false;
-        if arg_test_gadget_eval {
+        if arg_test_gadget_eval || arg_stats {
             return true;
         }
         if arg_zkif_out || arg_sieve_out || arg_boolean_out {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
+        }
+        if arg_boolean_out {
+            ok = ok || g.cast::<WideMul>().is_some();
         }
         ok
     };
