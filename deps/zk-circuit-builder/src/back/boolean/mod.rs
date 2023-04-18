@@ -15,6 +15,7 @@ use crate::ir::circuit::{
     Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call,
 };
 use crate::ir::migrate::{self, Migrate};
+use crate::routing::gadget::Permute;
 
 
 mod arith;
@@ -109,6 +110,19 @@ pub trait Sink: Sized {
     ) -> Self::FunctionId;
     fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId;
 
+    const HAS_PERMUTE: bool;
+    fn permute(
+        &mut self,
+        expire: Time,
+        wires_per_item: u64,
+        num_items: u64,
+        inputs: WireId,
+    ) -> WireId;
+    /// Emit private values corresponding to a `permute` operation.  `perm` should be an array of
+    /// `num_items` 32-bit indices, each referring to a distinct element in the range `0 ..
+    /// num_items`.
+    fn permute_private_values(&mut self, num_items: u64, perm: Bits);
+
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
         if n == 0 {
@@ -180,6 +194,13 @@ trait PrivateOps<'a> {
         get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
         call: Call<'a>,
     );
+    fn emit_permute(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        num_items: u64,
+        perm: Wire<'a>,
+    );
 }
 
 struct PrivateDirect<E> {
@@ -243,8 +264,20 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
                 PrivateOp::Emit(w) => sub_ops.emit(c, sink, w),
                 PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
                 PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
+                PrivateOp::Permute(n, perm) => sub_ops.emit_permute(c, sink, n, perm),
             }
         }
+    }
+
+    fn emit_permute(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        num_items: u64,
+        perm: Wire<'a>,
+    ) {
+        let bits = self.ev.eval_wire_bits(c, perm).unwrap().0;
+        sink.permute_private_values(num_items, bits);
     }
 }
 
@@ -253,6 +286,7 @@ enum PrivateOp<'a> {
     Emit(Wire<'a>),
     QuotRem(Wire<'a>, Wire<'a>),
     Call(Call<'a>),
+    Permute(u64, Wire<'a>),
 }
 
 struct PrivateLog<'a> {
@@ -298,6 +332,16 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
     ) {
         self.log.push(PrivateOp::Call(call));
     }
+
+    fn emit_permute(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        num_items: u64,
+        perm: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::Permute(num_items, perm));
+    }
 }
 
 
@@ -339,7 +383,9 @@ impl<'w, S: Sink> Backend<'w, S> {
     ) -> Vec<WireId> {
         let order = circuit::walk_wires_filtered(
             wires.iter().cloned(),
-            |w| !self.wire_map.contains_key(&w),
+            // We exclude `RawBits` wires on the assumption that they're only used for gadgets that
+            // will apply some kind of special handling to them.
+            |w| !self.wire_map.contains_key(&w) && !matches!(*w.ty, TyKind::RawBits),
         ).collect::<Vec<_>>();
 
         // For each wire, compute its last use time and whether its `WireIds` must be contiguous.
@@ -430,6 +476,39 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let mut get_log = |func| function_map[&func].private_log.clone();
                 private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
                 return out;
+            },
+            GateKind::Gadget(gk, ws) => {
+                if let Some(g) = gk.cast::<Permute>() {
+                    assert!(S::HAS_PERMUTE, "Permute gadget is unsupported with this Sink");
+                    let mut chunks = Vec::with_capacity(g.items * g.wires_per_item);
+                    for i in 0 .. g.items {
+                        for j in 0 .. g.wires_per_item {
+                            let w = ws[1 + i * g.wires_per_item + j];
+                            chunks.push((Source::Wires(self.wire_map[&w]), type_bits(w.ty)));
+                        }
+                    }
+                    let a = self.sink.concat_chunks(TEMP, &chunks);
+
+                    let bits_per_item = ws[1 .. 1 + g.wires_per_item].iter()
+                        .map(|w| type_bits(w.ty)).sum::<u64>();
+                    let out = self.sink.permute(
+                        expire,
+                        bits_per_item,
+                        u64::try_from(g.items).unwrap(),
+                        a,
+                    );
+
+                    if c.is_prover() {
+                        private.emit_permute(
+                            c.as_base(),
+                            &mut self.sink,
+                            u64::try_from(g.items).unwrap(),
+                            ws[0],
+                        );
+                    }
+
+                    return out;
+                }
             },
             _ => {},
         }
@@ -722,7 +801,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                 }
             },
 
-            GateKind::Call(..) => todo!("Call"),
+            // `Call` should be handled by the case above.
+            GateKind::Call(..) => unreachable!(),
         }
     }
 
@@ -1081,6 +1161,20 @@ mod test {
         fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
             unimplemented!("call not supported in TestSink");
         }
+
+        const HAS_PERMUTE: bool = false;
+        fn permute(
+            &mut self,
+            _expire: Time,
+            _wires_per_item: u64,
+            _num_items: u64,
+            _inputs: WireId,
+        ) -> WireId {
+            unimplemented!()
+        }
+        fn permute_private_values(&mut self, _num_items: u64, _perm: Bits) {
+            unimplemented!()
+        }
     }
 
 
@@ -1182,6 +1276,20 @@ mod test {
         }
         fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
             self.inner.call(expire, func, args)
+        }
+
+        const HAS_PERMUTE: bool = <TestSink as Sink>::HAS_PERMUTE;
+        fn permute(
+            &mut self,
+            expire: Time,
+            wires_per_item: u64,
+            num_items: u64,
+            inputs: WireId,
+        ) -> WireId {
+            self.inner.permute(expire, wires_per_item, num_items, inputs)
+        }
+        fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
+            self.inner.permute_private_values(num_items, perm)
         }
     }
 

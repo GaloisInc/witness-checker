@@ -8,7 +8,7 @@ use crate::ir::typed::{
 };
 use self::gadget::Permute;
 
-mod benes;
+pub mod benes;
 pub mod gadget;
 pub mod sort;
 

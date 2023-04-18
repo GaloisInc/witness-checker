@@ -216,6 +216,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         }
         if arg_boolean_out {
             ok = ok || g.cast::<WideMul>().is_some();
+            ok = ok || g.cast::<Permute>().is_some();
         }
         ok
     };
