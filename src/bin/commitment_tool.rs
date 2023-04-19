@@ -34,6 +34,9 @@ fn parse_args() -> ArgMatches<'static> {
                  .long("keep-randomness")
                  .help("keep the existing __commitment_randomness__ values \
                        instead of generating new ones"))
+            .arg(Arg::with_name("machine-readable")
+                 .long("machine-readable")
+                 .help("produce machine-readable output"))
         )
         .subcommand(SubCommand::with_name("update-cbor")
             .about("update a CBOR file by adding a commitment")
@@ -741,14 +744,20 @@ fn run_calc(args: &ArgMatches) -> Result<(), String> {
     let seed = calc_rng_seed(&commitment, steps);
 
     // Print output
-    println!("randomness hex = {}", to_hex_string(&randomness));
-    println!("randomness bytes = {}", to_byte_array_string(&randomness));
-    println!("randomness words = {}", to_word_array_string(iter_words(&randomness)));
-    println!("commitment = sha256:{}", to_hex_string(&commitment));
-    println!("steps = {}", steps);
-    println!("rng seed hex = {}", to_hex_string(&seed));
-    println!("rng seed bytes = {}", to_byte_array_string(&seed));
-    println!("rng seed words = {}", to_word_array_string(iter_words(&seed)));
+    if !args.is_present("machine-readable") {
+        println!("randomness hex = {}", to_hex_string(&randomness));
+        println!("randomness bytes = {}", to_byte_array_string(&randomness));
+        println!("randomness words = {}", to_word_array_string(iter_words(&randomness)));
+        println!("commitment = sha256:{}", to_hex_string(&commitment));
+        println!("steps = {}", steps);
+        println!("rng seed hex = {}", to_hex_string(&seed));
+        println!("rng seed bytes = {}", to_byte_array_string(&seed));
+        println!("rng seed words = {}", to_word_array_string(iter_words(&seed)));
+    } else {
+        println!("randomness={}", to_hex_string(&randomness));
+        println!("commitment={}", to_hex_string(&commitment));
+        println!("rng_seed={}", to_hex_string(&seed));
+    }
 
     Ok(())
 }
