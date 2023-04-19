@@ -297,7 +297,7 @@ fn count_randomness_words(exec: &ExecBody) -> usize {
             continue;
         }
         if ms.uncommitted {
-            eprintln!("warning: skipping non-secret segment {:?}", ms.name);
+            eprintln!("warning: skipping uncommitted segment {:?}", ms.name);
             continue;
         }
         sum += ms.len as usize;
@@ -377,6 +377,7 @@ fn calc_commitment(
         if !cs.secret || cs.uncommitted {
             continue;
         }
+        eprintln!("hashing secret code segment {:?} (at {:x})", cs.name, cs.start * 8);
         let instrs = cs.instrs.iter().cloned()
             .chain(iter::repeat(fetch::PADDING_INSTR).take(cs.len as usize - cs.instrs.len()));
         for instr in instrs {
@@ -396,6 +397,7 @@ fn calc_commitment(
         if !ms.secret || ms.uncommitted {
             continue;
         }
+        eprintln!("hashing secret memory segment {:?} (at {:x})", ms.name, ms.start * 8);
 
         // Special case: if this is a `__commitment_randomness__` segment, and a randomness
         // iterator is available, use the words it provides instead of the ones actually present in
@@ -407,6 +409,7 @@ fn calc_commitment(
                         .ok_or("ran out of randomness")?;
                     h.update(&u64::to_le_bytes(word));
                 }
+                mem_count += 1;
                 continue;
             }
         }
