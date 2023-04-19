@@ -37,6 +37,13 @@ fn parse_args() -> ArgMatches<'static> {
             .arg(Arg::with_name("machine-readable")
                  .long("machine-readable")
                  .help("produce machine-readable output"))
+            .arg(Arg::with_name("uncommitted")
+                 .long("uncommitted")
+                 .takes_value(true)
+                 .value_name("NAME")
+                 .multiple(true)
+                 .number_of_values(1)
+                 .help("treat the named secret memory segments as uncommitted"))
         )
         .subcommand(SubCommand::with_name("update-cbor")
             .about("update a CBOR file by adding a commitment")
@@ -61,6 +68,13 @@ fn parse_args() -> ArgMatches<'static> {
                  .takes_value(true)
                  .value_name("HEX")
                  .help("set the values of any __commitment_randomness__ memory segments"))
+            .arg(Arg::with_name("set-uncommitted")
+                 .long("set-uncommitted")
+                 .takes_value(true)
+                 .value_name("NAME")
+                 .multiple(true)
+                 .number_of_values(1)
+                 .help("mark the named secret memory segments as uncommitted in the output CBOR"))
         )
         .get_matches()
 }
@@ -70,6 +84,7 @@ type Error = String;
 
 trait Value: Sized + Serialize {
     fn from_reader<R: Read>(r: R) -> Result<Self, Error>;
+    fn new_bool(b: bool) -> Self;
     fn new_u64(x: u64) -> Self;
     fn new_string(s: String) -> Self;
     fn new_array(v: Vec<Self>) -> Self;
@@ -86,6 +101,10 @@ impl Value for serde_cbor::Value {
     fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
         serde_cbor::from_reader(r)
             .map_err(|e| e.to_string())
+    }
+
+    fn new_bool(x: bool) -> Self {
+        x.into()
     }
 
     fn new_u64(x: u64) -> Self {
@@ -151,6 +170,10 @@ impl Value for serde_yaml::Value {
     fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
         serde_yaml::from_reader(r)
             .map_err(|e| e.to_string())
+    }
+
+    fn new_bool(x: bool) -> Self {
+        x.into()
     }
 
     fn new_u64(x: u64) -> Self {
@@ -370,6 +393,7 @@ fn find_rng_seed(exec: &ExecBody) -> Result<Option<Vec<u8>>, String> {
 fn calc_commitment(
     exec: &ExecBody,
     randomness: Option<impl IntoIterator<Item = u64>>,
+    uncommitted_names: &HashSet<String>,
 ) -> Result<[u8; 32], String> {
     let mut randomness = randomness.map(|it| it.into_iter());
 
@@ -397,7 +421,7 @@ fn calc_commitment(
 
     let mut mem_count = 0;
     for ms in &exec.init_mem {
-        if !ms.secret || ms.uncommitted {
+        if !ms.secret || ms.uncommitted || uncommitted_names.contains(&ms.name) {
             continue;
         }
         eprintln!("hashing secret memory segment {:?} (at {:x})", ms.name, ms.start * 8);
@@ -495,130 +519,35 @@ fn set_commitment_value<V: Value>(exec: &mut V, commitment: String) -> Result<()
     Ok(())
 }
 
-/*
-fn run<V: Value>(in_path: &Path, out_path: Option<&Path>) -> Result<(), String> {
-    let f = File::open(in_path).map_err(|e| e.to_string())?;
-    let mut v = V::from_reader(f)?;
-
-
-    let version = v.get_index(0).ok_or("missing version")?.parse::<Version>()?;
-    let mut features = v.get_index(1).ok_or("missing features")?.parse::<HashSet<Feature>>()?;
-    let version_features = feature::lookup_version(version)
-        .unwrap_or_else(|| panic!("unknown version {:?}", version));
-    features.extend(version_features);
-
-    if features.contains(&Feature::MultiExec) {
-        return Err("multi-exec feature is not supported by this tool".into());
+fn get_uncommitted_names(args: &ArgMatches, key: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+    if let Some(vals) = args.values_of(key) {
+        for name in vals {
+            names.insert(name.to_owned());
+        }
     }
+    names
+}
 
-    let v_exec = v.get_index_mut(2).ok_or("missing execution")?;
-    let mut exec = parse::with_features(features, || v_exec.parse::<ExecBody>())?;
-
-
-    // Find `__commitment_randomness__` memory segment(s) and fill them with random data.
-    let mut randomness_count = 0;
-    let mut randomness_words = 0;
-    for (i, parsed_ms) in exec.init_mem.iter_mut().enumerate() {
-        if !parsed_ms.name.contains("__commitment_randomness__") {
+fn set_uncommitted_flags<V: Value>(
+    v_exec: &mut V,
+    parsed_exec: &ExecBody,
+    uncommitted_names: &HashSet<String>,
+) -> Result<(), String> {
+    for (i, parsed_ms) in parsed_exec.init_mem.iter().enumerate() {
+        if !uncommitted_names.contains(&parsed_ms.name) {
             continue;
         }
-        if !parsed_ms.secret {
-            eprintln!("warning: skipping non-secret segment {:?}", parsed_ms.name);
-            continue;
-        }
-
-        randomness_count += 1;
-        randomness_words += parsed_ms.len;
-
-        let len = parsed_ms.len as usize;
-        let mut bytes = vec![0; len * 8];
-        getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
-
-        let mut words = Vec::with_capacity(len);
-        for i in 0..len {
-            let mut word_bytes = [0; 8];
-            word_bytes.copy_from_slice(&bytes[i * 8 .. (i + 1) * 8]);
-            words.push(u64::from_le_bytes(word_bytes));
-        }
-        eprintln!("init_mem[{}] ({:?}) data = {:?}", i, parsed_ms.name, words);
-        parsed_ms.data = words.clone();
 
         let init_mem = v_exec.get_key_mut("init_mem").unwrap();
         let ms = init_mem.get_index_mut(i).unwrap();
-        let data = V::new_array(words.into_iter().map(V::new_u64).collect());
-        ms.insert_key("data", data);
-    }
-
-    if randomness_words < 2 {
-        eprintln!("warning: not enough secret __commitment_randomness__ bits: \
-            found {} segments containing {} total bits, but expected >= 128 bits",
-            randomness_count, randomness_words * 64);
-    }
-
-
-    // Hash the secret code and memory.
-
-    let mut h = Sha256::new();
-
-    let mut code_count = 0;
-    for cs in &exec.program {
-        if !cs.secret || cs.uncommitted {
-            continue;
-        }
-        let instrs = cs.instrs.iter().cloned()
-            .chain(iter::repeat(fetch::PADDING_INSTR).take(cs.len as usize - cs.instrs.len()));
-        for instr in instrs {
-            let RamInstr { opcode, dest, op1, op2, imm } = instr;
-            h.update(&u8::to_le_bytes(opcode));
-            h.update(&u8::to_le_bytes(dest));
-            h.update(&u8::to_le_bytes(op1));
-            h.update(&u64::to_le_bytes(op2));
-            h.update(&u8::to_le_bytes(imm as u8));
-        }
-        code_count += 1;
-    }
-    eprintln!("hashed {} secret code segments", code_count);
-
-    let mut mem_count = 0;
-    for ms in &exec.init_mem {
-        if !ms.secret || ms.uncommitted {
-            continue;
-        }
-        let words = ms.data.iter().cloned()
-            .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()));
-        for word in words {
-            h.update(&u64::to_le_bytes(word));
-        }
-        mem_count += 1;
-    }
-    eprintln!("hashed {} secret memory segments", mem_count);
-
-    let hash = h.finalize();
-
-    // Set `params.commitment` to the computed hash.
-
-    let mut commitment = String::from("sha256:");
-    commitment.reserve(64);
-    for &b in &hash {
-        write!(commitment, "{:02x}", b)
-            .map_err(|e| e.to_string())?;
-    }
-    debug_assert_eq!(commitment.len(), "sha256:".len() + 64);
-
-    eprintln!("commitment = {:?}", commitment);
-
-    add_commitment(v_exec, commitment);
-
-
-    // Write the output file, if needed.
-
-    if let Some(out_path) = out_path {
-        write_output(out_path, &v)?;
+        let data = V::new_bool(true);
+        ms.insert_key("uncommitted", data);
     }
 
     Ok(())
+
 }
-*/
 
 
 enum Format {
@@ -737,7 +666,12 @@ fn run_calc(args: &ArgMatches) -> Result<(), String> {
     assert_eq!(randomness.len(), randomness_len * 8);
 
     // Compute commitment.
-    let commitment = calc_commitment(&exec, Some(iter_words(&randomness)))?;
+    let uncommitted_names = get_uncommitted_names(args, "uncommitted");
+    let commitment = calc_commitment(
+        &exec,
+        Some(iter_words(&randomness)),
+        &uncommitted_names,
+    )?;
 
     // Compute RNG seed.
     let steps = count_steps(&exec);
@@ -796,7 +730,16 @@ fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<
             .ok_or("expected input file to contain params.commitment")?;
     }
 
-    let expect_commitment_bytes = calc_commitment(&exec, Some(iter_words(&randomness)))?;
+    let uncommitted_names = get_uncommitted_names(args, "set-uncommitted");
+    if uncommitted_names.len() > 0 {
+        set_uncommitted_flags(v_exec, &exec, &uncommitted_names)?;
+    }
+
+    let expect_commitment_bytes = calc_commitment(
+        &exec,
+        Some(iter_words(&randomness)),
+        &uncommitted_names,
+    )?;
     let expect_commitment = Commitment::Sha256(sha256_bytes_to_words(expect_commitment_bytes));
     if commitment != expect_commitment {
         return Err(format!("invalid commitment: expected {:?}, but got {:?}",
