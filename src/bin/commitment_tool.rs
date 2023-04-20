@@ -539,23 +539,6 @@ fn calc_commitment(
         }
         eprintln!("hashing secret memory segment {:?} (at {:x})", ms.name, ms.start * 8);
 
-        /*
-        // Special case: if this is a `__commitment_randomness__` segment, and a randomness
-        // iterator is available, use the words it provides instead of the ones actually present in
-        // `ms.data`.
-        if ms.name.contains(RANDOMNESS_NAME) {
-            if let Some(ref mut it) = randomness {
-                for _ in 0 .. ms.len {
-                    let word = it.next()
-                        .ok_or("ran out of randomness")?;
-                    h.update(&u64::to_le_bytes(word));
-                }
-                mem_count += 1;
-                continue;
-            }
-        }
-        */
-
         let mut words = ms.data.iter().cloned()
             .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()))
             .collect::<Vec<_>>();
@@ -594,33 +577,28 @@ fn calc_rng_seed(commitment: &[u8; 32], steps: usize) -> [u8; 32] {
 fn set_randomness_value<V: Value>(
     v_exec: &mut V,
     parsed_exec: &ExecBody,
-    randomness: impl IntoIterator<Item = u64>,
+    randomness: &[u8],
+    randomness_range: MemRange,
 ) -> Result<(), String> {
     let mut it = randomness.into_iter();
 
-    // Find `__commitment_randomness__` memory segment(s) and fill them with random data.
-    for (i, parsed_ms) in parsed_exec.init_mem.iter().enumerate() {
-        if !parsed_ms.name.contains("__commitment_randomness__") {
-            continue;
-        }
-        if !parsed_ms.secret {
-            eprintln!("warning: skipping non-secret segment {:?}", parsed_ms.name);
-            continue;
-        }
+    let parsed_ms = &parsed_exec.init_mem[randomness_range.segment_idx];
 
-        let mut words = Vec::with_capacity(parsed_ms.len as usize);
-        for _ in 0 .. parsed_ms.len {
-            let word = it.next()
-                .ok_or("ran out of randomness")?;
-            words.push(word);
-        }
-        eprintln!("set init_mem[{}] ({:?}) data = {:?}", i, parsed_ms.name, words);
-
-        let init_mem = v_exec.get_key_mut("init_mem").unwrap();
-        let ms = init_mem.get_index_mut(i).unwrap();
-        let data = V::new_array(words.into_iter().map(V::new_u64).collect());
-        ms.insert_key("data", data);
+    let mut words = parsed_ms.data.clone();
+    let start_offset = (randomness_range.start - parsed_ms.start * WORD_BYTES as u64) as usize;
+    let end_offset = start_offset + randomness_range.len();
+    let end_offset_word = (end_offset + WORD_BYTES - 1) / WORD_BYTES;
+    if words.len() < end_offset_word + 1 {
+        words.resize(end_offset_word + 1, 0);
     }
+
+    let bytes = word_bytes_mut(&mut words);
+    bytes[start_offset .. end_offset].copy_from_slice(randomness);
+
+    let init_mem = v_exec.get_key_mut("init_mem").unwrap();
+    let ms = init_mem.get_index_mut(randomness_range.segment_idx).unwrap();
+    let data = V::new_array(words.into_iter().map(V::new_u64).collect());
+    ms.insert_key("data", data);
 
     Ok(())
 }
@@ -875,7 +853,7 @@ fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<
     if let Some(randomness_str) = args.value_of("set-randomness") {
         randomness = parse_hex_string(randomness_str)
             .map_err(|e| format!("error parsing --set-randomness argument: {}", e))?;
-        set_randomness_value(v_exec, &exec, iter_words(&randomness))?;
+        set_randomness_value(v_exec, &exec, &randomness, randomness_range)?;
     } else {
         randomness = gather_randomness(&exec, randomness_range)?;
     }
