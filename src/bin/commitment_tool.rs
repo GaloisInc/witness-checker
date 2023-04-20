@@ -58,6 +58,14 @@ fn parse_args() -> ArgMatches<'static> {
                  .number_of_values(1)
                  .help("treat the named secret memory segments as uncommitted"))
         )
+        .subcommand(SubCommand::with_name("check")
+            .about("check that the commitment in a CBOR file is valid")
+            .arg(Arg::with_name("trace")
+                 .takes_value(true)
+                 .value_name("TRACE.CBOR")
+                 .help("MicroRAM execution trace")
+                 .required(true))
+        )
         .subcommand(SubCommand::with_name("update-cbor")
             .about("update a CBOR file by adding a commitment")
             .arg(Arg::with_name("trace")
@@ -552,7 +560,7 @@ fn calc_commitment(
             .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()))
             .collect::<Vec<_>>();
 
-        if i == randomness_range.segment_idx {
+        if i == randomness_range.segment_idx && randomness_range.len() > 0 {
             let bytes = word_bytes_mut(&mut words);
             let start_offset = (randomness_range.start - ms.start * WORD_BYTES as u64) as usize;
             let end_offset = start_offset + randomness_range.len();
@@ -816,6 +824,38 @@ fn run_calc(args: &ArgMatches) -> Result<(), String> {
 }
 
 
+fn run_check(args: &ArgMatches) -> Result<(), String> {
+    let in_path = Path::new(args.value_of_os("trace")
+        .ok_or("cbor path is required")?);
+    let exec = match Format::from_path(in_path) {
+        Format::Yaml => get_exec(&parse_file::<serde_yaml::Value>(in_path)?)?.0,
+        Format::Cbor => get_exec(&parse_file::<serde_cbor::Value>(in_path)?)?.0,
+        Format::Json => todo!("json support"),
+    };
+
+    // Get commitment from file
+    let commitment = exec.params.commitment
+        .ok_or("expected input file to contain params.commitment")?;
+
+    // Compute commitment.
+    let expect_commitment_bytes = calc_commitment(
+        &exec,
+        &[],
+        MemRange { segment_idx: 0, start: 0, end: 0 },
+        &HashSet::new(),
+    )?;
+    let expect_commitment = Commitment::Sha256(sha256_bytes_to_words(expect_commitment_bytes));
+    if commitment != expect_commitment {
+        return Err(format!("invalid commitment: expected {:?}, but got {:?}",
+            expect_commitment, commitment));
+    } else {
+        println!("commitment OK");
+    }
+
+    Ok(())
+}
+
+
 fn run_update_cbor(args: &ArgMatches) -> Result<(), String> {
     let in_path = Path::new(args.value_of_os("trace")
         .ok_or("cbor path is required")?);
@@ -896,6 +936,7 @@ fn real_main() -> Result<(), String> {
     let sub_args = opt_sub_args.ok_or("missing subcommand")?;
     match cmd {
         "calc" => run_calc(sub_args),
+        "check" => run_check(sub_args),
         "update-cbor" => run_update_cbor(sub_args),
         _ => unreachable!("bad command {:?}", cmd),
     }
