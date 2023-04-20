@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt::Write as _;
@@ -10,7 +11,7 @@ use std::slice;
 use cheesecloth::micro_ram::feature::{self, Version, Feature};
 use cheesecloth::micro_ram::fetch;
 use cheesecloth::micro_ram::parse;
-use cheesecloth::micro_ram::types::{ExecBody, RamInstr, Commitment};
+use cheesecloth::micro_ram::types::{ExecBody, RamInstr, Commitment, WORD_BYTES};
 use cheesecloth::mode::if_mode::{Mode, with_mode};
 use clap::{App, AppSettings, SubCommand, Arg, ArgMatches};
 use getrandom;
@@ -33,7 +34,19 @@ fn parse_args() -> ArgMatches<'static> {
             .arg(Arg::with_name("keep-randomness")
                  .long("keep-randomness")
                  .help("keep the existing __commitment_randomness__ values \
-                       instead of generating new ones"))
+                        instead of generating new ones"))
+            .arg(Arg::with_name("randomness-symbol")
+                 .long("randomness-symbol")
+                 .takes_value(true)
+                 .value_name("NAME")
+                 .help("symbol/label where randomness starts in memory; useful \
+                        when randomness is not in its own memory segment"))
+            .arg(Arg::with_name("randomness-length")
+                 .long("randomness-length")
+                 .takes_value(true)
+                 .value_name("N")
+                 .help("length of randomness in memory; useful when randomness \
+                        is not in its own memory segment"))
             .arg(Arg::with_name("machine-readable")
                  .long("machine-readable")
                  .help("produce machine-readable output"))
@@ -68,6 +81,18 @@ fn parse_args() -> ArgMatches<'static> {
                  .takes_value(true)
                  .value_name("HEX")
                  .help("set the values of any __commitment_randomness__ memory segments"))
+            .arg(Arg::with_name("randomness-symbol")
+                 .long("randomness-symbol")
+                 .takes_value(true)
+                 .value_name("NAME")
+                 .help("symbol/label where randomness starts in memory; useful \
+                        when randomness is not in its own memory segment"))
+            .arg(Arg::with_name("randomness-length")
+                 .long("randomness-length")
+                 .takes_value(true)
+                 .value_name("N")
+                 .help("length of randomness in memory; useful when randomness \
+                        is not in its own memory segment"))
             .arg(Arg::with_name("set-uncommitted")
                  .long("set-uncommitted")
                  .takes_value(true)
@@ -311,6 +336,96 @@ fn get_exec_mut<V: Value>(v: &mut V) -> Result<(ExecBody, &mut V), String> {
 
 const RANDOMNESS_NAME: &str = "__commitment_randomness__";
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+struct MemRange {
+    pub segment_idx: usize,
+    pub start: u64,
+    pub end: u64,
+}
+
+impl MemRange {
+    pub fn len(&self) -> usize {
+        (self.end - self.start) as usize
+    }
+}
+
+fn find_randomness(exec: &ExecBody, args: &ArgMatches) -> Result<MemRange, String> {
+    if let Some(sym) = args.value_of("randomness-symbol") {
+        let start = {
+            let mut found_addr: Option<u64> = None;
+            for (name, &addr) in exec.labels.iter() {
+                if let Some((name, _)) = name.split_once('#') {
+                    if name == sym {
+                        if found_addr.is_some() {
+                            return Err(format!(
+                                "found multiple symbols named {:?} in exec.labels", sym));
+                        }
+                        found_addr = Some(addr);
+                    }
+                }
+            }
+            found_addr.ok_or_else(|| format!("symbol {:?} not found in exec.labels", sym))?
+        };
+
+        let len_str = args.value_of("randomness-length")
+            .ok_or_else(|| {
+                "must set --randomness-length when using --randomness-symbol".to_owned()
+            })?;
+        let len = len_str.parse::<u64>()
+            .map_err(|e| format!("failed to parse randomness length {:?}: {}", len_str, e))?;
+
+        let end = start.checked_add(len)
+            .ok_or_else(|| "overflow when calculating randomness end".to_owned())?;
+
+        let mut found: Option<usize> = None;
+        for (i, ms) in exec.init_mem.iter().enumerate() {
+            let ms_start_addr = ms.start * WORD_BYTES as u64;
+            let ms_end_addr = ms_start_addr + ms.len * WORD_BYTES as u64;
+            if ms_start_addr <= start && start < ms_end_addr {
+                if !(end <= ms_end_addr) {
+                    return Err(format!(
+                        "randomness 0x{:x}..0x{:x} overflows memory segment {} {:?}",
+                        start, end, i, ms.name,
+                    ));
+                }
+                if found.is_some() {
+                    return Err(format!(
+                        "found multiple segments containing randomness 0x{:x}..0x{:x}: \
+                            {} {:?}, {} {:?}",
+                        start, end, i, ms.name,
+                        found.unwrap(), exec.init_mem[found.unwrap()].name,
+                    ));
+                }
+                found = Some(i);
+            }
+        }
+        let segment_idx = found
+            .ok_or_else(|| format!("no segment contains randomness 0x{:x}..0x{:x}", start, end))?;
+
+        Ok(MemRange { segment_idx, start, end })
+
+    } else {
+        let mut found: Option<usize> = None;
+        for (i, ms) in exec.init_mem.iter().enumerate() {
+            if ms.name.contains(RANDOMNESS_NAME) {
+                if found.is_some() {
+                    return Err(format!(
+                        "found multiple segments containing randomness: {} {:?}, {} {:?}",
+                        i, ms.name, found.unwrap(), exec.init_mem[found.unwrap()].name,
+                    ));
+                }
+                found = Some(i);
+            }
+        }
+        let segment_idx = found
+            .ok_or_else(|| format!("found no segment named {:?}", RANDOMNESS_NAME))?;
+
+        let start = 0;
+        let end = exec.init_mem[segment_idx].len * WORD_BYTES as u64;
+        Ok(MemRange { segment_idx, start, end })
+    }
+}
+
 /// Count the total number of words in all `__commitment_randomness__` memory segments.
 fn count_randomness_words(exec: &ExecBody) -> usize {
     let mut sum = 0;
@@ -340,25 +455,13 @@ fn count_steps(exec: &ExecBody) -> usize {
     sum
 }
 
-fn gather_randomness(exec: &ExecBody) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
+fn gather_randomness(exec: &ExecBody, range: MemRange) -> Result<Vec<u8>, String> {
+    let ms = &exec.init_mem[range.segment_idx];
+    let bytes = word_bytes(&ms.data);
 
-    for ms in &exec.init_mem {
-        if !ms.name.contains(RANDOMNESS_NAME) {
-            continue;
-        }
-        if !ms.secret || ms.uncommitted {
-            continue;
-        }
-
-        let words = ms.data.iter().cloned()
-            .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()));
-        for word in words {
-            bytes.extend_from_slice(&u64::to_le_bytes(word));
-        }
-    }
-
-    Ok(bytes)
+    let start_offset = (range.start - ms.start * WORD_BYTES as u64) as usize;
+    let end_offset = start_offset + range.len();
+    Ok((start_offset .. end_offset).map(|i| bytes.get(i).copied().unwrap_or(0)).collect())
 }
 
 const RNG_SEED_NAME: &str = "__rng_seed__";
@@ -390,13 +493,15 @@ fn find_rng_seed(exec: &ExecBody) -> Result<Option<Vec<u8>>, String> {
     Ok(seed)
 }
 
+/// Calculate a commitment for `exec`.  `randomness_range` gives the range of bytes that make up
+/// the commitment randomness; when calculating the commitment, we replace those bytes with the
+/// values in `randomness`.
 fn calc_commitment(
     exec: &ExecBody,
-    randomness: Option<impl IntoIterator<Item = u64>>,
+    randomness: &[u8],
+    randomness_range: MemRange,
     uncommitted_names: &HashSet<String>,
 ) -> Result<[u8; 32], String> {
-    let mut randomness = randomness.map(|it| it.into_iter());
-
     let mut h = Sha256::new();
 
     let mut code_count = 0;
@@ -420,12 +525,13 @@ fn calc_commitment(
     eprintln!("hashed {} secret code segments", code_count);
 
     let mut mem_count = 0;
-    for ms in &exec.init_mem {
+    for (i, ms) in exec.init_mem.iter().enumerate() {
         if !ms.secret || ms.uncommitted || uncommitted_names.contains(&ms.name) {
             continue;
         }
         eprintln!("hashing secret memory segment {:?} (at {:x})", ms.name, ms.start * 8);
 
+        /*
         // Special case: if this is a `__commitment_randomness__` segment, and a randomness
         // iterator is available, use the words it provides instead of the ones actually present in
         // `ms.data`.
@@ -440,9 +546,19 @@ fn calc_commitment(
                 continue;
             }
         }
+        */
 
-        let words = ms.data.iter().cloned()
-            .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()));
+        let mut words = ms.data.iter().cloned()
+            .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()))
+            .collect::<Vec<_>>();
+
+        if i == randomness_range.segment_idx {
+            let bytes = word_bytes_mut(&mut words);
+            let start_offset = (randomness_range.start - ms.start * WORD_BYTES as u64) as usize;
+            let end_offset = start_offset + randomness_range.len();
+            bytes[start_offset .. end_offset].copy_from_slice(randomness);
+        }
+
         for word in words {
             h.update(&u64::to_le_bytes(word));
         }
@@ -451,12 +567,6 @@ fn calc_commitment(
     eprintln!("hashed {} secret memory segments", mem_count);
 
     let hash = h.finalize();
-
-    if let Some(ref mut it) = randomness {
-        if it.next().is_some() {
-            return Err("got too much randomness".into());
-        }
-    }
 
     let mut hash_arr = [0_u8; 32];
     hash_arr.copy_from_slice(&hash);
@@ -628,10 +738,19 @@ fn to_word_array_string(words: impl IntoIterator<Item = u64>) -> String {
 
 fn iter_words<'a>(bytes: &'a [u8]) -> impl Iterator<Item = u64> + 'a {
     (0 .. bytes.len()).step_by(8).map(move |i| {
-        let slice = &bytes[i .. i + 8];
-        let arr = <[u8; 8]>::try_from(slice).unwrap();
+        let mut arr = [0; 8];
+        let n = cmp::min(arr.len(), bytes.len() - i);
+        arr[..n].copy_from_slice(&bytes[i .. i + n]);
         u64::from_le_bytes(arr)
     })
+}
+
+fn word_bytes<'a>(words: &'a [u64]) -> &'a [u8] {
+    unsafe { slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 8) }
+}
+
+fn word_bytes_mut<'a>(words: &'a mut [u64]) -> &'a mut [u8] {
+    unsafe { slice::from_raw_parts_mut(words.as_mut_ptr() as *mut u8, words.len() * 8) }
 }
 
 fn sha256_bytes_to_words(x: [u8; 32]) -> [u32; 8] {
@@ -655,21 +774,21 @@ fn run_calc(args: &ArgMatches) -> Result<(), String> {
     };
 
     // Sample randomness.
-    let randomness_len = count_randomness_words(&exec);
+    let randomness_range = find_randomness(&exec, args)?;
     let randomness = if args.is_present("keep-randomness") {
-        gather_randomness(&exec)?
+        gather_randomness(&exec, randomness_range)?
     } else {
-        let mut bytes = vec![0_u8; randomness_len * 8];
+        let mut bytes = vec![0_u8; randomness_range.len()];
         getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
         bytes
     };
-    assert_eq!(randomness.len(), randomness_len * 8);
 
     // Compute commitment.
     let uncommitted_names = get_uncommitted_names(args, "uncommitted");
     let commitment = calc_commitment(
         &exec,
-        Some(iter_words(&randomness)),
+        &randomness,
+        randomness_range,
         &uncommitted_names,
     )?;
 
@@ -711,13 +830,14 @@ fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<
     let mut v = parse_file::<V>(in_path)?;
     let (exec, v_exec) = get_exec_mut(&mut v)?;
 
+    let randomness_range = find_randomness(&exec, args)?;
     let randomness: Vec<u8>;
     if let Some(randomness_str) = args.value_of("set-randomness") {
         randomness = parse_hex_string(randomness_str)
             .map_err(|e| format!("error parsing --set-randomness argument: {}", e))?;
         set_randomness_value(v_exec, &exec, iter_words(&randomness))?;
     } else {
-        randomness = gather_randomness(&exec)?;
+        randomness = gather_randomness(&exec, randomness_range)?;
     }
 
     let commitment: Commitment;
@@ -737,7 +857,8 @@ fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<
 
     let expect_commitment_bytes = calc_commitment(
         &exec,
-        Some(iter_words(&randomness)),
+        &randomness,
+        randomness_range,
         &uncommitted_names,
     )?;
     let expect_commitment = Commitment::Sha256(sha256_bytes_to_words(expect_commitment_bytes));
