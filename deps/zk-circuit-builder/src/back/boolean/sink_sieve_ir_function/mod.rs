@@ -1014,41 +1014,12 @@ impl<S: zki_sieve::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV1> {
     }
 }
 
-impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
-    fn flush(&mut self, free_all_pages: bool) {
+impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
+    fn emit_sieve_v2(&mut self, directives: Vec<zki_sieve_v3::structs::directives::Directive>) {
         use zki_sieve_v3::Sink;
         use zki_sieve_v3::structs::IR_VERSION;
-        use zki_sieve_v3::structs::directives::Directive;
-        use zki_sieve_v3::structs::gates::Gate;
-        use zki_sieve_v3::structs::private_inputs::PrivateInputs;
         use zki_sieve_v3::structs::relation::Relation;
         use zki_sieve_v3::structs::types::Type;
-
-        let allocs = self.alloc.flush();
-
-        if free_all_pages {
-            for free in self.alloc.take_frees() {
-                if free.start != free.end {
-                    self.gates.push(Gate::Delete(0, free.start, free.end - 1));
-                }
-            }
-        }
-
-        let mut directives = Vec::with_capacity(
-            self.functions.len() + self.gates.len() + allocs.len());
-        directives.extend(mem::take(&mut self.functions).into_iter().map(Directive::Function));
-        let mut iter = mem::take(&mut self.gates).into_iter();
-        let mut prev = 0;
-        for alloc in allocs {
-            let n = alloc.pos - prev;
-            directives.extend(iter.by_ref().take(n).map(|g| Directive::Gate(g)));
-            prev = alloc.pos;
-
-            if alloc.start != alloc.end {
-                directives.push(Directive::Gate(Gate::New(0, alloc.start, alloc.end - 1)));
-            }
-        }
-        directives.extend(iter.map(|g| Directive::Gate(g)));
 
         // Build and emit the messages
         let mut r = Relation {
@@ -1066,6 +1037,68 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
         }
         self.sink.push_relation_message(&r).unwrap();
         self.emitted_relation = true;
+    }
+}
+
+impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
+    fn flush(&mut self, free_all_pages: bool) {
+        use zki_sieve_v3::structs::IR_VERSION;
+        use zki_sieve_v3::structs::directives::Directive;
+        use zki_sieve_v3::structs::function::FunctionBody;
+        use zki_sieve_v3::structs::gates::Gate;
+        use zki_sieve_v3::structs::private_inputs::PrivateInputs;
+        use zki_sieve_v3::structs::types::Type;
+
+
+        // Flush functions first.  Function definitions can always be moved earlier relative to
+        // gates, so we do these first to make it easier to break up the function definitions into
+        // separate messages if needed.
+        let functions = mem::take(&mut self.functions);
+        if functions.len() > 0 {
+            let mut directives = Vec::with_capacity(functions.len());
+            let mut total_gates = 0;
+            for function in functions {
+                let len = match function.body {
+                    FunctionBody::Gates(ref gates) => gates.len(),
+                    FunctionBody::PluginBody(_) => 0,
+                };
+                if directives.len() > 0 && total_gates + len > GATE_PAGE_SIZE {
+                    self.emit_sieve_v2(directives);
+                    directives = Vec::new();
+                }
+                directives.push(Directive::Function(function));
+            }
+            if directives.len() > 0 {
+                self.emit_sieve_v2(directives);
+            }
+        }
+
+
+        let allocs = self.alloc.flush();
+
+        if free_all_pages {
+            for free in self.alloc.take_frees() {
+                if free.start != free.end {
+                    self.gates.push(Gate::Delete(0, free.start, free.end - 1));
+                }
+            }
+        }
+
+        let mut directives = Vec::with_capacity(self.gates.len() + allocs.len());
+        let mut iter = mem::take(&mut self.gates).into_iter();
+        let mut prev = 0;
+        for alloc in allocs {
+            let n = alloc.pos - prev;
+            directives.extend(iter.by_ref().take(n).map(|g| Directive::Gate(g)));
+            prev = alloc.pos;
+
+            if alloc.start != alloc.end {
+                directives.push(Directive::Gate(Gate::New(0, alloc.start, alloc.end - 1)));
+            }
+        }
+        directives.extend(iter.map(|g| Directive::Gate(g)));
+
+        self.emit_sieve_v2(directives);
 
         if self.private_bits.len() > 0 {
             let inputs = mem::take(&mut self.private_bits).into_iter()
