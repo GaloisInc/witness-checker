@@ -162,6 +162,7 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
             segments: Vec::new(),
             trace: Vec::new(),
             advice: HashMap::new(),
+            labels: HashMap::new(),
             provided_init_state: None,
         };
 
@@ -214,7 +215,7 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                     }
                 },
                 "labels" => {
-                    let _: HashMap<String, usize> = map.next_value()?;
+                    ex.labels = map.next_value()?;
                 },
                 // Note: `provided_init_state` can't be set in the CBOR file.
                 _ => return Err(serde::de::Error::custom(format_args!(
