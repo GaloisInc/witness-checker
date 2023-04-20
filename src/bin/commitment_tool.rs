@@ -108,6 +108,10 @@ fn parse_args() -> ArgMatches<'static> {
                  .multiple(true)
                  .number_of_values(1)
                  .help("mark the named secret memory segments as uncommitted in the output CBOR"))
+            // HACK: this should probably be a different tool
+            .arg(Arg::with_name("set-privilege-levels")
+                 .long("set-privilege-levels")
+                 .help("set `params.privilege_levels` to true"))
         )
         .get_matches()
 }
@@ -269,14 +273,18 @@ impl Value for serde_yaml::Value {
 }
 
 
-fn add_commitment<V: Value>(exec: &mut V, commitment: String) {
+fn set_param<V: Value>(exec: &mut V, key: &str, value: V) {
     if let Some(params) = exec.get_key_mut("params") {
-        params.insert_key("commitment", V::new_string(commitment));
+        params.insert_key(key, value);
     } else {
         let mut m = V::new_map();
-        m.insert_key("commitment", V::new_string(commitment));
+        m.insert_key(key, value);
         exec.insert_key("params", m);
     }
+}
+
+fn add_commitment<V: Value>(exec: &mut V, commitment: String) {
+    set_param(exec, "commitment", V::new_string(commitment));
 }
 
 fn write_output<V: Value>(out_path: &Path, v: &V) -> Result<(), String> {
@@ -897,6 +905,11 @@ fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<
         println!("rng seed OK");
     } else {
         println!("rng seed OK (not present)");
+    }
+
+    // Set `params.privilege_levels` if requested
+    if args.is_present("set-privilege-levels") {
+        set_param(v_exec, "privilege_levels", V::new_bool(true));
     }
 
     if let Some(out_path) = args.value_of_os("output") {
