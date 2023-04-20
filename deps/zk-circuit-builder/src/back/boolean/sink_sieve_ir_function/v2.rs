@@ -111,7 +111,6 @@ impl SieveIrFormat for SieveIrV2 {
         mut visit_gate: impl FnMut(Gate),
         mut visit_function: impl FnMut(Function),
     ) {
-        debug_assert_eq!(r.types, vec![Type::Field(vec![2])]);
         for d in r.directives {
             match d {
                 Directive::Gate(g) => visit_gate(g),
