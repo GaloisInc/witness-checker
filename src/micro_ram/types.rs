@@ -1780,6 +1780,9 @@ pub struct Params {
     pub sparsity: Sparsity,
     #[serde(default)]
     pub commitment: Option<Commitment>,
+    /// If set, restrict accesses from unprivileged code to privileged code and data.
+    #[serde(default)]
+    pub privilege_levels: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -22,6 +22,7 @@ pub struct ExecBuilder<'a> {
     check_steps: usize,
     /// If set, then the trace is valid only if the final value of `r0` is 0.
     expect_zero: bool,
+    privilege_levels: bool,
     calc_step_func: Function<'a>,
     check_step_func: Function<'a>,
     /// If set, then the trace is valid only if the program writes a 1 to this address before
@@ -87,7 +88,12 @@ impl<'a> ExecBuilder<'a> {
             init_state: init_state.clone(),
             check_steps,
             expect_zero,
-            calc_step_func: trace::define_calc_step_function(b, exec.params.num_regs),
+            privilege_levels: exec.params.privilege_levels,
+            calc_step_func: trace::define_calc_step_function(
+                b,
+                exec.params.num_regs,
+                exec.params.privilege_levels,
+            ),
             check_step_func: trace::define_check_step_function(b),
             expect_write,
             debug_segment_graph_path,
@@ -229,6 +235,7 @@ impl<'a> ExecBuilder<'a> {
             cx: &self.cx,
             b: b,
             ev: &mut self.ev,
+            privilege_levels: self.privilege_levels,
             calc_step_func: self.calc_step_func,
             check_step_func: self.check_step_func,
             mem: &mut self.mem,
