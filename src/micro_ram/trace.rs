@@ -40,6 +40,7 @@ pub struct SegmentBuilder<'a, 'b, B> {
     pub cx: &'b Context<'a>,
     pub b: &'b B,
     pub ev: &'b mut CachingEvaluator<'a, 'static, eval::Public>,
+    pub privilege_levels: bool,
     pub calc_step_func: Function<'a>,
     pub check_step_func: Function<'a>,
     pub mem: &'b mut Memory<'a>,
@@ -140,7 +141,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             });
 
             let (calc_state, calc_im) =
-                calc_step(cx, b, ev, self.calc_step_func,
+                calc_step(cx, b, ev, self.privilege_levels, self.calc_step_func,
                     i, instr, &mem_port, advice, &prev_state, &mut kmem);
             if calc_im.mem_port_unused {
                 mem_ports.set_unused(i);
@@ -242,6 +243,7 @@ fn calc_step<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    privilege_levels: bool,
     calc_step_func: Function<'a>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
@@ -252,7 +254,8 @@ fn calc_step<'a>(
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let opcode = ev.eval_typed(b.circuit(), instr.opcode).and_then(Opcode::from_raw);
     if opcode.is_some() {
-        return calc_step_inner(cx, b, ev, idx, opcode, instr, mem_port, advice, s1, kmem);
+        return calc_step_inner(
+            cx, b, ev, privilege_levels, idx, opcode, instr, mem_port, advice, s1, kmem);
     }
 
     // The opcode is unknown, so it could be performing any store at any address.
@@ -298,9 +301,11 @@ fn calc_step<'a>(
 pub fn define_calc_step_function<'a>(
     b: &impl Builder<'a>,
     num_regs: usize,
+    privilege_levels: bool,
 ) -> Function<'a> {
     struct CalcStepFunction {
         num_regs: usize,
+        privilege_levels: bool,
     }
 
     impl<'b> DefineFunction<'b> for CalcStepFunction {
@@ -320,6 +325,7 @@ pub fn define_calc_step_function<'a>(
                 &cx,
                 b,
                 &mut ev,
+                self.privilege_levels,
                 idx,
                 None,
                 instr,
@@ -357,13 +363,15 @@ pub fn define_calc_step_function<'a>(
     let num_args = CalcStepArgs::expected_num_wires(&mut sizes.iter().copied());
     let mut arg_tys = Vec::with_capacity(num_args);
     CalcStepArgs::for_each_expected_wire_type(c, &mut sizes.iter().copied(), |t| arg_tys.push(t));
-    c.define_function::<MultiExecWitness, _>("calc_step", &arg_tys, CalcStepFunction { num_regs })
+    c.define_function::<MultiExecWitness, _>("calc_step", &arg_tys,
+        CalcStepFunction { num_regs, privilege_levels })
 }
 
 fn calc_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    privilege_levels: bool,
     idx: usize,
     opcode: Option<Opcode>,
     instr: TWire<'a, RamInstr>,
@@ -402,13 +410,12 @@ fn calc_step_inner<'a>(
 
     let y_addr: TWire<u64>;
 
-    #[cfg(feature = "privilege-levels")] {
+    if privilege_levels {
         // Mask for jump and load/store addresses.  All bits are one except for bit 31, which
         // matches bit 31 of the PC.
         let addr_mask = b.or(s1.pc, b.lit(0xffff_ffff_7fff_ffff_u64));
         y_addr = b.and(y, addr_mask);
-    }
-    #[cfg(not(feature = "privilege-levels"))] {
+    } else {
         y_addr = y;
     }
 
