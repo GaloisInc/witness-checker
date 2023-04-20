@@ -1627,6 +1627,7 @@ pub struct ExecBody {
     pub segments: Vec<Segment>,
     pub trace: Vec<TraceChunk>,
     pub advice: HashMap<u64, Vec<Advice>>,
+    pub labels: HashMap<String, u64>,
 
     pub provided_init_state: Option<RamState>,
 }
