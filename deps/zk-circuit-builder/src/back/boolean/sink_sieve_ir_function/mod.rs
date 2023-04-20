@@ -116,6 +116,12 @@ enum FunctionDesc {
     /// `Permute(n, m)`: permutation function from `m` inputs to `m` outputs, with each item being
     /// `n` bits.
     Permute(u64, u32),
+    /// `PermuteLayerShuffle(n, m, i)`: shuffle layer `l` of `Permute(n, m)`.  This is a helper
+    /// function used to reduce the peak message size in the SIEVE IR output.
+    PermuteLayerShuffle(u64, u32, usize),
+    /// `PermuteLayerSwitches(n, m, i)`: switch layer `l` of `Permute(n, m)`.  This is a helper
+    /// function used to reduce the peak message size in the SIEVE IR output.
+    PermuteLayerSwitches(u64, u32, usize),
     /// `PermuteSwitch(n)`: switch function taking two `n`-bit inputs and returning two `n`-bit
     /// outputs.
     PermuteSwitch(u64),
@@ -150,6 +156,10 @@ impl FunctionDesc {
             FunctionDesc::Neg(n) => format!("neg_{}", n),
             FunctionDesc::Mux(n) => format!("mux_{}", n),
             FunctionDesc::Permute(n, m) => format!("permute_{}_{}", n, m),
+            FunctionDesc::PermuteLayerShuffle(n, m, l) =>
+                format!("permute_layer_shuffle_{}_{}_{}", n, m, l),
+            FunctionDesc::PermuteLayerSwitches(n, m, l) =>
+                format!("permute_layer_shuffle_{}_{}_{}", n, m, l),
             FunctionDesc::PermuteSwitch(n) => format!("permute_switch_{}", n),
             FunctionDesc::PermuteSwitches(n, m) =>
                 format!("permute_switches_{}_{}", n, m),
@@ -473,6 +483,12 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             FunctionDesc::Permute(n, m) => {
                 sub_sink.permute_body(n, m)
             },
+            FunctionDesc::PermuteLayerShuffle(n, m, l) => {
+                sub_sink.permute_layer_shuffle(n, m, l)
+            },
+            FunctionDesc::PermuteLayerSwitches(n, m, l) => {
+                sub_sink.permute_layer_switches(n, m, l)
+            },
             FunctionDesc::PermuteSwitch(n) => {
                 let [out, inp] = sub_sink.alloc.preallocate([2 * n, 2 * n]);
                 let swap = sub_sink.alloc_wires(TEMP, 1);
@@ -592,6 +608,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             _ => {},
         }
 
+        // TODO: it's inefficient to rebuild the whole `BenesNetwork` each time
         let mut bn = BenesNetwork::new(m, m);
         let m_rounded = 2 * bn.layer_size as u32;
         bn.set_routes(&[]);
@@ -599,38 +616,16 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let [out, inp] = self.alloc.preallocate([n * m_rounded as u64, n * m as u64]);
         let num_wires = n * m_rounded as u64;
 
-        // Pad out `inp` with zeros to reach `num_wires`.
+        // Shuffle layer 0 pads out `inp` with zeros to reach `num_wires`.
         let mut cur = self.alloc_wires(TEMP, num_wires);
-        for i in 0 .. m as u64 {
-            self.call_into(cur + n * i, FunctionDesc::Copy(n), &[inp + n * i]);
-        }
-        for i in m as u64 .. m_rounded as u64 {
-            self.lit_zero_into(cur + n * i, n);
-        }
+        self.call_into(cur, FunctionDesc::PermuteLayerShuffle(n, m, 0), &[inp]);
 
         // TODO: insert deletes between layers (use `expire`/`advance`?)
         for l in 0 .. bn.num_layers {
             if l > 0 {
                 // Shuffle
                 let next = self.alloc_wires(TEMP, num_wires);
-
-                let half_layers = bn.num_layers / 2;
-                let (k, flip) = if l - 1 < half_layers {
-                    ((half_layers - 1) - (l - 1) + 2, false)
-                } else {
-                    ((l - 1) - half_layers + 2, true)
-                };
-                let k = u8::try_from(k).unwrap();
-
-                let idx = self.get_function(FunctionDesc::PermuteShuffle(n, k, flip));
-                for item_idx in (0 .. 2 * bn.layer_size as u64).step_by(1 << k) {
-                    self.call_idx_into(
-                        next + n * item_idx,
-                        idx,
-                        &[cur + n * item_idx],
-                    );
-                }
-
+                self.call_into(next, FunctionDesc::PermuteLayerShuffle(n, m, l), &[cur]);
                 cur = next;
             }
 
@@ -642,41 +637,93 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     // Outputs of the last switch layer go directly to the function outputs.
                     out
                 };
-
-                let mut i = 0;
-                while i < bn.layer_size {
-                    let flags = bn.flags(l, i);
-                    if !flags.contains(benes::SwitchFlags::F_PUBLIC) {
-                        // Handle all non-public switches in bulk.
-                        let start = i;
-                        while i < bn.layer_size &&
-                                !bn.flags(l, i).contains(benes::SwitchFlags::F_PUBLIC) {
-                            i += 1;
-                        }
-                        let end = i;
-
-                        self.call_into(
-                            next + n * 2 * start as u64,
-                            FunctionDesc::PermuteSwitches(n, (end - start) as u32),
-                            &[cur + n * 2 * start as u64],
-                        );
-
-                    } else {
-                        let swap = flags.contains(benes::SwitchFlags::F_SWAP);
-                        self.call_into(
-                            next + n * 2 * i as u64,
-                            FunctionDesc::PermuteSwitchPublic(n, swap),
-                            &[cur + n * 2 * i as u64],
-                        );
-                        i += 1;
-                    }
-                }
-
+                self.call_into(next, FunctionDesc::PermuteLayerSwitches(n, m, l), &[cur]);
                 cur = next;
             }
         }
 
         (vec![n * m_rounded as u64], vec![n * m as u64])
+    }
+
+    fn permute_layer_shuffle(&mut self, n: u64, m: u32, l: usize) -> (Vec<u64>, Vec<u64>) {
+        let mut bn = BenesNetwork::new(m, m);
+        let m_rounded = 2 * bn.layer_size as u32;
+        bn.set_routes(&[]);
+
+        if l == 0 {
+            let [out, inp] = self.alloc.preallocate([n * m_rounded as u64, n * m as u64]);
+
+            // Pad out `inp` with zeros to reach `num_wires`.
+            for i in 0 .. m as u64 {
+                self.call_into(out + n * i, FunctionDesc::Copy(n), &[inp + n * i]);
+            }
+            for i in m as u64 .. m_rounded as u64 {
+                self.lit_zero_into(out + n * i, n);
+            }
+
+            (vec![n * m_rounded as u64], vec![n * m as u64])
+
+        } else {
+            let [out, inp] = self.alloc.preallocate([n * m_rounded as u64, n * m_rounded as u64]);
+
+            let half_layers = bn.num_layers / 2;
+            let (k, flip) = if l - 1 < half_layers {
+                ((half_layers - 1) - (l - 1) + 2, false)
+            } else {
+                ((l - 1) - half_layers + 2, true)
+            };
+            let k = u8::try_from(k).unwrap();
+
+            let idx = self.get_function(FunctionDesc::PermuteShuffle(n, k, flip));
+            for item_idx in (0 .. 2 * bn.layer_size as u64).step_by(1 << k) {
+                self.call_idx_into(
+                    out + n * item_idx,
+                    idx,
+                    &[inp + n * item_idx],
+                );
+            }
+
+            (vec![n * m_rounded as u64], vec![n * m_rounded as u64])
+        }
+    }
+
+    fn permute_layer_switches(&mut self, n: u64, m: u32, l: usize) -> (Vec<u64>, Vec<u64>) {
+        let mut bn = BenesNetwork::new(m, m);
+        let m_rounded = 2 * bn.layer_size as u32;
+        bn.set_routes(&[]);
+
+        let [out, inp] = self.alloc.preallocate([n * m_rounded as u64, n * m_rounded as u64]);
+
+        let mut i = 0;
+        while i < bn.layer_size {
+            let flags = bn.flags(l, i);
+            if !flags.contains(benes::SwitchFlags::F_PUBLIC) {
+                // Handle all non-public switches in bulk.
+                let start = i;
+                while i < bn.layer_size &&
+                        !bn.flags(l, i).contains(benes::SwitchFlags::F_PUBLIC) {
+                    i += 1;
+                }
+                let end = i;
+
+                self.call_into(
+                    out + n * 2 * start as u64,
+                    FunctionDesc::PermuteSwitches(n, (end - start) as u32),
+                    &[inp + n * 2 * start as u64],
+                );
+
+            } else {
+                let swap = flags.contains(benes::SwitchFlags::F_SWAP);
+                self.call_into(
+                    out + n * 2 * i as u64,
+                    FunctionDesc::PermuteSwitchPublic(n, swap),
+                    &[inp + n * 2 * i as u64],
+                );
+                i += 1;
+            }
+        }
+
+        (vec![n * m_rounded as u64], vec![n * m_rounded as u64])
     }
 
     fn emit_call(
