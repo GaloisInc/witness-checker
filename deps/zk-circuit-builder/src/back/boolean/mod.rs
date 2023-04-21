@@ -1,5 +1,6 @@
 use std::cmp;
 use std::collections::btree_map::{BTreeMap, Entry};
+use std::collections::hash_map::{self, HashMap};
 use std::convert::TryFrom;
 use std::iter::{self, FromIterator};
 use std::mem;
@@ -360,6 +361,10 @@ pub struct Backend<'w, S: Sink> {
     wire_map: BTreeMap<Wire<'w>, WireId>,
     function_map: BTreeMap<Function<'w>, FunctionInfo<'w, S::FunctionId>>,
     args: Vec<WireId>,
+
+    /// Cache to avoid recomputing `TyKind::Bundle` bit offsets, which would result in `N^2`
+    /// behavior when splitting up a bundle using `N` `Extract` gates.
+    bundle_ty_offsets: HashMap<Ty<'w>, Vec<u64>>,
 }
 
 impl<'w, S: Sink> Backend<'w, S> {
@@ -369,6 +374,8 @@ impl<'w, S: Sink> Backend<'w, S> {
             wire_map: BTreeMap::new(),
             function_map: BTreeMap::new(),
             args: Vec::new(),
+
+            bundle_ty_offsets: HashMap::new(),
         }
     }
 
@@ -765,11 +772,7 @@ impl<'w, S: Sink> Backend<'w, S> {
             GateKind::Pack(..) => unimplemented!("Pack"),
 
             GateKind::Extract(bw, i) => {
-                let btys = match *bw.ty {
-                    TyKind::Bundle(btys) => btys,
-                    _ => unreachable!("GateKind::Extract bundle wire had non-bundle type?"),
-                };
-                let offset = btys.tys()[..i].iter().map(|&ty| type_bits(ty)).sum::<u64>();
+                let offset = self.bundle_ty_offset(bw.ty, i);
                 self.sink.copy(expire, n, self.wire_map[&bw] + offset)
             },
 
@@ -825,6 +828,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                     wire_map: BTreeMap::new(),
                     function_map: mem::take(self_function_map),
                     args: args.to_owned(),
+                    bundle_ty_offsets: HashMap::new(),
                 };
                 let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
@@ -840,6 +844,32 @@ impl<'w, S: Sink> Backend<'w, S> {
             id: func_id,
             private_log: private_log.into_inner(),
         });
+    }
+
+    fn bundle_ty_offsets(&mut self, ty: Ty<'w>) -> &[u64] {
+        match self.bundle_ty_offsets.entry(ty) {
+            hash_map::Entry::Occupied(e) => e.into_mut(),
+            hash_map::Entry::Vacant(e) => {
+                let btys = match *ty {
+                    TyKind::Bundle(btys) => btys,
+                    _ => unreachable!("expected TyKind::Bundle, but got {:?}", ty),
+                };
+                trace!("bundle_ty_offsets: computing for {:p}, {} entries", ty, btys.len());
+
+                let mut offsets = Vec::with_capacity(btys.len() + 1);
+                let mut pos = 0;
+                for &ty in btys.tys() {
+                    offsets.push(pos);
+                    pos += type_bits(ty);
+                }
+                offsets.push(pos);
+                e.insert(offsets)
+            },
+        }
+    }
+
+    fn bundle_ty_offset(&mut self, ty: Ty<'w>, i: usize) -> u64 {
+        self.bundle_ty_offsets(ty)[i]
     }
 
     pub fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
@@ -877,6 +907,8 @@ impl<'w, S: Sink> Backend<'w, S> {
             let new_func = v.visit(old_func);
             self.function_map.insert(new_func, v.visit(old_info));
         }
+
+        self.bundle_ty_offsets = HashMap::new();
     }
 
     pub fn enforce_true(
