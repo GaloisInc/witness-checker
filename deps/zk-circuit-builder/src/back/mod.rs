@@ -7,6 +7,10 @@ use crate::ir::migrate;
 use crate::stats::Stats;
 
 
+#[cfg(feature = "sieve_ir")]
+mod multi_file_sink;
+
+
 /// Trait for abstracting over backends.  `post_erase` and `post_migrate` are callbacks to be
 /// invoked during `MigrateHandle::erase_and_migrate`.  `finish` is used to finish writing the
 /// low-level circuit.
@@ -395,18 +399,19 @@ pub fn new_boolean_sieve_ir_v2<'a>(
     {
         use self::boolean::Backend;
         use self::boolean::sink_sieve_ir_function::SieveIrV2Sink;
+        use self::multi_file_sink::MultiFileSink;
         use zki_sieve_v3::{
             cli::{cli, Options, StructOpt},
             FilesSink,
         };
 
         struct BackendWrapper<'w> {
-            backend: Backend<'w, SieveIrV2Sink<FilesSink>>,
+            backend: Backend<'w, SieveIrV2Sink<MultiFileSink>>,
             workspace: String,
         }
 
 
-        let sink = FilesSink::new_clean(&workspace).unwrap();
+        let sink = MultiFileSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
         let bool_sink = SieveIrV2Sink::new(sink, use_plugins);
         let backend = Backend::new(bool_sink);
