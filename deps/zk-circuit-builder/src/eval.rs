@@ -377,7 +377,7 @@ trait EvalContext<'a, 'b> {
 pub struct CachingEvaluator<'a, 's, S> {
     secret_eval: S,
     secret: CowBox<'s, dyn Any>,
-    cache: HashMap<Wire<'a>, (Bits<'a>, bool)>,
+    cache: HashMap<Wire<'a>, (Option<Bits<'a>>, bool)>,
     in_function: bool,
     args: Vec<(Bits<'a>, bool)>,
 }
@@ -463,16 +463,24 @@ where S: SecretEvaluator<'a> + Default {
         ).collect::<Vec<_>>();
 
         for w in order {
-            let result = eval_gate_inner(c, self, w.ty, w.kind);
-            let (bits, sec) = result?;
-            if let Some(hook) = w.eval_hook.get() {
-                (hook.0)(c, self, w, bits)
+            let (opt_bits, sec) = match eval_gate_inner(c, self, w.ty, w.kind) {
+                Ok((bits, sec)) => (Some(bits), sec),
+                Err(Error::Secret) => (None, true),
+                Err(e) => return Err(e),
+            };
+            self.cache.insert(w, (opt_bits, sec));
+            if let Some(bits) = opt_bits {
+                if let Some(hook) = w.eval_hook.get() {
+                    (hook.0)(c, self, w, bits)
+                }
             }
-            self.cache.insert(w, (bits, sec));
         }
 
-        let bits = *self.cache.get(&w).unwrap();
-        Ok(bits)
+        match *self.cache.get(&w).unwrap() {
+            (Some(bits), sec) => Ok((bits, sec)),
+            (None, true) => Err(Error::Secret),
+            (None, false) => unreachable!(),
+        }
     }
 }
 
@@ -502,7 +510,12 @@ where S: SecretEvaluator<'a> + Default {
 impl<'a, 'b, 's, S> EvalContext<'a, 'b> for CachingEvaluator<'a, 's, S>
 where S: SecretEvaluator<'a> + Default {
     fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
-        self.cache.get(&w).cloned().ok_or(Error::UnevalInput)
+        match self.cache.get(&w).cloned() {
+            Some((Some(bits), sec)) => Ok((bits, sec)),
+            Some((None, true)) => Err(Error::Secret),
+            Some((None, false)) => unreachable!(),
+            None => Err(Error::UnevalInput),
+        }
     }
 
     fn eval_secret(&self, c: &CircuitBase<'a>, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>> {
