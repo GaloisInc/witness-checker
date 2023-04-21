@@ -1290,7 +1290,6 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
             // Erasing these wouldn't save much memory, if any.  We particularly want to leave
             // `Lit` intact so that constant folding can continue working.
             GateKind::Lit(..) |
-            GateKind::Secret(..) |
             GateKind::Erased(..) => return w,
             _ => {},
         }
