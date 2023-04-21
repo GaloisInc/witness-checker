@@ -98,6 +98,7 @@ pub type SieveIrV2Sink<S> = SieveIrFunctionSink<S, SieveIrV2>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum FunctionDesc {
+    LitZero(u64),
     Private(u64),
     Copy(u64),
     And(u64),
@@ -141,6 +142,7 @@ enum FunctionDesc {
 impl FunctionDesc {
     pub fn name(self) -> String {
         match self {
+            FunctionDesc::LitZero(n) => format!("lit_zero_{}", n),
             FunctionDesc::Private(n) => format!("private_{}", n),
             FunctionDesc::Copy(n) => format!("copy_{}", n),
             FunctionDesc::And(n) => format!("and_{}", n),
@@ -392,6 +394,12 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         let mut private_count = 0;
         let (output_count, input_count) = match desc {
+            FunctionDesc::LitZero(n) => {
+                let [out] = sub_sink.alloc.preallocate([n]);
+                sub_sink.lit_zero_into(out, n);
+                (vec![n], vec![])
+            },
+
             FunctionDesc::Private(n) => {
                 let [out] = sub_sink.alloc.preallocate([n]);
                 sub_sink.private_into(out, n);
@@ -658,7 +666,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 self.call_into(out + n * i, FunctionDesc::Copy(n), &[inp + n * i]);
             }
             for i in m as u64 .. m_rounded as u64 {
-                self.lit_zero_into(out + n * i, n);
+                self.call_into(out + n * i, FunctionDesc::LitZero(n), &[]);
             }
 
             (vec![n * m_rounded as u64], vec![n * m as u64])
