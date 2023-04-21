@@ -765,11 +765,11 @@ impl<'w, S: Sink> Backend<'w, S> {
             GateKind::Pack(..) => unimplemented!("Pack"),
 
             GateKind::Extract(bw, i) => {
-                let tys = match *bw.ty {
-                    TyKind::Bundle(tys) => tys,
+                let btys = match *bw.ty {
+                    TyKind::Bundle(btys) => btys,
                     _ => unreachable!("GateKind::Extract bundle wire had non-bundle type?"),
                 };
-                let offset = tys[..i].iter().map(|&ty| type_bits(ty)).sum::<u64>();
+                let offset = btys.tys()[..i].iter().map(|&ty| type_bits(ty)).sum::<u64>();
                 self.sink.copy(expire, n, self.wire_map[&bw] + offset)
             },
 
@@ -810,7 +810,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         let arg_ns = f.arg_tys.iter().map(|&ty| type_bits(ty)).collect::<Vec<_>>();
         let return_ty = f.result_wire.ty;
         let return_n = match *return_ty {
-            TyKind::Bundle(tys) => tys.iter().map(|&ty| type_bits(ty)).sum(),
+            TyKind::Bundle(btys) => btys.tys().iter().map(|&ty| type_bits(ty)).sum(),
             _ => type_bits(return_ty),
         };
 

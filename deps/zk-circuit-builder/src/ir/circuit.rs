@@ -150,11 +150,40 @@ impl<'a> CircuitBase<'a> {
     }
 
     fn intern_ty(&self, ty: TyKind<'a>) -> &'a TyKind<'a> {
+        debug_assert!(!matches!(ty, TyKind::Bundle(_)));
         let mut intern = self.intern_ty.borrow_mut();
         match intern.get(&ty) {
             Some(x) => x,
             None => {
                 let ty = self.arena().alloc(ty);
+                intern.insert(ty);
+                ty
+            },
+        }
+    }
+
+    fn intern_ty_bundle(&self, tys: &'a [Ty<'a>]) -> &'a TyKind<'a> {
+        let mut intern = self.intern_ty.borrow_mut();
+        // Offsets are `Unhashed`, so try a lookup with only the tys and no offsets to quickly see
+        // if the bundle type is already interned.
+        let placeholder_ty = TyKind::Bundle(BundleTypes { tys, offsets: Unhashed(&[]) });
+        match intern.get(&placeholder_ty) {
+            Some(x) => x,
+            None => {
+                // It's not interned.  Compute the offsets to build the full type.
+                let mut offsets = Vec::with_capacity(tys.len() + 1);
+                let mut pos = 0;
+                for &ty in tys {
+                    offsets.push(pos);
+                    pos += ty.digits();
+                }
+                offsets.push(pos);
+                let offsets = self.arena().alloc_slice_copy(&offsets);
+
+                let ty = self.arena().alloc(TyKind::Bundle(BundleTypes {
+                    tys,
+                    offsets: Unhashed(offsets),
+                }));
                 intern.insert(ty);
                 ty
             },
@@ -262,12 +291,9 @@ impl<'a> CircuitBase<'a> {
                 );
             },
             GateKind::Extract(w, i) => match *w.ty {
-                TyKind::Bundle(tys) => {
-                    if i >= tys.len() {
-                        panic!(
-                            "index out of range for extract: {} >= {} ({:?})",
-                            i, tys.len(), tys,
-                        );
+                TyKind::Bundle(btys) => {
+                    if i >= btys.len() {
+                        panic!("index out of range for extract: {} >= {}", i, btys.len());
                     }
                 },
                 _ => panic!("bad input type for extract: {:?} (expected Bundle)", w.ty),
@@ -695,7 +721,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
     fn ty_bundle(&self, tys: &[Ty<'a>]) -> Ty<'a> {
-        self.ty(TyKind::Bundle(self.ty_list(tys)))
+        let tys = self.ty_list(tys);
+        Ty(self.as_base().intern_ty_bundle(tys))
     }
 
     fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
@@ -1564,7 +1591,7 @@ pub enum TyKind<'a> {
     Int(IntSize),
     Uint(IntSize),
     GF(Field),
-    Bundle(&'a [Ty<'a>]),
+    Bundle(BundleTypes<'a>),
 
     /// Raw bits, with no particular interpretation.  This type is not accepted as input by any
     /// gate, nor can it be included in a `Bundle`.  However, it can appear as the type of a
@@ -1579,6 +1606,15 @@ pub enum TyKind<'a> {
     /// might not make sense as a circuit value or fit into the normal circuit type system, we
     /// provide `RawBits` to use for it instead.
     RawBits,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct BundleTypes<'a> {
+    tys: &'a [Ty<'a>],
+    /// **Invariant**: `offsets[i]` is the offset in digits of the start of element `i` (whose
+    /// types is `tys[i]`) within the `Bits` representation of this bundle type, and
+    /// `offsets.last()` is the total length of the bundle in digits.
+    offsets: Unhashed<&'a [usize]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -1684,8 +1720,8 @@ impl TyKind<'_> {
             TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
             TyKind::GF(f) => c.ty(TyKind::GF(f)),
-            TyKind::Bundle(tys) => {
-                c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
+            TyKind::Bundle(btys) => {
+                c.ty_bundle_iter(btys.tys().iter().map(|ty| ty.transfer(c)))
             },
             TyKind::RawBits => c.ty(TyKind::RawBits),
         }
@@ -1702,11 +1738,41 @@ impl TyKind<'_> {
             TyKind::GF(f) => {
                 (f.bit_size().bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
             },
-            TyKind::Bundle(tys) => {
-                tys.iter().map(|ty| ty.digits()).sum()
-            },
+            TyKind::Bundle(btys) => btys.digits(),
             TyKind::RawBits => panic!("RawBits type has unknown digit width"),
         }
+    }
+}
+
+impl<'a> BundleTypes<'a> {
+    pub fn len(self) -> usize {
+        self.tys.len()
+    }
+
+    pub fn ty(self, i: usize) -> Ty<'a> {
+        self.tys[i]
+    }
+
+    pub fn tys(self) -> &'a [Ty<'a>] {
+        self.tys
+    }
+
+    pub fn digit_offset(self, i: usize) -> usize {
+        self.offsets[i]
+    }
+
+    pub fn digits(self) -> usize {
+        *self.offsets.last().unwrap()
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for BundleTypes<'a> {
+    type Output = BundleTypes<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> BundleTypes<'b> {
+        let tys = self.tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
+        let tys = v.new_circuit().intern_ty_list(&tys);
+        let offsets = v.new_circuit().arena().alloc_slice_copy(&self.offsets);
+        BundleTypes { tys, offsets: Unhashed(offsets) }
     }
 }
 
@@ -1718,10 +1784,7 @@ impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
             Int(sz) => Int(sz),
             Uint(sz) => Uint(sz),
             GF(f) => GF(f),
-            Bundle(tys) => {
-                let tys = tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
-                Bundle(v.new_circuit().intern_ty_list(&tys))
-            },
+            Bundle(bt) => Bundle(v.visit(bt)),
             RawBits => RawBits,
         }
     }
@@ -2002,7 +2065,7 @@ impl<'a> GateKind<'a> {
             GateKind::Cast(_, ty) => ty,
             GateKind::Pack(ws) => c.ty_bundle_iter(ws.iter().map(|&w| w.ty)),
             GateKind::Extract(w, i) => match *w.ty {
-                TyKind::Bundle(tys) => tys[i],
+                TyKind::Bundle(btys) => btys.ty(i),
                 _ => panic!("invalid wire type {:?} in Extract", w.ty),
             },
             GateKind::Gadget(k, ws) => {

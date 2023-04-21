@@ -19,8 +19,8 @@ impl<'a> Iterator for BundleTys<'a> {
     fn next(&mut self) -> Option<Ty<'a>> {
         while let Some(ty) = self.stk.pop() {
             match *ty {
-                TyKind::Bundle(tys) => {
-                    self.stk.extend(tys.iter().rev().cloned());
+                TyKind::Bundle(btys) => {
+                    self.stk.extend(btys.tys().iter().rev().cloned());
                 },
                 TyKind::Uint(_) | TyKind::Int(_) => return Some(ty),
                 TyKind::GF(f) => panic!("Bitvector operations are not currently supported for field {:?}", f),
@@ -159,8 +159,8 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
                     *pos = end;
                     c.cast(extract_bits(&c, inp, start, end), ty)
                 },
-                TyKind::Bundle(tys) => {
-                    c.pack_iter(tys.iter().map(|&ty| walk(c, inp, ty, pos)))
+                TyKind::Bundle(btys) => {
+                    c.pack_iter(btys.tys().iter().map(|&ty| walk(c, inp, ty, pos)))
                 },
                 TyKind::GF(f) => {
                     panic!("Decompose is not currently supported for field {:?}", f);
@@ -176,8 +176,8 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
 
     fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         fn walk(inp: &BigInt, pos: &mut u16, ty: Ty) -> Value {
-            if let TyKind::Bundle(tys) = *ty {
-                Value::Bundle(tys.iter().map(|&ty| walk(inp, pos, ty)).collect())
+            if let TyKind::Bundle(btys) = *ty {
+                Value::Bundle(btys.tys().iter().map(|&ty| walk(inp, pos, ty)).collect())
             } else {
                 let v = Value::trunc(ty, inp >> *pos);
                 *pos += ty.integer_size().bits();
