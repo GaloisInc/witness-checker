@@ -877,7 +877,9 @@ impl<'w, S: Sink> Backend<'w, S> {
         // Each entry `(old, new)` in `v.erased()` indicates that wire `old` was replaced with the
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_map[new]` as well.
-        let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter().cloned().unzip();
+        let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter()
+            .filter(|&&(w, _)| !matches!(*w.ty, TyKind::RawBits))
+            .cloned().unzip();
         let old_reprs = self.convert_wires(
             v.new_circuit(), &mut PrivateDirect::new(&mut *v.evaluator()), &old_wires);
         for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
