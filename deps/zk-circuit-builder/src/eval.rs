@@ -37,10 +37,10 @@ impl Value {
             TyKind::GF(_) => {
                 Value::SingleField(bits.0.into())
             },
-            TyKind::Bundle(tys) => {
-                let mut vals = Vec::with_capacity(tys.len());
+            TyKind::Bundle(btys) => {
+                let mut vals = Vec::with_capacity(btys.len());
                 let mut pos = 0;
-                for &ty in tys {
+                for &ty in btys.tys() {
                     let end = pos + ty.digits();
                     let end = cmp::min(end, bits.0.len());
                     let field_bits = Bits(&bits.0[pos .. end]);
@@ -63,10 +63,10 @@ impl Value {
             (&Value::SingleField(ref v), TyKind::GF(field)) => {
                 c.intern_bits(v)
             }
-            (&Value::Bundle(ref vs), TyKind::Bundle(tys)) => {
-                assert_eq!(vs.len(), tys.len());
+            (&Value::Bundle(ref vs), TyKind::Bundle(btys)) => {
+                assert_eq!(vs.len(), btys.len());
                 let mut digits = Vec::with_capacity(ty.digits());
-                for (v, &ty) in vs.iter().zip(tys.iter()) {
+                for (v, &ty) in vs.iter().zip(btys.tys().iter()) {
                     let bits = v.to_bits(c, ty);
                     digits.extend_from_slice(&bits.0);
                     // Pad with zeros if `bits` is short.
@@ -853,12 +853,12 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::Extract(w, i) => {
             let (w_bits, w_sec) = ecx.get_value(w)?;
-            let tys = match *w.ty {
-                TyKind::Bundle(tys) => tys,
+            let btys = match *w.ty {
+                TyKind::Bundle(btys) => btys,
                 _ => panic!("expected Extract input to have Bundle type"),
             };
-            let pos = tys[..i].iter().map(|ty| ty.digits()).sum();
-            let end = pos + tys[i].digits();
+            let pos = btys.digit_offset(i);;
+            let end = pos + btys.ty(i).digits();
             let end = cmp::min(end, w_bits.0.len());
             let bits = c.intern_bits(&w_bits.0[pos .. end]);
             (bits, w_sec)
