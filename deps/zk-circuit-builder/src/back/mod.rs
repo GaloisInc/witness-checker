@@ -406,12 +406,12 @@ pub fn new_boolean_sieve_ir_v2<'a>(
         };
 
         struct BackendWrapper<'w> {
-            backend: Backend<'w, SieveIrV2Sink<MultiFileSink>>,
+            backend: Backend<'w, SieveIrV2Sink<FilesSink>>,
             workspace: String,
         }
 
 
-        let sink = MultiFileSink::new_clean(&workspace).unwrap();
+        let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
         let bool_sink = SieveIrV2Sink::new(sink, use_plugins);
         let backend = Backend::new(bool_sink);
