@@ -1174,7 +1174,15 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
         }
         directives.extend(iter.map(|g| Directive::Gate(g)));
 
-        self.emit_sieve_v2(directives);
+        let mut directives_iter = directives.into_iter();
+        loop {
+            let chunk_directives =
+                directives_iter.by_ref().take(GATE_PAGE_SIZE).collect::<Vec<_>>();
+            if chunk_directives.len() == 0 {
+                break;
+            }
+            self.emit_sieve_v2(chunk_directives);
+        }
 
         if self.private_bits.len() > 0 {
             let mut private_bits_iter = mem::take(&mut self.private_bits).into_iter();
