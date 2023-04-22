@@ -193,7 +193,11 @@ impl FunctionInfo {
     }
 }
 
+/// Strict upper limit on the number of gates per Flatbuffers message.
 const GATE_PAGE_SIZE: usize = 64 * 1024;
+/// We flush at a lower limit than the `GATE_PAGE_SIZE` since we might generate many gates between
+/// flushes.
+const GATE_FLUSH_SIZE: usize = GATE_PAGE_SIZE - 256;
 
 pub trait Dispatch {
     fn flush(&mut self, free_all_pages: bool);
@@ -895,7 +899,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             }
         }
 
-        if self.gates.len() >= GATE_PAGE_SIZE {
+        if self.gates.len() >= GATE_FLUSH_SIZE {
             self.flush(false);
         }
     }
@@ -1112,16 +1116,26 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
         if functions.len() > 0 {
             let mut directives = Vec::with_capacity(functions.len());
             let mut total_gates = 0;
+            let mut emit_directive = |d, len| {
+                if directives.len() > 0 && total_gates + len > GATE_PAGE_SIZE {
+                    self.emit_sieve_v2(mem::take(&mut directives));
+                    total_gates = 0;
+                }
+                directives.push(d);
+                total_gates += len;
+            };
+
             for function in functions {
                 let len = match function.body {
                     FunctionBody::Gates(ref gates) => gates.len(),
-                    FunctionBody::PluginBody(_) => 0,
+                    // We give `PluginBody` a positive cost to bound the number that can be placed
+                    // in a single message.
+                    FunctionBody::PluginBody(_) => 1,
                 };
-                if directives.len() > 0 && total_gates + len > GATE_PAGE_SIZE {
-                    self.emit_sieve_v2(directives);
-                    directives = Vec::new();
+                if len > GATE_PAGE_SIZE {
+                    eprintln!("warning: big function: {:?} has {} gates", function.name, len);
                 }
-                directives.push(Directive::Function(function));
+                emit_directive(Directive::Function(function), len);
             }
             if directives.len() > 0 {
                 self.emit_sieve_v2(directives);
@@ -1153,17 +1167,32 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
         }
         directives.extend(iter.map(|g| Directive::Gate(g)));
 
-        self.emit_sieve_v2(directives);
+        let mut directives_iter = directives.into_iter();
+        loop {
+            let chunk_directives =
+                directives_iter.by_ref().take(GATE_PAGE_SIZE).collect::<Vec<_>>();
+            if chunk_directives.len() == 0 {
+                break;
+            }
+            self.emit_sieve_v2(chunk_directives);
+        }
 
         if self.private_bits.len() > 0 {
-            let inputs = mem::take(&mut self.private_bits).into_iter()
-                .map(|b| vec![b as u8]).collect();
-            let mut p = PrivateInputs {
-                version: IR_VERSION.to_string(),
-                type_value: Type::Field(vec![2]),
-                inputs,
-            };
-            self.sink.push_private_inputs_message(&p).unwrap();
+            let mut private_bits_iter = mem::take(&mut self.private_bits).into_iter();
+            loop {
+                let chunk_inputs = private_bits_iter.by_ref().take(GATE_PAGE_SIZE)
+                    .map(|b| vec![b as u8])
+                    .collect::<Vec<_>>();
+                if chunk_inputs.len() == 0 {
+                    break;
+                }
+                let mut p = PrivateInputs {
+                    version: IR_VERSION.to_string(),
+                    type_value: Type::Field(vec![2]),
+                    inputs: chunk_inputs,
+                };
+                self.sink.push_private_inputs_message(&p).unwrap();
+            }
         }
     }
 }
