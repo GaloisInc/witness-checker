@@ -314,7 +314,6 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
     fn collect_sub_gates(&mut self, zki_sink: VecSink<IR>) -> Vec<IR::Gate> {
         assert_eq!(zki_sink.private_inputs.len(), 0);
-        assert_eq!(zki_sink.public_inputs.len(), 0);
         let mut gates = Vec::with_capacity(
             zki_sink.relations.iter().map(IR::relation_gate_count_approx).sum());
         let functions = &mut self.functions;
@@ -1077,6 +1076,7 @@ impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
     fn emit_sieve_v2(&mut self, directives: Vec<zki_sieve_v3::structs::directives::Directive>) {
         use zki_sieve_v3::Sink;
         use zki_sieve_v3::structs::IR_VERSION;
+        use zki_sieve_v3::structs::public_inputs::PublicInputs;
         use zki_sieve_v3::structs::relation::Relation;
         use zki_sieve_v3::structs::types::Type;
 
@@ -1093,6 +1093,14 @@ impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
                 r.plugins.push("mux_v0".into());
             }
             r.types = vec![Type::Field(vec![2])];
+
+            // Ensure every circuit contains at least one public input message.
+            let mut p = PublicInputs {
+                version: IR_VERSION.to_string(),
+                type_value: Type::Field(vec![2]),
+                inputs: vec![],
+            };
+            self.sink.push_public_inputs_message(&p).unwrap();
         }
         self.sink.push_relation_message(&r).unwrap();
         self.emitted_relation = true;
