@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use zki_sieve_v3;
 use zki_sieve_v3::structs::count::Count;
 use zki_sieve_v3::structs::directives::Directive;
@@ -92,8 +92,8 @@ impl SieveIrFormat for SieveIrV2 {
             name: plugin_name,
             operation: op_name,
             params: args,
-            public_count: HashMap::new(),
-            private_count: HashMap::new(),
+            public_count: BTreeMap::new(),
+            private_count: BTreeMap::new(),
         };
         Function::new(
             name,
