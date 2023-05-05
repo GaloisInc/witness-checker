@@ -161,7 +161,7 @@ impl FunctionDesc {
             FunctionDesc::PermuteLayerShuffle(n, m, l) =>
                 format!("permute_layer_shuffle_{}_{}_{}", n, m, l),
             FunctionDesc::PermuteLayerSwitches(n, m, l) =>
-                format!("permute_layer_shuffle_{}_{}_{}", n, m, l),
+                format!("permute_layer_switches_{}_{}_{}", n, m, l),
             FunctionDesc::PermuteSwitch(n) => format!("permute_switch_{}", n),
             FunctionDesc::PermuteSwitches(n, m) =>
                 format!("permute_switches_{}_{}", n, m),
