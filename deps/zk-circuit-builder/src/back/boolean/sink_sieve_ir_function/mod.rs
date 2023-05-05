@@ -628,28 +628,35 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let num_wires = n * m_rounded as u64;
 
         // Shuffle layer 0 pads out `inp` with zeros to reach `num_wires`.
-        let mut cur = self.alloc_wires(TEMP, num_wires);
+        let mut now = 0;
+        let mut cur = self.alloc_wires(now + 1, num_wires);
         self.call_into(cur, FunctionDesc::PermuteLayerShuffle(n, m, 0), &[inp]);
 
         // TODO: insert deletes between layers (use `expire`/`advance`?)
         for l in 0 .. bn.num_layers {
             if l > 0 {
                 // Shuffle
-                let next = self.alloc_wires(TEMP, num_wires);
+                let next = self.alloc_wires(now + 1, num_wires);
                 self.call_into(next, FunctionDesc::PermuteLayerShuffle(n, m, l), &[cur]);
+
                 cur = next;
+                now += 1;
+                self.free_expired(now);
             }
 
             {
                 // Switches
                 let next = if l < bn.num_layers - 1 {
-                    self.alloc_wires(TEMP, num_wires)
+                    self.alloc_wires(now + 1, num_wires)
                 } else {
                     // Outputs of the last switch layer go directly to the function outputs.
                     out
                 };
                 self.call_into(next, FunctionDesc::PermuteLayerSwitches(n, m, l), &[cur]);
+
                 cur = next;
+                now += 1;
+                self.free_expired(now);
             }
         }
 
