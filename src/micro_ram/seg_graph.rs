@@ -12,6 +12,7 @@ use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness, SegmentWitness};
+use crate::mode::if_mode::{is_mode, AnyTainted};
 use crate::util::PanicOnDrop;
 
 
@@ -327,9 +328,14 @@ impl<'a> SegGraphBuilder<'a> {
 
                     let cb_idx = self.cycle_breaks.len();
                     let pred_src = pred.src;
+                    let sizes = if is_mode::<AnyTainted>() {
+                        vec![num_regs, num_regs]
+                    } else {
+                        vec![num_regs]
+                    };
                     self.cycle_breaks.push(CycleBreakNode {
                         preds: vec![*pred],
-                        secret: b.secret_lazy_sized(&[num_regs], move |w| {
+                        secret: b.secret_lazy_sized(&sizes, move |w| {
                             let w: &ExecWitness = project_witness(w);
                             let w: &SegmentWitness = &w.segments[i];
                             let live = match pred_src {
