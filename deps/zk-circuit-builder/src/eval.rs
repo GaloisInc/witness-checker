@@ -309,9 +309,9 @@ trait EvalContext<'a> {
 
 /// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
 /// sharing.
-pub struct CachingEvaluator<'a, 's, S> {
+pub struct CachingEvaluator<'a, 'w, S> {
     secret_eval: S,
-    secret: CowBox<'s, dyn Any>,
+    witness: CowBox<'w, dyn Any>,
     cache: HashMap<Wire<'a>, (Bits<'a>, bool)>,
     in_function: bool,
     args: Vec<(Bits<'a>, bool)>,
@@ -322,25 +322,25 @@ pub struct CachingEvaluator<'a, 's, S> {
 
 impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
     pub fn new() -> Self {
-        Self::with_secret(&())
+        Self::with_witness(&())
     }
 }
 
 impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
-    pub fn with_boxed_secret(secret: Box<dyn Any>) -> Self {
-        Self::with_cow_secret(CowBox::from(secret))
+    pub fn with_boxed_witness(witness: Box<dyn Any>) -> Self {
+        Self::with_cow_witness(CowBox::from(witness))
     }
 }
 
-impl<'a, 's, S: Default> CachingEvaluator<'a, 's, S> {
-    pub fn with_secret(secret: &'s dyn Any) -> Self {
-        Self::with_cow_secret(CowBox::from(secret))
+impl<'a, 'w, S: Default> CachingEvaluator<'a, 'w, S> {
+    pub fn with_witness(witness: &'w dyn Any) -> Self {
+        Self::with_cow_witness(CowBox::from(witness))
     }
 
-    pub fn with_cow_secret(secret: CowBox<'s, dyn Any>) -> Self {
+    pub fn with_cow_witness(witness: CowBox<'w, dyn Any>) -> Self {
         CachingEvaluator {
             secret_eval: S::default(),
-            secret,
+            witness,
             cache: HashMap::new(),
             in_function: false,
             args: Vec::new(),
@@ -349,16 +349,16 @@ impl<'a, 's, S: Default> CachingEvaluator<'a, 's, S> {
     }
 }
 
-impl<'a, 'b, 's, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, 's, S> {
-    type Output = CachingEvaluator<'b, 's, S::Output>;
+impl<'a, 'b, 'w, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, 'w, S> {
+    type Output = CachingEvaluator<'b, 'w, S::Output>;
 
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(
         self,
         v: &mut V,
-    ) -> CachingEvaluator<'b, 's, S::Output> {
+    ) -> CachingEvaluator<'b, 'w, S::Output> {
         CachingEvaluator {
             secret_eval: v.visit(self.secret_eval),
-            secret: self.secret,
+            witness: self.witness,
             cache: self.cache.into_iter().filter_map(|(w, b)| {
                 let w = v.visit_wire_weak(w)?;
                 let b = v.visit(b);
@@ -371,11 +371,11 @@ impl<'a, 'b, 's, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, 's
     }
 }
 
-impl<'a, 's, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, 's, S> {
+impl<'a, 'w, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, 'w, S> {
     const REVEAL_SECRETS: bool = S::REVEAL_SECRETS;
 }
 
-impl<'a, 's, S> Evaluator<'a> for CachingEvaluator<'a, 's, S>
+impl<'a, 'w, S> Evaluator<'a> for CachingEvaluator<'a, 'w, S>
 where S: SecretEvaluator<'a> + Default {
     fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
         let (bits, sec) = Evaluator::eval_wire_bits(self, c, w)?;
@@ -416,7 +416,7 @@ where S: SecretEvaluator<'a> + Default {
     }
 }
 
-impl<'a, 's, S> EvalContext<'a> for CachingEvaluator<'a, 's, S>
+impl<'a, 'w, S> EvalContext<'a> for CachingEvaluator<'a, 'w, S>
 where S: SecretEvaluator<'a> + Default {
     fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
         self.cache.get(&w).cloned().ok_or(Error::UnevalInput)
@@ -431,7 +431,7 @@ where S: SecretEvaluator<'a> + Default {
             let dep_vals = s.deps.iter().map(|&w| {
                 self.get_value(w).map(|(b, _)| b)
             }).collect::<Result<Vec<_>, _>>()?;
-            let bits = s.init(c, &*self.secret, &dep_vals);
+            let bits = s.init(c, &*self.witness, &dep_vals);
             return Ok(bits);
         }
 
@@ -486,10 +486,10 @@ where S: SecretEvaluator<'a> + Default {
     ) -> Self::FunctionContext {
         // FIXME: awful lifetime hack.  This works as long as `self` outlives the returned
         // `FunctionContext`.
-        let secret: &'static dyn Any = unsafe { &*ptr::addr_of!(*self.secret) };
+        let witness: &'static dyn Any = unsafe { &*ptr::addr_of!(*self.witness) };
         CachingEvaluator {
             secret_eval: S::default(),
-            secret: CowBox::from(secret),
+            witness: CowBox::from(witness),
             cache: HashMap::new(),
             in_function: true,
             args,

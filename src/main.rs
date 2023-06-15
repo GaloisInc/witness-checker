@@ -375,7 +375,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         .chain(bugs.into_iter())
         .collect::<Vec<_>>();
 
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&multi_exec_witness);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_witness(&multi_exec_witness);
     {
         let flag_vals = flags.iter().map(|&w| {
             ev.eval_wire(c, w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()

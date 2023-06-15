@@ -35,7 +35,7 @@ pub struct MigrateHandle<'a> {
 
 pub struct MigrateContext<'a> {
     inner: RefCell<MigrateContextInner<'a>>,
-    secret_value: &'a dyn Any,
+    witness_value: &'a dyn Any,
 }
 
 pub struct Rooted<'a, T> {
@@ -58,10 +58,10 @@ pub struct Projected<'a, T> {
 
 
 impl<'a> MigrateContext<'a> {
-    pub fn new(secret_value: &'a dyn Any) -> MigrateContext<'a> {
+    pub fn new(witness_value: &'a dyn Any) -> MigrateContext<'a> {
         MigrateContext {
             inner: RefCell::new(MigrateContextInner::new()),
-            secret_value,
+            witness_value,
         }
     }
 
@@ -143,7 +143,7 @@ impl<'a> MigrateHandle<'a> {
     pub unsafe fn erase_and_migrate<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C) {
         if c.as_base().gc_size() > self.prev_size * 5 / 2 {
             let mcx = self.mcx;
-            c.erase_with(CowBox::from(mcx.secret_value), |v| mcx.erase_in_place(v));
+            c.erase_with(CowBox::from(mcx.witness_value), |v| mcx.erase_in_place(v));
             c.migrate_with(|v| mcx.migrate_in_place(v));
             self.prev_size = c.as_base().gc_size();
         }

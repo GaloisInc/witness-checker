@@ -57,7 +57,7 @@ pub struct CircuitBase<'a> {
     current_label: Cell<&'a str>,
     is_prover: bool,
     functions: RefCell<Vec<Function<'a>>>,
-    secret_type: TypeId,
+    witness_type: TypeId,
 }
 
 struct FunctionScope<'a> {
@@ -65,7 +65,7 @@ struct FunctionScope<'a> {
 }
 
 impl<'a> CircuitBase<'a> {
-    pub fn new<S: 'static>(arenas: &'a Arenas, is_prover: bool) -> CircuitBase<'a> {
+    pub fn new<W: 'static>(arenas: &'a Arenas, is_prover: bool) -> CircuitBase<'a> {
         let c = CircuitBase {
             arenas,
             intern_gate: RefCell::new(HashSet::new()),
@@ -79,7 +79,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(""),
             is_prover,
             functions: RefCell::new(Vec::new()),
-            secret_type: TypeId::of::<S>(),
+            witness_type: TypeId::of::<W>(),
         };
         c.preload_common();
         c
@@ -110,16 +110,16 @@ impl<'a> CircuitBase<'a> {
         intern.insert("");
     }
 
-    pub unsafe fn with_secret_type_unchecked<'b, S: 'static>(
+    pub unsafe fn with_witness_type_unchecked<'b, W: 'static>(
         &'b self,
-    ) -> &'b CircuitBaseWithSecretType<'a, S> {
+    ) -> &'b CircuitBaseWithWitnessType<'a, W> {
         mem::transmute(self)
     }
 
-    pub fn with_secret_type<S: 'static>(&self) -> Option<&CircuitBaseWithSecretType<'a, S>> {
+    pub fn with_witness_type<W: 'static>(&self) -> Option<&CircuitBaseWithWitnessType<'a, W>> {
         unsafe {
-            if self.secret_type == TypeId::of::<S>() {
-                Some(self.with_secret_type_unchecked())
+            if self.witness_type == TypeId::of::<W>() {
+                Some(self.with_witness_type_unchecked())
             } else {
                 None
             }
@@ -308,43 +308,43 @@ impl<'a> CircuitBase<'a> {
     }
 
 
-    fn alloc_secret_init_fn<S: 'static, F>(&self, f: F) -> SecretInitFn<'a>
+    fn alloc_secret_init_fn<W: 'static, F>(&self, f: F) -> SecretInitFn<'a>
     where
-        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
-        fn erase<S>(
-            f: impl for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b> + Copy + 'static,
+        fn erase<W>(
+            f: impl for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b> + Copy + 'static,
         ) -> impl for<'b> Fn(&CircuitBase<'b>, *const (), &[Bits<'b>]) -> Bits<'b> + Copy + 'static {
-            move |c, secret, dep_vals| {
+            move |c, witness, dep_vals| {
                 unsafe {
-                    let secret = &*(secret as *const S);
-                    f(c, secret, dep_vals)
+                    let witness = &*(witness as *const W);
+                    f(c, witness, dep_vals)
                 }
             }
         }
 
         unsafe {
-            let r = self.arena().alloc(erase::<S>(f));
+            let r = self.arena().alloc(erase::<W>(f));
             SecretInitFn::new(IsCopy::new_ref(r) as _)
         }
     }
 
-    fn alloc_lazy_secret<S, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
+    fn alloc_lazy_secret<W, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
     where
-        S: 'static,
-        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
-        // `S` must match this circuit's secret type.  As a special case, we also allow `()`, which
-        // essentially means that the `&S` input will be ignored.  We don't allow other ZSTs here
-        // because some ZSTs are used as markers, where having a value of that type means that some
-        // property holds.
-        assert!(TypeId::of::<S>() == self.secret_type ||
-            TypeId::of::<S>() == TypeId::of::<()>());
+        // `W` must match this circuit's witness type.  As a special case, we also allow `()`,
+        // which essentially means that the `&W` input will be ignored.  We don't allow other ZSTs
+        // here because some ZSTs are used as markers, where having a value of that type means that
+        // some property holds.
+        assert!(TypeId::of::<W>() == self.witness_type ||
+            TypeId::of::<W>() == TypeId::of::<()>());
         let sd = if self.is_prover {
-            let init = self.alloc_secret_init_fn::<S, F>(init);
-            SecretData::new_lazy_prover::<S>(ty, init, deps)
+            let init = self.alloc_secret_init_fn::<W, F>(init);
+            SecretData::new_lazy_prover::<W>(ty, init, deps)
         } else {
             SecretData::new(ty, SecretValue::VerifierUnknown)
         };
@@ -406,7 +406,7 @@ impl<'a> CircuitBase<'a> {
             ref current_label,
             is_prover,
             ref functions,
-            secret_type,
+            witness_type,
         } = *self;
 
         let old_arenas = Box::new(arenas.take());
@@ -425,7 +425,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(current_label.replace("")),
             is_prover,
             functions: RefCell::new(functions.take()),
-            secret_type,
+            witness_type,
         };
 
         self.preload_common();
@@ -491,7 +491,7 @@ impl<'a> Drop for ArenasAndCircuit<'a> {
 /// transformations to make corresponding changes to the witness if necessary, such as splitting a
 /// 64-bit secret into a pair of 32-bit secrets that together make up the original value.  The full
 /// witness is not represented explicitly, but the individual values are accessible through the
-/// `GateKind::Secret` gates present in the circuit.  Use the `walk_witness` function to obtain the
+/// `GateKind::Secret` gates present in the circuit.  Use the `walk_secrets` function to obtain the
 /// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a, F: ?Sized> {
     base: CircuitBase<'a>,
@@ -501,9 +501,9 @@ pub struct Circuit<'a, F: ?Sized> {
 }
 
 impl<'a, F> Circuit<'a, F> {
-    pub fn new<S: 'static>(arenas: &'a Arenas, is_prover: bool, filter: F) -> Circuit<'a, F> {
+    pub fn new<W: 'static>(arenas: &'a Arenas, is_prover: bool, filter: F) -> Circuit<'a, F> {
         Circuit {
-            base: CircuitBase::new::<S>(arenas, is_prover),
+            base: CircuitBase::new::<W>(arenas, is_prover),
             filter: UnsafeCell::new(filter),
         }
     }
@@ -812,30 +812,30 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.as_base().new_secret_input(ty)
     }
 
-    fn new_secret_lazy<S, F>(&self, ty: Ty<'a>, init: F) -> Secret<'a>
+    fn new_secret_lazy<W, F>(&self, ty: Ty<'a>, init: F) -> Secret<'a>
     where
-        S: 'static,
-        F: for<'b> Fn(&CircuitBase<'b>, &S) -> Bits<'b>,
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
-        self.as_base().alloc_lazy_secret(ty, &[], move |c, secret, _dep_vals| {
-            init(c, secret)
+        self.as_base().alloc_lazy_secret(ty, &[], move |c, witness, _dep_vals| {
+            init(c, witness)
         })
     }
 
-    fn new_secret_lazy_derived<S, F>(
+    fn new_secret_lazy_derived<W, F>(
         &self,
         ty: Ty<'a>,
         deps: &'a [Wire<'a>],
         init: F,
     ) -> Secret<'a>
     where
-        S: 'static,
-        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
-        self.as_base().alloc_lazy_secret(ty, deps, move |c, secret, dep_vals| {
-            init(c, secret, dep_vals)
+        self.as_base().alloc_lazy_secret(ty, deps, move |c, witness, dep_vals| {
+            init(c, witness, dep_vals)
         })
     }
 
@@ -856,19 +856,19 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         })
     }
 
-    fn secret_lazy<S, F>(&self, ty: Ty<'a>, init: F) -> Wire<'a>
+    fn secret_lazy<W, F>(&self, ty: Ty<'a>, init: F) -> Wire<'a>
     where
-        S: 'static,
-        F: for<'b> Fn(&CircuitBase<'b>, &S) -> Bits<'b>,
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
         self.secret(self.new_secret_lazy(ty, init))
     }
 
-    fn secret_lazy_derived<S, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Wire<'a>
+    fn secret_lazy_derived<W, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Wire<'a>
     where
-        S: 'static,
-        F: for<'b> Fn(&CircuitBase<'b>, &S, &[Bits<'b>]) -> Bits<'b>,
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
         F: Sized + Copy + 'static,
     {
         self.secret(self.new_secret_lazy_derived(ty, deps, init))
@@ -1145,10 +1145,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
     unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a, '_>) -> R, R>(
         &self,
-        secret_value: CowBox<dyn Any>,
+        witness_value: CowBox<dyn Any>,
         f: F,
     ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
-        let mut v = EraseVisitor::new(self.as_base(), secret_value);
+        let mut v = EraseVisitor::new(self.as_base(), witness_value);
 
         // Don't erase inside `self.functions`.
         self.erase_filter(&mut v);
@@ -1168,20 +1168,20 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// caller must ensure there are no outstanding references to the filter.
     unsafe fn erase<T: Migrate<'a, 'a, Output = T>>(
         &self,
-        secret_value: CowBox<dyn Any>,
+        witness_value: CowBox<dyn Any>,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
         use crate::ir::migrate::Visitor;
-        self.erase_with(secret_value, |v| v.visit(x))
+        self.erase_with(witness_value, |v| v.visit(x))
     }
 
     /// Shorthand for `erase` followed by `migrate`.
     unsafe fn erase_and_migrate<T: Migrate<'a, 'a, Output = T>>(
         &self,
-        secret_value: CowBox<dyn Any>,
+        witness_value: CowBox<dyn Any>,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
-        let x = self.erase(secret_value, x);
+        let x = self.erase(witness_value, x);
         let (x, erased_map) = self.migrate(x);
         (x, erased_map)
     }
@@ -1290,13 +1290,13 @@ pub struct EraseVisitor<'a, 'c> {
 impl<'a, 'c> EraseVisitor<'a, 'c> {
     fn new(
         circuit: &'c CircuitBase<'a>,
-        secret_value: CowBox<'c, dyn Any>,
+        witness_value: CowBox<'c, dyn Any>,
     ) -> EraseVisitor<'a, 'c> {
         EraseVisitor {
             circuit,
             erased_map: HashMap::new(),
             erased_order: Vec::new(),
-            ev: RefCell::new(CachingEvaluator::with_cow_secret(secret_value)),
+            ev: RefCell::new(CachingEvaluator::with_cow_witness(witness_value)),
         }
     }
 
@@ -1566,7 +1566,7 @@ where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
 
 /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
 /// once, in some deterministic order (assuming `wires` itself is deterministic).
-pub fn walk_witness<'a, I>(wires: I) -> impl Iterator<Item = Secret<'a>>
+pub fn walk_secrets<'a, I>(wires: I) -> impl Iterator<Item = Secret<'a>>
 where I: IntoIterator<Item = Wire<'a>> {
     walk_wires(wires).filter_map(|w| match w.kind {
         GateKind::Secret(s) => Some(s),
@@ -2488,7 +2488,7 @@ pub struct SecretData<'a> {
     /// Dependencies for computing derived secrets.  The values on these wires (represented as
     /// `Bits`) will be passed to `init`.
     pub deps: &'a [Wire<'a>],
-    secret_type: TypeId,
+    witness_type: TypeId,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
@@ -2502,7 +2502,7 @@ impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
             used: v.visit(self.used),
             init: v.visit(self.init),
             deps,
-            secret_type: self.secret_type,
+            witness_type: self.witness_type,
         }
     }
 }
@@ -2515,11 +2515,11 @@ impl<'a> SecretData<'a> {
             used: Cell::new(false),
             init: None,
             deps: &[],
-            secret_type: TypeId::of::<()>(),
+            witness_type: TypeId::of::<()>(),
         }
     }
 
-    fn new_lazy_prover<S: 'static>(
+    fn new_lazy_prover<W: 'static>(
         ty: Ty<'a>,
         init: SecretInitFn<'a>,
         deps: &'a [Wire<'a>],
@@ -2530,7 +2530,7 @@ impl<'a> SecretData<'a> {
             used: Cell::new(false),
             init: Some(init),
             deps,
-            secret_type: TypeId::of::<S>(),
+            witness_type: TypeId::of::<W>(),
         }
     }
 
@@ -2588,24 +2588,24 @@ impl<'a> SecretData<'a> {
     pub fn init(
         &self,
         c: &CircuitBase<'a>,
-        secret: &dyn Any,
+        witness: &dyn Any,
         dep_vals: &[Bits<'a>],
     ) -> Bits<'a> {
-        assert!(self.secret_type == secret.type_id() || self.secret_type == TypeId::of::<()>());
+        assert!(self.witness_type == witness.type_id() || self.witness_type == TypeId::of::<()>());
         let init = self.init.unwrap();
-        let bits = unsafe { init(c, secret as *const dyn Any as *const (), dep_vals) };
+        let bits = unsafe { init(c, witness as *const dyn Any as *const (), dep_vals) };
         bits
     }
 }
 
-/// Wrapper around `CircuitBase<'a>`, where the secret type of the circuit is known to be `S`.
+/// Wrapper around `CircuitBase<'a>`, where the witness type of the circuit is known to be `W`.
 #[repr(transparent)]
-pub struct CircuitBaseWithSecretType<'a, S> {
+pub struct CircuitBaseWithWitnessType<'a, W> {
     c: CircuitBase<'a>,
-    _marker: PhantomData<S>,
+    _marker: PhantomData<W>,
 }
 
-impl<'a, S> Deref for CircuitBaseWithSecretType<'a, S> {
+impl<'a, W> Deref for CircuitBaseWithWitnessType<'a, W> {
     type Target = CircuitBase<'a>;
     fn deref(&self) -> &CircuitBase<'a> {
         &self.c

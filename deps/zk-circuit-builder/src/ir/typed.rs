@@ -42,11 +42,11 @@ pub trait BuilderExt<'a>: Builder<'a> {
         TWire::new(Lit::lit(self, x))
     }
 
-    fn secret_lazy<T, S, F>(&self, init: F) -> TWire<'a, T>
+    fn secret_lazy<T, W, F>(&self, init: F) -> TWire<'a, T>
     where
         T: for<'b> LazySecret<'b>,
-        S: 'static,
-        F: Fn(&S) -> T + Sized + Copy + 'static,
+        W: 'static,
+        F: Fn(&W) -> T + Sized + Copy + 'static,
     {
         self.secret_lazy_sized(&[], init)
     }
@@ -60,30 +60,30 @@ pub trait BuilderExt<'a>: Builder<'a> {
     /// elements depends on `T`.  For the common case where `T` is `Vec<U>` and `U` contains no
     /// other complex data structures, `sizes` should have a single element giving the length of
     /// the `Vec`.
-    fn secret_lazy_sized<T, S, F>(&self, sizes: &[usize], init: F) -> TWire<'a, T>
+    fn secret_lazy_sized<T, W, F>(&self, sizes: &[usize], init: F) -> TWire<'a, T>
     where
         T: for<'b> LazySecret<'b>,
-        S: 'static,
-        F: Fn(&S) -> T + Sized + Copy + 'static,
+        W: 'static,
+        F: Fn(&W) -> T + Sized + Copy + 'static,
     {
         lazy_secret_common::<Self, T, _>(self, sizes, move |ty, expected_word_len| {
-            self.circuit().secret_lazy(ty, move |c, s| {
-                lazy_secret_init_bits(c, init(s), expected_word_len)
+            self.circuit().secret_lazy(ty, move |c, w| {
+                lazy_secret_init_bits(c, init(w), expected_word_len)
             })
         })
     }
 
-    fn secret_lazy_derived<T, S, D, F>(&self, deps: TWire<'a, D>, init: F) -> TWire<'a, T>
+    fn secret_lazy_derived<T, W, D, F>(&self, deps: TWire<'a, D>, init: F) -> TWire<'a, T>
     where
         T: for<'b> LazySecret<'b>,
-        S: 'static,
+        W: 'static,
         D: for<'b> SecretDep<'b>,
-        F: for <'b> Fn(&S, <D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
+        F: for <'b> Fn(&W, <D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
     {
         self.secret_lazy_derived_sized(&[], deps, init)
     }
 
-    fn secret_lazy_derived_sized<T, S, D, F>(
+    fn secret_lazy_derived_sized<T, W, D, F>(
         &self,
         sizes: &[usize],
         deps: TWire<'a, D>,
@@ -91,15 +91,15 @@ pub trait BuilderExt<'a>: Builder<'a> {
     ) -> TWire<'a, T>
     where
         T: for<'b> LazySecret<'b>,
-        S: 'static,
+        W: 'static,
         D: for<'b> SecretDep<'b>,
-        F: for <'b> Fn(&S, <D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
+        F: for <'b> Fn(&W, <D as SecretDep<'b>>::Decoded) -> T + Sized + Copy + 'static,
     {
         let (dep_wires, fixed_size) = lazy_secret_build_dep_wires::<_, D>(self.circuit(), deps);
         lazy_secret_common::<Self, T, _>(self, sizes, move |ty, expected_word_len| {
-            self.circuit().secret_lazy_derived(ty, dep_wires, move |c, s, bs| {
+            self.circuit().secret_lazy_derived(ty, dep_wires, move |c, w, bs| {
                 let dep_val = lazy_secret_deps_from_bits::<D>(fixed_size, bs);
-                lazy_secret_init_bits(c, init(s, dep_val), expected_word_len)
+                lazy_secret_init_bits(c, init(w, dep_val), expected_word_len)
             })
         })
     }
@@ -1906,7 +1906,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new::<u32>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&12345_u32);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_witness(&12345_u32);
 
         let w = b.secret_lazy(|&x: &u32| {
             assert_eq!(x, 12345);
@@ -1939,7 +1939,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new::<u32>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&12345_u32);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_witness(&12345_u32);
 
         let w = b.secret_lazy(|&x: &u32| {
             assert_eq!(x, 12345);
@@ -1975,7 +1975,7 @@ mod test {
         let arenas = Arenas::new();
         let c = Circuit::new::<u32>(&arenas, true, FilterNil);
         let b = BuilderImpl::from_ref(&c);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_secret(&12345_u32);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_witness(&12345_u32);
 
         let w = b.secret_lazy_sized(&[3], |&x: &u32| {
             assert_eq!(x, 12345);
