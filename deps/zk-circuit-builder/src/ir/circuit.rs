@@ -150,7 +150,10 @@ impl<'a> CircuitBase<'a> {
     }
 
     fn intern_ty(&self, ty: TyKind<'a>) -> &'a TyKind<'a> {
-        debug_assert!(!matches!(ty, TyKind::Bundle(_)));
+        if let TyKind::Bundle(btys) = ty {
+            return self.intern_ty_bundle(btys.tys);
+        }
+
         let mut intern = self.intern_ty.borrow_mut();
         match intern.get(&ty) {
             Some(x) => x,
