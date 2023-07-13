@@ -649,6 +649,10 @@ fn check_mem<'a>(
     prev_valid: TWire<'a, bool>,
     port: TWire<'a, MemPort>,
 ) {
+    if !b.circuit().allow_functions() {
+        return check_mem_inner(cx, b, prev, prev_valid, port);
+    }
+
     let c = b.circuit();
     let args_typed = TWire::<CheckMemArgs>::new((prev.clone(), prev_valid, port));
     let (args_wires, args_sizes) = typed::to_wire_list(&args_typed);

@@ -253,7 +253,7 @@ fn calc_step<'a>(
     kmem: &mut KnownMem<'a>,
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let opcode = ev.eval_typed(b.circuit(), instr.opcode).and_then(Opcode::from_raw);
-    if opcode.is_some() {
+    if opcode.is_some() || !b.circuit().allow_functions() {
         return calc_step_inner(
             cx, b, ev, privilege_levels, idx, opcode, instr, mem_port, advice, s1, kmem);
     }
@@ -657,7 +657,9 @@ fn check_step<'a>(
     mem_port: TWire<'a, MemPort>,
     calc_im: &CalcIntermediate<'a>,
 ) {
-    //return check_step_inner(cx, b, seg_idx, idx, cycle, live, instr, mem_port, calc_im);
+    if !b.circuit().allow_functions() {
+        return check_step_inner(cx, b, seg_idx, idx, cycle, live, instr, mem_port, calc_im);
+    }
 
     let c = b.circuit();
     let args_typed = TWire::<CheckStepArgs>::new((
