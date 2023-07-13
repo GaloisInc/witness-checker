@@ -55,6 +55,7 @@ pub struct CircuitBase<'a> {
 
     current_label: Cell<&'a str>,
     is_prover: bool,
+    allow_functions: bool,
     functions: RefCell<Vec<Function<'a>>>,
     witness_type: Cell<TypeId>,
     in_function: Cell<bool>,
@@ -73,6 +74,7 @@ impl<'a> CircuitBase<'a> {
             intern_bits: RefCell::new(HashSet::new()),
             current_label: Cell::new(""),
             is_prover,
+            allow_functions: true,
             functions: RefCell::new(Vec::new()),
             witness_type: Cell::new(TypeId::of::<W>()),
             in_function: Cell::new(false),
@@ -104,6 +106,11 @@ impl<'a> CircuitBase<'a> {
     fn preload_common_strs(&self) {
         let mut intern = self.intern_str.borrow_mut();
         intern.insert("");
+    }
+
+    pub fn set_allow_functions(mut self, allow_functions: bool) -> Self {
+        self.allow_functions = allow_functions;
+        self
     }
 
     pub unsafe fn with_witness_type_unchecked<'b, W: 'static>(
@@ -310,6 +317,11 @@ impl<'a> CircuitBase<'a> {
             GateKind::Secret(s) => { s.set_used(); },
             // Require argument counts and types to match.
             GateKind::Call(c) => {
+                // We allow function definitions, but not calls, which simplifies some logic in the
+                // MicroRAM circuit builder.
+                assert!(self.as_base().allow_functions,
+                    "function calls are not allowed in this Circuit");
+
                 assert_eq!(c.func.arg_tys.len(), c.args.len());
                 for (&ty, &arg) in c.func.arg_tys.iter().zip(c.args.iter()) {
                     assert_eq!(ty, arg.ty);
@@ -395,6 +407,7 @@ impl<'a> CircuitBase<'a> {
             ref intern_gadget_kind, ref intern_str, ref intern_bits,
             ref current_label,
             is_prover,
+            allow_functions,
             ref functions,
             ref witness_type,
             ref in_function,
@@ -416,6 +429,7 @@ impl<'a> CircuitBase<'a> {
             intern_bits: RefCell::new(intern_bits.take()),
             current_label: Cell::new(current_label.replace("")),
             is_prover,
+            allow_functions,
             functions: RefCell::new(functions.take()),
             witness_type: Cell::new(witness_type.get()),
             in_function: Cell::new(false),
@@ -499,6 +513,11 @@ impl<'a, F> Circuit<'a, F> {
             base: CircuitBase::new::<W>(arenas, is_prover),
             filter: UnsafeCell::new(filter),
         }
+    }
+
+    pub fn set_allow_functions(mut self, allow_functions: bool) -> Self {
+        self.base = self.base.set_allow_functions(allow_functions);
+        self
     }
 }
 
@@ -708,6 +727,10 @@ where
 pub trait CircuitExt<'a>: CircuitTrait<'a> {
     fn is_prover(&self) -> bool {
         self.as_base().is_prover
+    }
+
+    fn allow_functions(&self) -> bool {
+        self.as_base().allow_functions
     }
 
     fn as_ref(&self) -> DynCircuitRef<'a, '_> {
