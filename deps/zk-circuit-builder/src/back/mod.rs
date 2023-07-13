@@ -38,6 +38,21 @@ pub unsafe trait Backend<'a> {
         accepted: Wire<'a>,
         validate: bool,
     );
+
+    fn has_feature(&self, feature: BackendFeature) -> bool;
+}
+
+pub enum BackendFeature {
+    /// Support for function definitions and calls.
+    Function,
+    /// Comparison ops where the RHS is not a zero literal.
+    CompareNonZero,
+    /// `ConcatBits` and `ExtractBits` gadgets.
+    ConcatExtractBits,
+    /// `WideMul` gadget.
+    WideMul,
+    /// `Permute` gadget.
+    Permute,
 }
 
 
@@ -152,6 +167,12 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
                     field_order: Default::default(),
                 }).unwrap();
             }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::ConcatExtractBits
+                )
+            }
         }
     }
     #[cfg(not(feature = "bellman"))]
@@ -230,6 +251,12 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
                     cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::ConcatExtractBits
+                )
             }
         }
     }
@@ -314,6 +341,12 @@ pub fn new_sieve_ir_v2<'a>(
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
             }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::ConcatExtractBits
+                )
+            }
         }
     }
     #[cfg(not(feature = "sieve_ir"))]
@@ -382,6 +415,15 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
                     cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::Function
+                    | BackendFeature::ConcatExtractBits
+                    | BackendFeature::WideMul
+                    | BackendFeature::Permute
+                )
             }
         }
     }
@@ -453,6 +495,15 @@ pub fn new_boolean_sieve_ir_v2<'a>(
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
             }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::Function
+                    | BackendFeature::ConcatExtractBits
+                    | BackendFeature::WideMul
+                    | BackendFeature::Permute
+                )
+            }
         }
     }
     #[cfg(not(feature = "sieve_ir"))]
@@ -477,6 +528,7 @@ unsafe impl<'a> Backend<'a> for () {
         accepted: Wire<'a>,
         validate: bool,
     ) {}
+    fn has_feature(&self, feature: BackendFeature) -> bool { true }
 }
 
 
@@ -510,6 +562,15 @@ pub fn new_stats<'a>() -> Box<dyn Backend<'a> + 'a> {
             eprintln!(" ===== stats =====");
             self.stats.print();
             eprintln!(" ===== end stats =====");
+        }
+
+        fn has_feature(&self, feature: BackendFeature) -> bool {
+            matches!(feature,
+                | BackendFeature::CompareNonZero
+                | BackendFeature::ConcatExtractBits
+                | BackendFeature::WideMul
+                | BackendFeature::Permute
+            )
         }
     }
 }

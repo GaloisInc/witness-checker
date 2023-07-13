@@ -10,7 +10,7 @@ use env_logger;
 use num_bigint::BigUint;
 use num_traits::One;
 
-use zk_circuit_builder::back::{self, UsePlugins};
+use zk_circuit_builder::back::{self, UsePlugins, BackendFeature};
 use zk_circuit_builder::eval::{self, EvalWire, CachingEvaluator};
 use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
@@ -266,25 +266,26 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     // Set up the circuit and builder
     let arg_test_gadget_eval = args.is_present("test-gadget-eval");
-    let arg_stats = args.is_present("stats");
-    let arg_zkif_out = args.is_present("zkif-out");
-    let arg_sieve_out = args.is_present("sieve-ir-out") || args.is_present("sieve-ir-v2-out");
-    let arg_boolean_out =
-        args.is_present("boolean-sieve-ir-out") || args.is_present("boolean-sieve-ir-v2-out");
+
+    let has_concat_extract_bits = backend.has_feature(BackendFeature::ConcatExtractBits);
+    let has_wide_mul = backend.has_feature(BackendFeature::WideMul);
+    let has_permute = backend.has_feature(BackendFeature::Permute);
     let gadget_supported = move |g: GadgetKindRef| {
         use zk_circuit_builder::gadget::arith::WideMul;
         use zk_circuit_builder::gadget::bit_pack::{ConcatBits, ExtractBits};
         use zk_circuit_builder::routing::gadget::Permute;
         let mut ok = false;
-        if arg_test_gadget_eval || arg_stats {
+        if arg_test_gadget_eval {
             return true;
         }
-        if arg_zkif_out || arg_sieve_out || arg_boolean_out {
+        if has_concat_extract_bits {
             ok = ok || g.cast::<ConcatBits>().is_some();
             ok = ok || g.cast::<ExtractBits>().is_some();
         }
-        if arg_boolean_out {
+        if has_wide_mul {
             ok = ok || g.cast::<WideMul>().is_some();
+        }
+        if has_permute {
             ok = ok || g.cast::<Permute>().is_some();
         }
         ok
@@ -296,11 +297,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = cf.add_pass(lower::bool_::compare_to_logic);
     let cf = cf.add_pass(lower::bool_::mux);
     let cf = cf.add_opt_pass(
-        args.is_present("zkif-out") ||
-            args.is_present("sieve-ir-out") ||
-            args.is_present("sieve-ir-v2-out") ||
-            args.is_present("boolean-sieve-ir-out") ||
-            args.is_present("boolean-sieve-ir-v2-out"),
+        !backend.has_feature(BackendFeature::CompareNonZero),
         lower::int::compare_to_greater_or_equal_to_zero);
     let cf = cf.add_pass(lower::int::non_constant_shift);
     let cf = lower::const_fold::ConstFold(cf);
