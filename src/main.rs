@@ -223,11 +223,48 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
 
-
-    // Set up the circuit and builder
+    // `arenas` and `mcx` must outlive both the circuit and the backend.
     let arenas = Arenas::new();
     let mcx = zk_circuit_builder::ir::migrate::handle::MigrateContext::new(&multi_exec_witness);
 
+    // Set up the backend.
+    let modulus = args.value_of("field-modulus").map(|s| {
+        BigUint::from_str(s).unwrap_or_else(|e| {
+            panic!("invalid --field-modulus {:?}: {}", s, e);
+        })
+    });
+    let use_plugins = args.value_of("available-plugins")
+        .map(UsePlugins::from_str)
+        .unwrap_or_else(UsePlugins::all);
+    let mut backend =
+        if let Some(workspace) = args.value_of("sieve-ir-out") {
+            assert!(modulus.is_none(),
+                "--field-modulus is not supported with --sieve-ir-out");
+            let dedup = args.is_present("sieve-ir-dedup");
+            back::new_sieve_ir(workspace, dedup)
+        } else if let Some(workspace) = args.value_of("sieve-ir-v2-out") {
+            let dedup = args.is_present("sieve-ir-dedup");
+            back::new_sieve_ir_v2(workspace, modulus, dedup)
+        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-out") {
+            assert!(modulus.is_none(),
+                "--field-modulus is not supported with --boolean-sieve-ir-out");
+            back::new_boolean_sieve_ir(workspace)
+        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-v2-out") {
+            assert!(modulus.is_none(),
+                "--field-modulus is not supported with --boolean-sieve-ir-v2-out");
+            back::new_boolean_sieve_ir_v2(workspace, use_plugins)
+        } else if let Some(dest) = args.value_of_os("zkif-out") {
+            assert!(modulus.is_none(), "--field-modulus is not supported with --zkif-out");
+            back::new_zkif(dest)
+        } else if args.is_present("stats") {
+            // --field-modulus is accepted but ignored here.
+            back::new_stats()
+        } else {
+            // --field-modulus is accepted but ignored here.
+            back::new_dummy()
+        };
+
+    // Set up the circuit and builder
     let arg_test_gadget_eval = args.is_present("test-gadget-eval");
     let arg_stats = args.is_present("stats");
     let arg_zkif_out = args.is_present("zkif-out");
@@ -277,42 +314,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let b = BuilderImpl::from_ref(c);
     let mut cx = Context::new(c);
 
-    // Set up the backend.
-    let modulus = args.value_of("field-modulus").map(|s| {
-        BigUint::from_str(s).unwrap_or_else(|e| {
-            panic!("invalid --field-modulus {:?}: {}", s, e);
-        })
-    });
-    let use_plugins = args.value_of("available-plugins")
-        .map(UsePlugins::from_str)
-        .unwrap_or_else(UsePlugins::all);
-    let mut backend =
-        if let Some(workspace) = args.value_of("sieve-ir-out") {
-            assert!(modulus.is_none(),
-                "--field-modulus is not supported with --sieve-ir-out");
-            let dedup = args.is_present("sieve-ir-dedup");
-            back::new_sieve_ir(workspace, dedup)
-        } else if let Some(workspace) = args.value_of("sieve-ir-v2-out") {
-            let dedup = args.is_present("sieve-ir-dedup");
-            back::new_sieve_ir_v2(workspace, modulus, dedup)
-        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-out") {
-            assert!(modulus.is_none(),
-                "--field-modulus is not supported with --boolean-sieve-ir-out");
-            back::new_boolean_sieve_ir(workspace)
-        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-v2-out") {
-            assert!(modulus.is_none(),
-                "--field-modulus is not supported with --boolean-sieve-ir-v2-out");
-            back::new_boolean_sieve_ir_v2(workspace, use_plugins)
-        } else if let Some(dest) = args.value_of_os("zkif-out") {
-            assert!(modulus.is_none(), "--field-modulus is not supported with --zkif-out");
-            back::new_zkif(dest)
-        } else if args.is_present("stats") {
-            // --field-modulus is accepted but ignored here.
-            back::new_stats()
-        } else {
-            // --field-modulus is accepted but ignored here.
-            back::new_dummy()
-        };
     let mcx_backend_guard = mcx.set_backend(&mut *backend);
 
 
