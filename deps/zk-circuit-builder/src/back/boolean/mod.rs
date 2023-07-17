@@ -63,6 +63,28 @@ impl AssertNoWrap {
     }
 }
 
+/// Trait for emitting actual boolean gates.  For example, there's an implementation of this trait
+/// for emitting gates in SIEVE IR v2 (IR0+) format.
+///
+/// # Wire expiration
+///
+/// Most methods here take an `expire` argument that indicates how long the output wires should
+/// remain valid.  If `expire` is set to `t`, then the wires returned by the method can be used as
+/// inputs to further operations at least until the next call to `free_expired(u)` where `u >= t`.
+///
+/// Compound operations like `add` and `mul` internally call various other operations that produce
+/// wires.  If the inner operation's output wires will be returned as the output wires of the
+/// compound operation, then the inner operation must inherit the `expire` value of the compound
+/// operation.  Other wires, which are used to compute the result but aren't needed afterward,
+/// should be given an expire time of `TEMP`, which causes the wire to be deleted at the earliest
+/// opportunity (specifically, at the next call to `free_expired`).
+///
+/// For example, suppose we define `nand` as a compound operation build on `and` and `not`.  The
+/// output wires of `not` are returned directly as the output wires of `nand`, so `not` must be
+/// called with the same `expire` time that was passed to `nand`.  This ensures the wires returned
+/// by `nand` live until the requested time.  But the output wires of the `and` operation are
+/// temporaries: they are passed to `not`, but are never used after the call to `nand` returns.
+/// This means `and` should be called with its expire time set to `TEMP`.
 pub trait Sink {
     fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId;
     /// Obtain `n` private/witness inputs, storing them in the `n` wires starting at `out`.  In
