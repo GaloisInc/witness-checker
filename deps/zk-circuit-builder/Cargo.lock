@@ -161,6 +161,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "bristol-fashion"
+version = "0.5.0"
+source = "git+https://gitlab-ext.galois.com/crypto/swanky?rev=a54b84e0df5bc96547a1c26033bc683238c3d597#a54b84e0df5bc96547a1c26033bc683238c3d597"
+
+[[package]]
 name = "bumpalo"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1396,6 +1401,7 @@ dependencies = [
  "arrayvec 0.5.2",
  "bitflags",
  "bitvec 0.18.5",
+ "bristol-fashion",
  "bumpalo",
  "byteorder",
  "cheesecloth-derive-ir-typed",
