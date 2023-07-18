@@ -95,6 +95,8 @@ define_versions! {
     // 0.1.7.0 adds code segments, `params.commitment`, and `uncommitted` flag for code/memory
     // segments.
     (0,1,7,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
+    // 0.1.9.0 adds a new TraceReturn extension instruction, but this should never appear in CBOR.
+    (0,1,9,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {
