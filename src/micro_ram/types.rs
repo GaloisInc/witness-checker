@@ -1,15 +1,20 @@
+use std::cmp::{self, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use serde::{de, Deserialize};
-use zk_circuit_builder::eval::Evaluator;
+use zk_circuit_builder::eval::EvalWire;
 use zk_circuit_builder::gadget::bit_pack;
-use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize};
+use zk_circuit_builder::ir::circuit::{
+    CircuitBase, CircuitTrait, CircuitExt, Wire, Ty, TyKind, IntSize, Bits,
+};
 use zk_circuit_builder::ir::typed::{
-    self, Builder, TWire, TSecretHandle, Repr, Flatten, Lit, Secret, Mux, FromEval,
+    self, Builder, BuilderExt, TWire, Repr, Flatten, Lit, Mux, FromEval, LazySecret, SecretDep,
+    FromWireList, ToWireList,
 };
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::primitive_binary_impl;
+use zk_circuit_builder::routing::sort::Sortable;
 use crate::micro_ram::feature::{Feature, Version};
 use crate::micro_ram::types::typed::{Cast, Eq, Le, Lt, Ge, Gt, Ne};
 use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
@@ -17,7 +22,7 @@ use crate::mode::if_mode::{IfMode, AnyTainted, check_mode, panic_default};
 
 /// A TinyRAM instruction.  The program itself is not secret, but we most commonly load
 /// instructions from secret indices, which results in a secret instruction.
-#[derive(Clone, Copy, Debug, Default, Migrate)]
+#[derive(Clone, Copy, Debug, Default, Migrate, FromWireList, ToWireList, LazySecret, SecretDep)]
 pub struct RamInstr {
     pub opcode: u8,
     pub dest: u8,
@@ -29,7 +34,7 @@ pub struct RamInstr {
 }
 
 impl RamInstr {
-    pub fn new(
+    pub const fn new(
         opcode: Opcode,
         dest: u32,
         op1: u32,
@@ -99,7 +104,7 @@ impl<'a> Repr<'a> for RamInstr {
 }
 
 impl<'a> Lit<'a> for RamInstr {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         RamInstrRepr {
             opcode: bld.lit(a.opcode),
             dest: bld.lit(a.dest),
@@ -107,26 +112,6 @@ impl<'a> Lit<'a> for RamInstr {
             op2: bld.lit(a.op2),
             imm: bld.lit(a.imm),
         }
-    }
-}
-
-impl<'a> Secret<'a> for RamInstr {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        RamInstrRepr {
-            opcode: bld.secret_uninit(),
-            dest: bld.secret_uninit(),
-            op1: bld.secret_uninit(),
-            op2: bld.secret_uninit(),
-            imm: bld.secret_uninit(),
-        }
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.opcode, &val.opcode, force);
-        Builder::set_secret_from_lit(&s.dest, &val.dest, force);
-        Builder::set_secret_from_lit(&s.op1, &val.op1, force);
-        Builder::set_secret_from_lit(&s.op2, &val.op2, force);
-        Builder::set_secret_from_lit(&s.imm, &val.imm, force);
     }
 }
 
@@ -140,7 +125,7 @@ where
     type Output = RamInstr;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: RamInstrRepr<'a>,
         e: RamInstrRepr<'a>,
@@ -158,7 +143,7 @@ where
 
 impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         let parts = [
             bld.eq(a.opcode, b.opcode),
             bld.eq(a.dest, b.dest),
@@ -175,8 +160,7 @@ impl<'a> typed::Eq<'a, RamInstr> for RamInstr {
 }
 
 
-
-#[derive(Clone, Debug, Deserialize, Migrate)]
+#[derive(Clone, Debug, Deserialize, Migrate, FromWireList, ToWireList, LazySecret)]
 pub struct RamState {
     pub pc: u64,
     pub regs: Vec<u64>,
@@ -217,9 +201,9 @@ impl RamState {
 pub struct RamStateRepr<'a> {
     pub cycle: TWire<'a, u32>,
     pub pc: TWire<'a, u64>,
-    pub regs: Vec<TWire<'a, u64>>,
+    pub regs: TWire<'a, Vec<u64>>,
     pub live: TWire<'a, bool>,
-    pub tainted_regs: IfMode<AnyTainted, Vec<TWire<'a, WordLabel>>>,
+    pub tainted_regs: TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
 }
 
 impl<'a> Repr<'a> for RamState {
@@ -227,78 +211,14 @@ impl<'a> Repr<'a> for RamState {
 }
 
 impl<'a> Lit<'a> for RamState {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         RamStateRepr {
             cycle: bld.lit(a.cycle),
             pc: bld.lit(a.pc),
-            regs: bld.lit(a.regs).repr,
+            regs: bld.lit(a.regs),
             live: bld.lit(a.live),
-            tainted_regs: a.tainted_regs.map(|regs| bld.lit(regs).repr),
+            tainted_regs: TWire::new(a.tainted_regs.map(|regs| bld.lit(regs))),
         }
-    }
-}
-
-impl<'a> Secret<'a> for RamState {
-    fn secret(_bld: &Builder<'a>) -> Self::Repr {
-        panic!("can't construct RamState via Builder::secret - use RamState::secret instead");
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
-        Builder::set_secret_from_lit(&s.pc, &val.pc, force);
-        assert_eq!(s.regs.len(), val.regs.len());
-        for (s_reg, val_reg) in s.regs.iter().zip(val.regs.iter()) {
-            Builder::set_secret_from_lit(s_reg, val_reg, force);
-        }
-        if let Some(pf) = check_mode::<AnyTainted>() {
-            for (s_reg, val_reg) in s.tainted_regs.get(&pf).iter().zip(val.tainted_regs.get(&pf).iter()) {
-                Builder::set_secret_from_lit(s_reg, val_reg, force);
-            }
-        }
-        Builder::set_secret_from_lit(&s.live, &val.live, force);
-    }
-}
-
-impl RamState {
-    pub fn secret_with_value<'a>(bld: &Builder<'a>, a: Self) -> TWire<'a, RamState> {
-        TWire::new(RamStateRepr {
-            cycle: bld.secret_init(|| a.cycle),
-            pc: bld.secret_init(|| a.pc),
-            regs: a.regs.iter().map(|&x| bld.secret_init(|| x)).collect(),
-            live: bld.secret_init(|| a.live),
-            tainted_regs: a.tainted_regs.map(|v| v.iter().map(|&t| {
-                bld.secret_init(|| t)
-            }).collect()),
-        })
-    }
-
-    pub fn secret_with_len<'a>(bld: &Builder<'a>, len: usize) -> TWire<'a, RamState> {
-        TWire::new(RamStateRepr {
-            cycle: bld.secret_uninit(),
-            pc: bld.secret_uninit(),
-            regs: (0 .. len).map(|_| {
-                bld.secret_uninit()
-            }).collect(),
-            live: bld.secret_uninit(),
-            tainted_regs: IfMode::new(|_| (0 .. len).map(|_| {
-                bld.secret_uninit()
-            }).collect()),
-        })
-    }
-
-    pub fn secret<'a>(
-        bld: &Builder<'a>,
-        len: usize,
-    ) -> (TWire<'a, RamState>, TSecretHandle<'a, RamState>) {
-        let wire = Self::secret_with_len(bld, len);
-        let default = bld.lit(RamState {
-            cycle: 0,
-            pc: 0,
-            regs: vec![0; len],
-            live: false,
-            tainted_regs: IfMode::new(|_| vec![WORD_BOTTOM; len]),
-        });
-        (wire.clone(), TSecretHandle::new(wire, default))
     }
 }
 
@@ -317,7 +237,7 @@ where
     type Output = RamState;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: Self::Repr,
         e: Self::Repr,
@@ -327,22 +247,16 @@ where
         RamStateRepr {
             cycle: bld.mux(c.clone(), t.cycle, e.cycle),
             pc: bld.mux(c.clone(), t.pc, e.pc),
-            regs: t.regs.iter().zip(e.regs.iter())
-                .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
-                .collect(),
+            regs: bld.mux(c.clone(), t.regs, e.regs),
             live: bld.mux(c.clone(), t.live, e.live),
-            tainted_regs: IfMode::new(|pf| {
-                t.tainted_regs.unwrap(&pf).iter().zip(e.tainted_regs.unwrap(&pf).iter())
-                    .map(|(&t_reg, &e_reg)| bld.mux(c.clone(), t_reg, e_reg))
-                    .collect()
-            }),
+            tainted_regs: bld.mux(c.clone(), t.tainted_regs, e.tainted_regs),
         }
     }
 }
 
 impl<'a> typed::Eq<'a, RamState> for RamState {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         assert_eq!(a.regs.len(), b.regs.len());
         let mut acc = bld.lit(true);
         acc = bld.and(acc, bld.eq(a.cycle, b.cycle));
@@ -409,46 +323,40 @@ macro_rules! mk_named_enum {
 
         impl<'a> Flatten<'a> for $Name {
             fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> { c.ty(TyKind::U8) }
-            fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
-            fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+            fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> { w.repr.repr }
+            fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
                 assert!(*w.ty == TyKind::U8);
                 TWire::new(TWire::new(w))
             }
         }
 
         impl<'a> Lit<'a> for $Name {
-            fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+            fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
                 bld.lit(a as u8)
-            }
-        }
-
-        impl<'a> Secret<'a> for $Name {
-            fn secret(bld: &Builder<'a>) -> Self::Repr {
-                bld.secret_uninit()
-            }
-
-            fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-                Builder::set_secret_from_lit(s, val, force);
             }
         }
 
         impl<'a> typed::Eq<'a, $Name> for $Name {
             type Output = bool;
-            fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+            fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
                 bld.eq(a, b).repr
             }
         }
 
         impl<'a> typed::Ne<'a, $Name> for $Name {
             type Output = bool;
-            fn ne(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+            fn ne(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
                 bld.ne(a, b).repr
             }
         }
 
         impl<'a> FromEval<'a> for $Name {
-            fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-                let raw = u8::from_eval(ev, a.repr)?;
+            fn from_eval<E: EvalWire<'a> + ?Sized>(
+                c: &CircuitBase<'a>,
+                ev: &mut E,
+                a: Self::Repr,
+            ) -> Option<Self> {
+                let raw = u8::from_eval(c, ev, a.repr)?;
                 let result = Self::from_raw(raw);
                 if result.is_none() {
                     eprintln!(
@@ -457,6 +365,66 @@ macro_rules! mk_named_enum {
                     );
                 }
                 result
+            }
+        }
+
+        impl<'a> FromWireList<'a> for $Name {
+            fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                u8::expected_num_wires(sizes)
+            }
+
+            fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                f: impl FnMut(Ty<'a>),
+            ) {
+                u8::for_each_expected_wire_type(c, sizes, f);
+            }
+
+            fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+                c: &C,
+                sizes: &mut impl Iterator<Item = usize>,
+                build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+            ) -> Self::Repr {
+                TWire::new(u8::build_repr_from_wires(c, sizes, build_wire))
+            }
+        }
+
+        impl<'a> LazySecret<'a> for $Name {
+            fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+                u8::expected_word_len(sizes)
+            }
+            fn word_len(&self) -> usize {
+                (*self as u8).word_len()
+            }
+            fn push_words(&self, out: &mut Vec<u32>) {
+                (*self as u8).push_words(out);
+            }
+        }
+
+        impl<'a> ToWireList<'a> for $Name {
+            fn num_wires(x: &Self::Repr) -> usize {
+                u8::num_wires(x)
+            }
+            fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+                u8::for_each_wire(x, f);
+            }
+            fn num_sizes(x: &Self::Repr) -> usize {
+                u8::num_sizes(x)
+            }
+            fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+                u8::for_each_size(x, f);
+            }
+        }
+
+        impl<'a> SecretDep<'a> for $Name {
+            type Decoded = Self;
+            fn from_bits_iter(
+                sizes: &mut impl Iterator<Item = usize>,
+                bits: &mut impl Iterator<Item = Bits<'a>>,
+            ) -> $Name {
+                let raw = u8::from_bits_iter(sizes, bits);
+                $Name::from_raw(raw).unwrap()
             }
         }
     };
@@ -534,6 +502,7 @@ impl Opcode {
 }
 
 
+pub const MEM_PORT_FINAL_CYCLE: u32 = !0 - 2;
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;
 pub const MEM_PORT_PRELOAD_CYCLE: u32 = !0;
 
@@ -592,38 +561,42 @@ impl<'a> Flatten<'a> for Label {
         c.ty(TyKind::Uint(IntSize(LABEL_BITS as u16)))
     }
 
-    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
 
 impl<'a> FromEval<'a> for Label {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = FromEval::from_eval(ev, a)?;
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self> {
+        let val = FromEval::from_eval(c, ev, a)?;
         Some(Label(val))
     }
 }
 
 // Cast u64 to Label.
 impl<'a> Cast<'a, Label> for u64 {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         let ty = <Label as Flatten>::wire_type(bld.circuit());
         bld.circuit().cast(x, ty)
     }
 }
 
 impl<'a> Cast<'a, u64> for Label {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         bld.circuit().cast(x, bld.circuit().ty(TyKind::U64))
     }
 }
 
 impl<'a> Lit<'a> for Label {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         assert!(valid_label(a.0));
 
         // bld.lit(a.0).repr
@@ -637,23 +610,12 @@ impl<'a> Mux<'a, bool, Label> for Label {
     type Output = Label;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: Wire<'a>,
         t: Wire<'a>,
         e: Wire<'a>,
     ) -> Wire<'a> {
         bld.circuit().mux(c, t, e)
-    }
-}
-
-impl<'a> Secret<'a> for Label {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        let ty = <Label as Flatten>::wire_type(bld.circuit());
-        bld.circuit().new_secret_wire_uninit(ty)
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        s.kind.as_secret().set_from_lit(*val, force);
     }
 }
 
@@ -664,6 +626,57 @@ primitive_binary_impl!(Le::le(Label, Label) -> bool);
 primitive_binary_impl!(Gt::gt(Label, Label) -> bool);
 primitive_binary_impl!(Ge::ge(Label, Label) -> bool);
 
+impl<'a> FromWireList<'a> for Label {
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(Self::wire_type(c));
+    }
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        build_wire(Self::wire_type(c))
+    }
+}
+
+impl<'a> LazySecret<'a> for Label {
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u8::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        u8::word_len(&self.0)
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        u8::push_words(&self.0, out);
+    }
+}
+
+impl<'a> ToWireList<'a> for Label {
+    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(*x)
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+}
+
+impl<'a> SecretDep<'a> for Label {
+    type Decoded = Label;
+    fn from_bits_iter(
+        _sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> Label {
+        let bits = bits.next().unwrap();
+        let raw = bits.0.get(0).copied().unwrap_or(0) & ((1 << LABEL_BITS) - 1);
+        Label(raw as u8)
+    }
+}
+
 impl fmt::Debug for WordLabel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -672,7 +685,7 @@ impl fmt::Debug for WordLabel {
 
 impl<'a> typed::Eq<'a, WordLabel> for WordLabel {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         let mut acc = bld.eq(a[0], b[0]);
         for (&a,&b) in a.iter().zip(b.iter()).skip(1) {
             acc = bld.and(acc, bld.eq(a,b));
@@ -687,7 +700,7 @@ impl<'a> Repr<'a> for WordLabel {
 }
 
 impl<'a> Lit<'a> for WordLabel {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         <[Label; WORD_BYTES]>::lit(bld, a.0)
     }
 }
@@ -700,7 +713,7 @@ where
     type Output = WordLabel;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: [TWire<'a, Label>; 8],
         e: [TWire<'a, Label>; 8],
@@ -709,37 +722,91 @@ where
     }
 }
 
-impl<'a> Secret<'a> for WordLabel {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        <[Label; WORD_BYTES]>::secret(bld)
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        <[Label; WORD_BYTES]>::set_from_lit(s, val, force)
-    }
-}
-
 impl<'a> Flatten<'a> for WordLabel {
     fn wire_type<C: CircuitTrait<'a> + ?Sized>(c: &C) -> Ty<'a> {
         <[Label; WORD_BYTES]>::wire_type(c)
     }
 
-    fn to_wire(bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         <[Label; WORD_BYTES]>::to_wire(bld, TWire::new(w.repr))
     }
 
-    fn from_wire(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(<[Label; WORD_BYTES]>::from_wire(bld, w).repr)
     }
 }
 
 impl<'a> FromEval<'a> for WordLabel {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        Some(WordLabel(<[Label; WORD_BYTES]>::from_eval(ev, a)?))
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self> {
+        Some(WordLabel(<[Label; WORD_BYTES]>::from_eval(c, ev, a)?))
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+impl<'a> FromWireList<'a> for WordLabel {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <[Label; WORD_BYTES]>::expected_num_wires(sizes)
+    }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        f: impl FnMut(Ty<'a>),
+    ) {
+        <[Label; WORD_BYTES]>::for_each_expected_wire_type(c, sizes, f);
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        <[Label; WORD_BYTES]>::build_repr_from_wires(c, sizes, build_wire)
+    }
+}
+
+impl<'a> LazySecret<'a> for WordLabel {
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        <[Label; WORD_BYTES]>::expected_word_len(sizes)
+    }
+    fn word_len(&self) -> usize {
+        self.0.word_len()
+    }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        self.0.push_words(out);
+    }
+}
+
+impl<'a> ToWireList<'a> for WordLabel {
+    fn num_wires(x: &Self::Repr) -> usize {
+        <[Label; WORD_BYTES]>::num_wires(x)
+    }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        <[Label; WORD_BYTES]>::for_each_wire(x, f)
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        <[Label; WORD_BYTES]>::num_sizes(x)
+    }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        <[Label; WORD_BYTES]>::for_each_size(x, f)
+    }
+}
+
+impl<'a> SecretDep<'a> for WordLabel {
+    type Decoded = WordLabel;
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> WordLabel {
+        WordLabel(<[Label; WORD_BYTES]>::from_bits_iter(sizes, bits))
+    }
+}
+
+
+#[derive(Clone, Copy, Debug, FromWireList, ToWireList, LazySecret, SecretDep)]
 pub struct MemPort {
     /// The cycle on which this operation occurs.
     pub cycle: u32,
@@ -793,7 +860,7 @@ where
     type Output = MemOpKind;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: TWire<'a, u8>,
         e: TWire<'a, u8>,
@@ -863,7 +930,7 @@ where
     type Output = MemOpWidth;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: TWire<'a, u8>,
         e: TWire<'a, u8>,
@@ -873,7 +940,7 @@ where
 }
 
 impl<'a> Cast<'a, u8> for MemOpWidth {
-    fn cast(bld: &Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: TWire<'a,u8>) -> Wire<'a> {
         let ty = <u8 as Flatten>::wire_type(bld.circuit());
         bld.circuit().cast(x.repr, ty)
     }
@@ -894,7 +961,7 @@ impl<'a> Repr<'a> for MemPort {
 }
 
 impl<'a> Lit<'a> for MemPort {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         MemPortRepr {
             cycle: bld.lit(a.cycle),
             addr: bld.lit(a.addr),
@@ -903,28 +970,6 @@ impl<'a> Lit<'a> for MemPort {
             width: bld.lit(a.width),
             tainted: bld.lit(a.tainted),
         }
-    }
-}
-
-impl<'a> Secret<'a> for MemPort {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        MemPortRepr {
-            cycle: bld.secret_uninit(),
-            addr: bld.secret_uninit(),
-            value: bld.secret_uninit(),
-            op: bld.secret_uninit(),
-            width: bld.secret_uninit(),
-            tainted: bld.secret_uninit(),
-        }
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.cycle, &val.cycle, force);
-        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
-        Builder::set_secret_from_lit(&s.value, &val.value, force);
-        Builder::set_secret_from_lit(&s.op, &val.op, force);
-        Builder::set_secret_from_lit(&s.width, &val.width, force);
-        Builder::set_secret_from_lit(&s.tainted, &val.tainted, force);
     }
 }
 
@@ -941,7 +986,7 @@ where
     type Output = MemPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: MemPortRepr<'a>,
         e: MemPortRepr<'a>,
@@ -955,6 +1000,85 @@ where
             width: bld.mux(c.clone(), t.width, e.width),
             tainted: bld.mux(c.clone(), t.tainted, e.tainted),
         }
+    }
+}
+
+
+#[derive(Debug)]
+pub struct CompareMemPort(MemPort);
+
+impl PartialEq for CompareMemPort {
+    fn eq(&self, other: &CompareMemPort) -> bool {
+        let self_addr_masked = self.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        let other_addr_masked = other.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        self_addr_masked == other_addr_masked &&
+        self.0.cycle == other.0.cycle
+    }
+}
+
+impl cmp::Eq for CompareMemPort {}
+
+impl PartialOrd for CompareMemPort {
+    fn partial_cmp(&self, other: &CompareMemPort) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompareMemPort {
+    fn cmp(&self, other: &CompareMemPort) -> Ordering {
+        let self_addr_masked = self.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        let other_addr_masked = other.0.addr & !(MemOpWidth::WORD.bytes() as u64 - 1);
+        let self_cycle_adj = self.0.cycle.wrapping_add(1);
+        let other_cycle_adj = other.0.cycle.wrapping_add(1);
+        self_addr_masked.cmp(&other_addr_masked)
+            .then(self_cycle_adj.cmp(&other_cycle_adj))
+    }
+}
+
+impl<'a> Repr<'a> for CompareMemPort {
+    type Repr = MemPortRepr<'a>;
+}
+
+impl<'a> ToWireList<'a> for CompareMemPort {
+    fn num_wires(x: &Self::Repr) -> usize {
+        MemPort::num_wires(x)
+    }
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
+        MemPort::for_each_wire(x, f);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        MemPort::num_sizes(x)
+    }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        MemPort::for_each_size(x, f);
+    }
+}
+
+impl<'a> SecretDep<'a> for CompareMemPort {
+    type Decoded = CompareMemPort;
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> CompareMemPort {
+        CompareMemPort(MemPort::from_bits_iter(sizes, bits))
+    }
+}
+
+impl<'a> Sortable<'a> for CompareMemPort {
+    type Decoded = CompareMemPort;
+    type AsSecretDep = Self;
+    fn convert_vec(v: TWire<'a, Vec<Self>>) -> TWire<'a, Vec<Self>> { v }
+}
+
+impl<'a> Cast<'a, CompareMemPort> for MemPort {
+    fn cast(_bld: &impl Builder<'a>, x: MemPortRepr<'a>) -> MemPortRepr<'a> {
+        x
+    }
+}
+
+impl<'a> Cast<'a, MemPort> for CompareMemPort {
+    fn cast(_bld: &impl Builder<'a>, x: MemPortRepr<'a>) -> MemPortRepr<'a> {
+        x
     }
 }
 
@@ -982,17 +1106,17 @@ impl<'a> Flatten<'a> for ByteOffset {
         c.ty(TyKind::Uint(IntSize(MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
 
 impl<'a> Lit<'a> for ByteOffset {
-    fn lit(bld: &Builder<'a>, x: Self) -> Wire<'a> {
+    fn lit(bld: &impl Builder<'a>, x: Self) -> Wire<'a> {
         let c = bld.circuit();
         c.lit(Self::wire_type(c), x.raw() as u64)
     }
@@ -1000,7 +1124,7 @@ impl<'a> Lit<'a> for ByteOffset {
 
 impl<'a> Mux<'a, bool, ByteOffset> for ByteOffset {
     type Output = ByteOffset;
-    fn mux(bld: &Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
+    fn mux(bld: &impl Builder<'a>, c: Wire<'a>, t: Wire<'a>, e: Wire<'a>) -> Wire<'a> {
         bld.circuit().mux(c, t, e)
     }
 }
@@ -1008,22 +1132,63 @@ impl<'a> Mux<'a, bool, ByteOffset> for ByteOffset {
 
 impl<'a> typed::Eq<'a, ByteOffset> for ByteOffset {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a, b)
     }
 }
 
 impl<'a> Cast<'a, u8> for ByteOffset {
-    fn cast(bld: &Builder<'a>, x: Wire<'a>) -> Wire<'a> {
+    fn cast(bld: &impl Builder<'a>, x: Wire<'a>) -> Wire<'a> {
         bld.circuit().cast(x, bld.circuit().ty(TyKind::U8))
     }
 }
 
 impl<'a> FromEval<'a> for ByteOffset {
-    fn from_eval<E: Evaluator<'a>>(ev: &mut E, a: Self::Repr) -> Option<Self> {
-        let val = FromEval::from_eval(ev, a)?;
+    fn from_eval<E: EvalWire<'a> + ?Sized>(
+        c: &CircuitBase<'a>,
+        ev: &mut E,
+        a: Self::Repr,
+    ) -> Option<Self> {
+        let val = FromEval::from_eval(c, ev, a)?;
         Some(ByteOffset(val))
     }
+}
+
+impl<'a> FromWireList<'a> for ByteOffset {
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(Self::wire_type(c));
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Wire<'a> {
+        build_wire(Self::wire_type(c))
+    }
+}
+
+impl<'a> LazySecret<'a> for ByteOffset {
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn word_len(&self) -> usize { 1 }
+    fn push_words(&self, out: &mut Vec<u32>) {
+        out.push(self.0 as u32)
+    }
+}
+
+impl<'a> ToWireList<'a> for ByteOffset {
+    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(*x);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
 }
 
 pub struct WordAddr;
@@ -1038,18 +1203,18 @@ impl<'a> Flatten<'a> for WordAddr {
             MemOpWidth::WORD.bits() as u16 - MemOpWidth::WORD.log_bytes() as u16)))
     }
 
-    fn to_wire(_bld: &Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
+    fn to_wire(_bld: &impl Builder<'a>, w: TWire<'a, Self>) -> Wire<'a> {
         w.repr
     }
 
-    fn from_wire(_bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
+    fn from_wire(_bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, Self> {
         TWire::new(w)
     }
 }
 
 impl<'a> typed::Eq<'a, WordAddr> for WordAddr {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a, b)
     }
 }
@@ -1065,7 +1230,7 @@ pub struct PackedMemPortRepr<'a> {
 
 impl PackedMemPort {
     pub fn from_unpacked<'a>(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         mp: TWire<'a, MemPort>,
     ) -> TWire<'a, PackedMemPort> {
         // Add 1 to the cycle numbers so that MEM_PORT_UNUSED_CYCLE (-1) comes before all real
@@ -1083,7 +1248,7 @@ impl PackedMemPort {
 }
 
 impl<'a> PackedMemPortRepr<'a> {
-    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, MemPort> {
+    pub fn unpack(&self, bld: &impl Builder<'a>) -> TWire<'a, MemPort> {
         let (cycle_adj, waddr) = *bit_pack::split_bits::<(u32, WordAddr)>(bld, self.key);
         let cycle = bld.sub(cycle_adj, bld.lit(1));
         let (value, op, width, tainted, offset) =
@@ -1101,7 +1266,7 @@ impl<'a> Mux<'a, bool, PackedMemPort> for PackedMemPort {
     type Output = PackedMemPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: Wire<'a>,
         t: Self::Repr,
         e: Self::Repr,
@@ -1115,22 +1280,58 @@ impl<'a> Mux<'a, bool, PackedMemPort> for PackedMemPort {
 
 impl<'a> typed::Eq<'a, PackedMemPort> for PackedMemPort {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a.key, b.key)
     }
 }
 
 impl<'a> typed::Lt<'a, PackedMemPort> for PackedMemPort {
     type Output = bool;
-    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn lt(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().lt(a.key, b.key)
     }
 }
 
 impl<'a> typed::Le<'a, PackedMemPort> for PackedMemPort {
     type Output = bool;
-    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn le(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().le(a.key, b.key)
+    }
+}
+
+impl<'a> ToWireList<'a> for PackedMemPort {
+    fn num_wires(x: &Self::Repr) -> usize { 2 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(x.key);
+        f(x.data);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+}
+
+impl<'a> FromWireList<'a> for PackedMemPort {
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 2 }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(c.ty(TyKind::Uint(IntSize(93))));
+        let tainted = if let Some(_) = check_mode::<AnyTainted>() { 16 } else { 0 };
+        f(c.ty(TyKind::Uint(IntSize(64 + 8 + 8 + tainted + 3))));
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        let tainted = if let Some(_) = check_mode::<AnyTainted>() { 16 } else { 0 };
+        PackedMemPortRepr {
+            key: build_wire(c.ty(TyKind::Uint(IntSize(93)))),
+            data: build_wire(c.ty(TyKind::Uint(IntSize(64 + 8 + 8 + tainted + 3)))),
+        }
     }
 }
 
@@ -1138,7 +1339,7 @@ impl<'a> typed::Le<'a, PackedMemPort> for PackedMemPort {
 /// A simplified version of `MemPort` used for instruction fetch.  Since all accesses after
 /// initialization are reads, we don't need to track the cycle number - we sort by `(addr, !write)`
 /// instead of `(addr, cycle)`.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, ToWireList, SecretDep)]
 pub struct FetchPort {
     pub addr: u64,
     pub instr: RamInstr,
@@ -1157,28 +1358,12 @@ impl<'a> Repr<'a> for FetchPort {
 }
 
 impl<'a> Lit<'a> for FetchPort {
-    fn lit(bld: &Builder<'a>, a: Self) -> Self::Repr {
+    fn lit(bld: &impl Builder<'a>, a: Self) -> Self::Repr {
         FetchPortRepr {
             addr: bld.lit(a.addr),
             instr: bld.lit(a.instr),
             write: bld.lit(a.write),
         }
-    }
-}
-
-impl<'a> Secret<'a> for FetchPort {
-    fn secret(bld: &Builder<'a>) -> Self::Repr {
-        FetchPortRepr {
-            addr: bld.secret_uninit(),
-            instr: bld.secret_uninit(),
-            write: bld.secret_uninit(),
-        }
-    }
-
-    fn set_from_lit(s: &Self::Repr, val: &Self::Repr, force: bool) {
-        Builder::set_secret_from_lit(&s.addr, &val.addr, force);
-        Builder::set_secret_from_lit(&s.instr, &val.instr, force);
-        Builder::set_secret_from_lit(&s.write, &val.write, force);
     }
 }
 
@@ -1192,7 +1377,7 @@ where
     type Output = FetchPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: C::Repr,
         t: FetchPortRepr<'a>,
         e: FetchPortRepr<'a>,
@@ -1216,7 +1401,7 @@ pub struct PackedFetchPortRepr<'a> {
 
 impl PackedFetchPort {
     pub fn from_unpacked<'a>(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         fp: TWire<'a, FetchPort>,
     ) -> TWire<'a, PackedFetchPort> {
         // ConcatBits is little-endian.  To sort by `addr` first and then by `write`, we have to
@@ -1234,7 +1419,7 @@ impl PackedFetchPort {
 }
 
 impl<'a> PackedFetchPortRepr<'a> {
-    pub fn unpack(&self, bld: &Builder<'a>) -> TWire<'a, FetchPort> {
+    pub fn unpack(&self, bld: &impl Builder<'a>) -> TWire<'a, FetchPort> {
         let (not_write, addr) = *bit_pack::split_bits::<(_, _)>(bld, self.key);
         let (opcode, dest, op1, op2, imm) =
             *bit_pack::split_bits::<(_, _, _, _, _)>(bld, self.data);
@@ -1254,7 +1439,7 @@ impl<'a> Mux<'a, bool, PackedFetchPort> for PackedFetchPort {
     type Output = PackedFetchPort;
 
     fn mux(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         c: Wire<'a>,
         t: Self::Repr,
         e: Self::Repr,
@@ -1268,22 +1453,128 @@ impl<'a> Mux<'a, bool, PackedFetchPort> for PackedFetchPort {
 
 impl<'a> typed::Eq<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
-    fn eq(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn eq(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().eq(a.key, b.key)
     }
 }
 
 impl<'a> typed::Lt<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
-    fn lt(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn lt(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().lt(a.key, b.key)
     }
 }
 
 impl<'a> typed::Le<'a, PackedFetchPort> for PackedFetchPort {
     type Output = bool;
-    fn le(bld: &Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
+    fn le(bld: &impl Builder<'a>, a: Self::Repr, b: Self::Repr) -> <bool as Repr<'a>>::Repr {
         bld.circuit().le(a.key, b.key)
+    }
+}
+
+impl<'a> ToWireList<'a> for PackedFetchPort {
+    fn num_wires(x: &Self::Repr) -> usize { 2 }
+    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+        f(x.key);
+        f(x.data);
+    }
+    fn num_sizes(x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+}
+
+impl<'a> FromWireList<'a> for PackedFetchPort {
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 2 }
+
+    fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
+        mut f: impl FnMut(Ty<'a>),
+    ) {
+        f(c.ty(TyKind::Uint(IntSize(65))));
+        f(c.ty(TyKind::Uint(IntSize(89))));
+    }
+
+    fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
+        c: &C,
+        sizes: &mut impl Iterator<Item = usize>,
+        build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
+    ) -> Self::Repr {
+        PackedFetchPortRepr {
+            key: build_wire(c.ty(TyKind::Uint(IntSize(65)))),
+            data: build_wire(c.ty(TyKind::Uint(IntSize(89)))),
+        }
+    }
+}
+
+
+pub struct CompareFetchPort(FetchPort);
+
+impl PartialEq for CompareFetchPort {
+    fn eq(&self, other: &CompareFetchPort) -> bool {
+        self.0.addr == other.0.addr &&
+        self.0.write == other.0.write
+    }
+}
+
+impl cmp::Eq for CompareFetchPort {}
+
+impl PartialOrd for CompareFetchPort {
+    fn partial_cmp(&self, other: &CompareFetchPort) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompareFetchPort {
+    fn cmp(&self, other: &CompareFetchPort) -> Ordering {
+        self.0.addr.cmp(&other.0.addr)
+            .then(self.0.write.cmp(&other.0.write).reverse())
+    }
+}
+
+impl<'a> Repr<'a> for CompareFetchPort {
+    type Repr = FetchPortRepr<'a>;
+}
+
+impl<'a> ToWireList<'a> for CompareFetchPort {
+    fn num_wires(x: &Self::Repr) -> usize {
+        FetchPort::num_wires(x)
+    }
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
+        FetchPort::for_each_wire(x, f)
+    }
+    fn num_sizes(x: &Self::Repr) -> usize {
+        FetchPort::num_sizes(x)
+    }
+    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
+        FetchPort::for_each_size(x, f)
+    }
+}
+
+impl<'a> SecretDep<'a> for CompareFetchPort {
+    type Decoded = CompareFetchPort;
+    fn from_bits_iter(
+        sizes: &mut impl Iterator<Item = usize>,
+        bits: &mut impl Iterator<Item = Bits<'a>>,
+    ) -> CompareFetchPort {
+        CompareFetchPort(FetchPort::from_bits_iter(sizes, bits))
+    }
+}
+
+impl<'a> Sortable<'a> for CompareFetchPort {
+    type Decoded = CompareFetchPort;
+    type AsSecretDep = Self;
+    fn convert_vec(v: TWire<'a, Vec<Self>>) -> TWire<'a, Vec<Self>> { v }
+}
+
+impl<'a> Cast<'a, CompareFetchPort> for FetchPort {
+    fn cast(_bld: &impl Builder<'a>, x: FetchPortRepr<'a>) -> FetchPortRepr<'a> {
+        x
+    }
+}
+
+impl<'a> Cast<'a, FetchPort> for CompareFetchPort {
+    fn cast(_bld: &impl Builder<'a>, x: FetchPortRepr<'a>) -> FetchPortRepr<'a> {
+        x
     }
 }
 
@@ -1309,7 +1600,7 @@ impl VersionedMultiExec {
         self.features.contains(&feature)
     }
     pub fn validate(&self) -> Result<(), String> {
-        self.inner.validate(&self.features)
+        self.inner.validate()
     }
 }
 
@@ -1320,9 +1611,9 @@ pub struct MultiExec {
 }
 
 impl MultiExec {
-    pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         for (_, exec) in self.execs.iter() { 
-            exec.validate(features).unwrap();
+            exec.validate().unwrap();
         }
         Ok(())
     }
@@ -1330,42 +1621,63 @@ impl MultiExec {
 
 #[derive(Clone, Debug)]
 pub struct ExecBody {
-    pub program: Vec<RamInstr>,
+    pub program: Vec<CodeSegment>,
     pub init_mem: Vec<MemSegment>,
     pub params: Params,
     pub segments: Vec<Segment>,
     pub trace: Vec<TraceChunk>,
     pub advice: HashMap<u64, Vec<Advice>>,
+    pub labels: HashMap<String, u64>,
+
+    pub provided_init_state: Option<RamState>,
 }
 
 impl ExecBody {
+    pub fn initial_state(&self) -> RamState {
+        let mut regs = vec![0; self.params.num_regs];
+        regs[0] = self.init_mem.iter()
+            .filter(|ms| ms.heap_init == false)
+            .map(|ms| ms.start + ms.len)
+            .max().unwrap_or(0);
+        let tainted_regs = IfMode::new(|_| vec![WORD_BOTTOM; self.params.num_regs]);
+        RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
+    }
 
-    pub fn validate(&self, features: &HashSet<Feature>) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         let params = &self.params;
-        if !features.contains(&Feature::PublicPc) {
-            if self.segments.len() != 0 {
+
+        for (i, ms) in self.init_mem.iter().enumerate() {
+            if ms.data.len() as u64 > ms.len {
                 return Err(format!(
-                    "expected no segment definitions in non-public-pc trace, but got {}",
-                    self.segments.len(),
+                    "`init_mem[{}]` data length {} is too long for len field {}",
+                    i, ms.data.len(), ms.len,
                 ));
             }
-
-            if self.trace.len() != 1 {
+            if ms.start.checked_add(ms.len).is_none() {
                 return Err(format!(
-                    "expected exactly one trace chunk in non-public-pc trace, but got {}",
-                    self.trace.len(),
+                    "`init_mem[{}]` `start + len` overflowed (start = {}, len = {})",
+                    i, ms.start, ms.len,
                 ));
             }
+        }
 
-            if self.params.trace_len.is_none() {
-                return Err(format!("non-public-pc trace must have `params.trace_len` set"));
-            }
-
-            let expect_trace_len = self.params.trace_len.unwrap();
-            if self.trace[0].states.len() != expect_trace_len {
+        for (i, cs) in self.program.iter().enumerate() {
+            if cs.instrs.len() as u64 > cs.len {
                 return Err(format!(
-                    "wrong number of states in trace: expected {}, but got {}",
-                    expect_trace_len, self.trace[0].states.len(),
+                    "`program[{}]` instrs length {} is too long for len field {}",
+                    i, cs.instrs.len(), cs.len,
+                ));
+            }
+            if !cs.secret && cs.instrs.len() as u64 != cs.len {
+                return Err(format!(
+                    "`program[{}]` (public segment) instrs length {} should match len field {}",
+                    i, cs.instrs.len(), cs.len,
+                ));
+            }
+            if cs.start.checked_add(cs.len).is_none() {
+                return Err(format!(
+                    "`program[{}]` `start + len` overflowed (start = {}, len = {})",
+                    i, cs.start, cs.len,
                 ));
             }
         }
@@ -1382,28 +1694,19 @@ impl ExecBody {
         }
 
         for (i, chunk) in self.trace.iter().enumerate() {
-            if !features.contains(&Feature::PublicPc) {
-                if chunk.segment != 0 {
-                    return Err(format!(
-                        "`trace[{}]` references segment {} in non-public-pc mode",
-                        i, chunk.segment,
-                    ));
-                }
-            } else {
-                if chunk.segment >= self.segments.len() {
-                    return Err(format!(
-                        "`trace[{}]` references undefined segment {} (len = {})",
-                        i, chunk.segment, self.segments.len(),
-                    ));
-                }
+            if chunk.segment >= self.segments.len() {
+                return Err(format!(
+                    "`trace[{}]` references undefined segment {} (len = {})",
+                    i, chunk.segment, self.segments.len(),
+                ));
+            }
 
-                let expect_len = self.segments[chunk.segment].len;
-                if chunk.states.len() != expect_len {
-                    return Err(format!(
-                        "`trace[{}]` for segment {} should have {} states, but has {}",
-                        i, chunk.segment, expect_len, chunk.states.len(),
-                    ));
-                }
+            let expect_len = self.segments[chunk.segment].len;
+            if chunk.states.len() != expect_len {
+                return Err(format!(
+                    "`trace[{}]` for segment {} should have {} states, but has {}",
+                    i, chunk.segment, expect_len, chunk.states.len(),
+                ));
             }
 
             for (j, state) in chunk.states.iter().enumerate() {
@@ -1434,11 +1737,28 @@ impl ExecBody {
 pub type MemoryEquivalence = Vec<(String, String)>;
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct CodeSegment {
+    #[serde(default)]
+    pub name: String,
+    #[serde(alias = "addr")]
+    pub start: u64,
+    pub len: u64,
+    #[serde(default)]
+    pub secret: bool,
+    #[serde(default)]
+    pub uncommitted: bool,
+    #[serde(default)]
+    pub instrs: Vec<RamInstr>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct MemSegment {
     pub start: u64,
     pub len: u64,
     pub read_only: bool,
     pub secret: bool,
+    #[serde(default)]
+    pub uncommitted: bool,
     /// Whether the segment is used to initialize the heap. Defaults to `false` if field is
     /// missing.
     #[serde(default="bool::default")]
@@ -1458,6 +1778,11 @@ pub struct Params {
     pub trace_len: Option<usize>,
     #[serde(alias = "sparcity", default)]
     pub sparsity: Sparsity,
+    #[serde(default)]
+    pub commitment: Option<Commitment>,
+    /// If set, restrict accesses from unprivileged code to privileged code and data.
+    #[serde(default)]
+    pub privilege_levels: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1476,6 +1801,11 @@ impl Default for Sparsity {
             mem_op: 1,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Commitment {
+    Sha256([u32; 8]),
 }
 
 #[derive(Clone, Debug)]
@@ -1556,11 +1886,13 @@ pub struct TaintCalcIntermediate<'a> {
 }
 
 pub struct CalcIntermediate<'a> {
-    pub x: TWire<'a,u64>,
-    pub y: TWire<'a,u64>,
-    pub result: TWire<'a,u64>,
+    pub x: TWire<'a, u64>,
+    pub y: TWire<'a, u64>,
+    pub result: TWire<'a, u64>,
     pub tainted: IfMode<AnyTainted, TaintCalcIntermediate<'a>>,
     /// If set, then this step is publicly known not to use any `MemPort`.
     pub mem_port_unused: bool,
+    /// If a memory operation occurred during this step, this field gives its address.
+    pub mem_op_addr: TWire<'a, u64>,
 }
 

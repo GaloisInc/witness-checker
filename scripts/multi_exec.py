@@ -35,7 +35,9 @@ def segeq_to_set(segeq):
     For example, the following string 'a.seg1==b.seg2==c.seg3' will result in
     {(a,seg1),(b,seg2),(c,seg3)}"""
     ls = segeq.split("==")
-    split_dot = lambda x: split_in_two(x,separator=".",name="segment")
+    def split_dot(x):
+        a, _, b = x.partition('.')
+        return (a, b)
     set_pairs = map(split_dot, ls)
     return set(set_pairs)
 

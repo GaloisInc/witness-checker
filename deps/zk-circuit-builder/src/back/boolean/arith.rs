@@ -568,8 +568,10 @@ mod test {
         let mut sink = TestArithSink::default();
 
         const MAX: u64 = 64;
-        let a = sink.private(TEMP, MAX, Some(Bits::zero()));
-        let b = sink.private(TEMP, MAX, Some(Bits::zero()));
+        let a = sink.private(TEMP, MAX);
+        sink.private_value(MAX, Bits::zero());
+        let b = sink.private(TEMP, MAX);
+        sink.private_value(MAX, Bits::zero());
 
         // The Karatsuba algorithm is not usable for `n < 4` (it would recurse infinitely).
         for n in 4 ..= MAX {
@@ -685,8 +687,11 @@ mod test {
         fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
             self.inner.lit(expire, n, bits)
         }
-        fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
-            self.inner.private(expire, n, value)
+        fn private(&mut self, expire: Time, n: u64) -> WireId {
+            self.inner.private(expire, n)
+        }
+        fn private_value(&mut self, n: u64, value: Bits) {
+            self.inner.private_value(n, value);
         }
         fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             self.inner.copy(expire, n, a)
@@ -759,6 +764,35 @@ mod test {
 
         fn free_expired(&mut self, now: Time) {
             self.inner.free_expired(now);
+        }
+
+        type FunctionId = <TestSink as Sink>::FunctionId;
+        type FunctionSink = <TestSink as Sink>::FunctionSink;
+        fn define_function(
+            &mut self,
+            name: String,
+            arg_ns: &[u64],
+            return_n: u64,
+            build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+        ) -> Self::FunctionId {
+            self.inner.define_function(name, arg_ns, return_n, build)
+        }
+        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+            self.inner.call(expire, func, args)
+        }
+
+        const HAS_PERMUTE: bool = <TestSink as Sink>::HAS_PERMUTE;
+        fn permute(
+            &mut self,
+            expire: Time,
+            wires_per_item: u64,
+            num_items: u64,
+            inputs: WireId,
+        ) -> WireId {
+            self.inner.permute(expire, wires_per_item, num_items, inputs)
+        }
+        fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
+            self.inner.permute_private_values(num_items, perm)
         }
     }
 

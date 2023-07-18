@@ -2,11 +2,11 @@
 #![cfg(feature = "gf_scuttlebutt")]
 
 use scuttlebutt::field::{FiniteField, SmallBinaryField, Gf40, Gf45, F56b, F63b, F64b};
-use zk_circuit_builder::eval::{self, CachingEvaluator, Evaluator};
+use zk_circuit_builder::eval::{self, CachingEvaluator, EvalWire};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitFilter, DynCircuit, FilterNil, TyKind, Wire,
 };
-use zk_circuit_builder::ir::typed::{self, Builder};
+use zk_circuit_builder::ir::typed::{self, BuilderExt, BuilderImpl};
 use zk_circuit_builder::lower;
 use num_bigint::BigInt;
 use zki_sieve::FilesSink;
@@ -14,7 +14,7 @@ use zki_sieve::FilesSink;
 macro_rules! make_circuit {
     ($arenas:expr) => {{
         let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-        let c = Circuit::new($arenas, true, cf);
+        let c = Circuit::new::<()>($arenas, true, cf);
         c
     }};
 }
@@ -26,8 +26,8 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     };
 
     // Make sure the circuit is valid.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
-    let val = ev.eval_wire(w).ok();
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+    let val = ev.eval_wire(c, w).ok();
     assert_eq!(val, Some(eval::Value::SingleInteger(BigInt::from(1))));
 
     // TODO
@@ -61,7 +61,7 @@ where
 {
     let arenas = Arenas::new();
     let c = make_circuit!(&arenas);
-    let b = Builder::new(&c);
+    let b = BuilderImpl::from_ref(&c);
 
 
     let inv = b.lit(x.inverse());

@@ -19,11 +19,12 @@ impl<'a> Iterator for BundleTys<'a> {
     fn next(&mut self) -> Option<Ty<'a>> {
         while let Some(ty) = self.stk.pop() {
             match *ty {
-                TyKind::Bundle(tys) => {
-                    self.stk.extend(tys.iter().rev().cloned());
+                TyKind::Bundle(btys) => {
+                    self.stk.extend(btys.tys().iter().rev().cloned());
                 },
                 TyKind::Uint(_) | TyKind::Int(_) => return Some(ty),
-                TyKind::GF(f)  => panic!("Bitvector operations are not currently supported for field {:?}", f),
+                TyKind::GF(f) => panic!("Bitvector operations are not currently supported for field {:?}", f),
+                TyKind::RawBits => panic!("Bitvector operations are not supported RawBits"),
             }
         }
         None
@@ -48,7 +49,10 @@ impl<'a> Iterator for BundleWires<'_, 'a> {
                     let c = self.c;
                     self.stk.extend((0 .. tys.len()).rev().map(|i| c.extract(w, i)));
                 },
-                TyKind::Uint(_) | TyKind::Int(_) | TyKind::GF(_) => return Some(w),
+                TyKind::Uint(_) |
+                TyKind::Int(_) |
+                TyKind::GF(_) |
+                TyKind::RawBits => return Some(w),
             }
         }
         None
@@ -104,7 +108,7 @@ impl<'a> GadgetKind<'a> for ConcatBits {
     }
 }
 
-pub fn concat_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, x: TWire<'a, T>) -> Wire<'a> {
+pub fn concat_bits<'a, T: Flatten<'a>>(bld: &impl Builder<'a>, x: TWire<'a, T>) -> Wire<'a> {
     let w = T::to_wire(bld, x);
     let gk = bld.circuit().intern_gadget_kind(ConcatBits);
     bld.circuit().gadget(gk, &[w])
@@ -155,12 +159,15 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
                     *pos = end;
                     c.cast(extract_bits(&c, inp, start, end), ty)
                 },
+                TyKind::Bundle(btys) => {
+                    c.pack_iter(btys.tys().iter().map(|&ty| walk(c, inp, ty, pos)))
+                },
                 TyKind::GF(f) => {
                     panic!("Decompose is not currently supported for field {:?}", f);
                 }
-                TyKind::Bundle(tys) => {
-                    c.pack_iter(tys.iter().map(|&ty| walk(c, inp, ty, pos)))
-                },
+                TyKind::RawBits => {
+                    panic!("Decompose is not supported for RawBits");
+                }
             }
         }
         let mut pos = 0;
@@ -169,8 +176,8 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
 
     fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         fn walk(inp: &BigInt, pos: &mut u16, ty: Ty) -> Value {
-            if let TyKind::Bundle(tys) = *ty {
-                Value::Bundle(tys.iter().map(|&ty| walk(inp, pos, ty)).collect())
+            if let TyKind::Bundle(btys) = *ty {
+                Value::Bundle(btys.tys().iter().map(|&ty| walk(inp, pos, ty)).collect())
             } else {
                 let v = Value::trunc(ty, inp >> *pos);
                 *pos += ty.integer_size().bits();
@@ -183,7 +190,7 @@ impl<'a> GadgetKind<'a> for SplitBits<'a> {
     }
 }
 
-pub fn split_bits<'a, T: Flatten<'a>>(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, T> {
+pub fn split_bits<'a, T: Flatten<'a>>(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, T> {
     let ty = T::wire_type(bld.circuit());
     let gk = bld.circuit().intern_gadget_kind(SplitBits(ty));
     T::from_wire(bld, bld.circuit().gadget(gk, &[w]))
@@ -242,7 +249,7 @@ pub fn extract_bits<'a, C: CircuitTrait<'a> + ?Sized>(
 }
 
 /// Extract enough low bits from `w` to construct a value of type `T`.
-pub fn extract_low<'a, T: Flatten<'a>>(bld: &Builder<'a>, w: Wire<'a>) -> TWire<'a, T> {
+pub fn extract_low<'a, T: Flatten<'a>>(bld: &impl Builder<'a>, w: Wire<'a>) -> TWire<'a, T> {
     let c = bld.circuit();
     let ty = T::wire_type(c);
     let width = bundle_tys(&[ty]).map(|ty| ty.integer_size().bits()).sum::<u16>();

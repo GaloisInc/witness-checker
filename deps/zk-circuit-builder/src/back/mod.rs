@@ -1,9 +1,14 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use num_bigint::BigUint;
+use crate::eval::{self, CachingEvaluator};
 use crate::ir::circuit::{CircuitBase, Wire, EraseVisitor, MigrateVisitor};
 use crate::ir::migrate;
 use crate::stats::Stats;
+
+
+#[cfg(feature = "sieve_ir")]
+mod multi_file_sink;
 
 
 /// Trait for abstracting over backends.  `post_erase` and `post_migrate` are callbacks to be
@@ -15,18 +20,39 @@ use crate::stats::Stats;
 pub unsafe trait Backend<'a> {
     /// Called at the end of the `erase` step, after the `EraseVisitor` has been applied to all
     /// other objects in the program.
-    fn post_erase(&mut self, v: &mut EraseVisitor<'a>);
+    fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>);
 
     /// Called at the end of the `migrate` step, after the `MigrateVisitor` has been applied to all
     /// other objects in the program.
     ///
     /// Safety: This method must migrate all wires stored within the backend.  Any wires not
     /// migrated will be left dangling when `MigrateHandle::erase_and_migrate` is called.
-    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>);
+    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>);
 
     /// Assert that `accepted` is true, and finish writing out the circuit.  If `validate` is set,
     /// a validation pass will be run on the output afterward.
-    fn finish(self: Box<Self>, c: &CircuitBase<'a>, accepted: Wire<'a>, validate: bool);
+    fn finish(
+        self: Box<Self>,
+        c: &CircuitBase<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::RevealSecrets>,
+        accepted: Wire<'a>,
+        validate: bool,
+    );
+
+    fn has_feature(&self, feature: BackendFeature) -> bool;
+}
+
+pub enum BackendFeature {
+    /// Support for function definitions and calls.
+    Function,
+    /// Comparison ops where the RHS is not a zero literal.
+    CompareNonZero,
+    /// `ConcatBits` and `ExtractBits` gadgets.
+    ConcatExtractBits,
+    /// `WideMul` gadget.
+    WideMul,
+    /// `Permute` gadget.
+    Permute,
 }
 
 
@@ -103,21 +129,22 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
             fn finish(
                 mut self: Box<Self>,
-                _c: &CircuitBase<'w>,
+                c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
-                self.backend.enforce_true(accepted);
+                self.backend.enforce_true(c, ev, accepted);
 
                 // Write files.
                 self.backend.finish().unwrap();
@@ -139,6 +166,12 @@ pub fn new_zkif<'a>(dest: &OsStr) -> Box<dyn Backend<'a> + 'a> {
                     paths: vec![self.workspace.clone()],
                     field_order: Default::default(),
                 }).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::ConcatExtractBits
+                )
             }
         }
     }
@@ -186,23 +219,24 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
             fn finish(
                 mut self: Box<Self>,
-                _c: &CircuitBase<'w>,
+                c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let ir_builder = self.backend.finish();
 
                 eprintln!();
@@ -217,6 +251,12 @@ pub fn new_sieve_ir<'a>(workspace: &str, dedup: bool) -> Box<dyn Backend<'a> + '
                     cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::ConcatExtractBits
+                )
             }
         }
     }
@@ -268,23 +308,24 @@ pub fn new_sieve_ir_v2<'a>(
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
             fn finish(
                 mut self: Box<Self>,
-                _c: &CircuitBase<'w>,
+                c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let ir_builder = self.backend.finish();
 
                 eprintln!();
@@ -299,6 +340,12 @@ pub fn new_sieve_ir_v2<'a>(
                     cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::ConcatExtractBits
+                )
             }
         }
     }
@@ -338,23 +385,24 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
             fn finish(
                 mut self: Box<Self>,
                 c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(c, accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let bool_sink = self.backend.finish();
                 let sink = bool_sink.finish();
 
@@ -367,6 +415,15 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
                     cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::Function
+                    | BackendFeature::ConcatExtractBits
+                    | BackendFeature::WideMul
+                    | BackendFeature::Permute
+                )
             }
         }
     }
@@ -384,6 +441,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
     {
         use self::boolean::Backend;
         use self::boolean::sink_sieve_ir_function::SieveIrV2Sink;
+        use self::multi_file_sink::MultiFileSink;
         use zki_sieve_v3::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -406,23 +464,24 @@ pub fn new_boolean_sieve_ir_v2<'a>(
 
 
         unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
-            fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
                 self.backend.post_erase(v);
             }
 
-            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
                 self.backend.post_migrate(v);
             }
 
             fn finish(
                 mut self: Box<Self>,
                 c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
                 accepted: Wire<'w>,
                 validate: bool,
             ) {
                 let workspace = self.workspace.clone();
 
-                self.backend.enforce_true(c, accepted);
+                self.backend.enforce_true(c, ev, accepted);
                 let bool_sink = self.backend.finish();
                 let sink = bool_sink.finish();
 
@@ -435,6 +494,15 @@ pub fn new_boolean_sieve_ir_v2<'a>(
                     cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
                 }
                 cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                matches!(feature,
+                    | BackendFeature::Function
+                    | BackendFeature::ConcatExtractBits
+                    | BackendFeature::WideMul
+                    | BackendFeature::Permute
+                )
             }
         }
     }
@@ -451,9 +519,16 @@ pub fn new_dummy<'a>() -> Box<dyn Backend<'a> + 'a> {
 
 #[allow(unused)]
 unsafe impl<'a> Backend<'a> for () {
-    fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {}
-    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {}
-    fn finish(self: Box<Self>, c: &CircuitBase<'a>, accepted: Wire<'a>, validate: bool) {}
+    fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>) {}
+    fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>) {}
+    fn finish(
+        self: Box<Self>,
+        c: &CircuitBase<'a>,
+        ev: &mut CachingEvaluator<'a, '_, eval::RevealSecrets>,
+        accepted: Wire<'a>,
+        validate: bool,
+    ) {}
+    fn has_feature(&self, feature: BackendFeature) -> bool { true }
 }
 
 
@@ -467,20 +542,35 @@ pub fn new_stats<'a>() -> Box<dyn Backend<'a> + 'a> {
 
 
     unsafe impl<'a> Backend<'a> for BackendWrapper<'a> {
-        fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {
+        fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>) {
             self.stats.add_iter(v.erased().iter().map(|&(w, _)| w));
             migrate::migrate_in_place(v, &mut self.stats);
         }
 
-        fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
+        fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>) {
             migrate::migrate_in_place(v, &mut self.stats);
         }
 
-        fn finish(mut self: Box<Self>, _c: &CircuitBase<'a>, accepted: Wire<'a>, _validate: bool) {
+        fn finish(
+            mut self: Box<Self>,
+            _c: &CircuitBase<'a>,
+            _ev: &mut CachingEvaluator<'a, '_, eval::RevealSecrets>,
+            accepted: Wire<'a>,
+            _validate: bool,
+        ) {
             self.stats.add(&[accepted]);
             eprintln!(" ===== stats =====");
             self.stats.print();
             eprintln!(" ===== end stats =====");
+        }
+
+        fn has_feature(&self, feature: BackendFeature) -> bool {
+            matches!(feature,
+                | BackendFeature::CompareNonZero
+                | BackendFeature::ConcatExtractBits
+                | BackendFeature::WideMul
+                | BackendFeature::Permute
+            )
         }
     }
 }

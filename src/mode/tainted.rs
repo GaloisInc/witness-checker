@@ -1,6 +1,6 @@
 
 use zk_circuit_builder::gadget::bit_pack;
-use zk_circuit_builder::ir::typed::{Builder, TWire};
+use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
 use crate::micro_ram::{
     context::{Context, ContextWhen},
     types::{ByteOffset, CalcIntermediate, Label, MemOpWidth, MemPort, Opcode, WORD_BOTTOM, WordLabel, RamInstr, TaintCalcIntermediate, BOTTOM, MAYBE_TAINTED, WORD_BYTES, WORD_MAYBE_TAINTED}
@@ -11,15 +11,15 @@ use crate::{wire_assert, wire_bug_if};
 // Builds the circuit that calculates our conservative dynamic taint tracking semantics. 
 pub fn calc_step<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
-    regs0: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    regs0: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
     concrete_x: TWire<'a, u64>,
     concrete_y: TWire<'a, u64>,
     concrete_dest: TWire<'a, u8>,
-) -> (IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
+) -> (TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>, IfMode<AnyTainted, TaintCalcIntermediate<'a>>) {
     if let Some(pf) = check_mode::<AnyTainted>() {
         let regs0 = regs0.as_ref().unwrap(&pf);
         let _g = b.scoped_label(format_args!("tainted::calc_step/cycle {}", idx));
@@ -70,7 +70,7 @@ pub fn calc_step<'a>(
             // Assert that we're not jumping to a tainted location.
             cx.when(b, b.or(b.or(is_jmp, is_cjmp), is_cnjmp), |cx| {
                 wire_assert!(
-                    cx, b.eq(ty_joined, b.lit(BOTTOM)),
+                    cx, b, b.eq(ty_joined, b.lit(BOTTOM)),
                     "Invalid jump. Cannot jump to tainted destination {} with label {} at cycle {}",
                     cx.eval(concrete_y), cx.eval(ty_joined), idx,
                 );
@@ -79,7 +79,7 @@ pub fn calc_step<'a>(
             // Assert that the conditional is not tainted.
             cx.when(b, b.or(is_cjmp, is_cnjmp), |cx| {
                 wire_assert!(
-                    cx, b.eq(tx_joined, b.lit(BOTTOM)),
+                    cx, b, b.eq(tx_joined, b.lit(BOTTOM)),
                     "Invalid jump. Cannot branch on tainted data with label {} at cycle {}",
                     cx.eval(tx_joined), idx,
                 );
@@ -127,15 +127,15 @@ pub fn calc_step<'a>(
             label_result: result,
             addr_offset: offset,
         };
-        (IfMode::some(&pf, regs), IfMode::some(&pf, timm))
+        (TWire::new(IfMode::some(&pf, TWire::new(regs))), IfMode::some(&pf, timm))
     } else {
         // JP: Better combinator for this? map_with_or?
-        (IfMode::none(), IfMode::none())
+        (TWire::new(IfMode::none()), IfMode::none())
     }
 }
 
 fn join<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label1: TWire<'a,Label>,
     label2: TWire<'a,Label>,
 ) -> TWire<'a,Label> {
@@ -155,7 +155,7 @@ fn join<'a>(
 }
 
 fn map_join_vec<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label: TWire<'a,Label>,
     labels: TWire<'a,WordLabel>,
 ) -> TWire<'a,WordLabel> {
@@ -168,7 +168,7 @@ fn map_join_vec<'a>(
 }
 
 fn fold1_join_vec<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     labels: TWire<'a,WordLabel>,
 ) -> TWire<'a,Label> {
     let mut res = labels[0];
@@ -179,7 +179,7 @@ fn fold1_join_vec<'a>(
 }
 
 fn check_vec<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     guard: TWire<'a,Label>,
     labels: TWire<'a,WordLabel>,
 ) -> TWire<'a,WordLabel> {
@@ -187,15 +187,15 @@ fn check_vec<'a>(
 }
 
 fn is_taint<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     opcode: TWire<'a,u8>,
 ) -> TWire<'a, bool> {
     b.eq(opcode, b.lit(Opcode::Taint1 as u8))
 }
 
 fn convert_to_label<'a,'b>(
-    cx: &ContextWhen<'a,'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     idx: usize,
     label: TWire<'a, u64>, // Label>,
 ) -> TWire<'a, Label> {
@@ -203,7 +203,7 @@ fn convert_to_label<'a,'b>(
 
     // Check that the label is valid by ensuring the casted label is unchanged.
     wire_assert!(
-        cx, b.eq(label, b.cast(l)),
+        cx, b, b.eq(label, b.cast(l)),
         "Invalid tainted label {} at cycle {}",
         cx.eval(label), idx,
     );
@@ -213,7 +213,7 @@ fn convert_to_label<'a,'b>(
 
 // Duplicate a value `width` times. Fills the remaining elements with `default`.
 fn duplicate<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label: TWire<'a, Label>,
     width: MemOpWidth,
     default: Label,
@@ -230,7 +230,7 @@ fn duplicate<'a>(
 }
 
 fn approx<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label: TWire<'a, Label>,
 ) -> TWire<'a, WordLabel> {
     let bottom = b.lit(BOTTOM);
@@ -239,7 +239,7 @@ fn approx<'a>(
 }
 
 fn approx2<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     label1: TWire<'a, Label>,
     label2: TWire<'a, Label>,
 ) -> TWire<'a, WordLabel> {
@@ -250,7 +250,7 @@ fn approx2<'a>(
 
 // Take `width` elements starting at the given offset. Fills the remaining elements with `default`.
 fn take_width_at_offset<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     labels: TWire<'a, WordLabel>,
     offset: TWire<'a, ByteOffset>,
     width: MemOpWidth,
@@ -273,7 +273,7 @@ fn take_width_at_offset<'a>(
 
 // Shift right by `offset`, filling with `default`.
 fn shift_labels<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     labels: TWire<'a, WordLabel>,
     offset: TWire<'a, ByteOffset>,
     default: Label,
@@ -293,7 +293,7 @@ fn shift_labels<'a>(
 
 // Compare `width` labels.
 fn eq_word_labels_with_width<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     width: TWire<'a, MemOpWidth>,
     label1: TWire<'a, WordLabel>,
     label2: TWire<'a, WordLabel>,
@@ -310,7 +310,7 @@ fn eq_word_labels_with_width<'a>(
 }
 
 fn eq_packed_labels_except_at_offset<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     offset: TWire<'a, ByteOffset>,
     width: TWire<'a, MemOpWidth>,
     label1: TWire<'a, WordLabel>,
@@ -327,7 +327,7 @@ fn eq_packed_labels_except_at_offset<'a>(
 
 // Checks if the byte at index idx is in range.
 fn in_range<'a>(
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     idx: TWire<'a, u8>,
     offset: TWire<'a, ByteOffset>,
     width: TWire<'a, MemOpWidth>,
@@ -340,10 +340,10 @@ fn in_range<'a>(
 
 pub fn check_state<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     cycle: u32,
-    calc_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
-    trace_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    calc_regs: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
+    trace_regs: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
 ) {
     if let Some(pf) = if_mode::check_mode::<AnyTainted>() {
         let _g = b.scoped_label(format_args!("tainted::check_state/cycle {}", cycle));
@@ -353,7 +353,7 @@ pub fn check_state<'a>(
 
         for (i, (&v_calc, &v_new)) in calc_regs.iter().zip(trace_regs.iter()).enumerate() {
             wire_assert!(
-                cx, b.eq(v_new, v_calc),
+                cx, b, b.eq(v_new, v_calc),
                 "cycle {} sets tainted label of reg {} to {:?} (expected {:?})",
                 cycle, i, cx.eval(v_new), cx.eval(v_calc),
             );
@@ -363,13 +363,13 @@ pub fn check_state<'a>(
 
 pub fn check_first<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
-    init_regs: &IfMode<AnyTainted, Vec<TWire<'a,WordLabel>>>,
+    b: &impl Builder<'a>,
+    init_regs: &TWire<'a, IfMode<AnyTainted, Vec<WordLabel>>>,
 ) {
     if let Some(init_regs) = init_regs.try_get() {
         for (i, &r) in init_regs.iter().enumerate() {
             wire_assert!(
-                cx, b.eq(r, b.lit(WORD_BOTTOM)),
+                cx, b, b.eq(r, b.lit(WORD_BOTTOM)),
                 "initial tainted r{} has value {:?} (expected {:?})",
                 i, cx.eval(r), WORD_BOTTOM,
             );
@@ -379,7 +379,7 @@ pub fn check_first<'a>(
 
 pub fn check_step<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     seg_idx: usize,
     idx: usize,
     instr: TWire<'a, RamInstr>,
@@ -402,7 +402,7 @@ pub fn check_step<'a>(
                     // the sink. Equivalent to `not . canFlowTo`.
                     let mt = b.lit(MAYBE_TAINTED);
                     wire_bug_if!(
-                        cx, b.and(b.and(b.ne(xt, y), b.ne(xt, b.lit(BOTTOM))), b.and(b.ne(xt, mt), b.ne(y, mt))),
+                        cx, b, b.and(b.and(b.ne(xt, y), b.ne(xt, b.lit(BOTTOM))), b.and(b.ne(xt, mt), b.ne(y, mt))),
                         "leak of tainted data from register {:x} (byte {}) with label {} does not match output channel label {} on cycle {},{}",
                         cx.eval(instr.op1), i, cx.eval(xt), cx.eval(y), seg_idx, idx,
                     );
@@ -415,8 +415,8 @@ pub fn check_step<'a>(
 // Circuit for checking memory operations. Only called when an operation is a memory operation
 // (read, write, poison).
 pub fn check_step_mem<'a, 'b>(
-    cx: &ContextWhen<'a, 'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     seg_idx: usize,
     idx: usize,
     mem_port: &TWire<'a, MemPort>, 
@@ -437,7 +437,7 @@ pub fn check_step_mem<'a, 'b>(
             let width = mem_port.width;
             // Compare the lowest `width` labels.
             wire_assert!(
-                cx, eq_word_labels_with_width(b, mem_port.width, port_shifted, expect_tainted),
+                cx, b, eq_word_labels_with_width(b, mem_port.width, port_shifted, expect_tainted),
                 "segment {}: step {}'s mem port (op {:?}, offset {:?}, width {:?}) has tainted {:?} expected {:?} ({:?})",
                 seg_idx, idx, cx.eval(op),
                 cx.eval(offset), cx.eval(width),
@@ -451,8 +451,8 @@ pub fn check_step_mem<'a, 'b>(
 // Circuit that checks memory when port2 is a read. Since it is a read, port2's tainted must be the same as
 // port1's tainted.
 pub fn check_read_memports<'a, 'b>(
-    cx: &ContextWhen<'a, 'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     port1label: &TWire<'a, IfMode<AnyTainted,WordLabel>>,
     port2: &TWire<'a, MemPort>, 
 ) {
@@ -463,7 +463,7 @@ pub fn check_read_memports<'a, 'b>(
         let addr2 = port2.addr;
         let cycle2 = port2.cycle;
         wire_assert!(
-            cx, b.eq(tainted1, tainted2),
+            cx, b, b.eq(tainted1, tainted2),
             "tainted read from {:#x} on cycle {} produced {:?} (expected {:?})",
             cx.eval(addr2), cx.eval(cycle2),
             cx.eval(tainted2), cx.eval(tainted1),
@@ -473,8 +473,8 @@ pub fn check_read_memports<'a, 'b>(
 
 // Circuit that checks memory when port is a write. Since it is a write, port's unmodified tainted bits must be the same as prev's.
 pub fn check_write_memports<'a, 'b>(
-    cx: &ContextWhen<'a, 'b>,
-    b: &Builder<'a>,
+    cx: &ContextWhen<'a, 'b, impl Builder<'a>>,
+    b: &impl Builder<'a>,
     prev_label: &TWire<'a, IfMode<AnyTainted,WordLabel>>,
     port2: &TWire<'a, MemPort>,
     offset2: &TWire<'a, ByteOffset>,
@@ -487,7 +487,7 @@ pub fn check_write_memports<'a, 'b>(
         let addr2 = port2.addr;
         let cycle2 = port2.cycle;
         wire_assert!(
-            cx, eq_packed_labels_except_at_offset(b, *offset2, width2, tainted1, tainted2),
+            cx, b, eq_packed_labels_except_at_offset(b, *offset2, width2, tainted1, tainted2),
             "tainted write from {:x} on cycle {} modified outside width {:?}: 0x{:?} != 0x{:?}",
             cx.eval(addr2), cx.eval(cycle2),
             cx.eval(width2),

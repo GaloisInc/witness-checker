@@ -217,6 +217,7 @@ dependencies = [
  "arrayvec 0.5.2",
  "clap",
  "env_logger",
+ "getrandom 0.2.8",
  "goldenfile",
  "log",
  "num-bigint",
@@ -225,7 +226,17 @@ dependencies = [
  "serde_cbor",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "zk-circuit-builder",
+]
+
+[[package]]
+name = "cheesecloth-derive-ir-typed"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1421,10 +1432,12 @@ dependencies = [
 name = "zk-circuit-builder"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.5.2",
  "bitflags",
  "bitvec 0.18.4",
  "bumpalo",
  "byteorder",
+ "cheesecloth-derive-ir-typed",
  "cheesecloth-derive-migrate",
  "ff",
  "generic-array",

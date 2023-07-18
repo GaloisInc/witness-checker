@@ -1,9 +1,10 @@
 use num_bigint::{BigInt, BigUint};
 use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
-    CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind, GadgetKindRef,
+    CircuitExt, CircuitBase, CircuitTrait, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
+    GadgetKindRef,
 };
-use crate::ir::typed::{Builder, AsBuilder, Repr, TWire};
+use crate::ir::typed::{Builder, BuilderExt as _, Repr, TWire};
 
 
 fn overflow_result(ty: Ty, raw: BigInt) -> Value {
@@ -325,14 +326,14 @@ impl<'a> GadgetKind<'a> for WideMul {
 }
 
 
-pub trait BuilderExt<'a>: AsBuilder<'a> {
+pub trait BuilderExt<'a>: Builder<'a> {
     fn add_with_overflow<A: AddWithOverflowTrait<'a, B>, B: Repr<'a>>(
         &self,
         a: TWire<'a, A>,
         b: TWire<'a, B>,
     ) -> (TWire<'a, A::Output>, TWire<'a, bool>) {
         let (result, overflow) = <A as AddWithOverflowTrait<B>>::add_with_overflow(
-            self.as_builder(),
+            self,
             a.repr,
             b.repr,
         );
@@ -345,7 +346,7 @@ pub trait BuilderExt<'a>: AsBuilder<'a> {
         b: TWire<'a, B>,
     ) -> (TWire<'a, A::Output>, TWire<'a, bool>) {
         let (result, overflow) = <A as SubWithOverflowTrait<B>>::sub_with_overflow(
-            self.as_builder(),
+            self,
             a.repr,
             b.repr,
         );
@@ -358,21 +359,21 @@ pub trait BuilderExt<'a>: AsBuilder<'a> {
         b: TWire<'a, B>,
     ) -> TWire<'a, A::Output> {
         TWire::new(<A as WideMulTrait<B>>::wide_mul(
-            self.as_builder(),
+            self,
             a.repr,
             b.repr,
         ))
     }
 }
 
-impl<'a> BuilderExt<'a> for Builder<'a> {}
+impl<'a, B: Builder<'a>> BuilderExt<'a> for B {}
 
 
 pub trait AddWithOverflowTrait<'a, Other = Self>
 where Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn add_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Self::Repr,
         b: Other::Repr,
     ) -> (<Self::Output as Repr<'a>>::Repr, <bool as Repr<'a>>::Repr);
@@ -381,7 +382,7 @@ where Self: Repr<'a>, Other: Repr<'a> {
 impl<'a> AddWithOverflowTrait<'a> for u64 {
     type Output = u64;
     fn add_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (Wire<'a>, Wire<'a>) {
@@ -397,7 +398,7 @@ pub trait SubWithOverflowTrait<'a, Other = Self>
 where Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn sub_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Self::Repr,
         b: Other::Repr,
     ) -> (<Self::Output as Repr<'a>>::Repr, <bool as Repr<'a>>::Repr);
@@ -406,7 +407,7 @@ where Self: Repr<'a>, Other: Repr<'a> {
 impl<'a> SubWithOverflowTrait<'a> for u64 {
     type Output = u64;
     fn sub_with_overflow(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (Wire<'a>, Wire<'a>) {
@@ -422,7 +423,7 @@ pub trait WideMulTrait<'a, Other = Self>
 where Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn wide_mul(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Self::Repr,
         b: Other::Repr,
     ) -> <Self::Output as Repr<'a>>::Repr;
@@ -431,7 +432,7 @@ where Self: Repr<'a>, Other: Repr<'a> {
 impl<'a> WideMulTrait<'a> for u64 {
     type Output = (u64, u64);
     fn wide_mul(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (TWire<'a, u64>, TWire<'a, u64>) {
@@ -445,7 +446,7 @@ impl<'a> WideMulTrait<'a> for u64 {
 impl<'a> WideMulTrait<'a> for i64 {
     type Output = (u64, i64);
     fn wide_mul(
-        bld: &Builder<'a>,
+        bld: &impl Builder<'a>,
         a: Wire<'a>,
         b: Wire<'a>,
     ) -> (TWire<'a, u64>, TWire<'a, i64>) {
@@ -473,8 +474,8 @@ mod test {
             a_ty: TyKind<'static>,
             b_ty: TyKind<'static>,
         ) {
-            let c1 = Circuit::new(arenas1, true, FilterNil);
-            let c2 = Circuit::new(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
+            let c1 = Circuit::new::<()>(arenas1, true, FilterNil);
+            let c2 = Circuit::new::<()>(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
 
             let gk1 = c1.intern_gadget_kind(WideMul);
             let gk2 = c2.intern_gadget_kind(WideMul);
@@ -489,8 +490,8 @@ mod test {
                     let out1 = c1.gadget(gk1, &[a1, b1]);
                     let out2 = c2.gadget(gk2, &[a2, b2]);
 
-                    let out1_val = eval::eval_wire_public(&c1, out1);
-                    let out2_val = eval::eval_wire_public(&c2, out2);
+                    let out1_val = eval::eval_wire_public(c1.as_base(), out1);
+                    let out2_val = eval::eval_wire_public(c2.as_base(), out2);
                     assert_eq!(out1_val, out2_val, "on inputs {}, {}", a_val, b_val);
                 }
             }
@@ -534,8 +535,8 @@ mod test {
             a_ty: TyKind<'static>,
             b_ty: TyKind<'static>,
         ) {
-            let c1 = Circuit::new(arenas1, true, FilterNil);
-            let c2 = Circuit::new(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
+            let c1 = Circuit::new::<()>(arenas1, true, FilterNil);
+            let c2 = Circuit::new::<()>(arenas2, true, DecomposeGadgets::new(FilterNil, |_| true));
 
             let gk1 = c1.intern_gadget_kind(WideMulSplit);
             let gk1_unsplit = c1.intern_gadget_kind(WideMul);
@@ -552,11 +553,11 @@ mod test {
                     let out1_unsplit = c1.gadget(gk1_unsplit, &[a1, b1]);
                     let out2 = c2.gadget(gk2, &[a2, b2]);
 
-                    let out1_val = eval::eval_wire_public(&c1, out1);
-                    let out2_val = eval::eval_wire_public(&c2, out2);
+                    let out1_val = eval::eval_wire_public(c1.as_base(), out1);
+                    let out2_val = eval::eval_wire_public(c2.as_base(), out2);
                     assert_eq!(out1_val, out2_val, "on inputs {}, {}", a_val, b_val);
 
-                    let unsplit_val = eval::eval_wire_public(&c1, out1_unsplit)
+                    let unsplit_val = eval::eval_wire_public(c1.as_base(), out1_unsplit)
                         .unwrap().unwrap_single().unwrap();
                     let low = &unsplit_val & BigInt::from((1_u8 << a_ty.integer_size().bits()) - 1);
                     let high = &unsplit_val >> a_ty.integer_size().bits();

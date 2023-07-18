@@ -5,8 +5,8 @@ use std::mem;
 use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
-    VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr, Advice, TraceChunk,
-    Segment, SegmentConstraint,
+    VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr,
+    Advice, TraceChunk, Segment, SegmentConstraint, Commitment, CodeSegment,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -109,11 +109,40 @@ impl<'de> Visitor<'de> for VersionedMultiExecVisitor {
 
 impl<'de> Deserialize<'de> for ExecBody {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_struct(
+        let mut exec = d.deserialize_struct(
             "ExecBody",
             &["program", "init_mem", "params", "trace", "advice"],
             ExecBodyVisitor,
-        )
+        )?;
+
+        if !has_feature(Feature::PublicPc) {
+            // Adjust non-public-pc traces to fit the public-pc format.  In non-public-PC mode, the
+            // prover can provide an initial state, with some restrictions.
+            assert!(exec.segments.len() == 0);
+            assert!(exec.trace.len() == 1);
+            let chunk = &exec.trace[0];
+
+            let new_segment = Segment {
+                constraints: vec![],
+                len: exec.params.trace_len.unwrap() - 1,
+                successors: vec![],
+                enter_from_network: false,
+                exit_to_network: false,
+            };
+
+            let provided_init_state = Some(chunk.states[0].clone());
+            let new_chunk = TraceChunk {
+                segment: 0,
+                states: chunk.states[1..].to_owned(),
+                debug: None,
+            };
+
+            exec.segments = vec![new_segment];
+            exec.trace = vec![new_chunk];
+            exec.provided_init_state = provided_init_state;
+        }
+
+        Ok(exec)
     }
 }
 
@@ -133,6 +162,8 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
             segments: Vec::new(),
             trace: Vec::new(),
             advice: HashMap::new(),
+            labels: HashMap::new(),
+            provided_init_state: None,
         };
 
         let mut seen = HashSet::new();
@@ -144,7 +175,21 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
             }
 
             match &k as &str {
-                "program" => { ex.program = map.next_value()?; },
+                "program" => {
+                    if has_feature(Feature::CodeSegments) {
+                        ex.program = map.next_value()?;
+                    } else {
+                        let instrs: Vec<_> = map.next_value()?;
+                        ex.program = vec![CodeSegment {
+                            name: "_program".into(),
+                            start: 0,
+                            len: instrs.len() as u64,
+                            secret: false,
+                            uncommitted: false,
+                            instrs,
+                        }];
+                    }
+                },
                 "init_mem" => { ex.init_mem = map.next_value()?; },
                 "params" => { ex.params = map.next_value()?; },
                 "segments" if has_feature(Feature::PublicPc) => {
@@ -170,8 +215,9 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                     }
                 },
                 "labels" => {
-                    let _: HashMap<String, usize> = map.next_value()?;
+                    ex.labels = map.next_value()?;
                 },
+                // Note: `provided_init_state` can't be set in the CBOR file.
                 _ => return Err(serde::de::Error::custom(format_args!(
                     "unknown key {:?}", k,
                 ))),
@@ -269,6 +315,48 @@ impl<'de> Visitor<'de> for RamInstrVisitor {
     }
 }
 
+
+impl<'de> Deserialize<'de> for Commitment {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let i = s.find(':').ok_or_else(|| de::Error::invalid_value(
+            de::Unexpected::Str(&s),
+            &"a commitment of the form KIND:DATA",
+        ))?;
+
+        let kind = &s[..i];
+        let data = &s[i + 1 ..];
+
+        match kind {
+            "sha256" => {
+                if data.len() != 64 {
+                    return Err(de::Error::invalid_length(
+                        data.len(),
+                        &"sha256:DATA, where DATA is a 64-digit hex string",
+                    ));
+                }
+                let mut hash = [0_u32; 8];
+                for i in 0..8 {
+                    let chunk = &data[i * 8 .. (i + 1) * 8];
+                    hash[i] = u32::from_str_radix(chunk, 16).map_err(|_| {
+                        de::Error::invalid_value(
+                            de::Unexpected::Str(chunk),
+                            &"hex digits",
+                        )
+                    })?;
+                }
+                Ok(Commitment::Sha256(hash))
+            },
+
+            _ => {
+                return Err(de::Error::unknown_variant(
+                    kind,
+                    &["sha256"],
+                ));
+            },
+        }
+    }
+}
 
 impl<'de> Deserialize<'de> for Segment {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {

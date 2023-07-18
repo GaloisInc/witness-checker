@@ -29,10 +29,13 @@ use std::path::Path;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
+use crate::eval::{Evaluator, CachingEvaluator, RevealSecrets};
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
-    self, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor, MigrateVisitor,
+    self, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor,
+    MigrateVisitor,
 };
+use crate::ir::migrate::Visitor as _;
 
 use super::{
     field::QuarkScalar,
@@ -79,8 +82,13 @@ impl<'a> Backend<'a> {
         self.cs.finish("cheesecloth")
     }
 
-    pub fn enforce_true(&mut self, wire: Wire<'a>) {
-        let repr_id = self.convert_wires(&[wire])[0];
+    pub fn enforce_true(
+        &mut self,
+        c: &CircuitBase<'a>,
+        ev: &mut impl Evaluator<'a>,
+        wire: Wire<'a>,
+    ) {
+        let repr_id = self.convert_wires(c, ev, &[wire])[0];
         let bool = self.representer.mut_repr(repr_id).as_boolean(&mut self.cs);
         enforce_true(&mut self.cs, &bool);
     }
@@ -91,14 +99,19 @@ impl<'a> Backend<'a> {
         bool.get_value()
     }
 
-    fn convert_wires(&mut self, wires: &[Wire<'a>]) -> Vec<ReprId> {
+    fn convert_wires(
+        &mut self,
+        c: &CircuitBase<'a>,
+        ev: &mut impl Evaluator<'a>,
+        wires: &[Wire<'a>],
+    ) -> Vec<ReprId> {
         let order = circuit::walk_wires_filtered(
             wires.iter().cloned(),
             |w| !self.wire_to_repr.contains_key(&w),
         ).collect::<Vec<_>>();
 
         for wire in order {
-            let wid = self.make_repr(wire);
+            let wid = self.make_repr(c, ev, wire);
             self.wire_to_repr.insert(wire, wid);
         }
 
@@ -109,7 +122,12 @@ impl<'a> Backend<'a> {
         self.wire_to_repr[&wire]
     }
 
-    fn make_repr(&mut self, wire: Wire<'a>) -> ReprId {
+    fn make_repr(
+        &mut self,
+        c: &CircuitBase<'a>,
+        ev: &mut impl Evaluator<'a>,
+        wire: Wire<'a>,
+    ) -> ReprId {
         // Most gates create a representation for a new wire,
         // but some no-op gates return directly the ReprId of their argument.
 
@@ -127,10 +145,11 @@ impl<'a> Backend<'a> {
                 match *secret.ty {
                     TyKind::Uint(sz) | TyKind::Int(sz) => {
                         // TODO: can we use Num::alloc here instead?
+                        let opt_bits = ev.eval_wire_bits(c, wire).ok().map(|(b, _)| b);
                         let int = Int::alloc::<Scalar, _>(
                             &mut self.cs,
                             sz.bits() as usize,
-                            secret.val().map(|val| val.to_biguint()),
+                            opt_bits.map(|val| val.to_biguint()),
                         )
                         .unwrap();
                         WireRepr::from(int)
@@ -439,25 +458,27 @@ impl<'a> Backend<'a> {
                 }
             }
 
-            GateKind::Call(_, _, _) => unimplemented!("Call"),
+            GateKind::Call(_) => unimplemented!("Call"),
         };
 
         self.representer.new_repr(repr)
     }
 
-    pub fn post_erase(&mut self, v: &mut EraseVisitor<'a>) {
+    pub fn post_erase(&mut self, v: &mut EraseVisitor<'a, '_>) {
         // Each entry `(old, new)` in `v.erased()` indicates that wire `old` was replaced with the
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_to_repr[new]` as well.
-        let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter().cloned().unzip();
-        let old_reprs = self.convert_wires(&old_wires);
+        let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter()
+            .filter(|&&(w, _)| !matches!(*w.ty, TyKind::RawBits))
+            .cloned().unzip();
+        let old_reprs = self.convert_wires(v.new_circuit(), &mut *v.evaluator(), &old_wires);
         for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
             assert!(!self.wire_to_repr.contains_key(&new_wire));
             self.wire_to_repr.insert(new_wire, old_repr);
         }
     }
 
-    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a>) {
+    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>) {
         use crate::ir::migrate::Visitor as _;
 
         let mut old_representer = mem::replace(&mut self.representer, Representer::new());
@@ -484,18 +505,20 @@ fn as_lit(wire: Wire) -> Option<BigUint> {
 
 #[test]
 fn test_zkif() -> Result<()> {
-    use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
+    use crate::eval::{self, CachingEvaluator};
+    use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt, Ty};
     use super::num::_scalar_from_unsigned;
 
     let mut b = Backend::new(Path::new("local/test"), true);
 
     let arenas = Arenas::new();
-    let c = CircuitBase::new(&arenas, true);
+    let c = CircuitBase::new::<()>(&arenas, true);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
     let zero = c.lit(c.ty(TyKind::I64), 0);
     let lit = c.lit(c.ty(TyKind::I64), 11);
-    let sec1 = c.new_secret_wire_init(c.ty(TyKind::I64), || 12);
-    let sec2 = c.new_secret_wire_init(c.ty(TyKind::I64), || 13);
+    let sec1 = c.secret_immediate(Ty::int(64), 12_i64);
+    let sec2 = c.secret_immediate(Ty::int(64), 13_i64);
     let prod = c.mul(sec1, sec2);
     let is_zero = c.compare(CmpOp::Eq, prod, zero);
     let diff1 = c.sub(prod, lit);
@@ -503,7 +526,7 @@ fn test_zkif() -> Result<()> {
     let diff2 = c.sub(lit, prod);
     let is_ge_zero2 = c.compare(CmpOp::Ge, diff2, zero);
 
-    b.convert_wires(&[is_zero, is_ge_zero1, is_ge_zero2]);
+    b.convert_wires(&c, &mut ev, &[is_zero, is_ge_zero1, is_ge_zero2]);
 
     fn check_int<'a>(b: &Backend<'a>, w: Wire<'a>, expect: u64) {
         let wi = *b.wire_to_repr.get(&w).unwrap();

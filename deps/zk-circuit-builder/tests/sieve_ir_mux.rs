@@ -1,6 +1,6 @@
 #![cfg(feature = "sieve_ir")]
 
-use zk_circuit_builder::eval::{self, CachingEvaluator, Evaluator};
+use zk_circuit_builder::eval::{self, CachingEvaluator, EvalWire};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };
@@ -11,7 +11,7 @@ use zki_sieve::FilesSink;
 macro_rules! make_circuit {
     ($arenas:expr) => {{
         let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-        let c = Circuit::new($arenas, true, cf);
+        let c = Circuit::new::<()>($arenas, true, cf);
         c
     }};
 }
@@ -23,8 +23,8 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     };
 
     // Make sure the circuit is valid.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
-    let val = ev.eval_wire(w).ok();
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+    let val = ev.eval_wire(c, w).ok();
     assert_eq!(val, Some(eval::Value::SingleInteger(BigInt::from(1))));
 
     // Convert to zkif and validate
@@ -33,7 +33,7 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     let sink = FilesSink::new_clean(&dir.path()).unwrap();
     let ir_builder = IRBuilder::new::<Scalar>(sink);
     let mut backend = Backend::new(ir_builder);
-    backend.enforce_true(w);
+    backend.enforce_true(c.as_base(), &mut ev, w);
     let ir_builder = backend.finish();
     ir_builder.finish();
 

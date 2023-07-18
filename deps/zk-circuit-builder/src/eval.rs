@@ -1,17 +1,19 @@
+use std::any::Any;
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::convert::TryFrom;
 use std::iter;
+use std::ptr;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 #[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
-
 use crate::ir::circuit::{
-    self, CircuitBase, CircuitTrait, Field, FromBits, Ty, Wire, Secret, Bits, AsBits, GateKind, TyKind, UnOp, BinOp,
-    ShiftOp, CmpOp, GateValue, Function, SecretValue, SecretInputId,
+    self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
+    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, Call, SecretProjectFn,
 };
+use crate::util::CowBox;
 
 use self::Value::SingleField;
 use self::Value::SingleInteger;
@@ -35,10 +37,10 @@ impl Value {
             TyKind::GF(_) => {
                 Value::SingleField(bits.0.into())
             },
-            TyKind::Bundle(tys) => {
-                let mut vals = Vec::with_capacity(tys.len());
+            TyKind::Bundle(btys) => {
+                let mut vals = Vec::with_capacity(btys.len());
                 let mut pos = 0;
-                for &ty in tys {
+                for &ty in btys.tys() {
                     let end = pos + ty.digits();
                     let end = cmp::min(end, bits.0.len());
                     let field_bits = Bits(&bits.0[pos .. end]);
@@ -48,6 +50,7 @@ impl Value {
                 assert_eq!(pos, bits.0.len());
                 Value::Bundle(vals)
             },
+            TyKind::RawBits => panic!("can't convert RawBits to Value"),
         }
     }
 
@@ -60,10 +63,10 @@ impl Value {
             (&Value::SingleField(ref v), TyKind::GF(field)) => {
                 c.intern_bits(v)
             }
-            (&Value::Bundle(ref vs), TyKind::Bundle(tys)) => {
-                assert_eq!(vs.len(), tys.len());
+            (&Value::Bundle(ref vs), TyKind::Bundle(btys)) => {
+                assert_eq!(vs.len(), btys.len());
                 let mut digits = Vec::with_capacity(ty.digits());
-                for (v, &ty) in vs.iter().zip(tys.iter()) {
+                for (v, &ty) in vs.iter().zip(btys.tys().iter()) {
                     let bits = v.to_bits(c, ty);
                     digits.extend_from_slice(&bits.0);
                     // Pad with zeros if `bits` is short.
@@ -128,26 +131,130 @@ impl Value {
     }
 }
 
-pub trait Evaluator<'a>: SecretEvaluator<'a> {
-    fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a>;
+pub trait EvalWire<'a> {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a>;
 
-    fn eval_single_integer_wire(&mut self, w: Wire<'a>) -> Result<BigInt, Error<'a>> {
-        match self.eval_wire(w)? {
+    fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
+        &mut self,
+        c: &C,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>>;
+
+    fn eval_single_integer_wire(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<BigInt, Error<'a>> {
+        match self.eval_wire(c, w)? {
             SingleInteger(x) => Ok(x),
             _ => Err(Error::Other),
         }
     }
 
-    fn eval_single_field_wire(&mut self, w: Wire<'a>) -> Result<Vec<u32>, Error<'a>> {
-        match self.eval_wire(w)? {
+    fn eval_single_field_wire(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<Vec<u32>, Error<'a>> {
+        match self.eval_wire(c, w)? {
             SingleField(x) => Ok(x),
             _ => Err(Error::Other),
         }
     }
 }
 
+pub trait Evaluator<'a>: EvalWire<'a> {
+    type FunctionEvaluator<'b>: Evaluator<'a> where Self: 'b;
+
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> Self::FunctionEvaluator<'b>;
+}
+
 pub trait SecretEvaluator<'a> {
     const REVEAL_SECRETS: bool;
+}
+
+impl<'a, E: EvalWire<'a>> EvalWire<'a> for &'_ mut E {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        E::eval_wire(self, c, w)
+    }
+
+    fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
+        &mut self,
+        c: &C,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
+        E::eval_wire_bits(self, c, w)
+    }
+
+    fn eval_single_integer_wire(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<BigInt, Error<'a>> {
+        E::eval_single_integer_wire(self, c, w)
+    }
+
+    fn eval_single_field_wire(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<Vec<u32>, Error<'a>> {
+        E::eval_single_field_wire(self, c, w)
+    }
+}
+
+impl<'a, E: Evaluator<'a>> Evaluator<'a> for &'_ mut E {
+    type FunctionEvaluator<'b> = E::FunctionEvaluator<'b> where Self: 'b;
+
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> Self::FunctionEvaluator<'b> {
+        E::enter_call(self, c, call)
+    }
+}
+
+/// Object-safe version of `Evaluator`.
+pub trait EvaluatorObj<'a> {
+    fn eval_wire(&mut self, c: &CircuitBase<'a>, w: Wire<'a>) -> EvalResult<'a>;
+    fn eval_wire_bits(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>>;
+}
+
+impl<'a, E: Evaluator<'a>> EvaluatorObj<'a> for E {
+    fn eval_wire(&mut self, c: &CircuitBase<'a>, w: Wire<'a>) -> EvalResult<'a> {
+        <Self as EvalWire>::eval_wire(self, c, w)
+    }
+
+    fn eval_wire_bits(
+        &mut self,
+        c: &CircuitBase<'a>,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
+        <Self as EvalWire>::eval_wire_bits(self, c, w)
+    }
+}
+
+impl<'a> EvalWire<'a> for dyn EvaluatorObj<'a> + '_ {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        EvaluatorObj::eval_wire(self, c.as_base(), w)
+    }
+
+    fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
+        &mut self,
+        c: &C,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
+        EvaluatorObj::eval_wire_bits(self, c.as_base(), w)
+    }
 }
 
 
@@ -166,13 +273,6 @@ impl<'a> SecretEvaluator<'a> for RevealSecrets {
 }
 
 
-/// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
-/// sharing.
-pub struct CachingEvaluator<'a, S> {
-    secret_eval: S,
-    circuit: &'a CircuitBase<'a>,
-}
-
 /// Result of evaluating a `Wire`.  Evaluation produces a `Value` on success.  It fails if the
 /// `Wire` depends on a `Secret` whose value is unknown or not yet set, in which case it returns
 /// the relevant `Secret`.
@@ -180,6 +280,9 @@ pub type EvalResult<'a> = Result<Value, Error<'a>>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
 pub enum Error<'a> {
+    /// Evaluation failed because the result would be secret, but the evaluator was configured not
+    /// to reveal secrets.
+    Secret,
     /// Evaluation failed because the value of this secret was unknown at the time.
     UnknownSecret(Secret<'a>),
     /// Evaluation failed because some input was unevaluated.
@@ -193,43 +296,6 @@ impl<'a> From<&'_ Error<'a>> for Error<'a> {
     fn from(x: &Error<'a>) -> Error<'a> { x.clone() }
 }
 
-impl<'a, S: Default> CachingEvaluator<'a, S> {
-    pub fn new<C: CircuitTrait<'a> + ?Sized>(circuit: &'a C) -> Self {
-        CachingEvaluator {
-            secret_eval: S::default(),
-            circuit: circuit.as_base(),
-        }
-    }
-}
-
-impl<'a, 'b, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, S> {
-    type Output = CachingEvaluator<'b, S::Output>;
-
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(
-        self,
-        v: &mut V,
-    ) -> CachingEvaluator<'b, S::Output> {
-        CachingEvaluator {
-            secret_eval: v.visit(self.secret_eval),
-            circuit: v.new_circuit(),
-        }
-    }
-}
-
-impl<'a, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, S> {
-    const REVEAL_SECRETS: bool = S::REVEAL_SECRETS;
-}
-
-impl<'a, S: SecretEvaluator<'a>> Evaluator<'a> for CachingEvaluator<'a, S> {
-    fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a> {
-        let (bits, sec) = eval_wire(self.circuit, w)?;
-        if sec && !S::REVEAL_SECRETS {
-            return Err(Error::Other);
-        }
-        Ok(Value::from_bits(w.ty, bits))
-    }
-}
-
 
 pub struct LiteralEvaluator;
 
@@ -237,33 +303,38 @@ impl<'a> SecretEvaluator<'a> for LiteralEvaluator {
     const REVEAL_SECRETS: bool = false;
 }
 
-impl<'a> Evaluator<'a> for LiteralEvaluator {
-    fn eval_wire(&mut self, w: Wire<'a>) -> EvalResult<'a> {
+impl<'a> EvalWire<'a> for LiteralEvaluator {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        let (bits, sec) = EvalWire::eval_wire_bits(self, c, w)?;
+        debug_assert!(!sec);
+        let val = Value::from_bits(w.ty, bits);
+        Ok(val)
+    }
+
+    fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
+        &mut self,
+        c: &C,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
         match w.kind {
-            GateKind::Lit(bits, ty) => Ok(Value::from_bits(ty, bits)),
+            GateKind::Lit(bits, _ty) => Ok((bits, false)),
             _ => Err(Error::Other),
         }
     }
 }
 
+impl<'a> Evaluator<'a> for LiteralEvaluator {
+    type FunctionEvaluator<'b> = LiteralEvaluator;
 
-fn convert_gate_value<'a>(gv: GateValue<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
-    match gv {
-        GateValue::Unset => Err(Error::UnevalInput),
-        GateValue::Public(bits) => Ok((bits, false)),
-        GateValue::Secret(bits) => Ok((bits, true)),
-        GateValue::NeedsSecret(s) => Err(Error::UnknownSecret(s)),
-        GateValue::Failed => Err(Error::Other),
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> Self::FunctionEvaluator<'b> {
+        LiteralEvaluator
     }
 }
 
-fn get_int_value<'a>(
-    ecx: &impl EvalContext<'a>,
-    w: Wire<'a>,
-) -> Result<(BigInt, bool), Error<'a>> {
-    let (bits, sec) = ecx.get_value(w)?;
-    Ok((bits.to_bigint(w.ty), sec))
-}
 
 fn trunc<'a, T: AsBits>(c: &CircuitBase<'a>, ty: Ty<'a>, x: T) -> Bits<'a> {
     x.as_bits(c, ty.integer_size())
@@ -277,58 +348,229 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { x } else { x % y }
 }
 
-trait EvalContext<'a> {
+trait EvalContext<'a, 'b> {
     /// Get the value of `w` as `Bits` and a flag indicating whether the value is derived from
     /// secrets.
     fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>>;
-    fn eval_secret(&self, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>>;
-    fn eval_argument(&self, i: usize) -> Result<(Bits<'a>, bool), Error<'a>>;
+
+    fn get_int_value(&self, w: Wire<'a>) -> Result<(BigInt, bool), Error<'a>> {
+        let (bits, sec) = self.get_value(w)?;
+        Ok((bits.to_bigint(w.ty), sec))
+    }
+
+    fn eval_secret(&self, c: &CircuitBase<'a>, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>>;
+    fn get_erased(&self, e: Erased<'a>) -> Result<(Bits<'a>, bool), Error<'a>>;
+    fn get_argument(&self, i: usize) -> Result<(Bits<'a>, bool), Error<'a>>;
+
+    type FunctionContext: Evaluator<'a>;
+    fn enter_function(
+        &'b self,
+        c: &CircuitBase<'a>,
+        args: Vec<(Bits<'a>, bool)>,
+        project_witness: SecretProjectFn<'a>,
+        project_deps: &[Bits<'a>],
+    ) -> Self::FunctionContext;
 }
 
-struct TopLevelContext;
-impl<'a> EvalContext<'a> for TopLevelContext {
-    fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
-        convert_gate_value(w.value.get())
-    }
-
-    fn eval_secret(&self, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>> {
-        match s.secret_value() {
-            SecretValue::ProverInit(b) => Ok(b),
-            SecretValue::ProverUninit => Err(Error::UnknownSecret(s)),
-            SecretValue::VerifierUnknown =>  Err(Error::UnknownSecret(s)),
-            SecretValue::FunctionInput(_) => unreachable!("found FunctionInput at top level?"),
-        }
-    }
-
-    fn eval_argument(&self, _i: usize) -> Result<(Bits<'a>, bool), Error<'a>> {
-        panic!("can't access arguments at top level")
-    }
-}
-
-struct FunctionContext<'a> {
+/// Evaluator that caches the result of each wire.  This avoids duplicate work in cases with
+/// sharing.
+pub struct CachingEvaluator<'a, 'w, S> {
+    secret_eval: S,
+    witness: CowBox<'w, dyn Any>,
+    cache: HashMap<Wire<'a>, (Option<Bits<'a>>, bool)>,
+    in_function: bool,
     args: Vec<(Bits<'a>, bool)>,
-    /// The value of each secret used by this function.  `None` means the value is not known at
-    /// this time.
-    secrets: Vec<Option<Bits<'a>>>,
-    cache: HashMap<Wire<'a>, (Bits<'a>, bool)>,
 }
 
-impl<'a> EvalContext<'a> for FunctionContext<'a> {
-    fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
-        self.cache.get(&w).cloned().ok_or(Error::UnevalInput)
+impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
+    pub fn new() -> Self {
+        Self::with_witness(&())
+    }
+}
+
+impl<'a, S: Default> CachingEvaluator<'a, 'static, S> {
+    pub fn with_boxed_witness(witness: Box<dyn Any>) -> Self {
+        Self::with_cow_witness(CowBox::from(witness))
+    }
+}
+
+impl<'a, 'w, S: Default> CachingEvaluator<'a, 'w, S> {
+    pub fn with_witness(witness: &'w dyn Any) -> Self {
+        Self::with_cow_witness(CowBox::from(witness))
     }
 
-    fn eval_secret(&self, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>> {
-        match s.secret_value() {
-            SecretValue::FunctionInput(id) => {
-                self.secrets[id.0].ok_or(Error::UnknownSecret(s))
+    pub fn with_cow_witness(witness: CowBox<'w, dyn Any>) -> Self {
+        CachingEvaluator {
+            secret_eval: S::default(),
+            witness,
+            cache: HashMap::new(),
+            in_function: false,
+            args: Vec::new(),
+        }
+    }
+}
+
+impl<'a, 'b, 'w, S: Migrate<'a, 'b>> Migrate<'a, 'b> for CachingEvaluator<'a, 'w, S> {
+    type Output = CachingEvaluator<'b, 'w, S::Output>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(
+        self,
+        v: &mut V,
+    ) -> CachingEvaluator<'b, 'w, S::Output> {
+        CachingEvaluator {
+            secret_eval: v.visit(self.secret_eval),
+            witness: self.witness,
+            cache: self.cache.into_iter().filter_map(|(w, b)| {
+                let w = v.visit_wire_weak(w)?;
+                let b = v.visit(b);
+                Some((w, b))
+            }).collect(),
+            in_function: self.in_function,
+            args: v.visit(self.args),
+        }
+    }
+}
+
+impl<'a, 'w, S: SecretEvaluator<'a>> SecretEvaluator<'a> for CachingEvaluator<'a, 'w, S> {
+    const REVEAL_SECRETS: bool = S::REVEAL_SECRETS;
+}
+
+impl<'a, 'w, S> EvalWire<'a> for CachingEvaluator<'a, 'w, S>
+where S: SecretEvaluator<'a> + Default {
+    fn eval_wire<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C, w: Wire<'a>) -> EvalResult<'a> {
+        let (bits, sec) = EvalWire::eval_wire_bits(self, c, w)?;
+        debug_assert!(S::REVEAL_SECRETS || !sec);
+        let val = Value::from_bits(w.ty, bits);
+        Ok(val)
+    }
+
+    fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
+        &mut self,
+        c: &C,
+        w: Wire<'a>,
+    ) -> Result<(Bits<'a>, bool), Error<'a>> {
+        let c = c.as_base();
+
+        let order = circuit::walk_wires_ex(
+            iter::once(w),
+            |w| {
+                if self.cache.contains_key(&w) {
+                    (false, circuit::WireDeps::zero())
+                } else {
+                    (true, circuit::wire_and_secret_deps(w))
+                }
             },
-            v => unreachable!("found non-FunctionInput ({:?}) inside a function?", v),
+        ).collect::<Vec<_>>();
+
+        for w in order {
+            let (opt_bits, sec) = match eval_gate_inner(c, self, w.ty, w.kind) {
+                Ok((bits, sec)) => (Some(bits), sec),
+                Err(Error::Secret) => (None, true),
+                Err(e) => return Err(e),
+            };
+            self.cache.insert(w, (opt_bits, sec));
+            if let Some(bits) = opt_bits {
+                if let Some(hook) = w.eval_hook.get() {
+                    (hook.0)(c, self, w, bits)
+                }
+            }
+        }
+
+        match *self.cache.get(&w).unwrap() {
+            (Some(bits), sec) => Ok((bits, sec)),
+            (None, true) => Err(Error::Secret),
+            (None, false) => unreachable!(),
+        }
+    }
+}
+
+impl<'a, 'w, S> Evaluator<'a> for CachingEvaluator<'a, 'w, S>
+where S: SecretEvaluator<'a> + Default {
+    type FunctionEvaluator<'b> = CachingEvaluator<'a, 'b, S>
+        where Self: 'b;
+
+    fn enter_call<'b>(
+        &'b mut self,
+        c: &CircuitBase<'a>,
+        call: Call<'a>,
+    ) -> CachingEvaluator<'a, 'b, S> {
+        let func = call.func;
+
+        let arg_bits = call.args.iter().map(|&w| {
+            EvalWire::eval_wire_bits(self, c, w)
+        }).collect::<Result<Vec<_>, _>>().unwrap();
+        let dep_bits = call.project_deps.iter().map(|&w| {
+            EvalWire::eval_wire_bits(self, c, w).map(|(bits, sec)| bits)
+        }).collect::<Result<Vec<_>, _>>().unwrap();
+
+        self.enter_function(c, arg_bits, call.project_witness, &dep_bits)
+    }
+}
+
+impl<'a, 'b, 'w, S> EvalContext<'a, 'b> for CachingEvaluator<'a, 'w, S>
+where S: SecretEvaluator<'a> + Default {
+    fn get_value(&self, w: Wire<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
+        match self.cache.get(&w).cloned() {
+            Some((Some(bits), sec)) => Ok((bits, sec)),
+            Some((None, true)) => Err(Error::Secret),
+            Some((None, false)) => unreachable!(),
+            None => Err(Error::UnevalInput),
         }
     }
 
-    fn eval_argument(&self, i: usize) -> Result<(Bits<'a>, bool), Error<'a>> {
-        Ok(self.args[i])
+    fn eval_secret(&self, c: &CircuitBase<'a>, s: Secret<'a>) -> Result<Bits<'a>, Error<'a>> {
+        if !S::REVEAL_SECRETS {
+            return Err(Error::Secret);
+        }
+
+        let dep_vals = s.deps.iter().map(|&w| {
+            self.get_value(w).map(|(b, _)| b)
+        }).collect::<Result<Vec<_>, _>>()?;
+        let bits = s.init.call(c, &*self.witness, &dep_vals);
+        Ok(bits)
+    }
+
+    fn get_erased(&self, e: Erased<'a>) -> Result<(Bits<'a>, bool), Error<'a>> {
+        match e.gate_value() {
+            GateValue::Unset => Err(Error::UnevalInput),
+            GateValue::Public(bits) => Ok((bits, false)),
+            GateValue::Secret(bits) => {
+                if S::REVEAL_SECRETS {
+                    Ok((bits, true))
+                } else {
+                    Err(Error::Secret)
+                }
+            },
+            GateValue::NeedsSecret(s) => Err(Error::UnknownSecret(s)),
+            GateValue::Failed => Err(Error::Other),
+        }
+    }
+
+    fn get_argument(&self, i: usize) -> Result<(Bits<'a>, bool), Error<'a>> {
+        if self.in_function {
+            Ok(self.args[i])
+        } else {
+            panic!("can't access arguments at top level")
+        }
+    }
+
+    type FunctionContext = CachingEvaluator<'a, 'b, S>;
+
+    fn enter_function(
+        &'b self,
+        c: &CircuitBase<'a>,
+        args: Vec<(Bits<'a>, bool)>,
+        project_witness: SecretProjectFn<'a>,
+        project_deps: &[Bits<'a>],
+    ) -> Self::FunctionContext {
+        let witness = project_witness.call(c, &*self.witness, project_deps);
+        CachingEvaluator {
+            secret_eval: S::default(),
+            witness,
+            cache: HashMap::new(),
+            in_function: true,
+            args,
+        }
     }
 }
 
@@ -509,20 +751,20 @@ pub fn eval_cmp_galois_field<'a>(
     }
 }
 
-fn eval_gate_inner<'a>(
+fn eval_gate_inner<'a, 'b>(
     c: &CircuitBase<'a>,
-    ecx: &impl EvalContext<'a>,
+    ecx: &'b impl EvalContext<'a, 'b>,
     ty: Ty<'a>,
     gk: GateKind<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     Ok(match gk {
         GateKind::Lit(bits, _) => (bits, false),
 
-        GateKind::Secret(s) => (ecx.eval_secret(s)?, true),
+        GateKind::Secret(s) => (ecx.eval_secret(c, s)?, true),
 
-        GateKind::Erased(e) => convert_gate_value(e.gate_value())?,
+        GateKind::Erased(e) => ecx.get_erased(e)?,
 
-        GateKind::Argument(i, _) => ecx.eval_argument(i)?,
+        GateKind::Argument(i, _) => ecx.get_argument(i)?,
 
         GateKind::Unary(op, a) => {
             let (a_bits, a_sec) = ecx.get_value(a)?;
@@ -551,8 +793,8 @@ fn eval_gate_inner<'a>(
 
         GateKind::Shift(op, a, b) => {
             if a.ty.is_integer() {
-                let (a_val, a_sec) = get_int_value(ecx, a)?;
-                let (b_val, b_sec) = get_int_value(ecx, b)?;
+                let (a_val, a_sec) = ecx.get_int_value(a)?;
+                let (b_val, b_sec) = ecx.get_int_value(b)?;
                 let b_val = u16::try_from(b_val).map_err(|_| Error::Other)?;
                 let val = match op {
                     ShiftOp::Shl => a_val << b_val,
@@ -579,7 +821,7 @@ fn eval_gate_inner<'a>(
 
         GateKind::Mux(c, x, y) => {
             if c.ty.is_integer() {
-                let (c_val, c_sec) = get_int_value(ecx, c)?;
+                let (c_val, c_sec) = ecx.get_int_value(c)?;
                 // Secrecy: If the condition is public, then the result is only as secret as the chosen
                 // input (`x` or `y`).  If the condition is secret, then the result is always secret.
                 if !c_val.is_zero() {
@@ -596,7 +838,7 @@ fn eval_gate_inner<'a>(
 
         GateKind::Cast(a, _) => {
             if a.ty.is_integer() && ty.is_integer() {
-                let (a_val, a_sec) = get_int_value(ecx, a)?;
+                let (a_val, a_sec) = ecx.get_int_value(a)?;
                 (trunc(c, ty, a_val), a_sec)
             } else {
                 panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
@@ -608,9 +850,12 @@ fn eval_gate_inner<'a>(
             let mut sec = false;
             for &w in ws {
                 let (w_bits, w_sec) = ecx.get_value(w)?;
-                digits.extend_from_slice(w_bits.0);
+                let w_bits = &w_bits.0[.. cmp::min(w_bits.0.len(), w.ty.digits())];
+                // Truncate if `bits` is too long.  This can happen sometimes due to values being
+                // zero-extended.
+                digits.extend_from_slice(w_bits);
                 // Pad with zeros if `bits` is short.
-                for _ in w_bits.0.len() .. w.ty.digits() {
+                for _ in w_bits.len() .. w.ty.digits() {
                     digits.push(0);
                 }
                 sec |= w_sec;
@@ -621,12 +866,12 @@ fn eval_gate_inner<'a>(
 
         GateKind::Extract(w, i) => {
             let (w_bits, w_sec) = ecx.get_value(w)?;
-            let tys = match *w.ty {
-                TyKind::Bundle(tys) => tys,
+            let btys = match *w.ty {
+                TyKind::Bundle(btys) => btys,
                 _ => panic!("expected Extract input to have Bundle type"),
             };
-            let pos = tys[..i].iter().map(|ty| ty.digits()).sum();
-            let end = pos + tys[i].digits();
+            let pos = btys.digit_offset(i);;
+            let end = pos + btys.ty(i).digits();
             let end = cmp::min(end, w_bits.0.len());
             let bits = c.intern_bits(&w_bits.0[pos .. end]);
             (bits, w_sec)
@@ -640,7 +885,7 @@ fn eval_gate_inner<'a>(
                 tys.push(w.ty);
                 match ecx.get_value(w) {
                     Ok((w_bits, w_sec)) => {
-                        vals.push(Ok(Value::from_bits(w.ty, w_bits)));
+                        vals.push(Ok(w_bits));
                         sec |= w_sec;
                     },
                     Err(e) => {
@@ -649,107 +894,73 @@ fn eval_gate_inner<'a>(
                 }
             }
 
-            let v = k.eval(&tys, &vals)?;
-            let bits = v.to_bits(c, ty);
+            let bits = k.eval_bits(c, &tys, &vals, ty)?;
             (bits, sec)
         },
 
-        GateKind::Call(func, args, secrets) => eval_call(c, ecx, func, args, secrets)?,
+        GateKind::Call(call) => eval_call(c, ecx, call)?,
     })
 }
 
-pub fn eval_gate<'a>(
+fn eval_call<'a, 'b>(
+    c: &CircuitBase<'a>,
+    outer_ecx: &'b impl EvalContext<'a, 'b>,
+    call: Call<'a>,
+) -> Result<(Bits<'a>, bool), Error<'a>> {
+    let func = call.func;
+
+    let arg_bits = call.args.iter().map(|&w| {
+        outer_ecx.get_value(w)
+    }).collect::<Result<Vec<_>, _>>()?;
+    let dep_bits = call.project_deps.iter().map(|&w| {
+        outer_ecx.get_value(w).map(|(bits, sec)| bits)
+    }).collect::<Result<Vec<_>, _>>()?;
+
+    let mut inner_eval = outer_ecx.enter_function(
+        c, arg_bits, call.project_witness, &dep_bits);
+    EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
+}
+
+
+pub fn eval_gate<'a, S: SecretEvaluator<'a> + Default>(
     c: &CircuitBase<'a>,
     ty: Ty<'a>,
     gk: GateKind<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    eval_gate_inner(c, &TopLevelContext, ty, gk)
-}
-
-pub fn eval_gate_public<'a, C>(c: &C, ty: Ty<'a>, gk: GateKind<'a>) -> Option<Value>
-where C: CircuitTrait<'a> + ?Sized {
-    let (bits, sec) = eval_gate(c.as_base(), ty, gk).ok()?;
-    if sec {
-        return None;
+    let mut ev = CachingEvaluator::<S>::new();
+    for w in circuit::gate_deps(gk) {
+        let _ = EvalWire::eval_wire(&mut ev, c, w)?;
     }
+    eval_gate_inner(c, &ev, ty, gk)
+}
+
+pub fn eval_gate_public<'a>(c: &CircuitBase<'a>, ty: Ty<'a>, gk: GateKind<'a>) -> Option<Value> {
+    let (bits, sec) = eval_gate::<Public>(c, ty, gk).ok()?;
+    debug_assert!(!sec);
     Some(Value::from_bits(ty, bits))
 }
 
-pub fn eval_gate_secret<'a, C>(c: &C, ty: Ty<'a>, gk: GateKind<'a>) -> Option<Value>
-where C: CircuitTrait<'a> + ?Sized {
-    let (bits, _sec) = eval_gate(c.as_base(), ty, gk).ok()?;
+pub fn eval_gate_secret<'a>(c: &CircuitBase<'a>, ty: Ty<'a>, gk: GateKind<'a>) -> Option<Value> {
+    let (bits, _sec) = eval_gate::<RevealSecrets>(c, ty, gk).ok()?;
     Some(Value::from_bits(ty, bits))
 }
 
-pub fn eval_wire<'a, C: CircuitTrait<'a> + ?Sized>(
-    c: &C,
+pub fn eval_wire<'a, S: SecretEvaluator<'a> + Default>(
+    c: &CircuitBase<'a>,
     w: Wire<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    if w.value.is_valid() {
-        return TopLevelContext.get_value(w);
-    }
-
-    let order = circuit::walk_wires_filtered(
-        iter::once(w),
-        |w| !w.value.is_valid(),
-    ).collect::<Vec<_>>();
-    for w in order {
-        let result = eval_gate(c.as_base(), w.ty, w.kind);
-        w.value.set(match result {
-            Ok((bits, false)) => GateValue::Public(bits),
-            Ok((bits, true)) => GateValue::Secret(bits),
-            Err(Error::UnknownSecret(s)) => GateValue::NeedsSecret(s),
-            Err(Error::UnevalInput) => GateValue::Unset,
-            Err(Error::Other) => GateValue::Failed,
-        });
-    }
-
-    TopLevelContext.get_value(w)
+    let mut ev = CachingEvaluator::<S>::new();
+    EvalWire::eval_wire_bits(&mut ev, c, w)
 }
 
-fn eval_call<'a, C: CircuitTrait<'a> + ?Sized>(
-    c: &C,
-    outer_ecx: &impl EvalContext<'a>,
-    func: Function<'a>,
-    args: &[Wire<'a>],
-    secret_args: &[(SecretInputId, Secret<'a>)],
-) -> Result<(Bits<'a>, bool), Error<'a>> {
-    assert_eq!(secret_args.len(), func.secret_inputs.len());
-
-    let mut num_secrets = func.secret_inputs.iter().map(|&(id, _)| id.0).max()
-        .map_or(0, |i| i + 1);
-    let mut secrets = vec![None; num_secrets];
-    for &(id, s) in secret_args {
-        secrets[id.0] = Some(outer_ecx.eval_secret(s)?);
-    }
-
-    let mut inner_ecx = FunctionContext {
-        args: args.iter().map(|&w| {
-            eval_gate_inner(c.as_base(), outer_ecx, w.ty, w.kind)
-        }).collect::<Result<Vec<_>, _>>()?,
-        secrets,
-        cache: HashMap::new(),
-    };
-
-    let order = circuit::walk_wires(iter::once(func.result_wire)).collect::<Vec<_>>();
-    for w in order {
-        let result = eval_gate_inner(c.as_base(), &inner_ecx, w.ty, w.kind)?;
-        inner_ecx.cache.insert(w, result);
-    }
-
-    Ok(inner_ecx.cache.get(&func.result_wire).cloned().unwrap())
-}
-
-pub fn eval_wire_public<'a, C: CircuitTrait<'a> + ?Sized>(c: &C, w: Wire<'a>) -> Option<Value> {
-    let (bits, sec) = eval_wire(c, w).ok()?;
-    if sec {
-        return None;
-    }
+pub fn eval_wire_public<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
+    let (bits, sec) = eval_wire::<Public>(c, w).ok()?;
+    debug_assert!(!sec);
     Some(Value::from_bits(w.ty, bits))
 }
 
-pub fn eval_wire_secret<'a, C: CircuitTrait<'a> + ?Sized>(c: &C, w: Wire<'a>) -> Option<Value> {
-    let (bits, _sec) = eval_wire(c, w).ok()?;
+pub fn eval_wire_secret<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
+    let (bits, _sec) = eval_wire::<RevealSecrets>(c, w).ok()?;
     Some(Value::from_bits(w.ty, bits))
 }
 
@@ -762,7 +973,7 @@ mod test {
     #[test]
     fn value_trunc_uint_to_int() {
         let arenas = Arenas::new();
-        let c = CircuitBase::new(&arenas, true);
+        let c = CircuitBase::new::<()>(&arenas, true);
         let ty_i8 = c.ty(TyKind::I8);
 
         for &x in [0_u8, 1, 126, 127, 128, 129, 254, 255].iter() {

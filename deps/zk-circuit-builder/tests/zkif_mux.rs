@@ -1,7 +1,7 @@
 #![cfg(feature = "bellman")]
 
 use num_bigint::BigInt;
-use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
+use zk_circuit_builder::eval::{self, EvalWire, CachingEvaluator};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, TyKind, Wire,
 };
@@ -10,7 +10,7 @@ use zk_circuit_builder::lower;
 macro_rules! make_circuit {
     ($arenas:expr) => {{
         let cf = FilterNil.add_pass(lower::int::compare_to_greater_or_equal_to_zero);
-        let c = Circuit::new($arenas, true, cf);
+        let c = Circuit::new::<()>($arenas, true, cf);
         c
     }};
 }
@@ -23,8 +23,8 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
 
 
     // Make sure the circuit is valid.
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
-    let val = ev.eval_wire(w).ok();
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+    let val = ev.eval_wire(c, w).ok();
     assert_eq!(val, Some(eval::Value::SingleInteger(BigInt::from(1))));
 
 
@@ -43,7 +43,7 @@ fn finish<'a, C: CircuitTrait<'a> + ?Sized>(c: &'a C, w: Wire<'a>) {
     }
 
     let mut backend = Backend::new(workspace, true);
-    backend.enforce_true(w);
+    backend.enforce_true(c.as_base(), &mut ev, w);
     backend.finish().unwrap();
 
     // Validate the circuit and witness.

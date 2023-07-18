@@ -78,15 +78,16 @@ impl SieveIrFormat for SieveIrV1 {
         name: String,
         outs: impl IntoIterator<Item = u64>,
         ins: impl IntoIterator<Item = u64>,
+        private_count: u64,
         gates: Vec<Gate>,
     ) -> Function {
         Function::new(
             name,
             outs.into_iter().sum::<u64>() as usize,
             ins.into_iter().sum::<u64>() as usize,
-            // No public or private inputs consumed
+            // No public inputs consumed
             0,
-            0,
+            private_count as usize,
             gates,
         )
     }

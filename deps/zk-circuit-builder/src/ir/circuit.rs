@@ -9,13 +9,15 @@
 //!   trait abstracts over `Circuit` and `CircuitRef`.
 //! * The `CircuitExt` trait adds higher-level helper methods, so callers can use convenient
 //!   `add`/`sub` methods instead of manually constructing a `GateKind::Add`.
-use std::any;
-use std::cell::{Cell, RefCell, UnsafeCell};
+use std::alloc::Layout;
+use std::any::{self, Any, TypeId, type_name};
+use std::cell::{self, Cell, RefCell, UnsafeCell};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::iter;
 use std::marker::PhantomData;
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
@@ -25,8 +27,9 @@ use std::str;
 use bumpalo::Bump;
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use crate::eval;
+use crate::eval::{self, EvalWire, CachingEvaluator};
 use crate::ir::migrate::{self, Migrate, Visitor as _};
+use crate::util::CowBox;
 
 
 // CircuitBase layer
@@ -50,19 +53,16 @@ pub struct CircuitBase<'a> {
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
 
-    function_scope: RefCell<Option<FunctionScope<'a>>>,
-
     current_label: Cell<&'a str>,
     is_prover: bool,
+    allow_functions: bool,
     functions: RefCell<Vec<Function<'a>>>,
-}
-
-struct FunctionScope<'a> {
-    secrets: Vec<(SecretInputId, Ty<'a>)>,
+    witness_type: Cell<TypeId>,
+    in_function: Cell<bool>,
 }
 
 impl<'a> CircuitBase<'a> {
-    pub fn new(arenas: &'a Arenas, is_prover: bool) -> CircuitBase<'a> {
+    pub fn new<W: 'static>(arenas: &'a Arenas, is_prover: bool) -> CircuitBase<'a> {
         let c = CircuitBase {
             arenas,
             intern_gate: RefCell::new(HashSet::new()),
@@ -72,15 +72,21 @@ impl<'a> CircuitBase<'a> {
             intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
-            function_scope: RefCell::new(None),
             current_label: Cell::new(""),
             is_prover,
+            allow_functions: true,
             functions: RefCell::new(Vec::new()),
+            witness_type: Cell::new(TypeId::of::<W>()),
+            in_function: Cell::new(false),
         };
-        c.preload_common_types();
-        c.preload_common_bits();
-        c.preload_common_strs();
+        c.preload_common();
         c
+    }
+
+    fn preload_common(&self) {
+        self.preload_common_types();
+        self.preload_common_bits();
+        self.preload_common_strs();
     }
 
     fn preload_common_types(&self) {
@@ -100,6 +106,27 @@ impl<'a> CircuitBase<'a> {
     fn preload_common_strs(&self) {
         let mut intern = self.intern_str.borrow_mut();
         intern.insert("");
+    }
+
+    pub fn set_allow_functions(mut self, allow_functions: bool) -> Self {
+        self.allow_functions = allow_functions;
+        self
+    }
+
+    pub unsafe fn with_witness_type_unchecked<'b, W: 'static>(
+        &'b self,
+    ) -> &'b CircuitBaseWithWitnessType<'a, W> {
+        mem::transmute(self)
+    }
+
+    pub fn with_witness_type<W: 'static>(&self) -> Option<&CircuitBaseWithWitnessType<'a, W>> {
+        unsafe {
+            if self.witness_type.get() == TypeId::of::<W>() {
+                Some(self.with_witness_type_unchecked())
+            } else {
+                None
+            }
+        }
     }
 
     fn arena(&self) -> &'a Bump {
@@ -130,11 +157,43 @@ impl<'a> CircuitBase<'a> {
     }
 
     fn intern_ty(&self, ty: TyKind<'a>) -> &'a TyKind<'a> {
+        if let TyKind::Bundle(btys) = ty {
+            return self.intern_ty_bundle(btys.tys);
+        }
+
         let mut intern = self.intern_ty.borrow_mut();
         match intern.get(&ty) {
             Some(x) => x,
             None => {
                 let ty = self.arena().alloc(ty);
+                intern.insert(ty);
+                ty
+            },
+        }
+    }
+
+    fn intern_ty_bundle(&self, tys: &'a [Ty<'a>]) -> &'a TyKind<'a> {
+        let mut intern = self.intern_ty.borrow_mut();
+        // Offsets are `Unhashed`, so try a lookup with only the tys and no offsets to quickly see
+        // if the bundle type is already interned.
+        let placeholder_ty = TyKind::Bundle(BundleTypes { tys, offsets: Unhashed(&[]) });
+        match intern.get(&placeholder_ty) {
+            Some(x) => x,
+            None => {
+                // It's not interned.  Compute the offsets to build the full type.
+                let mut offsets = Vec::with_capacity(tys.len() + 1);
+                let mut pos = 0;
+                for &ty in tys {
+                    offsets.push(pos);
+                    pos += ty.digits();
+                }
+                offsets.push(pos);
+                let offsets = self.arena().alloc_slice_copy(&offsets);
+
+                let ty = self.arena().alloc(TyKind::Bundle(BundleTypes {
+                    tys,
+                    offsets: Unhashed(offsets),
+                }));
                 intern.insert(ty);
                 ty
             },
@@ -207,6 +266,10 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
+    fn alloc_call(&self, call: CallData<'a>) -> Call<'a> {
+        Call(self.arena().alloc(call))
+    }
+
 
     fn gate(&self, kind: GateKind<'a>) -> Wire<'a> {
         // Forbid constructing gates that violate type-safety invariants.
@@ -238,12 +301,9 @@ impl<'a> CircuitBase<'a> {
                 );
             },
             GateKind::Extract(w, i) => match *w.ty {
-                TyKind::Bundle(tys) => {
-                    if i >= tys.len() {
-                        panic!(
-                            "index out of range for extract: {} >= {} ({:?})",
-                            i, tys.len(), tys,
-                        );
+                TyKind::Bundle(btys) => {
+                    if i >= btys.len() {
+                        panic!("index out of range for extract: {} >= {}", i, btys.len());
                     }
                 },
                 _ => panic!("bad input type for extract: {:?} (expected Bundle)", w.ty),
@@ -252,28 +312,29 @@ impl<'a> CircuitBase<'a> {
             _ => {},
         }
 
-        // Forbid using a single `Secret` in multiple gates.
         match kind {
+            // Forbid using a single `Secret` in multiple gates.
             GateKind::Secret(s) => { s.set_used(); },
-            GateKind::Call(_, _, ss) => {
-                for &(_, s) in ss {
-                    s.set_used();
+            // Require argument counts and types to match.
+            GateKind::Call(c) => {
+                // We allow function definitions, but not calls, which simplifies some logic in the
+                // MicroRAM circuit builder.
+                assert!(self.as_base().allow_functions,
+                    "function calls are not allowed in this Circuit");
+
+                assert_eq!(c.func.arg_tys.len(), c.args.len());
+                for (&ty, &arg) in c.func.arg_tys.iter().zip(c.args.iter()) {
+                    assert_eq!(ty, arg.ty);
                 }
-            },
+            }
             _ => {},
         }
-
-        let value = match kind {
-            GateKind::Lit(bits, _) => GateValue::Public(bits),
-            GateKind::Erased(e) => e.gate_value(),
-            _ => GateValue::Unset,
-        };
 
         Wire(self.intern_gate(Gate {
             ty: kind.ty(self),
             kind,
             label: Label(self.current_label.get()),
-            value: Unhashed(GateValueCell::new(value)),
+            eval_hook: Unhashed(Cell::new(None)),
         }))
     }
 
@@ -290,111 +351,39 @@ impl<'a> CircuitBase<'a> {
     }
 
 
-    fn alloc_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
-        let mut scope = self.function_scope.borrow_mut();
-        let scope = scope.as_mut().expect("can't use alloc_secret_input outside function body");
-        let id = SecretInputId(scope.secrets.len());
-        scope.secrets.push((id, ty));
-        let s = Secret(self.arena().alloc(SecretData::new(ty, SecretValue::FunctionInput(id))));
-        (s, id)
+    fn alloc_secret_init_fn<W: 'static, F>(&self, f: F) -> SecretInitFn<'a>
+    where
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        let f = self.arena().alloc(SecretInitFnImpl::new(f));
+        SecretInitFn::new(f)
     }
 
-    fn alloc_secret(&self, ty: Ty<'a>, val: SecretValue<'a>) -> Secret<'a> {
-        assert!(
-            self.function_scope.borrow().is_none(),
-            "can't use alloc_secret inside a function body",
-        );
-        Secret(self.arena().alloc(SecretData::new(ty, val)))
+    fn alloc_secret_project_fn<W: 'static, T: 'static, F>(&self, f: F) -> SecretProjectFn<'a>
+    where
+        F: for<'b, 'w> Fn(&CircuitBase<'b>, &'w W, &[Bits<'b>]) -> CowBox<'w, T>,
+        F: Sized + Copy + 'static,
+    {
+        let f = self.arena().alloc(SecretProjectFnImpl::new(f));
+        SecretProjectFn::new(f)
     }
 
-
-    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
-    /// running in prover mode), and return the resulting `Secret`.
-    ///
-    /// `mk_val` will not be called when running in prover mode.
-    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Secret<'a>
-    where F: FnOnce() -> T {
-        let val = SecretValue::init(self.is_prover, || self.bits(ty, mk_val()));
-        self.alloc_secret(ty, val)
-    }
-
-    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
-    /// initialized later using `SecretData::set_from_lit`.
-    fn new_secret_uninit(&self, ty: Ty<'a>) -> Secret<'a> {
-        let val = SecretValue::uninit(self.is_prover);
-        self.alloc_secret(ty, val)
-    }
-
-    /// Add a new secret value to the witness and return it.  The accompanying `SecretHandle` can
-    /// be used to assign a value to the secret after construction.  If the `SecretHandle` is
-    /// dropped without setting a value, the value will be set to zero automatically.
-    fn new_secret(&self, ty: Ty<'a>) -> (Secret<'a>, SecretHandle<'a>) {
-        let default = self.intern_bits(&[]);
-        self.new_secret_default(ty, default)
-    }
-
-    /// Like `new_secret`, but dropping the `SecretHandle` without setting a value will set the
-    /// value to `default` instead of zero.
-    fn new_secret_default<T: AsBits>(
-        &self,
-        ty: Ty<'a>,
-        default: T,
-    ) -> (Secret<'a>, SecretHandle<'a>) {
-        let secret = self.new_secret_uninit(ty);
-        let default = self.bits(ty, default);
-        let handle = SecretHandle::new(secret, default);
-        (secret, handle)
-    }
-
-    /// Add a new secret input to the current function.  Panics if called at top level (outside a
-    /// function definition).
-    fn new_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
-        self.alloc_secret_input(ty)
-    }
-
-
-    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
-    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
-    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
-    /// automatically.
-    fn new_secret_wire(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
-        let (s, sh) = self.new_secret(ty);
-        (self.secret(s), sh)
-    }
-
-    /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
-    /// value to `default` instead of zero.
-    fn new_secret_wire_default<T: AsBits>(
-        &self,
-        ty: Ty<'a>,
-        default: T,
-    ) -> (Wire<'a>, SecretHandle<'a>) {
-        let (s, sh) = self.new_secret_default(ty, default);
-        (self.secret(s), sh)
-    }
-
-    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
-    /// running in prover mode), and return a `Wire` that carries that value.
-    ///
-    /// `mk_val` will not be called when running in prover mode.
-    fn new_secret_wire_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
-    where F: FnOnce() -> T {
-        let s = self.new_secret_init(ty, mk_val);
-        self.secret(s)
-    }
-
-    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
-    /// initialized later using `SecretData::set_from_lit`.
-    fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        let s = self.new_secret_uninit(ty);
-        self.secret(s)
-    }
-
-    /// Add a new secret input to the current function.  Panics if called at top level (outside a
-    /// function definition).
-    fn new_secret_wire_input(&self, ty: Ty<'a>) -> (Wire<'a>, SecretInputId) {
-        let (s, id) = self.alloc_secret_input(ty);
-        (self.secret(s), id)
+    fn alloc_lazy_secret<W, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
+    where
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        // `W` must match this circuit's witness type.  As a special case, we also allow `()`, which
+        // essentially means that the `&W` input will be ignored.  We don't allow other ZSTs here
+        // because some ZSTs are used as markers, where having a value of that type means that some
+        // property holds.
+        assert!(TypeId::of::<W>() == self.witness_type.get() ||
+            TypeId::of::<W>() == TypeId::of::<()>());
+        let init = self.alloc_secret_init_fn::<W, F>(init);
+        let sd = SecretData::new_lazy::<W>(ty, init, deps);
+        Secret(self.arena().alloc(sd))
     }
 
 
@@ -408,39 +397,50 @@ impl<'a> CircuitBase<'a> {
     }
 
 
-    /// Replace the current arenas with new ones, as preparation to migrate.  Returns the old
-    /// arenas.  This is unsafe because dropping the returned `Arenas` will invalidate any
-    /// outstanding references to values allocated there.
-    unsafe fn pre_migrate(&self) -> Arenas {
+    /// Replace the current arenas with new ones, and reset `*self` to a fresh circuit.  Returns
+    /// the old `Arenas` and `Circuit`.  This is unsafe because dropping the returned `Arenas` will
+    /// invalidate the `Circuit` and any outstanding references to values allocated there.
+    unsafe fn take(&self) -> ArenasAndCircuit<'a> {
         let CircuitBase {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
             ref intern_gadget_kind, ref intern_str, ref intern_bits,
-            ref function_scope,
             ref current_label,
-            is_prover: _,
-            functions: _,
+            is_prover,
+            allow_functions,
+            ref functions,
+            ref witness_type,
+            ref in_function,
         } = *self;
 
-        let old_arenas = arenas.take();
+        assert!(!in_function.get());
 
-        // Flush all the old interning tables, which hold references to the old arena.
-        intern_gate.borrow_mut().clear();
-        intern_ty.borrow_mut().clear();
-        intern_wire_list.borrow_mut().clear();
-        intern_ty_list.borrow_mut().clear();
-        intern_gadget_kind.borrow_mut().clear();
-        intern_str.borrow_mut().clear();
-        intern_bits.borrow_mut().clear();
+        let old_arenas = Box::new(arenas.take());
 
-        self.preload_common_types();
+        let old_arenas_ptr: *const Arenas = &*old_arenas;
+        let old_circuit = CircuitBase {
+            arenas: &*old_arenas_ptr,
+            intern_gate: RefCell::new(intern_gate.take()),
+            intern_ty: RefCell::new(intern_ty.take()),
+            intern_wire_list: RefCell::new(intern_wire_list.take()),
+            intern_ty_list: RefCell::new(intern_ty_list.take()),
+            intern_gadget_kind: RefCell::new(intern_gadget_kind.take()),
+            intern_str: RefCell::new(intern_str.take()),
+            intern_bits: RefCell::new(intern_bits.take()),
+            current_label: Cell::new(current_label.replace("")),
+            is_prover,
+            allow_functions,
+            functions: RefCell::new(functions.take()),
+            witness_type: Cell::new(witness_type.get()),
+            in_function: Cell::new(false),
+        };
 
-        // Migrate `current_label` to the new arena.
-        current_label.set(self.intern_str(current_label.get()));
+        self.preload_common();
 
-        assert!(function_scope.borrow().is_none(), "can't migrate inside define_function");
-
-        old_arenas
+        ArenasAndCircuit {
+            arenas: ManuallyDrop::new(old_arenas),
+            circuit: ManuallyDrop::new(old_circuit),
+        }
     }
 }
 
@@ -468,6 +468,22 @@ impl Arenas {
     }
 }
 
+/// Helper type for use during migration.  We use this to make sure the old `circuit` and `Arenas`
+/// get dropped in the right order.  This is not safe for general use.
+struct ArenasAndCircuit<'a> {
+    arenas: ManuallyDrop<Box<Arenas>>,
+    circuit: ManuallyDrop<CircuitBase<'a>>,
+}
+
+impl<'a> Drop for ArenasAndCircuit<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.circuit);
+            ManuallyDrop::drop(&mut self.arenas);
+        }
+    }
+}
+
 
 // Filtering layer
 
@@ -482,7 +498,7 @@ impl Arenas {
 /// transformations to make corresponding changes to the witness if necessary, such as splitting a
 /// 64-bit secret into a pair of 32-bit secrets that together make up the original value.  The full
 /// witness is not represented explicitly, but the individual values are accessible through the
-/// `GateKind::Secret` gates present in the circuit.  Use the `walk_witness` function to obtain the
+/// `GateKind::Secret` gates present in the circuit.  Use the `walk_secrets` function to obtain the
 /// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a, F: ?Sized> {
     base: CircuitBase<'a>,
@@ -492,64 +508,16 @@ pub struct Circuit<'a, F: ?Sized> {
 }
 
 impl<'a, F> Circuit<'a, F> {
-    pub fn new(arenas: &'a Arenas, is_prover: bool, filter: F) -> Circuit<'a, F> {
+    pub fn new<W: 'static>(arenas: &'a Arenas, is_prover: bool, filter: F) -> Circuit<'a, F> {
         Circuit {
-            base: CircuitBase::new(arenas, is_prover),
+            base: CircuitBase::new::<W>(arenas, is_prover),
             filter: UnsafeCell::new(filter),
         }
     }
-}
 
-impl<'a, F: CircuitFilter<'a> + ?Sized> Circuit<'a, F> {
-    /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
-    /// returns a wire representing the output of the function.  The secondary output of type `T`
-    /// can be used to return a data structure describing the `SecretInputId`s used by this
-    /// function.
-    ///
-    /// Concretely, the `Circuit` passed to the callback is `self` and uses the same lifetime `'a`,
-    /// but we hide this fact from the caller so that `rustc` will report an error if wires from
-    /// outside the function are used inside the callback or vice versa.
-    //
-    // This function is defined on the concrete `Circuit` type instead of the generic `CircuitExt`
-    // trait because this lets it provide a more precise circuit type to the callback, which
-    // simplifies its usage with `typed::Builder`.  However, it should be easy to copy into
-    // `CircuitExt` if it's needed in the future.
-    pub fn define_function_ex<F2, T>(
-        &self,
-        name: &str,
-        arg_tys: &[Ty<'a>],
-        f: F2,
-    ) -> (Function<'a>, T)
-    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> (Wire<'b>, T) {
-        let function_scope = &self.base.function_scope;
-        let old_scope = mem::replace(&mut *function_scope.borrow_mut(), Some(FunctionScope {
-            secrets: Vec::new(),
-        }));
-
-        let arg_wires = arg_tys.iter().enumerate()
-            .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
-            .collect::<Vec<_>>();
-        let (result_wire, extra) = f(self, &arg_wires);
-
-        let new_scope = mem::replace(&mut *function_scope.borrow_mut(), old_scope).unwrap();
-        let func = Function(self.as_base().arena().alloc(FunctionDef {
-            name: self.as_base().intern_str(name),
-            arg_tys: self.ty_list(arg_tys),
-            secret_inputs: self.as_base().arena().alloc_slice_copy(&new_scope.secrets),
-            result_wire,
-        }));
-        self.as_base().functions.borrow_mut().push(func);
-        (func, extra)
-    }
-
-    pub fn define_function<F2>(&self, name: &str, arg_tys: &[Ty<'a>], f: F2) -> Function<'a>
-    where F2: for<'b> FnOnce(&Circuit<'b, F>, &[Wire<'b>]) -> Wire<'b> {
-        let (func, ()) = self.define_function_ex(
-            name,
-            arg_tys,
-            |c, args| (f(c, args), ()),
-        );
-        func
+    pub fn set_allow_functions(mut self, allow_functions: bool) -> Self {
+        self.base = self.base.set_allow_functions(allow_functions);
+        self
     }
 }
 
@@ -576,8 +544,8 @@ pub trait CircuitTrait<'a> {
     /// place.  There must be no outstanding references to the filter.
     ///
     /// This will panic when called on a `CircuitRef`, which doesn't have ownership of its filter.
-    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a>);
-    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a>);
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>);
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>);
 }
 
 impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
@@ -588,8 +556,8 @@ impl<'a> CircuitTrait<'a> for CircuitBase<'a> {
         self.gate(kind)
     }
 
-    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a>) {}
-    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a>) {}
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {}
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {}
 }
 
 impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
@@ -602,10 +570,10 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for Circuit<'a, F> {
         self.filter().gate(&self.base, kind)
     }
 
-    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a>) {
+    unsafe fn migrate_filter(&self, v: &mut MigrateVisitor<'a, 'a, '_>) {
         (*self.filter.get()).migrate_in_place(v)
     }
-    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a>) {
+    unsafe fn erase_filter(&self, v: &mut EraseVisitor<'a, '_>) {
         (*self.filter.get()).erase_in_place(v)
     }
 }
@@ -618,10 +586,10 @@ impl<'a, F: CircuitFilter<'a> + ?Sized> CircuitTrait<'a> for CircuitRef<'a, '_, 
         self.filter.gate(self.base, kind)
     }
 
-    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a>) {
+    unsafe fn migrate_filter(&self, _v: &mut MigrateVisitor<'a, 'a, '_>) {
         panic!("can't migrate CircuitRef");
     }
-    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a>) {
+    unsafe fn erase_filter(&self, _v: &mut EraseVisitor<'a, '_>) {
         panic!("can't erase CircuitRef");
     }
 }
@@ -634,8 +602,8 @@ pub type DynCircuitRef<'a, 'c> = CircuitRef<'a, 'c, dyn CircuitFilter<'a> + 'c>;
 pub trait CircuitFilter<'a> {
     fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a);
 
-    fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a>);
-    fn erase_in_place(&mut self, v: &mut EraseVisitor<'a>);
+    fn migrate_in_place(&mut self, v: &mut MigrateVisitor<'a, 'a, '_>);
+    fn erase_in_place(&mut self, v: &mut EraseVisitor<'a, '_>);
 
     fn gate(&self, c: &CircuitBase<'a>, kind: GateKind<'a>) -> Wire<'a>;
 
@@ -660,11 +628,11 @@ macro_rules! circuit_filter_common_methods {
     () => {
         fn as_dyn(&self) -> &(dyn CircuitFilter<'a> + 'a) { self }
 
-        fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a>) {
+        fn migrate_in_place(&mut self, v: &mut $crate::ir::circuit::MigrateVisitor<'a, 'a, '_>) {
             $crate::ir::migrate::migrate_in_place(v, self);
         }
 
-        fn erase_in_place(&mut self, v: &mut $crate::ir::circuit::EraseVisitor<'a>) {
+        fn erase_in_place(&mut self, v: &mut $crate::ir::circuit::EraseVisitor<'a, '_>) {
             $crate::ir::migrate::migrate_in_place(v, self);
         }
     };
@@ -761,6 +729,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.as_base().is_prover
     }
 
+    fn allow_functions(&self) -> bool {
+        self.as_base().allow_functions
+    }
+
     fn as_ref(&self) -> DynCircuitRef<'a, '_> {
         CircuitRef { base: self.as_base(), filter: self.filter() }
     }
@@ -775,7 +747,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
     fn ty_bundle(&self, tys: &[Ty<'a>]) -> Ty<'a> {
-        self.ty(TyKind::Bundle(self.ty_list(tys)))
+        let tys = self.ty_list(tys);
+        Ty(self.as_base().intern_ty_bundle(tys))
     }
 
     fn ty_bundle_iter<I>(&self, it: I) -> Ty<'a>
@@ -797,83 +770,88 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
-    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
-    /// running in prover mode), and return a `Secret` that carries that value.
-    ///
-    /// `mk_val` will not be called when running in prover mode.
-    fn new_secret_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Secret<'a>
-    where F: FnOnce() -> T {
-        self.as_base().new_secret_init(ty, mk_val)
+    fn new_secret_lazy<W, F>(&self, ty: Ty<'a>, init: F) -> Secret<'a>
+    where
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.as_base().alloc_lazy_secret(ty, &[], move |c, witness, _dep_vals| {
+            init(c, witness)
+        })
     }
 
-    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
-    /// initialized later using `SecretData::set_from_lit`.
-    fn new_secret_uninit(&self, ty: Ty<'a>) -> Secret<'a> {
-        self.as_base().new_secret_uninit(ty)
-    }
-
-    /// Add a new secret value to the witness, and return a `Secret` that carries that value.  The
-    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
-    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
-    /// automatically.
-    fn new_secret(&self, ty: Ty<'a>) -> (Secret<'a>, SecretHandle<'a>) {
-        self.as_base().new_secret(ty)
-    }
-
-    /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
-    /// value to `default` instead of zero.
-    fn new_secret_default<T: AsBits>(
+    fn new_secret_lazy_derived<W, F>(
         &self,
         ty: Ty<'a>,
-        default: T,
-    ) -> (Secret<'a>, SecretHandle<'a>) {
-        self.as_base().new_secret_default(ty, default)
+        deps: &'a [Wire<'a>],
+        init: F,
+    ) -> Secret<'a>
+    where
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.as_base().alloc_lazy_secret(ty, deps, move |c, witness, dep_vals| {
+            init(c, witness, dep_vals)
+        })
     }
 
-    /// Add a new secret input to the current function.  Panics if called at top level (outside a
-    /// function definition).
-    fn new_secret_input(&self, ty: Ty<'a>) -> (Secret<'a>, SecretInputId) {
-        self.as_base().new_secret_input(ty)
+    fn new_secret_derived<F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Secret<'a>
+    where
+        F: for<'b> Fn(&CircuitBase<'b>, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.as_base().alloc_lazy_secret(ty, deps, move |c, &(), dep_vals| {
+            init(c, dep_vals)
+        })
+    }
+
+    fn new_secret_immediate<T: AsBits + Copy + 'static>(&self, ty: Ty<'a>, val: T) -> Secret<'a> {
+        let sz = ty.integer_size();
+        self.as_base().alloc_lazy_secret(ty, &[], move |c, &(), _dep_vals| {
+            val.as_bits(c, sz)
+        })
+    }
+
+    fn secret_lazy<W, F>(&self, ty: Ty<'a>, init: F) -> Wire<'a>
+    where
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.secret(self.new_secret_lazy(ty, init))
+    }
+
+    fn secret_lazy_derived<W, F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Wire<'a>
+    where
+        W: 'static,
+        F: for<'b> Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.secret(self.new_secret_lazy_derived(ty, deps, init))
+    }
+
+    fn secret_derived<F>(&self, ty: Ty<'a>, deps: &'a [Wire<'a>], init: F) -> Wire<'a>
+    where
+        F: for<'b> Fn(&CircuitBase<'b>, &[Bits<'b>]) -> Bits<'b>,
+        F: Sized + Copy + 'static,
+    {
+        self.secret(self.new_secret_derived(ty, deps, init))
+    }
+
+    /// Create a secret wire with a fixed value.  This is mainly for use in tests.
+    fn secret_immediate<T: AsBits + Copy + 'static>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
+        self.secret(self.new_secret_immediate(ty, val))
     }
 
 
-    /// Add a new secret value to the witness, initialize it with the result of `mk_val()` (if
-    /// running in prover mode), and return a `Wire` that carries that value.
-    ///
-    /// `mk_val` will not be called when running in prover mode.
-    fn new_secret_wire_init<T: AsBits, F>(&self, ty: Ty<'a>, mk_val: F) -> Wire<'a>
-    where F: FnOnce() -> T {
-        self.as_base().new_secret_wire_init(ty, mk_val)
-    }
-
-    /// Create a new uninitialized secret.  When running in prover mode, the secret must be
-    /// initialized later using `SecretData::set_from_lit`.
-    fn new_secret_wire_uninit(&self, ty: Ty<'a>) -> Wire<'a> {
-        self.as_base().new_secret_wire_uninit(ty)
-    }
-
-    /// Add a new secret value to the witness, and return a `Wire` that carries that value.  The
-    /// accompanying `SecretHandle` can be used to assign a value to the secret after construction.
-    /// If the `SecretHandle` is dropped without setting a value, the value will be set to zero
-    /// automatically.
-    fn new_secret_wire(&self, ty: Ty<'a>) -> (Wire<'a>, SecretHandle<'a>) {
-        self.as_base().new_secret_wire(ty)
-    }
-
-    /// Like `new_secret_wire`, but dropping the `SecretHandle` without setting a value will set the
-    /// value to `default` instead of zero.
-    fn new_secret_wire_default<T: AsBits>(
-        &self,
-        ty: Ty<'a>,
-        default: T,
-    ) -> (Wire<'a>, SecretHandle<'a>) {
-        self.as_base().new_secret_wire_default(ty, default)
-    }
-
-    /// Add a new secret input to the current function.  Panics if called at top level (outside a
-    /// function definition).
-    fn new_secret_wire_input(&self, ty: Ty<'a>) -> (Wire<'a>, SecretInputId) {
-        self.as_base().new_secret_wire_input(ty)
+    fn alloc_eval_hook_fn<F>(&self, f: F) -> EvalHookFn<'a>
+    where
+        F: Fn(&CircuitBase<'a>, &mut dyn eval::EvaluatorObj<'a>, Wire<'a>, Bits<'a>) + Copy + 'a,
+    {
+        let r = self.as_base().arena().alloc(f);
+        EvalHookFn(r)
     }
 
 
@@ -1037,14 +1015,83 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gadget(kind, &args)
     }
 
-    fn call(
+    fn call<W, W2, F>(
         &self,
         func: Function<'a>,
         args: &'a [Wire<'a>],
-        secrets: &[(SecretInputId, Secret<'a>)],
-    ) -> Wire<'a> {
-        let secrets = self.as_base().arena().alloc_slice_copy(secrets);
-        self.gate(GateKind::Call(func, args, secrets))
+        project_deps: &'a [Wire<'a>],
+        project_witness: F,
+    ) -> Wire<'a>
+    where
+        W: 'static,
+        W2: 'static,
+        F: for<'b, 's> Fn(&CircuitBase<'b>, &'s W, &[Bits<'b>]) -> CowBox<'s, W2>,
+        F: Sized + Copy + 'static,
+    {
+        debug_assert!(TypeId::of::<W>() == self.as_base().witness_type.get() ||
+            TypeId::of::<W>() == TypeId::of::<()>());
+        debug_assert_eq!(TypeId::of::<W2>(), func.witness_type);
+        let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
+        let call = self.as_base().alloc_call(CallData {
+            func,
+            args,
+            project_witness,
+            project_deps,
+        });
+        self.gate(GateKind::Call(call))
+    }
+
+
+    /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
+    /// returns a wire representing the output of the function.
+    ///
+    /// Within the function, lazy secrets use a witness type of `W2` rather than the witness type
+    /// of the enclosing circuit.  Calls to the function will need to provide a `SecretProjectFn`
+    /// to convert from the outer witness type to the inner one.
+    ///
+    /// Concretely, the `Circuit` passed to the callback is `self` and uses the same lifetime `'a`,
+    /// but we hide this fact from the caller so that `rustc` will report an error if wires from
+    /// outside the function are used inside the callback or vice versa.
+    fn define_function<W2: 'static, F2>(
+        &self,
+        name: &str,
+        arg_tys: &[Ty<'a>],
+        f: F2,
+    ) -> Function<'a>
+    where Self: Sized, F2: for<'b> DefineFunction<'b> {
+        self.define_function_unchecked::<W2, F2>(name, arg_tys, f)
+    }
+
+    /// Like `define_function`, but the callback can use existing values from the circuit.
+    ///
+    /// If the function body uses wires from the outer circuit, the behavior may be unpredictable.
+    fn define_function_unchecked<W2: 'static, F2>(
+        &self,
+        name: &str,
+        arg_tys: &[Ty<'a>],
+        f: F2,
+    ) -> Function<'a>
+    where Self: Sized, F2: DefineFunction<'a> {
+        let inner_witness_type = TypeId::of::<W2>();
+        let old_witness_type = self.as_base().witness_type.replace(inner_witness_type);
+        let old_in_function = self.as_base().in_function.replace(true);
+
+        let arg_wires = arg_tys.iter().enumerate()
+            .map(|(i, &ty)| self.gate(GateKind::Argument(i, ty)))
+            .collect::<Vec<_>>();
+        let result_wire = f.build_body(self, &arg_wires);
+
+        let func = Function(self.as_base().arena().alloc(FunctionDef {
+            name: self.as_base().intern_str(name),
+            arg_tys: self.ty_list(arg_tys),
+            result_wire,
+            witness_type: inner_witness_type,
+        }));
+        self.as_base().functions.borrow_mut().push(func);
+
+        self.as_base().witness_type.set(old_witness_type);
+        self.as_base().in_function.set(old_in_function);
+        func
     }
 
 
@@ -1067,23 +1114,33 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
-    unsafe fn migrate_with<F: FnOnce(&mut MigrateVisitor<'a, 'a>) -> R, R>(&'a self, f: F) -> R {
-        let old_arenas = self.as_base().pre_migrate();
-        let mut v = MigrateVisitor::new(self.as_base());
+    unsafe fn migrate_with<F, R>(&self, f: F) -> R
+    where F: FnOnce(&mut MigrateVisitor<'a, 'a, '_>) -> R {
+        let old = self.as_base().take();
 
-        let functions = mem::take(&mut *self.as_base().functions.borrow_mut()).into_iter()
-            .map(|f| v.visit(f))
-            .collect();
-        *self.as_base().functions.borrow_mut() = functions;
+        let new_circuit = self.as_base();
+        let mut v = MigrateVisitor::new(&old.circuit, new_circuit);
+
+        // Transfer parts of `old_circuit` into `self`, which has been cleared.
+        assert!(!old.circuit.in_function.get(),
+            "can't migrate inside define_function");
+        let current_label = new_circuit.intern_str(old.circuit.current_label.get());
+        new_circuit.current_label.set(current_label);
+        // Note we visit functions in the order they were originally defined.  This ensures the
+        // calls are topologically sorted.
+        let functions = old.circuit.as_base().functions.borrow_mut()
+            .iter().map(|&f| v.visit(f)).collect();
+        *new_circuit.functions.borrow_mut() = functions;
+
         self.migrate_filter(&mut v);
         let r = f(&mut v);
 
         info!("migrated {} wires, {} secrets", v.wire_map.len(), v.secret_map.len());
-        info!("  old size: {} bytes", old_arenas.allocated_bytes());
-        info!("  new size: {} bytes", self.as_base().arena().allocated_bytes());
+        info!("  old size: {} bytes", old.arenas.allocated_bytes());
+        info!("  new size: {} bytes", new_circuit.arena().allocated_bytes());
 
         drop(v);
-        drop(old_arenas);
+        drop(old);
 
         r
     }
@@ -1099,18 +1156,19 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// This method will panic when called on a `CircuitRef`.  It should only be called when the
     /// concrete type is `CircuitBase` or `Circuit`.
     unsafe fn migrate<T: Migrate<'a, 'a, Output = T>>(
-        &'a self,
+        &self,
         x: T,
     ) -> T {
         use crate::ir::migrate::Visitor;
         self.migrate_with(|v| v.visit(x))
     }
 
-    unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a>) -> R, R>(
-        &'a self,
+    unsafe fn erase_with<F: FnOnce(&mut EraseVisitor<'a, '_>) -> R, R>(
+        &self,
+        witness_value: CowBox<dyn Any>,
         f: F,
     ) -> (R, HashMap<Wire<'a>, Wire<'a>>) {
-        let mut v = EraseVisitor::new(self.as_base());
+        let mut v = EraseVisitor::new(self.as_base(), witness_value);
 
         // Don't erase inside `self.functions`.
         self.erase_filter(&mut v);
@@ -1129,19 +1187,21 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     /// This method is unsafe because it mutates the circuit filter (if any) in place, so the
     /// caller must ensure there are no outstanding references to the filter.
     unsafe fn erase<T: Migrate<'a, 'a, Output = T>>(
-        &'a self,
+        &self,
+        witness_value: CowBox<dyn Any>,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
         use crate::ir::migrate::Visitor;
-        self.erase_with(|v| v.visit(x))
+        self.erase_with(witness_value, |v| v.visit(x))
     }
 
     /// Shorthand for `erase` followed by `migrate`.
     unsafe fn erase_and_migrate<T: Migrate<'a, 'a, Output = T>>(
-        &'a self,
+        &self,
+        witness_value: CowBox<dyn Any>,
         x: T,
     ) -> (T, HashMap<Wire<'a>, Wire<'a>>) {
-        let x = self.erase(x);
+        let x = self.erase(witness_value, x);
         let (x, erased_map) = self.migrate(x);
         (x, erased_map)
     }
@@ -1149,9 +1209,14 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
 impl<'a, C: CircuitTrait<'a> + ?Sized> CircuitExt<'a> for C {}
 
+pub trait DefineFunction<'a> {
+    fn build_body<C: CircuitTrait<'a>>(self, c: &C, args: &[Wire<'a>]) -> Wire<'a>;
+}
 
-pub struct MigrateVisitor<'a, 'b> {
-    new_circuit: &'b CircuitBase<'b>,
+
+pub struct MigrateVisitor<'a, 'b, 'c> {
+    old_circuit: &'c CircuitBase<'a>,
+    new_circuit: &'c CircuitBase<'b>,
 
     wire_map: HashMap<Wire<'a>, Wire<'b>>,
     secret_map: HashMap<Secret<'a>, Secret<'b>>,
@@ -1159,11 +1224,13 @@ pub struct MigrateVisitor<'a, 'b> {
     function_map: HashMap<Function<'a>, Function<'b>>,
 }
 
-impl<'a, 'b> MigrateVisitor<'a, 'b> {
+impl<'a, 'b, 'c> MigrateVisitor<'a, 'b, 'c> {
     fn new(
-        new_circuit: &'b CircuitBase<'b>,
-    ) -> MigrateVisitor<'a, 'b> {
+        old_circuit: &'c CircuitBase<'a>,
+        new_circuit: &'c CircuitBase<'b>,
+    ) -> MigrateVisitor<'a, 'b, 'c> {
         MigrateVisitor {
+            old_circuit,
             new_circuit,
 
             wire_map: HashMap::new(),
@@ -1174,8 +1241,12 @@ impl<'a, 'b> MigrateVisitor<'a, 'b> {
     }
 }
 
-impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
-    fn new_circuit(&self) -> &'b CircuitBase<'b> {
+impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b, '_> {
+    fn old_circuit(&self) -> &CircuitBase<'a> {
+        self.old_circuit
+    }
+
+    fn new_circuit(&self) -> &CircuitBase<'b> {
         self.new_circuit
     }
 
@@ -1225,8 +1296,8 @@ impl<'a, 'b> migrate::Visitor<'a, 'b> for MigrateVisitor<'a, 'b> {
 }
 
 
-pub struct EraseVisitor<'a> {
-    circuit: &'a CircuitBase<'a>,
+pub struct EraseVisitor<'a, 'c> {
+    circuit: &'c CircuitBase<'a>,
     erased_map: HashMap<Wire<'a>, Wire<'a>>,
     /// Keep track of the order in which we visit wires so that the backend can visit in a
     /// deterministic order.
@@ -1237,22 +1308,33 @@ pub struct EraseVisitor<'a> {
     /// may place that block at any unused address, and that choice affects the ordering of
     /// pointers.
     erased_order: Vec<(Wire<'a>, Wire<'a>)>,
+    ev: RefCell<CachingEvaluator<'a, 'c, eval::RevealSecrets>>,
 }
 
-impl<'a> EraseVisitor<'a> {
+impl<'a, 'c> EraseVisitor<'a, 'c> {
     fn new(
-        circuit: &'a CircuitBase<'a>,
-    ) -> EraseVisitor<'a> {
+        circuit: &'c CircuitBase<'a>,
+        witness_value: CowBox<'c, dyn Any>,
+    ) -> EraseVisitor<'a, 'c> {
         EraseVisitor {
             circuit,
             erased_map: HashMap::new(),
             erased_order: Vec::new(),
+            ev: RefCell::new(CachingEvaluator::with_cow_witness(witness_value)),
         }
+    }
+
+    pub fn evaluator(&self) -> cell::RefMut<CachingEvaluator<'a, 'c, eval::RevealSecrets>> {
+        self.ev.borrow_mut()
     }
 }
 
-impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
-    fn new_circuit(&self) -> &'a CircuitBase<'a> {
+impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
+    fn old_circuit(&self) -> &CircuitBase<'a> {
+        self.circuit
+    }
+
+    fn new_circuit(&self) -> &CircuitBase<'a> {
         self.circuit
     }
 
@@ -1261,7 +1343,6 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
             // Erasing these wouldn't save much memory, if any.  We particularly want to leave
             // `Lit` intact so that constant folding can continue working.
             GateKind::Lit(..) |
-            GateKind::Secret(..) |
             GateKind::Erased(..) => return w,
             _ => {},
         }
@@ -1270,19 +1351,22 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
             return e;
         }
 
-        // `eval_wire` will update `w.value`.
-        let (bits, secret) = match eval::eval_wire(self.circuit, w) {
-            Ok(x) => x,
-            Err(e) => {
-                // Losing track of the value for this wire will leave us unable to construct the
-                // witness.  We can't simply choose not to erase the wire because that would leave
-                // the `GateKind` visible to later rewrite passes, which could cause the prover and
-                // verifier circuits to diverge.
-                panic!("failed to evaluate erased wire {:?}: {:?}", w, e);
-            },
+        let ed = if self.circuit.is_prover() {
+            let (bits, secret) = match self.ev.get_mut().eval_wire_bits(self.circuit, w) {
+                Ok(x) => x,
+                Err(e) => {
+                    // Losing track of the value for this wire will leave us unable to construct
+                    // the witness.  We can't simply choose not to erase the wire because that
+                    // would leave the `GateKind` visible to later rewrite passes, which could
+                    // cause the prover and verifier circuits to diverge.
+                    panic!("failed to evaluate erased wire {:?}: {:?}", w, e);
+                },
+            };
+            ErasedData::new(w.ty, bits, secret)
+        } else {
+            ErasedData::new_unset(w.ty)
         };
-
-        let ed = self.circuit.arena().alloc(ErasedData::new(w.ty, bits, secret));
+        let ed = self.circuit.arena().alloc(ed);
         let e = self.circuit.erased(Erased(ed));
         self.erased_map.insert(w, e);
         self.erased_order.push((w, e));
@@ -1300,7 +1384,7 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a> {
     }
 }
 
-impl<'a> EraseVisitor<'a> {
+impl<'a> EraseVisitor<'a, '_> {
     pub fn erased(&self) -> &[(Wire<'a>, Wire<'a>)] {
         &self.erased_order
     }
@@ -1315,10 +1399,11 @@ pub struct WireDeps<'a> {
 enum WireDepsInner<'a> {
     Small(Range<u8>, [Option<Wire<'a>>; 3]),
     Large(slice::Iter<'a, Wire<'a>>),
+    Large2(iter::Chain<slice::Iter<'a, Wire<'a>>, slice::Iter<'a, Wire<'a>>>),
 }
 
 impl<'a> WireDeps<'a> {
-    fn zero() -> WireDeps<'a> {
+    pub fn zero() -> WireDeps<'a> {
         Self::small(0, [None, None, None])
     }
 
@@ -1345,6 +1430,12 @@ impl<'a> WireDeps<'a> {
             inner: WireDepsInner::Large(ws.iter()),
         }
     }
+
+    fn many2(ws1: &'a [Wire<'a>], ws2: &'a [Wire<'a>]) -> WireDeps<'a> {
+        WireDeps {
+            inner: WireDepsInner::Large2(ws1.iter().chain(ws2.iter())),
+        }
+    }
 }
 
 impl<'a> Iterator for WireDepsInner<'a> {
@@ -1356,6 +1447,7 @@ impl<'a> Iterator for WireDepsInner<'a> {
                 arr.get(i).and_then(|&x| x)
             },
             WireDepsInner::Large(ref mut it) => it.next().cloned(),
+            WireDepsInner::Large2(ref mut it) => it.next().cloned(),
         }
     }
 }
@@ -1368,6 +1460,7 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
                 arr.get(i).and_then(|&x| x)
             },
             WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
+            WireDepsInner::Large2(ref mut it) => it.next_back().cloned(),
         }
     }
 }
@@ -1386,7 +1479,11 @@ impl<'a> DoubleEndedIterator for WireDeps<'a> {
 }
 
 pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
-    match w.kind {
+    gate_deps(w.kind)
+}
+
+pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
+    match gk {
         GateKind::Lit(_, _) |
         GateKind::Secret(_) |
         GateKind::Erased(_) |
@@ -1399,78 +1496,111 @@ pub fn wire_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
         GateKind::Compare(_, a, b) => WireDeps::two(a, b),
         GateKind::Mux(c, t, e) => WireDeps::three(c, t, e),
         GateKind::Pack(ws) |
-        GateKind::Gadget(_, ws) |
-        GateKind::Call(_, ws, _) => WireDeps::many(ws),
+        GateKind::Gadget(_, ws) => WireDeps::many(ws),
+        GateKind::Call(c) => WireDeps::many(c.args),
     }
 }
 
-pub struct PostorderIter<'a, F> {
-    stack: Vec<Wire<'a>>,
-    /// Wires that have already been yielded.  We avoid processing the same wire twice.
-    seen: HashSet<Wire<'a>>,
-    filter: F,
+pub fn wire_and_secret_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
+    gate_and_secret_deps(w.kind)
 }
 
-impl<'a, F: FnMut(Wire<'a>) -> bool> Iterator for PostorderIter<'a, F> {
+pub fn gate_and_secret_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
+    match gk {
+        GateKind::Secret(s) => WireDeps::many(s.deps),
+        GateKind::Call(c) => WireDeps::many2(c.args, c.project_deps),
+        _ => gate_deps(gk),
+    }
+}
+
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+enum PostorderAction<T> {
+    Visit(T),
+    Emit(T),
+}
+
+pub struct PostorderIter<'a, F> {
+    stack: Vec<PostorderAction<Wire<'a>>>,
+    /// Wires that have already been yielded.  We avoid processing the same wire twice.
+    seen: HashSet<Wire<'a>>,
+    /// Visitor function, called on each wire.  Returns `(emit, deps)`; first, all wires listed in
+    /// `deps` will be visited (if they haven't been visited already), then the wire itself will be
+    /// emitted if `emit` is `true`.
+    visit: F,
+}
+
+impl<'a, F, I> Iterator for PostorderIter<'a, F>
+where
+    F: FnMut(Wire<'a>) -> (bool, I),
+    I: Iterator<Item = Wire<'a>>,
+{
     type Item = Wire<'a>;
     fn next(&mut self) -> Option<Wire<'a>> {
-        // NB: `last().cloned()`, not `pop()`.  We only pop the item if all its children have been
-        // processed.
-        while let Some(wire) = self.stack.last().cloned() {
-            // We may end up with the same wire on the stack twice, if the wire is accessible via
-            // two different paths.
-            if self.seen.contains(&wire) {
-                self.stack.pop();
-                continue;
-            }
+        let PostorderIter { ref mut stack, ref mut seen, ref mut visit } = *self;
 
-            let maybe_push = |w| {
-                if self.seen.contains(&w) || !(self.filter)(w) {
-                    false
-                } else {
-                    self.stack.push(w);
-                    true
-                }
-            };
+        while let Some(action) = stack.pop() {
+            match action {
+                PostorderAction::Visit(wire) => {
+                    if seen.contains(&wire) {
+                        continue;
+                    }
 
-            let children_pending = wire_deps(wire).rev().any(maybe_push);
+                    let (emit, deps) = visit(wire);
+                    if emit {
+                        stack.push(PostorderAction::Emit(wire));
+                    }
+                    for child in deps {
+                        stack.push(PostorderAction::Visit(child));
+                    }
+                },
 
-            if !children_pending {
-                let result = self.stack.pop();
-                debug_assert!(result == Some(wire));
-                self.seen.insert(wire);
-                return Some(wire);
+                PostorderAction::Emit(wire) => {
+                    if !seen.insert(wire) {
+                        continue;
+                    }
+                    return Some(wire);
+                },
             }
         }
         None
     }
 }
 
-pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
-where I: IntoIterator<Item = Wire<'a>> {
-    let mut stack = wires.into_iter().collect::<Vec<_>>();
+pub fn walk_wires_ex<'a, I, F, I2>(wires: I, visit: F) -> impl Iterator<Item = Wire<'a>>
+where
+    I: IntoIterator<Item = Wire<'a>>,
+    F: FnMut(Wire<'a>) -> (bool, I2),
+    I2: Iterator<Item = Wire<'a>>,
+{
+    let mut stack = wires.into_iter().map(PostorderAction::Visit).collect::<Vec<_>>();
     stack.reverse();
     PostorderIter {
         stack,
         seen: HashSet::new(),
-        filter: |_| true,
+        visit,
     }
 }
 
-pub fn walk_wires_filtered<'a, I, F>(wires: I, filter: F) -> PostorderIter<'a, F>
+pub fn walk_wires<'a, I>(wires: I) -> impl Iterator<Item = Wire<'a>>
+where I: IntoIterator<Item = Wire<'a>> {
+    walk_wires_ex(wires, |w| (true, wire_deps(w)))
+}
+
+pub fn walk_wires_filtered<'a, I, F>(wires: I, mut filter: F) -> impl Iterator<Item = Wire<'a>>
 where I: IntoIterator<Item = Wire<'a>>, F: FnMut(Wire<'a>) -> bool {
-    let mut stack = wires.into_iter().collect::<Vec<_>>();
-    stack.reverse();
-    PostorderIter {
-        stack,
-        seen: HashSet::new(),
-        filter,
-    }
+    walk_wires_ex(wires, move |w| {
+        if filter(w) {
+            (true, wire_deps(w))
+        } else {
+            (false, WireDeps::zero())
+        }
+    })
 }
 
 /// Visit all `Secret`s that are used in the computation of `wires`.  Yields each `Secret`
 /// once, in some deterministic order (assuming `wires` itself is deterministic).
-pub fn walk_witness<'a, I>(wires: I) -> impl Iterator<Item = Secret<'a>>
+pub fn walk_secrets<'a, I>(wires: I) -> impl Iterator<Item = Secret<'a>>
 where I: IntoIterator<Item = Wire<'a>> {
     walk_wires(wires).filter_map(|w| match w.kind {
         GateKind::Secret(s) => Some(s),
@@ -1487,7 +1617,30 @@ pub enum TyKind<'a> {
     Int(IntSize),
     Uint(IntSize),
     GF(Field),
-    Bundle(&'a [Ty<'a>]),
+    Bundle(BundleTypes<'a>),
+
+    /// Raw bits, with no particular interpretation.  This type is not accepted as input by any
+    /// gate, nor can it be included in a `Bundle`.  However, it can appear as the type of a
+    /// `Secret` gate and in the dependency list of a derived secret.
+    ///
+    /// This is used to fit arbitrary intermediate values into the wire-based dependency tracking
+    /// for derived secrets.  Suppose you have a function that takes many input wires, does an
+    /// expensive computation on their values, and derives many secrets from the result.  It would
+    /// be inefficient to repeat the expensive computation for each derived secret.  To avoid this,
+    /// you can create an intermediate secret derived from all the inputs via the expensive
+    /// computation, and then derive the many secrets from that result.  As the intermediate value
+    /// might not make sense as a circuit value or fit into the normal circuit type system, we
+    /// provide `RawBits` to use for it instead.
+    RawBits,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct BundleTypes<'a> {
+    tys: &'a [Ty<'a>],
+    /// **Invariant**: `offsets[i]` is the offset in digits of the start of element `i` (whose
+    /// types is `tys[i]`) within the `Bits` representation of this bundle type, and
+    /// `offsets.last()` is the total length of the bundle in digits.
+    offsets: Unhashed<&'a [usize]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -1550,6 +1703,7 @@ impl TyKind<'_> {
             TyKind::Uint(_) => None,
             TyKind::GF(f) => Some(f),
             TyKind::Bundle(_) => None,
+            TyKind::RawBits => None,
         }
     }
 
@@ -1559,6 +1713,7 @@ impl TyKind<'_> {
             TyKind::Uint(_) => true,
             TyKind::GF(_) => false,
             TyKind::Bundle(_) => false,
+            TyKind::RawBits => false,
         }
     }
 
@@ -1567,7 +1722,8 @@ impl TyKind<'_> {
             TyKind::Int(sz) => sz,
             TyKind::Uint(sz) => sz,
             TyKind::GF(f) => f.bit_size(),
-            TyKind::Bundle(_) => panic!("Bundle has no IntSize"),
+            TyKind::Bundle(_) |
+            TyKind::RawBits => panic!("{:?} has no IntSize", self),
         }
     }
 
@@ -1590,9 +1746,10 @@ impl TyKind<'_> {
             TyKind::Uint(sz) => c.ty(TyKind::Uint(sz)),
             TyKind::Int(sz) => c.ty(TyKind::Int(sz)),
             TyKind::GF(f) => c.ty(TyKind::GF(f)),
-            TyKind::Bundle(tys) => {
-                c.ty_bundle_iter(tys.iter().map(|ty| ty.transfer(c)))
+            TyKind::Bundle(btys) => {
+                c.ty_bundle_iter(btys.tys().iter().map(|ty| ty.transfer(c)))
             },
+            TyKind::RawBits => c.ty(TyKind::RawBits),
         }
     }
 
@@ -1607,10 +1764,41 @@ impl TyKind<'_> {
             TyKind::GF(f) => {
                 (f.bit_size().bits() as usize + Bits::DIGIT_BITS - 1) / Bits::DIGIT_BITS
             },
-            TyKind::Bundle(tys) => {
-                tys.iter().map(|ty| ty.digits()).sum()
-            },
+            TyKind::Bundle(btys) => btys.digits(),
+            TyKind::RawBits => panic!("RawBits type has unknown digit width"),
         }
+    }
+}
+
+impl<'a> BundleTypes<'a> {
+    pub fn len(self) -> usize {
+        self.tys.len()
+    }
+
+    pub fn ty(self, i: usize) -> Ty<'a> {
+        self.tys[i]
+    }
+
+    pub fn tys(self) -> &'a [Ty<'a>] {
+        self.tys
+    }
+
+    pub fn digit_offset(self, i: usize) -> usize {
+        self.offsets[i]
+    }
+
+    pub fn digits(self) -> usize {
+        *self.offsets.last().unwrap()
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for BundleTypes<'a> {
+    type Output = BundleTypes<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> BundleTypes<'b> {
+        let tys = self.tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
+        let tys = v.new_circuit().intern_ty_list(&tys);
+        let offsets = v.new_circuit().arena().alloc_slice_copy(&self.offsets);
+        BundleTypes { tys, offsets: Unhashed(offsets) }
     }
 }
 
@@ -1622,10 +1810,8 @@ impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
             Int(sz) => Int(sz),
             Uint(sz) => Uint(sz),
             GF(f) => GF(f),
-            Bundle(tys) => {
-                let tys = tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
-                Bundle(v.new_circuit().intern_ty_list(&tys))
-            },
+            Bundle(bt) => Bundle(v.visit(bt)),
+            RawBits => RawBits,
         }
     }
 }
@@ -1639,6 +1825,7 @@ static COMMON_TY_I8: TyKind = TyKind::I8;
 static COMMON_TY_I16: TyKind = TyKind::I16;
 static COMMON_TY_I32: TyKind = TyKind::I32;
 static COMMON_TY_I64: TyKind = TyKind::I64;
+static COMMON_TY_RAW_BITS: TyKind = TyKind::RawBits;
 
 static COMMON_TYPES: &[&TyKind] = &[
     &COMMON_TY_BOOL,
@@ -1650,6 +1837,7 @@ static COMMON_TYPES: &[&TyKind] = &[
     &COMMON_TY_I16,
     &COMMON_TY_I32,
     &COMMON_TY_I64,
+    &COMMON_TY_RAW_BITS,
 ];
 
 impl Ty<'_> {
@@ -1675,6 +1863,10 @@ impl Ty<'_> {
             64 => Ty(&COMMON_TY_I64),
             _ => panic!("not a common bit width: {}", width),
         }
+    }
+
+    pub fn raw_bits<'a>() -> Ty<'a> {
+        Ty(&COMMON_TY_RAW_BITS)
     }
 }
 
@@ -1822,33 +2014,6 @@ impl<'a, 'b> Migrate<'a, 'b> for PackedGateValue<'a> {
 }
 
 
-#[derive(Clone, Debug, Default)]
-pub struct GateValueCell<'a>(Cell<PackedGateValue<'a>>);
-
-impl<'a> GateValueCell<'a> {
-    pub fn new(gv: GateValue<'a>) -> GateValueCell<'a> {
-        GateValueCell(Cell::new(gv.pack()))
-    }
-
-    pub fn get(&self) -> GateValue<'a> {
-        self.0.get().unpack()
-    }
-
-    pub fn set(&self, x: GateValue<'a>) {
-        self.0.set(x.pack());
-    }
-
-    pub fn is_valid(&self) -> bool {
-        match self.0.get().unpack() {
-            GateValue::Unset => false,
-            GateValue::Public(_) |
-            GateValue::Secret(_) => true,
-            GateValue::NeedsSecret(s) => !s.has_val(),
-            GateValue::Failed => true,
-        }
-    }
-}
-
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Gate<'a> {
     /// Cached output type of this gate.  Computed when the `Gate` is created.  The result is
@@ -1857,7 +2022,17 @@ pub struct Gate<'a> {
     pub ty: Ty<'a>,
     pub kind: GateKind<'a>,
     pub label: Label<'a>,
-    pub value: Unhashed<GateValueCell<'a>>,
+    /// Hook function to run after successfully evaluating this gate.
+    ///
+    /// As the closure used here may contain `Wire<'a>` captures, it can't be migrated.  Migrate
+    /// operations will instead clear this field; after migration, `eval_hook` will always be
+    /// `None`.
+    ///
+    /// Note this field is ignored during interning.  This could result in confusing interactions
+    /// where two `Gate`s unexpectedly alias and setting one gate's `eval_hook` overwrites the
+    /// `eval_hook` that was provided for the other gate.  However, these hooks are only used for
+    /// debugging, so this is okay for now.
+    pub eval_hook: Unhashed<Cell<Option<EvalHookFn<'a>>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -1891,11 +2066,8 @@ pub enum GateKind<'a> {
     /// A custom gadget.
     // TODO: move fields to a struct (this variant is 5 words long)
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
-    /// A function call.  The wires are the arguments to the function.  Secret inputs to the
-    /// function are provided as a list of pairs, giving a value for each `SecretInputId` used in
-    /// the function.  (This would be a `HashMap`, but `Gate` is arena-allocated and thus never
-    /// gets dropped, so putting a `HashMap` here would leak memory.)
-    Call(Function<'a>, &'a [Wire<'a>], &'a [(SecretInputId, Secret<'a>)]),
+    /// A function call.  See `CallData` for details.
+    Call(Call<'a>),
 }
 
 impl<'a> Gate<'a> {
@@ -1919,14 +2091,14 @@ impl<'a> GateKind<'a> {
             GateKind::Cast(_, ty) => ty,
             GateKind::Pack(ws) => c.ty_bundle_iter(ws.iter().map(|&w| w.ty)),
             GateKind::Extract(w, i) => match *w.ty {
-                TyKind::Bundle(tys) => tys[i],
+                TyKind::Bundle(btys) => btys.ty(i),
                 _ => panic!("invalid wire type {:?} in Extract", w.ty),
             },
             GateKind::Gadget(k, ws) => {
                 let tys = ws.iter().map(|w| w.ty).collect::<Vec<_>>();
                 k.typecheck(c.as_base(), &tys)
             },
-            GateKind::Call(f, _, _) => f.result_wire.ty,
+            GateKind::Call(c) => c.func.result_wire.ty,
         }
     }
 
@@ -1989,7 +2161,7 @@ impl<'a> GateKind<'a> {
             Pack(_) => "Pack",
             Extract(_, _) => "Extract",
             Gadget(_, _) => "Gadget",
-            Call(_, _, _) => "Call",
+            Call(_) => "Call",
         }
     }
 }
@@ -2023,7 +2195,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Gate<'a> {
             ty: v.visit(self.ty),
             kind: v.visit(self.kind),
             label: v.visit(self.label),
-            value: v.visit(self.value),
+            eval_hook: Unhashed(Cell::new(None)),
         }
     }
 }
@@ -2054,22 +2226,8 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 let ws = v.new_circuit().intern_wire_list(&ws);
                 Gadget(gk, ws)
             },
-            Call(f, ws, ss) => {
-                let f = v.visit(f);
-                let ws = ws.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
-                let ws = v.new_circuit().intern_wire_list(&ws);
-                let ss = ss.iter().map(|&s| v.visit(s)).collect::<Vec<_>>();
-                let ss = v.new_circuit().arena().alloc_slice_copy(&ss);
-                Call(f, ws, ss)
-            },
+            Call(c) => Call(v.visit(c)),
         }
-    }
-}
-
-impl<'a, 'b> Migrate<'a, 'b> for GateValueCell<'a> {
-    type Output = GateValueCell<'b>;
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> GateValueCell<'b> {
-        GateValueCell(Cell::new(v.visit(self.0.into_inner())))
     }
 }
 
@@ -2190,11 +2348,8 @@ declare_interned_pointer! {
     /// use within the circuit is added to the witness in an arbitrary order.
     ///
     /// With the addition of call gates, we consider each stack frame to have a separate witness.
-    /// Each `Secret` used in a function body refers to an element of the witness for the current
-    /// stack frame, identified by the `SecretInputId` stored in the `SecretValue::FunctionInput`.
-    /// The `FunctionDef` contains a list of `SecretInputId`s that must be given values at each
-    /// call, and `GateKind::Call` contains a list mapping `SecretInputId`s to `Secret`s in the
-    /// caller's scope.
+    /// `Secret`s within a function body access the witness of the current call frame rather than
+    /// the global witness of the entire circuit.
     #[derive(Debug)]
     pub struct Secret<'a> => SecretData<'a>;
 }
@@ -2207,242 +2362,338 @@ impl<'a, 'b> Migrate<'a, 'b> for Secret<'a> {
     }
 }
 
-/// The ID of a secret input to a function.  This is essentially used as an "argument name" when
-/// passing secret values to functions: the `FunctionDef` declares a type for each `SecretInputId`
-/// that it uses, and the caller must provide a value for each `SecretInputId` when it makes the
-/// call.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
-pub struct SecretInputId(pub usize);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Migrate)]
-pub enum SecretValue<'a> {
-    /// The circuit is in prover mode, and the value is initialized.
-    ProverInit(Bits<'a>),
-    /// The circuit is in prover mode, and the value hasn't be initialized yet.
-    ProverUninit,
-    /// The circuit is in verifier mode, so the value will never be initialized.
-    VerifierUnknown,
-    /// This secret is inside a function, and its value is taken from one of the function's secret
-    /// inputs.
-    FunctionInput(SecretInputId),
-}
+/// Wrapper that signals that the wrapped type implements `Copy`.  Coercing `&IsCopy<Concrete>` to
+/// `&IsCopy<dyn Trait>` retains the fact that the underlying concrete type of the `dyn Trait`
+/// implements `Copy`.
+#[repr(transparent)]
+struct IsCopy<T: ?Sized>(T);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct PackedSecretValue<'a> {
-    inner: (usize, usize),
-    _marker: PhantomData<Bits<'a>>,
-}
-
-impl<'a> SecretValue<'a> {
-    /// Produce either `ProverUninit` or `VerifierUnknown`, depending on the value of `is_prover`.
-    pub fn uninit(is_prover: bool) -> SecretValue<'a> {
-        if is_prover {
-            SecretValue::ProverUninit
-        } else {
-            SecretValue::VerifierUnknown
-        }
+impl<T: ?Sized> IsCopy<T> {
+    pub fn new_ref<'a>(r: &'a T) -> &'a IsCopy<T>
+    where T: Copy {
+        unsafe { mem::transmute(r) }
     }
 
-    /// Produce either `ProverInit(mk_val())` or `VerifierUnknown`, depending on the value of
-    /// `is_prover`.
-    pub fn init(is_prover: bool, mk_val: impl FnOnce() -> Bits<'a>) -> SecretValue<'a> {
-        if is_prover {
-            SecretValue::ProverInit(mk_val())
-        } else {
-            SecretValue::VerifierUnknown
-        }
-    }
-
-    pub fn pack(self) -> PackedSecretValue<'a> {
-        let inner = match self {
-            SecretValue::ProverInit(bits) => {
-                let ptr = bits.0.as_ptr() as usize;
-                assert!(ptr >= 2);
-                let len = bits.0.len();
-                (ptr, len)
-            },
-            SecretValue::ProverUninit => (0, 0),
-            SecretValue::VerifierUnknown => (0, 1),
-            SecretValue::FunctionInput(i) => (1, i.0),
-        };
-        PackedSecretValue { inner, _marker: PhantomData }
+    pub fn get_ref(&self) -> &T {
+        &self.0
     }
 }
 
-impl<'a> PackedSecretValue<'a> {
-    pub fn unpack(self) -> SecretValue<'a> {
+/// `Migrate`-able wrapper for references to arena-allocated trait objects.  Requires `T: 'static`,
+/// meaning that the trait object can simply be copied to the new arena without requiring any
+/// migrations within its data.
+struct ArenaDyn<'a, T: ?Sized>(&'a IsCopy<T>);
+
+impl<'a, T: ?Sized> Clone for ArenaDyn<'a, T> {
+    fn clone(&self) -> Self { *self }
+}
+
+impl<'a, T: ?Sized> Copy for ArenaDyn<'a, T> {}
+
+impl<'a, T: ?Sized> ArenaDyn<'a, T> {
+    /// Create a new `ArenaDyn` reference.  We use `IsCopy` to assert that the concrete type
+    /// underlying `T` is `Copy`.  We can't add `T: Copy` since that won't hold when `T` is a `dyn`
+    /// type.
+    pub fn new(r: &'a IsCopy<T>) -> ArenaDyn<'a, T>
+    where T: 'static {
+        ArenaDyn(r)
+    }
+}
+
+impl<'a, T: ?Sized> fmt::Debug for ArenaDyn<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ArenaDyn({})", any::type_name::<T>())
+    }
+}
+
+impl<'a, 'b, T: ?Sized + 'static> Migrate<'a, 'b> for ArenaDyn<'a, T> {
+    type Output = ArenaDyn<'b, T>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> ArenaDyn<'b, T> {
+        // Copy the unsized value.
         unsafe {
-            match self.inner {
-                (0, 0) => SecretValue::ProverUninit,
-                (0, 1) => SecretValue::VerifierUnknown,
-                (1, i) => SecretValue::FunctionInput(SecretInputId(i)),
-                (ptr, len) => {
-                    let bits = slice::from_raw_parts(ptr as *const _, len);
-                    SecretValue::ProverInit(Bits(bits))
-                }
+            let size = mem::size_of_val::<IsCopy<T>>(self.0);
+            let align = mem::align_of_val::<IsCopy<T>>(self.0);
+            let layout = Layout::from_size_align(size, align).unwrap();
+            let src_ptr = self.0 as *const IsCopy<T> as *const u8;
+            let dest_ptr = v.new_circuit().arena().alloc_layout(layout).as_ptr();
+            ptr::copy_nonoverlapping(src_ptr, dest_ptr, size);
+
+            // Keep the vtable, but change the address.  This is a bit of a hack, since things like
+            // `ptr::from_raw_parts` are not yet stable.
+            let mut t_ptr = self.0 as *const IsCopy<T>;
+            *(&mut t_ptr as *mut *const IsCopy<T> as *mut *const u8) = dest_ptr;
+            ArenaDyn(&*t_ptr)
+        }
+    }
+}
+
+impl<'a, T: ?Sized> Deref for ArenaDyn<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.0.get_ref()
+    }
+}
+
+
+trait SecretInitFnTrait<'b> {
+    /// Get the required type of the `witness` argument to `Self::call`.  If this is
+    /// `TypeId::of::<()>()`, then all types are allowed (because the argument is ignored).
+    fn witness_type(&self) -> TypeId;
+    /// Call the function.  The `witness` argument must be a valid pointer to a value of the type
+    /// indicated by `self.witness_type()`.
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> Bits<'b>;
+}
+
+struct SecretInitFnImpl<F, W> {
+    f: F,
+    _marker: PhantomData<fn(&W)>,
+}
+
+impl<F: Clone, W> Clone for SecretInitFnImpl<F, W> {
+    fn clone(&self) -> Self {
+        SecretInitFnImpl {
+            f: self.f.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<F: Copy, W> Copy for SecretInitFnImpl<F, W> {}
+
+impl<F, W> SecretInitFnImpl<F, W> {
+    pub fn new(f: F) -> SecretInitFnImpl<F, W> {
+        SecretInitFnImpl {
+            f,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'b, F, W> SecretInitFnTrait<'b> for SecretInitFnImpl<F, W>
+where
+    W: 'static,
+    F: Fn(&CircuitBase<'b>, &W, &[Bits<'b>]) -> Bits<'b>,
+{
+    fn witness_type(&self) -> TypeId {
+        TypeId::of::<W>()
+    }
+
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> Bits<'b> {
+        let witness = &*(witness as *const W);
+        (self.f)(c, witness, dep_vals)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Migrate)]
+pub struct SecretInitFn<'a> {
+    inner: ArenaDyn<'a, dyn for<'b> SecretInitFnTrait<'b> + 'static>,
+}
+
+impl<'a> SecretInitFn<'a> {
+    fn new<T>(x: &'a T) -> SecretInitFn<'a>
+    where T: for<'b> SecretInitFnTrait<'b> + Copy + 'static {
+        SecretInitFn {
+            inner: ArenaDyn::new(IsCopy::<T>::new_ref(x)),
+        }
+    }
+
+    pub fn call(
+        &self,
+        c: &CircuitBase<'a>,
+        witness: &dyn Any,
+        dep_vals: &[Bits<'a>],
+    ) -> Bits<'a> {
+        unsafe {
+            assert!(witness.type_id() == self.inner.witness_type() ||
+                self.inner.witness_type() == TypeId::of::<()>());
+            self.inner.call(c, witness as *const dyn Any as *const (), dep_vals)
+        }
+    }
+}
+
+
+trait SecretProjectFnTrait<'b> {
+    /// Get the required type of the `witness` argument to `Self::call`.  If this is
+    /// `TypeId::of::<()>()`, then all types are allowed (because the argument is ignored).
+    fn input_witness_type(&self) -> TypeId;
+    /// Get the type of the new witness returned by `Self::call`.
+    fn output_witness_type(&self) -> TypeId;
+    /// Call the function.  The `witness` argument must be a valid pointer to a value of the type
+    /// indicated by `self.input_witness_type()`.  Returns a pointer to a new witness and a boolean
+    /// indicating if the output pointer is owned (boxed) as opposed to borrowed.
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> (*mut dyn Any, bool);
+}
+
+struct SecretProjectFnImpl<F, W1, W2> {
+    f: F,
+    _marker: PhantomData<fn(&W1) -> CowBox<W2>>,
+}
+
+impl<F: Clone, W1, W2> Clone for SecretProjectFnImpl<F, W1, W2> {
+    fn clone(&self) -> Self {
+        SecretProjectFnImpl {
+            f: self.f.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<F: Copy, W1, W2> Copy for SecretProjectFnImpl<F, W1, W2> {}
+
+impl<F, W1, W2> SecretProjectFnImpl<F, W1, W2> {
+    pub fn new(f: F) -> SecretProjectFnImpl<F, W1, W2> {
+        SecretProjectFnImpl {
+            f,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'b, F, W1, W2> SecretProjectFnTrait<'b> for SecretProjectFnImpl<F, W1, W2>
+where
+    W1: 'static,
+    W2: 'static,
+    F: for<'s> Fn(&CircuitBase<'b>, &'s W1, &[Bits<'b>]) -> CowBox<'s, W2>,
+{
+    fn input_witness_type(&self) -> TypeId {
+        TypeId::of::<W1>()
+    }
+
+    fn output_witness_type(&self) -> TypeId {
+        TypeId::of::<W2>()
+    }
+
+    unsafe fn call(
+        &self,
+        c: &CircuitBase<'b>,
+        witness: *const (),
+        dep_vals: &[Bits<'b>],
+    ) -> (*mut dyn Any, bool) {
+        let witness = &*(witness as *const W1);
+        match (self.f)(c, witness, dep_vals) {
+            CowBox::Owned(b) => {
+                (Box::into_raw(b) as *mut dyn Any, true)
+            },
+            CowBox::Borrowed(r) => {
+                (r as *const W2 as *const dyn Any as *mut dyn Any, false)
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Migrate)]
+pub struct SecretProjectFn<'a> {
+    inner: ArenaDyn<'a, dyn for<'b> SecretProjectFnTrait<'b> + 'static>,
+}
+
+impl<'a> SecretProjectFn<'a> {
+    fn new<T>(x: &'a T) -> SecretProjectFn<'a>
+    where T: for<'b> SecretProjectFnTrait<'b> + Copy + 'static {
+        SecretProjectFn {
+            inner: ArenaDyn::new(IsCopy::<T>::new_ref(x)),
+        }
+    }
+
+    pub fn call<'s>(
+        &self,
+        c: &CircuitBase<'a>,
+        witness: &'s dyn Any,
+        dep_vals: &[Bits<'a>],
+    ) -> CowBox<'s, dyn Any> {
+        unsafe {
+            assert!(witness.type_id() == self.inner.input_witness_type() ||
+                self.inner.input_witness_type() == TypeId::of::<()>());
+            let (ptr, owned) = self.inner.call(
+                c, witness as *const dyn Any as *const (), dep_vals);
+            if owned {
+                CowBox::Owned(Box::from_raw(ptr))
+            } else {
+                CowBox::Borrowed(&*ptr)
             }
         }
     }
 }
 
-impl<'a> fmt::Debug for PackedSecretValue<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&self.unpack(), f)
-    }
-}
 
-impl<'a, 'b> Migrate<'a, 'b> for PackedSecretValue<'a> {
-    type Output = PackedSecretValue<'b>;
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PackedSecretValue<'b> {
-        self.unpack().migrate(v).pack()
-    }
-}
-
-
-#[derive(Clone, PartialEq, Eq, Debug, Migrate)]
+#[derive(Clone, Debug)]
 pub struct SecretData<'a> {
     pub ty: Ty<'a>,
-    val: Cell<PackedSecretValue<'a>>,
     /// Indicates whether this `Secret` has been used to construct a gate.  Each `Secret` can only
     /// be used in one place in the circuit.  This flag is `false` on construction and becomes
     /// `true` at the first use; if it is used again after that, a panic occurs.  Note that
     /// constructing a second gate from the same `Secret` will panic even if the first gate isn't
     /// used anywhere.
     used: Cell<bool>,
+
+    pub init: SecretInitFn<'a>,
+    /// Dependencies for computing derived secrets.  The values on these wires (represented as
+    /// `Bits`) will be passed to `init`.
+    pub deps: &'a [Wire<'a>],
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for SecretData<'a> {
+    type Output = SecretData<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SecretData<'b> {
+        let deps = self.deps.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let deps = v.new_circuit().intern_wire_list(&deps);
+        SecretData {
+            ty: v.visit(self.ty),
+            used: v.visit(self.used),
+            init: v.visit(self.init),
+            deps,
+        }
+    }
 }
 
 impl<'a> SecretData<'a> {
-    fn new(ty: Ty<'a>, val: SecretValue<'a>) -> SecretData<'a> {
+    fn new_lazy<W: 'static>(
+        ty: Ty<'a>,
+        init: SecretInitFn<'a>,
+        deps: &'a [Wire<'a>],
+    ) -> SecretData<'a> {
         SecretData {
             ty,
-            val: Cell::new(val.pack()),
             used: Cell::new(false),
+            init,
+            deps,
         }
-    }
-
-    pub fn secret_value(&self) -> SecretValue<'a> {
-        self.val.get().unpack()
     }
 
     pub fn set_used(&self) {
         assert!(!self.used.get(), "this secret has already been used");
         self.used.set(true);
     }
-
-    /// Retrieve the value of this secret.  Returns `None` in verifier mode, or `Some(bits)` in
-    /// prover mode.  In prover mode, if the value has not been initialized yet, this function will
-    /// panic.
-    pub fn val(&self) -> Option<Bits<'a>> {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(bits) => Some(bits),
-            SecretValue::ProverUninit =>
-                panic!("tried to access uninitialized secert value"),
-            SecretValue::VerifierUnknown => None,
-            SecretValue::FunctionInput(_) =>
-                panic!("tried to access value of abstract function input"),
-        }
-    }
-
-    /// Try to retrieve the value of this secret.  In verifier mode, this always returns `None`.
-    /// In prover mode, this returns `Some(bits)` if the value has been initialized and `None`
-    /// otherwise.
-    pub fn try_val(&self) -> Option<Bits<'a>> {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(bits) => Some(bits),
-            SecretValue::ProverUninit => None,
-            SecretValue::VerifierUnknown => None,
-            SecretValue::FunctionInput(_) =>
-                panic!("tried to access value of abstract function input"),
-        }
-    }
-
-    pub fn has_val(&self) -> bool {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(_) => true,
-            SecretValue::ProverUninit => false,
-            SecretValue::VerifierUnknown => false,
-            SecretValue::FunctionInput(_) =>
-                panic!("tried to access value of abstract function input"),
-        }
-    }
-
-    pub fn set(&self, bits: Bits<'a>) {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(_) =>
-                panic!("secret value has already been set"),
-            SecretValue::ProverUninit => {
-                self.val.set(SecretValue::ProverInit(bits).pack());
-            },
-            SecretValue::VerifierUnknown =>
-                panic!("can't provide secret values when running in verifier mode"),
-            SecretValue::FunctionInput(_) =>
-                panic!("can't provide secret value for abstract function input"),
-        }
-    }
-
-    pub fn set_default(&self, bits: Bits<'a>) {
-        match self.val.get().unpack() {
-            SecretValue::ProverInit(_) => {},
-            SecretValue::ProverUninit => {
-                self.val.set(SecretValue::ProverInit(bits).pack());
-            },
-            SecretValue::VerifierUnknown => {},
-            SecretValue::FunctionInput(_) => {},
-        }
-    }
-
-    pub fn set_from_lit(&self, w: Wire<'a>, force: bool) {
-        let (ty, bits) = w.kind.as_lit();
-        assert!(ty == self.ty, "type mismatch in secret init: {:?} != {:?}", ty, self.ty);
-        if force {
-            self.set(bits);
-        } else {
-            self.set_default(bits);
-        }
-    }
 }
 
-/// A handle that can be used to set the value of a `Secret`.  Sets a default value on drop, if a
-/// default was provided when the handle was constructed.
-#[derive(Debug)]
-pub struct SecretHandle<'a> {
-    s: Secret<'a>,
-    default: Bits<'a>,
+/// Wrapper around `CircuitBase<'a>`, where the witness type of the circuit is known to be `W`.
+#[repr(transparent)]
+pub struct CircuitBaseWithWitnessType<'a, W> {
+    c: CircuitBase<'a>,
+    _marker: PhantomData<W>,
 }
 
-impl<'a> SecretHandle<'a> {
-    fn new(s: Secret<'a>, default: Bits<'a>) -> SecretHandle<'a> {
-        SecretHandle { s, default }
-    }
-
-    pub fn set(&self, c: &impl CircuitTrait<'a>, val: impl AsBits) {
-        let bits = c.bits(self.s.ty, val);
-        self.s.set(bits);
-    }
-
-    /// Set the secret to its default value, if it hasn't been set yet.
-    pub fn apply_default(&self) {
-        self.s.set_default(self.default);
+impl<'a, W> Deref for CircuitBaseWithWitnessType<'a, W> {
+    type Target = CircuitBase<'a>;
+    fn deref(&self) -> &CircuitBase<'a> {
+        &self.c
     }
 }
-
-impl<'a> Drop for SecretHandle<'a> {
-    fn drop(&mut self) {
-        self.apply_default();
-    }
-}
-
-impl<'a, 'b> Migrate<'a, 'b> for SecretHandle<'a> {
-    type Output = SecretHandle<'b>;
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SecretHandle<'b> {
-        let sh = ManuallyDrop::new(self);
-        SecretHandle {
-            s: v.visit(sh.s),
-            default: v.visit(sh.default),
-        }
-    }
-}
-
 
 
 #[derive(Clone, Debug, Migrate)]
@@ -2456,6 +2707,13 @@ impl<'a> ErasedData<'a> {
         ErasedData {
             ty,
             value: GateValue::from_bits(bits, secret).pack(),
+        }
+    }
+
+    pub fn new_unset(ty: Ty<'a>) -> ErasedData<'a> {
+        ErasedData {
+            ty,
+            value: GateValue::Unset.pack(),
         }
     }
 
@@ -2495,6 +2753,60 @@ impl<'a, 'b> Migrate<'a, 'b> for Erased<'a> {
     }
 }
 
+
+declare_interned_pointer! {
+    /// A call to a circuit function.
+    #[derive(Debug)]
+    pub struct Call<'a> => CallData<'a>;
+}
+
+#[derive(Clone, Debug)]
+pub struct CallData<'a> {
+    pub func: Function<'a>,
+    pub args: &'a [Wire<'a>],
+    pub project_witness: SecretProjectFn<'a>,
+    pub project_deps: &'a [Wire<'a>],
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for CallData<'a> {
+    type Output = CallData<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> CallData<'b> {
+        let args = self.args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let args = v.new_circuit().intern_wire_list(&args);
+        let project_deps = self.project_deps.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+        let project_deps = v.new_circuit().arena().alloc_slice_copy(&project_deps);
+        CallData {
+            func: v.visit(self.func),
+            args,
+            project_witness: v.visit(self.project_witness),
+            project_deps,
+        }
+    }
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for Call<'a> {
+    type Output = Call<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Call<'b> {
+        let new = v.visit((*self).clone());
+        v.new_circuit().alloc_call(new)
+    }
+}
+
+
+#[derive(Clone, Copy)]
+pub struct EvalHookFn<'a>(pub &'a (dyn Fn(
+    &CircuitBase<'a>,
+    &mut dyn eval::EvaluatorObj<'a>,
+    Wire<'a>,
+    Bits<'a>,
+) + 'a));
+
+impl fmt::Debug for EvalHookFn<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "EvalHookFn(..)")
+    }
+}
 
 
 declare_interned_pointer! {
@@ -2586,7 +2898,26 @@ pub trait GadgetKind<'a>: GadgetKindSupport<'a> + 'a {
     ) -> Wire<'a>;
 
     /// Evaluate this gadget on the provided inputs.
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a>;
+    fn eval_bits(
+        &self,
+        c: &CircuitBase<'a>,
+        arg_tys: &[Ty<'a>],
+        args: &[Result<Bits<'a>, eval::Error<'a>>],
+        result_ty: Ty<'a>,
+    ) -> Result<Bits<'a>, eval::Error<'a>> {
+        let mut args_vals = Vec::with_capacity(args.len());
+        for (&ty, &arg) in arg_tys.iter().zip(args.iter()) {
+            args_vals.push(arg.map(|b| eval::Value::from_bits(ty, b)));
+        }
+        let result_val = self.eval(arg_tys, &args_vals)?;
+        Ok(result_val.to_bits(c, result_ty))
+    }
+
+    /// Evaluate this gadget on the provided inputs.
+    fn eval(&self, arg_tys: &[Ty<'a>], args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a> {
+        // Provided in case the user would prefer to implement only `eval_bits`.
+        unimplemented!()
+    }
 }
 
 declare_interned_pointer! {
@@ -2658,13 +2989,11 @@ pub struct FunctionDef<'a> {
     /// The argument types of this function.  If the function body contains an `Argument(i)` gate,
     /// the type of that gate is `arg_tys[i]`.
     pub arg_tys: &'a [Ty<'a>],
-    /// The secret inputs required by this function.  Each `Call` to this function must provide a
-    /// `Secret` of the indicated `Ty` for each `SecretInputId` in this list.
-    pub secret_inputs: &'a [(SecretInputId, Ty<'a>)],
     /// The output of the function body.  This will typically depend in some way on the function's
     /// `Argument` gates.  For functions that need to return multiple values, this wire can have a
     /// `Bundle` type.
     pub result_wire: Wire<'a>,
+    witness_type: TypeId,
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
@@ -2672,12 +3001,11 @@ impl<'a, 'b> Migrate<'a, 'b> for FunctionDef<'a> {
 
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> FunctionDef<'b> {
         let arg_tys = self.arg_tys.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
-        let secret_inputs = self.secret_inputs.iter().map(|&ty| v.visit(ty)).collect::<Vec<_>>();
         FunctionDef {
             name: v.new_circuit().intern_str(self.name),
             arg_tys: v.new_circuit().intern_ty_list(&arg_tys),
-            secret_inputs: v.new_circuit().arena().alloc_slice_copy(&secret_inputs),
             result_wire: v.visit(self.result_wire),
+            witness_type: self.witness_type,
         }
     }
 }
@@ -2740,6 +3068,8 @@ impl<'a, 'b> Migrate<'a, 'b> for Label<'a> {
 
 /// An arbitrary-sized array of bits.  Used to represent values in the circuit and
 /// evaluator.
+///
+/// Integers of 64 bits or more are stored in little-endian order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Bits<'a>(pub &'a [u32]);
 

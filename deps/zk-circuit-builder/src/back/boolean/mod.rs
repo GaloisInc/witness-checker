@@ -1,5 +1,6 @@
 use std::cmp;
 use std::collections::btree_map::{BTreeMap, Entry};
+use std::collections::hash_map::{self, HashMap};
 use std::convert::TryFrom;
 use std::iter::{self, FromIterator};
 use std::mem;
@@ -7,13 +8,15 @@ use std::slice;
 use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
-use crate::eval;
+use crate::eval::{self, Evaluator, CachingEvaluator, RevealSecrets};
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
-    self, CircuitTrait, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, Ty,
-    EraseVisitor, MigrateVisitor, Bits, AsBits,
+    self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
+    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call,
 };
+use crate::ir::migrate::{self, Migrate};
+use crate::routing::gadget::Permute;
 
 
 mod arith;
@@ -85,11 +88,12 @@ impl AssertNoWrap {
 /// by `nand` live until the requested time.  But the output wires of the `and` operation are
 /// temporaries: they are passed to `not`, but are never used after the call to `nand` returns.
 /// This means `and` should be called with its expire time set to `TEMP`.
-pub trait Sink {
+pub trait Sink: Sized {
     fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId;
     /// Obtain `n` private/witness inputs, storing them in the `n` wires starting at `out`.  In
-    /// prover mode, `value` should be set to the witness value.
-    fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId;
+    /// prover mode, the caller should also call `private_value` to provide the actual value.
+    fn private(&mut self, expire: Time, n: u64) -> WireId;
+    fn private_value(&mut self, n: u64, value: Bits);
     fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId;
     fn concat_chunks(&mut self, expire: Time, entries: &[(Source, u64)]) -> WireId;
 
@@ -117,6 +121,30 @@ pub trait Sink {
 
     /// Try to free wires that were allocated with `expire <= now`
     fn free_expired(&mut self, now: Time);
+
+    type FunctionId: for<'a, 'b> Migrate<'a, 'b, Output = Self::FunctionId>;
+    type FunctionSink: Sink<FunctionId = Self::FunctionId>;
+    fn define_function(
+        &mut self,
+        name: String,
+        arg_ns: &[u64],
+        return_n: u64,
+        build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+    ) -> Self::FunctionId;
+    fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId;
+
+    const HAS_PERMUTE: bool;
+    fn permute(
+        &mut self,
+        expire: Time,
+        wires_per_item: u64,
+        num_items: u64,
+        inputs: WireId,
+    ) -> WireId;
+    /// Emit private values corresponding to a `permute` operation.  `perm` should be an array of
+    /// `num_items` 32-bit indices, each referring to a distinct element in the range `0 ..
+    /// num_items`.
+    fn permute_private_values(&mut self, num_items: u64, perm: Bits);
 
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -165,11 +193,200 @@ pub trait Sink {
 }
 
 
-pub struct Backend<'w, S> {
+/// Trait for emitting private values.  This is used to abstract over "top-level" mode, where
+/// values are emitted directly into the witness, and "function body" mode, where we simply record
+/// the sequence of operations to be played back when the function is called.
+trait PrivateOps<'a> {
+    fn emit(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    );
+    fn emit_quot_rem(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        numer: Wire<'a>,
+        denom: Wire<'a>,
+    );
+    fn emit_call(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        call: Call<'a>,
+    );
+    fn emit_permute(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        num_items: u64,
+        perm: Wire<'a>,
+    );
+}
+
+struct PrivateDirect<E> {
+    ev: E,
+}
+
+impl<E> PrivateDirect<E> {
+    pub fn new(ev: E) -> PrivateDirect<E> {
+        PrivateDirect { ev }
+    }
+}
+
+impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
+    fn emit(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        let n = type_bits(w.ty);
+        let bits = self.ev.eval_wire_bits(c, w).unwrap().0;
+        sink.private_value(n, bits);
+    }
+
+    fn emit_quot_rem(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        numer: Wire<'a>,
+        denom: Wire<'a>,
+    ) {
+        let sz = numer.ty.integer_size();
+        let n = sz.bits() as u64;
+        let numer_val = self.ev.eval_wire(c, numer).unwrap();
+        let denom_val = self.ev.eval_wire(c, denom).unwrap();
+        let numer_uint = numer_val.as_single().unwrap();
+        let denom_uint = denom_val.as_single().unwrap();
+        let (quot_uint, rem_uint) = if !denom_uint.is_zero() {
+            (numer_uint / denom_uint, numer_uint % denom_uint)
+        } else {
+            (Zero::zero(), numer_uint.clone())
+        };
+        let quot_bits = quot_uint.as_bits(c, sz);
+        let rem_bits = rem_uint.as_bits(c, sz);
+        sink.private_value(n, quot_bits);
+        sink.private_value(n, rem_bits);
+    }
+
+    fn emit_call(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        call: Call<'a>,
+    ) {
+        let sub_ev = self.ev.enter_call(c, call);
+        let mut sub_ops = PrivateDirect::new(sub_ev);
+
+        for op in get_log(call.func) {
+            match op {
+                PrivateOp::Emit(w) => sub_ops.emit(c, sink, w),
+                PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
+                PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
+                PrivateOp::Permute(n, perm) => sub_ops.emit_permute(c, sink, n, perm),
+            }
+        }
+    }
+
+    fn emit_permute(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        num_items: u64,
+        perm: Wire<'a>,
+    ) {
+        let bits = self.ev.eval_wire_bits(c, perm).unwrap().0;
+        sink.permute_private_values(num_items, bits);
+    }
+}
+
+#[derive(Clone, Debug, Migrate)]
+enum PrivateOp<'a> {
+    Emit(Wire<'a>),
+    QuotRem(Wire<'a>, Wire<'a>),
+    Call(Call<'a>),
+    Permute(u64, Wire<'a>),
+}
+
+struct PrivateLog<'a> {
+    log: Vec<PrivateOp<'a>>,
+}
+
+impl<'a> PrivateLog<'a> {
+    pub fn new() -> PrivateLog<'a> {
+        PrivateLog { log: Vec::new() }
+    }
+
+    pub fn into_inner(self) -> Vec<PrivateOp<'a>> {
+        self.log
+    }
+}
+
+impl<'a> PrivateOps<'a> for PrivateLog<'a> {
+    fn emit(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::Emit(w));
+    }
+
+    fn emit_quot_rem(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        numer: Wire<'a>,
+        denom: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::QuotRem(numer, denom));
+    }
+
+    fn emit_call(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        _get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        call: Call<'a>,
+    ) {
+        self.log.push(PrivateOp::Call(call));
+    }
+
+    fn emit_permute(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        num_items: u64,
+        perm: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::Permute(num_items, perm));
+    }
+}
+
+
+
+
+#[derive(Migrate)]
+struct FunctionInfo<'w, T> {
+    id: T,
+    private_log: Vec<PrivateOp<'w>>,
+}
+
+pub struct Backend<'w, S: Sink> {
     sink: S,
     /// Maps each high-level `Wire` to the `WireId` of the first bit in its representation.  The
     /// number of bits in the representation can be computed from the wire type.
     wire_map: BTreeMap<Wire<'w>, WireId>,
+    function_map: BTreeMap<Function<'w>, FunctionInfo<'w, S::FunctionId>>,
+    args: Vec<WireId>,
+
+    /// Cache to avoid recomputing `TyKind::Bundle` bit offsets, which would result in `N^2`
+    /// behavior when splitting up a bundle using `N` `Extract` gates.
+    bundle_ty_offsets: HashMap<Ty<'w>, Vec<u64>>,
 }
 
 impl<'w, S: Sink> Backend<'w, S> {
@@ -177,16 +394,27 @@ impl<'w, S: Sink> Backend<'w, S> {
         Backend {
             sink,
             wire_map: BTreeMap::new(),
+            function_map: BTreeMap::new(),
+            args: Vec::new(),
+
+            bundle_ty_offsets: HashMap::new(),
         }
     }
 
     /// Populate `wire_map` with entries for all the wires in `wires`.  Temporary intermediate
     /// values will not be kept in `wire_map`.  The caller is responsible for removing the entries
     /// from `wire_map`, if desired.
-    fn convert_wires(&mut self, c: &impl CircuitTrait<'w>, wires: &[Wire<'w>]) -> Vec<WireId> {
+    fn convert_wires(
+        &mut self,
+        c: &impl CircuitTrait<'w>,
+        private: &mut impl PrivateOps<'w>,
+        wires: &[Wire<'w>],
+    ) -> Vec<WireId> {
         let order = circuit::walk_wires_filtered(
             wires.iter().cloned(),
-            |w| !self.wire_map.contains_key(&w),
+            // We exclude `RawBits` wires on the assumption that they're only used for gadgets that
+            // will apply some kind of special handling to them.
+            |w| !self.wire_map.contains_key(&w) && !matches!(*w.ty, TyKind::RawBits),
         ).collect::<Vec<_>>();
 
         // For each wire, compute its last use time and whether its `WireIds` must be contiguous.
@@ -194,6 +422,12 @@ impl<'w, S: Sink> Backend<'w, S> {
         for (i, &w) in order.iter().enumerate() {
             for v in circuit::wire_deps(w) {
                 last_use_map.insert(v, i);
+            }
+
+            if let GateKind::Call(call) = w.kind {
+                if !self.function_map.contains_key(&call.func) {
+                    self.define_function(c.as_base(), call.func);
+                }
             }
         }
 
@@ -222,7 +456,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 
         // Convert each gate.
         for (i, (&w, &j)) in order.iter().zip(last_use.iter()).enumerate() {
-            let wire_id = self.convert_wire(c, j as Time, w);
+            let wire_id = self.convert_wire(c, private, j as Time, w);
             trace!("converted: {} = {:?}", wire_id, crate::ir::circuit::DebugDepth(0, &w.kind));
             self.wire_map.insert(w, wire_id);
 
@@ -247,20 +481,90 @@ impl<'w, S: Sink> Backend<'w, S> {
         wires.iter().cloned().map(|w| self.wire_map[&w]).collect::<Vec<_>>()
     }
 
-    fn convert_wire(&mut self, c: &impl CircuitTrait<'w>, expire: Time, w: Wire<'w>) -> WireId {
+    fn convert_wire(
+        &mut self,
+        c: &impl CircuitTrait<'w>,
+        private: &mut impl PrivateOps<'w>,
+        expire: Time,
+        w: Wire<'w>,
+    ) -> WireId {
+        // Check for (potentially) non-integer cases first.
+        match w.kind {
+            GateKind::Pack(ws) => {
+                // We only allow single-level bundles.
+                let entries = ws.iter().map(|&w| {
+                    (Source::Wires(self.wire_map[&w]), type_bits(w.ty))
+                }).collect::<Vec<_>>();
+                return self.sink.concat_chunks(expire, &entries);
+            },
+            GateKind::Call(call) => {
+                let function_map = &self.function_map;
+                let func_id = &function_map[&call.func].id;
+                let args = call.args.iter().map(|&w| self.wire_map[&w]).collect::<Vec<_>>();
+                let out = self.sink.call(expire, func_id, &args);
+                let mut get_log = |func| function_map[&func].private_log.clone();
+                private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
+                return out;
+            },
+            GateKind::Gadget(gk, ws) => {
+                if let Some(g) = gk.cast::<Permute>() {
+                    assert!(S::HAS_PERMUTE, "Permute gadget is unsupported with this Sink");
+                    let mut chunks = Vec::with_capacity(g.items * g.wires_per_item);
+                    for i in 0 .. g.items {
+                        for j in 0 .. g.wires_per_item {
+                            let w = ws[1 + i * g.wires_per_item + j];
+                            chunks.push((Source::Wires(self.wire_map[&w]), type_bits(w.ty)));
+                        }
+                    }
+                    let a = self.sink.concat_chunks(TEMP, &chunks);
+
+                    let bits_per_item = ws[1 .. 1 + g.wires_per_item].iter()
+                        .map(|w| type_bits(w.ty)).sum::<u64>();
+                    let out = self.sink.permute(
+                        expire,
+                        bits_per_item,
+                        u64::try_from(g.items).unwrap(),
+                        a,
+                    );
+
+                    if c.is_prover() {
+                        private.emit_permute(
+                            c.as_base(),
+                            &mut self.sink,
+                            u64::try_from(g.items).unwrap(),
+                            ws[0],
+                        );
+                    }
+
+                    return out;
+                }
+            },
+            _ => {},
+        }
+
+        // Only integer types should remain, so we can safely get the bit width in advance.
         let n = type_bits(w.ty);
         match w.kind {
             GateKind::Lit(val, ty) => {
                 assert!(ty.is_integer());
                 self.sink.lit(expire, n, val)
             },
-            GateKind::Secret(secret) => {
-                assert!(secret.ty.is_integer());
-                self.sink.private(expire, n, secret.val())
+            GateKind::Secret(_secret) => {
+                assert!(w.ty.is_integer());
+                let out = self.sink.private(expire, n);
+                if c.is_prover() {
+                    private.emit(c.as_base(), &mut self.sink, w);
+                }
+                out
             },
 
             GateKind::Erased(_erased) => unimplemented!("Erased"),
-            GateKind::Argument(_, _) => unimplemented!("Argument"),
+
+            GateKind::Argument(i, _) => {
+                assert!(i < self.args.len(),
+                    "saw Argument({}), but there are only {} args here", i, self.args.len());
+                self.args[i]
+            },
 
             GateKind::Unary(op, aw) => {
                 let a = self.wire_map[&aw];
@@ -285,34 +589,18 @@ impl<'w, S: Sink> Backend<'w, S> {
                             unimplemented!("{:?} for {:?}", op, aw.ty);
                         }
 
-                        let sz = aw.ty.integer_size();
-                        let a_val = eval::eval_wire_secret(c, aw);
-                        let b_val = eval::eval_wire_secret(c, bw);
-                        let (quot_bits, rem_bits) = match (a_val.as_ref(), b_val.as_ref()) {
-                            (Some(a_val), Some(b_val)) => {
-                                let a_uint = a_val.as_single().unwrap();
-                                let b_uint = b_val.as_single().unwrap();
-                                let (quot_uint, rem_uint) = if !b_uint.is_zero() {
-                                    (a_uint / b_uint, a_uint % b_uint)
-                                } else {
-                                    (Zero::zero(), a_uint.clone())
-                                };
-                                (
-                                    Some(quot_uint.as_bits(c.as_base(), sz)),
-                                    Some(rem_uint.as_bits(c.as_base(), sz)),
-                                )
-                            },
-                            _ => (None, None),
-                        };
-
                         // Add witness variables for quotient and remainder.
                         let (quot_expire, rem_expire) = match op {
                             BinOp::Div => (expire, TEMP),
                             BinOp::Mod => (TEMP, expire),
                             _ => unreachable!(),
                         };
-                        let quot = self.sink.private(quot_expire, n, quot_bits);
-                        let rem = self.sink.private(rem_expire, n, rem_bits);
+                        let quot = self.sink.private(quot_expire, n);
+                        let rem = self.sink.private(rem_expire, n);
+
+                        if c.is_prover() {
+                            private.emit_quot_rem(c.as_base(), &mut self.sink, aw, bw);
+                        }
 
                         // Assert: a == quot * b + rem
                         {
@@ -504,7 +792,11 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
 
             GateKind::Pack(..) => unimplemented!("Pack"),
-            GateKind::Extract(..) => unimplemented!("Extract"),
+
+            GateKind::Extract(bw, i) => {
+                let offset = self.bundle_ty_offset(bw.ty, i);
+                self.sink.copy(expire, n, self.wire_map[&bw] + offset)
+            },
 
             GateKind::Gadget(gk, ws) => {
                 if let Some(_) = gk.cast::<ConcatBits>() {
@@ -534,28 +826,94 @@ impl<'w, S: Sink> Backend<'w, S> {
                 }
             },
 
-            GateKind::Call(..) => todo!("Call"),
+            // `Call` should be handled by the case above.
+            GateKind::Call(..) => unreachable!(),
         }
     }
 
-    pub fn post_erase(&mut self, v: &mut EraseVisitor<'w>) {
+    fn define_function(&mut self, c: &CircuitBase<'w>, f: Function<'w>) {
+        let arg_ns = f.arg_tys.iter().map(|&ty| type_bits(ty)).collect::<Vec<_>>();
+        let return_ty = f.result_wire.ty;
+        let return_n = match *return_ty {
+            TyKind::Bundle(btys) => btys.tys().iter().map(|&ty| type_bits(ty)).sum(),
+            _ => type_bits(return_ty),
+        };
+
+        eprintln!("define_function({:?})", f.name);
+        let self_function_map = &mut self.function_map;
+        let mut private_log = PrivateLog::new();
+        let func_id = self.sink.define_function(
+            f.name.to_owned(), &arg_ns, return_n,
+            |sink, args| {
+                let mut backend = Backend {
+                    sink,
+                    wire_map: BTreeMap::new(),
+                    function_map: mem::take(self_function_map),
+                    args: args.to_owned(),
+                    bundle_ty_offsets: HashMap::new(),
+                };
+                let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+
+                let out_wires = backend.convert_wires(c, &mut private_log, &[f.result_wire]);
+                let out_wire = out_wires[0];
+
+                *self_function_map = backend.function_map;
+
+                (backend.sink, out_wire)
+            },
+        );
+        self.function_map.insert(f, FunctionInfo {
+            id: func_id,
+            private_log: private_log.into_inner(),
+        });
+    }
+
+    fn bundle_ty_offsets(&mut self, ty: Ty<'w>) -> &[u64] {
+        match self.bundle_ty_offsets.entry(ty) {
+            hash_map::Entry::Occupied(e) => e.into_mut(),
+            hash_map::Entry::Vacant(e) => {
+                let btys = match *ty {
+                    TyKind::Bundle(btys) => btys,
+                    _ => unreachable!("expected TyKind::Bundle, but got {:?}", ty),
+                };
+                trace!("bundle_ty_offsets: computing for {:p}, {} entries", ty, btys.len());
+
+                let mut offsets = Vec::with_capacity(btys.len() + 1);
+                let mut pos = 0;
+                for &ty in btys.tys() {
+                    offsets.push(pos);
+                    pos += type_bits(ty);
+                }
+                offsets.push(pos);
+                e.insert(offsets)
+            },
+        }
+    }
+
+    fn bundle_ty_offset(&mut self, ty: Ty<'w>, i: usize) -> u64 {
+        self.bundle_ty_offsets(ty)[i]
+    }
+
+    pub fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
         use crate::ir::migrate::Visitor as _;
         // Each entry `(old, new)` in `v.erased()` indicates that wire `old` was replaced with the
         // new `Erased` wire `new`.  In each case, we construct (or otherwise obtain) a `ReprId`
         // for `old` and copy it into `wire_map[new]` as well.
-        let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter().cloned().unzip();
-        let old_reprs = self.convert_wires(v.new_circuit(), &old_wires);
+        let (old_wires, new_wires): (Vec<_>, Vec<_>) = v.erased().iter()
+            .filter(|&&(w, _)| !matches!(*w.ty, TyKind::RawBits))
+            .cloned().unzip();
+        let old_reprs = self.convert_wires(
+            v.new_circuit(), &mut PrivateDirect::new(&mut *v.evaluator()), &old_wires);
         for (old_repr, new_wire) in old_reprs.into_iter().zip(new_wires.into_iter()) {
             assert!(!self.wire_map.contains_key(&new_wire));
             self.wire_map.insert(new_wire, old_repr);
         }
     }
 
-    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w>) {
+    pub fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
         use crate::ir::migrate::Visitor as _;
 
         let old_wire_map = mem::take(&mut self.wire_map);
-
         for (old_wire, old_repr) in old_wire_map {
             let new_wire = match v.visit_wire_weak(old_wire) {
                 Some(x) => x,
@@ -567,10 +925,23 @@ impl<'w, S: Sink> Backend<'w, S> {
             };
             self.wire_map.insert(new_wire, old_repr);
         }
+
+        let old_function_map = mem::take(&mut self.function_map);
+        for (old_func, old_info) in old_function_map {
+            let new_func = v.visit(old_func);
+            self.function_map.insert(new_func, v.visit(old_info));
+        }
+
+        self.bundle_ty_offsets = HashMap::new();
     }
 
-    pub fn enforce_true(&mut self, c: &impl CircuitTrait<'w>, w: Wire<'w>) {
-        let wire_ids = self.convert_wires(c, &[w]);
+    pub fn enforce_true(
+        &mut self,
+        c: &impl CircuitTrait<'w>,
+        ev: &mut impl Evaluator<'w>,
+        w: Wire<'w>,
+    ) {
+        let wire_ids = self.convert_wires(c, &mut PrivateDirect::new(ev), &[w]);
         let w = wire_ids[0];
         let w_inv = self.sink.not(TEMP, 1, w);
         self.sink.assert_zero(1, w_inv);
@@ -586,6 +957,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 mod test {
     use std::collections::{HashMap, HashSet};
     use crate::back::UsePlugins;
+    use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
         IntSize,
@@ -594,7 +966,15 @@ mod test {
 
     #[derive(Default)]
     pub struct TestSink {
+        /// Values of ordinary wires.
         pub m: HashMap<WireId, bool>,
+        /// Indices of secret wires.  The index gives the position of the wire's value in
+        /// `secret_values`.
+        ///
+        /// No `WireId` should appear in both `m` and `secret_map`.
+        pub secret_map: HashMap<WireId, usize>,
+        pub secret_values: Vec<bool>,
+        pub next_secret_idx: usize,
         pub next: WireId,
         pub expire_map: BTreeMap<Time, Vec<WireId>>,
         pub count_and: u64,
@@ -605,8 +985,14 @@ mod test {
 
     impl TestSink {
         pub fn get(&self, w: WireId) -> bool {
-            self.m.get(&w).cloned()
-                .unwrap_or_else(|| panic!("accessed wire {} before definition", w))
+            if let Some(&x) = self.m.get(&w) {
+                x
+            } else if let Some(&idx) = self.secret_map.get(&w) {
+                self.secret_values.get(idx).cloned()
+                    .unwrap_or_else(|| panic!("secret value has not yet been provided"))
+            } else {
+                panic!("accessed wire {} before definition", w);
+            }
         }
 
         pub fn get_uint(&self, n: u64, w: WireId) -> BigUint {
@@ -631,8 +1017,18 @@ mod test {
         }
 
         fn set(&mut self, w: WireId, val: bool) {
+            assert!(!self.secret_map.contains_key(&w));
             let old = self.m.insert(w, val);
             assert!(old.is_none());
+        }
+
+        fn set_secret(&mut self, w: WireId) -> usize {
+            assert!(!self.m.contains_key(&w));
+            let idx = self.next_secret_idx;
+            self.next_secret_idx += 1;
+            let old = self.secret_map.insert(w, idx);
+            assert!(old.is_none());
+            idx
         }
 
         pub fn init(
@@ -650,6 +1046,20 @@ mod test {
             }
             w
         }
+
+        pub fn init_secret(
+            &mut self,
+            expire: Time,
+            n: u64,
+            desc: std::fmt::Arguments,
+        ) -> WireId {
+            let w = self.alloc(expire, n);
+            for i in 0 .. n {
+                let idx = self.set_secret(w + i);
+                trace!("{} = {}[{}] = <secret #{}>", w + i, desc, i, idx);
+            }
+            w
+        }
     }
 
     impl Sink for TestSink {
@@ -657,10 +1067,13 @@ mod test {
             self.init(expire, n, |_, i| bits.get(i as usize),
                 format_args!("lit({:?})", bits))
         }
-        fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
-            let bits = value.unwrap();
-            self.init(expire, n, |_, i| bits.get(i as usize),
-                format_args!("private({:?})", bits))
+        fn private(&mut self, expire: Time, n: u64) -> WireId {
+            self.init_secret(expire, n, format_args!("private"))
+        }
+        fn private_value(&mut self, n: u64, value: Bits) {
+            for i in 0..n {
+                self.secret_values.push(value.get(i as usize));
+            }
         }
         fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             self.init(expire, n, |slf, i| slf.get(a + i),
@@ -783,10 +1196,40 @@ mod test {
             for k in keys {
                 for w in self.expire_map.remove(&k).unwrap() {
                     trace!("expired: {}", w);
-                    let old = self.m.remove(&w);
-                    assert!(old.is_some());
+                    let old1 = self.m.remove(&w);
+                    let old2 = self.secret_map.remove(&w);
+                    assert!(old1.is_some() || old2.is_some());
                 }
             }
+        }
+
+        type FunctionId = usize;
+        type FunctionSink = Self;
+        fn define_function(
+            &mut self,
+            name: String,
+            arg_ns: &[u64],
+            return_n: u64,
+            build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+        ) -> Self::FunctionId {
+            unimplemented!("define_function not supported in TestSink");
+        }
+        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+            unimplemented!("call not supported in TestSink");
+        }
+
+        const HAS_PERMUTE: bool = false;
+        fn permute(
+            &mut self,
+            _expire: Time,
+            _wires_per_item: u64,
+            _num_items: u64,
+            _inputs: WireId,
+        ) -> WireId {
+            unimplemented!()
+        }
+        fn permute_private_values(&mut self, _num_items: u64, _perm: Bits) {
+            unimplemented!()
         }
     }
 
@@ -804,8 +1247,11 @@ mod test {
         fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
             self.inner.lit(expire, n, bits)
         }
-        fn private(&mut self, expire: Time, n: u64, value: Option<Bits>) -> WireId {
-            self.inner.private(expire, n, value)
+        fn private(&mut self, expire: Time, n: u64) -> WireId {
+            self.inner.private(expire, n)
+        }
+        fn private_value(&mut self, n: u64, value: Bits) {
+            self.inner.private_value(n, value);
         }
         fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
             self.inner.copy(expire, n, a)
@@ -872,6 +1318,35 @@ mod test {
         fn free_expired(&mut self, now: Time) {
             self.inner.free_expired(now);
         }
+
+        type FunctionId = <TestSink as Sink>::FunctionId;
+        type FunctionSink = <TestSink as Sink>::FunctionSink;
+        fn define_function(
+            &mut self,
+            name: String,
+            arg_ns: &[u64],
+            return_n: u64,
+            build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
+        ) -> Self::FunctionId {
+            self.inner.define_function(name, arg_ns, return_n, build)
+        }
+        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+            self.inner.call(expire, func, args)
+        }
+
+        const HAS_PERMUTE: bool = <TestSink as Sink>::HAS_PERMUTE;
+        fn permute(
+            &mut self,
+            expire: Time,
+            wires_per_item: u64,
+            num_items: u64,
+            inputs: WireId,
+        ) -> WireId {
+            self.inner.permute(expire, wires_per_item, num_items, inputs)
+        }
+        fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
+            self.inner.permute_private_values(num_items, perm)
+        }
     }
 
 
@@ -894,14 +1369,14 @@ mod test {
                 };
                 let val = x & ((1 << n) - 1);
                 x >>= n;
-                inputs.push(c.new_secret_wire_init(ty, || val));
+                inputs.push(c.secret_immediate(ty, val));
             }
             let inputs = *<&[_; N]>::try_from(&inputs as &[_]).unwrap();
             let out = f(c, inputs);
 
-            let val = eval::eval_wire_secret(c, out).unwrap().unwrap_single().unwrap();
+            let val = eval::eval_wire_secret(c.as_base(), out).unwrap().unwrap_single().unwrap();
             let ok = c.eq(out, c.lit(out.ty, val));
-            let ok_val = eval::eval_wire_secret(c, ok).unwrap().unwrap_single().unwrap();
+            let ok_val = eval::eval_wire_secret(c.as_base(), ok).unwrap().unwrap_single().unwrap();
             assert_eq!(ok_val, 1_u64.into());
 
             enforce_true(ok);
@@ -915,7 +1390,8 @@ mod test {
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
     ) {
         let arenas = Arenas::new();
-        let c = Circuit::new(&arenas, true, FilterNil);
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         let mut backend = Backend::new(TestSink::default());
         let mut arith_backend = Backend::new(arith_sink);
 
@@ -935,14 +1411,14 @@ mod test {
         };
 
         test_gate_common(&c, input_bits, f, |w| {
-            backend.enforce_true(&c, w);
-            arith_backend.enforce_true(&c, w);
+            backend.enforce_true(&c, &mut ev, w);
+            arith_backend.enforce_true(&c, &mut ev, w);
 
             #[cfg(feature = "sieve_ir")]
-            sieve_ir_backend.enforce_true(&c, w);
+            sieve_ir_backend.enforce_true(&c, &mut ev, w);
 
             #[cfg(feature = "sieve_ir")]
-            sieve_ir_v2_backend.enforce_true(&c, w);
+            sieve_ir_v2_backend.enforce_true(&c, &mut ev, w);
         });
 
         #[cfg(feature = "sieve_ir")]
@@ -1034,11 +1510,11 @@ mod test {
     #[test]
     fn shl_1() {
         test_gate([1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
         test_gate([-1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
     }
@@ -1046,11 +1522,11 @@ mod test {
     #[test]
     fn shr_1() {
         test_gate([1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
         test_gate([-1, 2], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
     }
@@ -1168,11 +1644,11 @@ mod test {
     #[test]
     fn shl_3() {
         test_gate([3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
         test_gate([-3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
     }
@@ -1180,11 +1656,11 @@ mod test {
     #[test]
     fn shr_3() {
         test_gate([3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
         test_gate([-3, 3], |c, [a, b]| {
-            let amount = eval::eval_wire_secret(c, b).unwrap().unwrap_single().unwrap();
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shr(a, c.lit(b.ty, amount))
         });
     }

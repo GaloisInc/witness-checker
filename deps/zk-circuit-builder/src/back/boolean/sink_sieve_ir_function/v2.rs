@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use zki_sieve_v3;
 use zki_sieve_v3::structs::count::Count;
 use zki_sieve_v3::structs::directives::Directive;
@@ -67,6 +67,7 @@ impl SieveIrFormat for SieveIrV2 {
         name: String,
         outs: impl IntoIterator<Item = u64>,
         ins: impl IntoIterator<Item = u64>,
+        _private_count: u64,
         gates: Vec<Gate>,
     ) -> Function {
         Function::new(
@@ -91,8 +92,8 @@ impl SieveIrFormat for SieveIrV2 {
             name: plugin_name,
             operation: op_name,
             params: args,
-            public_count: HashMap::new(),
-            private_count: HashMap::new(),
+            public_count: BTreeMap::new(),
+            private_count: BTreeMap::new(),
         };
         Function::new(
             name,
@@ -110,7 +111,6 @@ impl SieveIrFormat for SieveIrV2 {
         mut visit_gate: impl FnMut(Gate),
         mut visit_function: impl FnMut(Function),
     ) {
-        debug_assert_eq!(r.types, vec![Type::Field(vec![2])]);
         for d in r.directives {
             match d {
                 Directive::Gate(g) => visit_gate(g),

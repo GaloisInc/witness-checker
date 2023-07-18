@@ -1,0 +1,19 @@
+## FLAGS: --validate-only --expect-write 12345000
+# Failing test for --expect-write, where the program doesn't write at all.
+
+- [0,1,0,0]
+- []
+-
+  program:
+    # r0: temporary
+    - [mov, 0, null, true, 1]             # mov r0, 1
+    - [mov, 0, null, true, 1]             # mov r0, 1
+
+  params:
+    num_regs: 1
+    trace_len: 3
+
+  trace:
+    - [0, [ 0]]
+    - [1, [ 1]]
+    - [2, [ 1]]

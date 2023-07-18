@@ -1,20 +1,22 @@
 use std::fs;
 use std::io;
 use std::iter;
+use std::num::ParseIntError;
 use std::path::Path;
+use std::ptr;
 use std::str::FromStr;
 use clap::{App, Arg, ArgMatches};
 use env_logger;
 use num_bigint::BigUint;
 use num_traits::One;
 
-use zk_circuit_builder::back::{self, UsePlugins};
-use zk_circuit_builder::eval::{self, Evaluator, CachingEvaluator};
+use zk_circuit_builder::back::{self, UsePlugins, BackendFeature};
+use zk_circuit_builder::eval::{self, EvalWire, CachingEvaluator};
 use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
-    Circuit, Arenas, CircuitTrait, CircuitExt, DynCircuit, CircuitFilter, FilterNil, GadgetKindRef,
+    Circuit, Arenas, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, GadgetKindRef,
 };
-use zk_circuit_builder::ir::typed::{Builder, TWire};
+use zk_circuit_builder::ir::typed::{Builder, BuilderExt, BuilderImpl, TWire};
 use zk_circuit_builder::lower;
 
 use cheesecloth::wire_assert;
@@ -25,6 +27,7 @@ use cheesecloth::micro_ram::mem::EquivSegments;
 use cheesecloth::micro_ram::types::{
     VersionedMultiExec, MultiExec, RamState, Segment, TraceChunk, WORD_BOTTOM,
 };
+use cheesecloth::micro_ram::witness::MultiExecWitness;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
@@ -73,6 +76,11 @@ fn parse_args() -> ArgMatches<'static> {
         .arg(Arg::with_name("expect-zero")
              .long("expect-zero")
              .help("check that r0 == 0 in the final state"))
+        .arg(Arg::with_name("expect-write")
+             .long("expect-write")
+             .takes_value(true)
+             .value_name("ADDR")
+             .help("check that the program writes the value 1 to ADDR before terminating"))
         .arg(Arg::with_name("stats")
              .long("stats")
              .help("print info about the size of the circuit"))
@@ -124,19 +132,19 @@ fn parse_args() -> ArgMatches<'static> {
 
 fn check_first<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     s: &TWire<'a, RamState>,
 ) {
     let _g = b.scoped_label("check_first");
     let pc = s.pc;
     wire_assert!(
-        cx, b.eq(pc, b.lit(0)),
+        cx, b, b.eq(pc, b.lit(0)),
         "initial pc is {} (expected {})",
         cx.eval(pc), 0,
     );
     for (i, &r) in s.regs.iter().enumerate().skip(1) {
         wire_assert!(
-            cx, b.eq(r, b.lit(0)),
+            cx, b, b.eq(r, b.lit(0)),
             "initial r{} has value {} (expected {})",
             i, cx.eval(r), 0,
         );
@@ -174,52 +182,21 @@ fn expand_trace(multi_exec: &mut MultiExec, factor: usize) {
     }
 }
 
+fn parse_address(s: &str) -> Result<u64, ParseIntError> {
+    if s.starts_with("0x") {
+        u64::from_str_radix(&s[2..], 16)
+    } else if s.starts_with("0o") {
+        u64::from_str_radix(&s[2..], 8)
+    } else if s.starts_with("0b") {
+        u64::from_str_radix(&s[2..], 2)
+    } else {
+        u64::from_str_radix(s, 10)
+    }
+}
 
 fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let is_prover = !args.is_present("verifier-mode");
 
-    let arenas = Arenas::new();
-    let mcx = zk_circuit_builder::ir::migrate::handle::MigrateContext::new();
-
-    let arg_test_gadget_eval = args.is_present("test-gadget-eval");
-    let arg_zkif_out = args.is_present("zkif-out");
-    let arg_sieve_out = args.is_present("sieve-out");
-    let gadget_supported = move |g: GadgetKindRef| {
-        use zk_circuit_builder::gadget::bit_pack::{ConcatBits, ExtractBits};
-        let mut ok = false;
-        if arg_test_gadget_eval {
-            return true;
-        }
-        if arg_zkif_out || arg_sieve_out {
-            ok = ok || g.cast::<ConcatBits>().is_some();
-            ok = ok || g.cast::<ExtractBits>().is_some();
-        }
-        ok
-    };
-
-    let cf = FilterNil;
-    //let cf = lower::const_fold::ConstFold(c);
-    let cf = cf.add_pass(lower::bool_::not_to_xor);
-    let cf = cf.add_pass(lower::bool_::compare_to_logic);
-    let cf = cf.add_pass(lower::bool_::mux);
-    let cf = cf.add_opt_pass(
-        args.is_present("zkif-out") ||
-            args.is_present("sieve-ir-out") ||
-            args.is_present("sieve-ir-v2-out") ||
-            args.is_present("boolean-sieve-ir-out") ||
-            args.is_present("boolean-sieve-ir-v2-out"),
-        lower::int::compare_to_greater_or_equal_to_zero);
-    let cf = cf.add_pass(lower::int::non_constant_shift);
-    let cf = lower::const_fold::ConstFold(cf);
-    let cf = cf.add_pass(lower::bundle::simplify);
-    let cf = cf.add_pass(lower::bundle::unbundle_mux);
-    let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
-    let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
-    let c = Circuit::new(&arenas, is_prover, cf);
-    let c = &c as &DynCircuit;
-
-    let b = Builder::new(c);
-    let mut cx = Context::new(c);
 
     // Load the program and trace from files
     let trace_path = Path::new(args.value_of_os("trace").unwrap());
@@ -235,36 +212,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     // Check that --mode leak-tainted is provided iff the feature is present.
     assert!(is_mode::<AnyTainted>() == multi_exec.has_feature(Feature::LeakTainted), "--mode leak-tainted must only be provided when the feature is set in the input file.");
 
-    // Adjust non-public-pc traces to fit the public-pc format.
-    // In non-public-PC mode, the prover can provide an initial state, with some restrictions.
-    let mut provided_init_state = None;
-    if !multi_exec.has_feature(Feature::PublicPc) {
-        for (_name,exec) in multi_exec.inner.execs.iter_mut(){
-            assert!(exec.segments.len() == 0);
-            assert!(exec.trace.len() == 1);
-            let chunk = &exec.trace[0];
-            
-            let new_segment = Segment {
-                constraints: vec![],
-                len: exec.params.trace_len.unwrap() - 1,
-                successors: vec![],
-                enter_from_network: false,
-                exit_to_network: false,
-            };
-            
-            provided_init_state = Some(chunk.states[0].clone());
-            let new_chunk = TraceChunk {
-                segment: 0,
-                states: chunk.states[1..].to_owned(),
-                debug: None,
-            };
-            
-            exec.segments = vec![new_segment];
-            exec.trace = vec![new_chunk];
-            
-        }
-    }
-
     if let Some(factor_str) = args.value_of("test-expand-trace") {
         let factor = factor_str.parse::<usize>().unwrap_or_else(|e| {
             panic!("bad --test-expand-trace argument {:?}: {}", factor_str, e);
@@ -272,7 +219,13 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         expand_trace(&mut multi_exec.inner, factor);
     }
 
+    let multi_exec_witness = MultiExecWitness::from_raw(&multi_exec.inner);
+
     let mut equiv_segments = EquivSegments::new(&multi_exec.inner.mem_equiv);
+
+    // `arenas` and `mcx` must outlive both the circuit and the backend.
+    let arenas = Arenas::new();
+    let mcx = zk_circuit_builder::ir::migrate::handle::MigrateContext::new(&multi_exec_witness);
 
     // Set up the backend.
     let modulus = args.value_of("field-modulus").map(|s| {
@@ -310,45 +263,95 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             // --field-modulus is accepted but ignored here.
             back::new_dummy()
         };
+
+    // Set up the circuit and builder
+    let arg_test_gadget_eval = args.is_present("test-gadget-eval");
+
+    let has_concat_extract_bits = backend.has_feature(BackendFeature::ConcatExtractBits);
+    let has_wide_mul = backend.has_feature(BackendFeature::WideMul);
+    let has_permute = backend.has_feature(BackendFeature::Permute);
+    let gadget_supported = move |g: GadgetKindRef| {
+        use zk_circuit_builder::gadget::arith::WideMul;
+        use zk_circuit_builder::gadget::bit_pack::{ConcatBits, ExtractBits};
+        use zk_circuit_builder::routing::gadget::Permute;
+        let mut ok = false;
+        if arg_test_gadget_eval {
+            return true;
+        }
+        if has_concat_extract_bits {
+            ok = ok || g.cast::<ConcatBits>().is_some();
+            ok = ok || g.cast::<ExtractBits>().is_some();
+        }
+        if has_wide_mul {
+            ok = ok || g.cast::<WideMul>().is_some();
+        }
+        if has_permute {
+            ok = ok || g.cast::<Permute>().is_some();
+        }
+        ok
+    };
+
+    let cf = FilterNil;
+    //let cf = lower::const_fold::ConstFold(c);
+    let cf = cf.add_pass(lower::bool_::not_to_xor);
+    let cf = cf.add_pass(lower::bool_::compare_to_logic);
+    let cf = cf.add_pass(lower::bool_::mux);
+    let cf = cf.add_opt_pass(
+        !backend.has_feature(BackendFeature::CompareNonZero),
+        lower::int::compare_to_greater_or_equal_to_zero);
+    let cf = cf.add_pass(lower::int::non_constant_shift);
+    let cf = lower::const_fold::ConstFold(cf);
+    let cf = cf.add_pass(lower::bundle::simplify);
+    let cf = cf.add_pass(lower::bundle::unbundle_mux);
+    let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
+    let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
+    let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf)
+        .set_allow_functions(backend.has_feature(BackendFeature::Function));
+    let c = &c;
+
+    let b = BuilderImpl::from_ref(c);
+    let mut cx = Context::new(c);
+
     let mcx_backend_guard = mcx.set_backend(&mut *backend);
 
+
+    // Hack: cast away the lifetime of the `MultiExec`, pretending it's `'static`.   We do this to
+    // allow lazy secret callbacks to include `&'static str` names for executions.  This is okay as
+    // long as the value outlives the circuit, which we ensure below.
+    let multi_exec: &'static _ = unsafe { &*ptr::addr_of!(multi_exec) };
 
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
     // for equivalent mem segments. 
     for (name,exec) in multi_exec.inner.execs.iter(){
         // Generate IR code to check the trace.
-        let init_state = provided_init_state.clone().unwrap_or_else(|| {
-            let mut regs = vec![0; exec.params.num_regs];
-            regs[0] = exec.init_mem.iter()
-                .filter(|ms| ms.heap_init == false)
-                .map(|ms| ms.start + ms.len)
-                .max().unwrap_or(0);
-            let tainted_regs = IfMode::new(|_| vec![WORD_BOTTOM; exec.params.num_regs]);
-            RamState { cycle: 0, pc: 0, regs, live: true, tainted_regs }
-        });
-        if provided_init_state.is_some() {
+        let init_state = exec.provided_init_state.clone().unwrap_or_else(|| exec.initial_state());
+        if exec.provided_init_state.is_some() {
             let init_state_wire = b.lit(init_state.clone());
-            check_first(&cx, &b, &init_state_wire);
+            check_first(&cx, b, &init_state_wire);
         }
 
         let check_steps = args.value_of("check-steps")
             .and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
 
         let expect_zero = args.is_present("expect-zero");
+        let expect_write = args.value_of("expect-write").map(|s| {
+            parse_address(s).expect("failed to parse --expect-write address")
+        });
         let debug_segment_graph_path = args.value_of("debug-segment-graph")
             .map(|s| s.to_owned());
 
+        // Get a `&'static str` version of `name` from the witness.
         let (new_cx, new_equiv_segments) = ExecBuilder::build(
-            &b, &mcx, cx, &exec, name, equiv_segments, init_state,
-            check_steps, expect_zero, debug_segment_graph_path);
+            b, &mcx, cx, &exec, name, equiv_segments, init_state,
+            check_steps, expect_zero, expect_write, debug_segment_graph_path);
         cx = new_cx;
         equiv_segments = new_equiv_segments;
     }
 
     // Collect assertions and bugs.
     drop(b);
-    let (asserts, bugs) = cx.finish();
+    let (asserts, bugs) = cx.finish(c);
     let asserts = asserts.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
     let bugs = bugs.into_iter().map(|tw| tw.repr).collect::<Vec<_>>();
 
@@ -370,10 +373,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         .chain(bugs.into_iter())
         .collect::<Vec<_>>();
 
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::with_witness(&multi_exec_witness);
     {
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
         let flag_vals = flags.iter().map(|&w| {
-            ev.eval_wire(w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()
+            ev.eval_wire(c, w).ok().as_ref().and_then(|v| v.as_single()).unwrap().is_one()
         }).collect::<Vec<_>>();
 
         let asserts_ok: u32 = flag_vals[1 .. 1 + num_asserts].iter().map(|&ok| ok as u32).sum();
@@ -395,10 +398,13 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     drop(mcx_backend_guard);
     let accepted = flags[0];
     let validate = !args.is_present("skip-backend-validation");
-    backend.finish(c.as_base(), accepted, validate);
+    backend.finish(c.as_base(), &mut ev, accepted, validate);
 
     // Unused in some configurations.
     let _ = num_asserts;
+
+    // Ensure `multi_exec` is still valid.
+    let _ = &*multi_exec;
 
     Ok(())
 }

@@ -2,58 +2,118 @@
 //!
 //! This includes setting up the program, adding `FetchPort`s for each cycle, sorting, and checking
 //! the sorted list.
+use std::convert::TryFrom;
 use log::*;
+use zk_circuit_builder::eval::{self, CachingEvaluator};
+use zk_circuit_builder::ir::circuit::CircuitTrait;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder};
-use crate::micro_ram::context::Context;
-use crate::micro_ram::types::{FetchPort, FetchPortRepr, PackedFetchPort, RamInstr};
-use zk_circuit_builder::routing::sort;
+use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, EvaluatorExt};
+use crate::micro_ram::context::{Context, ContextEval};
+use crate::micro_ram::types::{
+    FetchPort, FetchPortRepr, PackedFetchPort, RamInstr, Opcode, CodeSegment, CompareFetchPort,
+};
+use crate::micro_ram::witness::{MultiExecWitness, ExecWitness, SegmentWitness};
+use zk_circuit_builder::routing::sort::{self, CompareLe};
 
 #[derive(Migrate)]
 pub struct Fetch<'a> {
     ports: Vec<TWire<'a, FetchPort>>,
-    /// Default value for secret `instr`s in uninitialized `FetchPort`s.
-    default_instr: RamInstr,
+    all_instrs: Vec<Vec<TWire<'a, RamInstr>>>,
+    /// Default `addr` and `instr` values to use for uninitialized `FetchPort`s.  This corresponds
+    /// to an actual instruction somewhere in the program, which means uninitialized `FetchPort`s
+    /// will be valid under the normal rules, and no special checks for unused `FetchPort`s are
+    /// necessary.
+    default_addr_and_instr: (u64, RamInstr),
 }
 
-impl<'a> Fetch<'a> {
-    pub fn new(b: &Builder<'a>, prog: &[RamInstr]) -> Fetch<'a> {
-        let mut ports = Vec::with_capacity(prog.len());
+pub const PADDING_INSTR: RamInstr = RamInstr::new(Opcode::Answer, 0, 0, 0, true);
 
-        for (i, instr) in prog.iter().enumerate() {
-            let fp = b.lit(FetchPort {
-                addr: i as u64,
-                instr: instr.clone(),
-                write: true,
-            });
-            ports.push(fp);
+impl<'a> Fetch<'a> {
+    pub fn new(
+        b: &impl Builder<'a>,
+        prog: &[CodeSegment],
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) -> Fetch<'a> {
+        let num_ports = prog.iter().map(|cs| cs.len as usize).sum();
+        let mut ports = Vec::with_capacity(num_ports);
+        let mut all_instrs = Vec::with_capacity(prog.len());
+
+        let mut first_public_instr = None;
+        for (seg_idx, cs) in prog.iter().enumerate() {
+            let mut seg_instrs = Vec::with_capacity(cs.len as usize);
+            for i in 0 .. cs.len {
+                let addr = cs.start + i;
+                let instr: TWire<RamInstr> = if cs.secret {
+                    b.secret_lazy(move |w: &MultiExecWitness| {
+                        let w: &ExecWitness = project_witness(w);
+                        w.init_fetch_instrs[seg_idx][usize::try_from(i).unwrap()]
+                    })
+                } else {
+                    let instr = cs.instrs.get(i as usize).cloned()
+                        .unwrap_or(PADDING_INSTR);
+                    if first_public_instr.is_none() {
+                        first_public_instr = Some((addr, instr));
+                    }
+                    b.lit(instr)
+                };
+
+                let fp = TWire::new(FetchPortRepr {
+                    addr: b.lit(addr),
+                    instr,
+                    write: b.lit(true),
+                });
+                ports.push(fp);
+                seg_instrs.push(instr);
+            }
+            all_instrs.push(seg_instrs);
         }
 
         Fetch {
             ports,
-            // Set the default `RamInstr` to the correct `RamInstr` for the default address (0).
-            // This means uninitialized `FetchPort`s will be valid under the normal rules, and no
-            // special checks for unused `FetchPort`s are necessary.
-            default_instr: prog[0].clone(),
+            all_instrs,
+            default_addr_and_instr: first_public_instr
+                .expect("program must contain at least one public instruction"),
         }
+    }
+
+    /// Get a `TWire<RamInstr>` for each instruction of each code segment.
+    pub fn all_instrs(&self) -> &[Vec<TWire<'a, RamInstr>>] {
+        &self.all_instrs
     }
 
     pub fn add_cycles<'b>(
         &mut self,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         len: usize,
+        project_witness: impl Fn(&MultiExecWitness) -> &SegmentWitness + Copy + 'static,
     ) -> CyclePorts<'a> {
         let mut cp = CyclePorts {
             ports: Vec::with_capacity(len),
         };
 
-        for _ in 0 .. len {
-            let (addr, addr_secret) = b.secret();
-            let (instr, instr_secret) = b.secret_default(self.default_instr.clone());
+        let (default_addr, default_instr) = self.default_addr_and_instr;
+
+        for i in 0 .. len {
+            let addr = b.secret_lazy(move |w: &MultiExecWitness| {
+                let w: &SegmentWitness = project_witness(w);
+                if w.live() {
+                    w.fetches[i].0
+                } else {
+                    default_addr
+                }
+            });
+            let instr = b.secret_lazy(move |w: &MultiExecWitness| {
+                let w: &SegmentWitness = project_witness(w);
+                if w.live() {
+                    w.fetches[i].1
+                } else {
+                    default_instr
+                }
+            });
             let write = b.lit(false);
             let fp = TWire::new(FetchPortRepr { addr, instr, write });
-            cp.ports.push(CyclePort { fp, addr_secret, instr_secret });
+            cp.ports.push(CyclePort { fp });
         }
 
         self.ports.extend(cp.ports.iter().map(|p| p.fp));
@@ -67,10 +127,10 @@ impl<'a> Fetch<'a> {
         self,
         mh: &mut MigrateHandle<'a>,
         cx: &mut Rooted<'a, Context<'a>>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
     ) {
         let (mut ports,) = {
-            let Fetch { ports, default_instr: _ } = self;
+            let Fetch { ports, all_instrs: _, default_addr_and_instr: _ } = self;
             (mh.root(ports),)
         };
 
@@ -78,9 +138,12 @@ impl<'a> Fetch<'a> {
             let _g = b.scoped_label("fetch/sort");
             let mut sort = Rooted::new({
                 let packed_ports = ports.open(mh).iter().map(|&fp| {
-                    PackedFetchPort::from_unpacked(&b, fp)
+                    PackedFetchPort::from_unpacked(b, fp)
                 }).collect::<Vec<_>>();
-                sort::sort(&b, &packed_ports, |b, &x, &y| b.le(x, y))
+                sort::sort_by_key(b, &packed_ports, CompareLe, |w| {
+                    let w = w.unpack(b);
+                    b.cast::<_, CompareFetchPort>(w)
+                })
             }, mh);
 
             while !sort.open(mh).is_ready() {
@@ -89,32 +152,36 @@ impl<'a> Fetch<'a> {
             }
 
             let (packed_ports, sorted) = sort.take().finish(b);
-            wire_assert!(cx = &cx.open(mh), sorted, "instruction fetch sorting failed");
-            packed_ports.iter().map(|pfp| pfp.unpack(&b)).collect::<Vec<_>>()
+            wire_assert!(cx = &cx.open(mh), b, sorted, "instruction fetch sorting failed");
+            packed_ports.iter().map(|pfp| pfp.unpack(b)).collect::<Vec<_>>()
         }, mh);
 
         // Debug logging, showing the state before and after sorting.
+        // TODO: need a way to run these prints during eval, with MultExecWitness available
+        /*
         {
-            let cx = cx.open(mh);
+            let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
+            let mut cev = ContextEval::new(b.circuit().as_base(), &mut ev);
             trace!("fetches:");
             for (i, port) in ports.open(mh).iter().enumerate() {
                 trace!(
                     "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                    i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
-                    cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-                    cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+                    i, cev.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
+                    cev.eval(port.addr), cev.eval(port.instr.opcode), cev.eval(port.instr.dest),
+                    cev.eval(port.instr.op1), cev.eval(port.instr.op2), cev.eval(port.instr.imm),
                 );
             }
             trace!("sorted fetches:");
             for (i, port) in sorted_ports.open(mh).iter().enumerate() {
                 trace!(
                     "fetch {:3}: {:5} {:x}, op{} {} {} {} {}",
-                    i, cx.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
-                    cx.eval(port.addr), cx.eval(port.instr.opcode), cx.eval(port.instr.dest),
-                    cx.eval(port.instr.op1), cx.eval(port.instr.op2), cx.eval(port.instr.imm),
+                    i, cev.eval(port.write).0.map_or("??", |x| if !x { "read" } else { "write" }),
+                    cev.eval(port.addr), cev.eval(port.instr.opcode), cev.eval(port.instr.dest),
+                    cev.eval(port.instr.op1), cev.eval(port.instr.op2), cev.eval(port.instr.imm),
                 );
             }
         }
+        */
 
         // Run the consistency check.
         check_first_fetch(&cx.open(mh), b, sorted_ports.open(mh)[0]);
@@ -136,8 +203,6 @@ impl<'a> Fetch<'a> {
 #[derive(Migrate)]
 struct CyclePort<'a> {
     fp: TWire<'a, FetchPort>,
-    addr_secret: TSecretHandle<'a, u64>,
-    instr_secret: TSecretHandle<'a, RamInstr>,
 }
 
 #[derive(Migrate)]
@@ -157,22 +222,17 @@ impl<'a> CyclePorts<'a> {
     pub fn iter<'b>(&'b self) -> impl Iterator<Item = TWire<'a, FetchPort>> + 'b {
         self.ports.iter().map(|p| p.fp)
     }
-
-    pub fn set(&self, b: &Builder<'a>, idx: usize, addr: u64, instr: RamInstr) {
-        self.ports[idx].addr_secret.set(b, addr);
-        self.ports[idx].instr_secret.set(b, instr);
-    }
 }
 
 
 fn check_first_fetch<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     port: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label("fetch/check_first");
     wire_assert!(
-        cx, port.write,
+        cx, b, port.write,
         "uninit fetch from program address {:x}",
         cx.eval(port.addr),
     );
@@ -180,19 +240,19 @@ fn check_first_fetch<'a>(
 
 fn check_fetch<'a>(
     cx: &Context<'a>,
-    b: &Builder<'a>,
+    b: &impl Builder<'a>,
     port1: TWire<'a, FetchPort>,
     port2: TWire<'a, FetchPort>,
 ) {
     let _g = b.scoped_label("fetch/check");
     cx.when(b, b.not(port2.write), |cx| {
         wire_assert!(
-            cx, b.eq(port2.addr, port1.addr),
+            cx, b, b.eq(port2.addr, port1.addr),
             "fetch from uninitialized program address {:x}",
             cx.eval(port2.addr),
         );
         wire_assert!(
-            cx, b.eq(port2.instr, port1.instr),
+            cx, b, b.eq(port2.instr, port1.instr),
             "fetch from program address {:x} produced wrong instruction",
             cx.eval(port2.addr),
         );

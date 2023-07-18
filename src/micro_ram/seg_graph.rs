@@ -6,11 +6,12 @@ use std::mem;
 use log::*;
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted, Projected};
-use zk_circuit_builder::ir::typed::{TWire, TSecretHandle, Builder};
+use zk_circuit_builder::ir::typed::{TWire, Builder, BuilderExt, FlatBits};
 use zk_circuit_builder::routing::{RoutingBuilder, InputId, OutputId};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::types::{self, RamState, Params, TraceChunk};
+use crate::micro_ram::witness::{MultiExecWitness, ExecWitness, SegmentWitness};
 use crate::util::PanicOnDrop;
 
 
@@ -71,7 +72,7 @@ struct SegmentNode<'a> {
 #[derive(Migrate)]
 struct CycleBreakNode<'a> {
     preds: Vec<Predecessor>,
-    secret: TSecretHandle<'a, RamState>,
+    secret: TWire<'a, RamState>,
 }
 
 #[derive(Migrate)]
@@ -85,7 +86,8 @@ enum NetworkState<'a> {
     /// We haven't built the network yet.  Final states for segments with `to_net` set can be fed
     /// directly to the routing network as inputs.
     Before(RoutingBuilder<'a, RamState>),
-    /// We have built the routing network.  
+    /// We have built the routing network.  These wires are the network's outputs, which should be
+    /// used as possible initial states for segments with `from_net`.
     After(Vec<TWire<'a, RamState>>),
 }
 
@@ -97,14 +99,12 @@ pub struct SegGraphBuilder<'a> {
     network_inputs: Vec<NetworkInputNode>,
 
     // Edge liveness flags
-    edges: HashMap<(usize, usize), TSecretHandle<'a, bool>>,
-    from_net: HashMap<usize, TSecretHandle<'a, bool>>,
-    to_net: HashMap<usize, TSecretHandle<'a, bool>>,
+    edges: HashMap<(usize, usize), TWire<'a, bool>>,
+    from_net: HashMap<usize, TWire<'a, bool>>,
+    to_net: HashMap<usize, TWire<'a, bool>>,
 
     /// The state of routing network construction.
     network: NetworkState<'a>,
-    /// Paths that must be connected once the routing network has been constructed.
-    network_conns: Vec<(usize, usize)>,
 
     default_state: RamState,
     cpu_init_state: RamState,
@@ -116,11 +116,12 @@ pub struct SegGraphBuilder<'a> {
 
 impl<'a> SegGraphBuilder<'a> {
     pub fn new(
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
         seg_defs: &[types::Segment],
         params: &Params,
         cpu_init_state: RamState,
         trace: &[TraceChunk],
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> SegGraphBuilder<'a> {
         let _g = b.scoped_label("seg_graph/new");
         let mut sg = SegGraphBuilder {
@@ -132,8 +133,7 @@ impl<'a> SegGraphBuilder<'a> {
             from_net: HashMap::new(),
             to_net: HashMap::new(),
 
-            network: NetworkState::Before(RoutingBuilder::new()),
-            network_conns: Vec::new(),
+            network: NetworkState::Before(RoutingBuilder::new(b)),
 
             default_state: RamState::default_with_regs(params.num_regs),
             cpu_init_state: cpu_init_state.clone(),
@@ -159,7 +159,10 @@ impl<'a> SegGraphBuilder<'a> {
 
             for &j in &seg_def.successors {
                 assert!(!sg.edges.contains_key(&(i, j)), "duplicate edge {} -> {}", i, j);
-                sg.edges.insert((i, j), b.secret().1);
+                sg.edges.insert((i, j), b.secret_lazy(move |w| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.segments[i].succ == Some(j)
+                }));
 
                 sg.segments[j].preds.push(Predecessor {
                     src: StateSource::Segment(i),
@@ -170,7 +173,10 @@ impl<'a> SegGraphBuilder<'a> {
             if seg_def.enter_from_network {
                 // Note that `enter_from_network` is ignored for segment 0.
                 assert!(!sg.from_net.contains_key(&i), "duplicate edge net -> {}", i);
-                sg.from_net.insert(i, b.secret().1);
+                sg.from_net.insert(i, b.secret_lazy(move |w| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.segments[i].from_net
+                }));
                 let output_id = network.add_output();
                 sg.segments[i].preds.push(Predecessor {
                     src: StateSource::Network(output_id),
@@ -181,7 +187,10 @@ impl<'a> SegGraphBuilder<'a> {
 
             if seg_def.exit_to_network {
                 assert!(!sg.to_net.contains_key(&i), "duplicate edge {} -> net", i);
-                sg.to_net.insert(i, b.secret().1);
+                sg.to_net.insert(i, b.secret_lazy(move |w| {
+                    let w: &ExecWitness = project_witness(w);
+                    w.segments[i].to_net
+                }));
                 sg.network_inputs.push(NetworkInputNode {
                     pred: Predecessor {
                         src: StateSource::Segment(i),
@@ -195,11 +204,9 @@ impl<'a> SegGraphBuilder<'a> {
             }
         }
 
-        sg.break_cycles(b, params);
+        sg.break_cycles(b, params, project_witness);
         sg.mark_unreachable();
         sg.count_final_mem_users();
-
-        sg.init_secrets(b, trace);
 
         sg
     }
@@ -252,7 +259,14 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     /// Break cycles in the graph by inserting `CycleBreakNodes`.
-    fn break_cycles(&mut self, b: &Builder<'a>, params: &Params) {
+    fn break_cycles(
+        &mut self,
+        b: &impl Builder<'a>,
+        params: &Params,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) {
+        let num_regs = params.num_regs;
+
         // If a segment's `good` flag is set, then there are no cycles involving that node or any
         // of its (transitive) predecessors.
         let mut good = vec![false; self.segments.len()];
@@ -312,9 +326,24 @@ impl<'a> SegGraphBuilder<'a> {
                     }
 
                     let cb_idx = self.cycle_breaks.len();
+                    let pred_src = pred.src;
                     self.cycle_breaks.push(CycleBreakNode {
                         preds: vec![*pred],
-                        secret: RamState::secret(b, params.num_regs).1,
+                        secret: b.secret_lazy_sized(&[num_regs], move |w| {
+                            let w: &ExecWitness = project_witness(w);
+                            let w: &SegmentWitness = &w.segments[i];
+                            let live = match pred_src {
+                                StateSource::CpuInit => true,
+                                StateSource::Segment(j) => w.pred == Some(j),
+                                StateSource::Network(_) => w.from_net,
+                                StateSource::CycleBreak(_) => unreachable!(),
+                            };
+                            if live {
+                                w.init_state.clone()
+                            } else {
+                                RamState::default_with_regs(num_regs)
+                            }
+                        }),
                     });
                     *pred = Predecessor {
                         src: StateSource::CycleBreak(cb_idx),
@@ -417,115 +446,6 @@ impl<'a> SegGraphBuilder<'a> {
         });
     }
 
-    /// Initialize secrets needed for evaluation of intermediate values.
-    fn init_secrets(&mut self, b: &Builder<'a>, trace: &[TraceChunk]) {
-        // Initialize edge liveness flags.
-
-        // Keep the set of live edges for use when setting CycleBreak states.
-        let mut live_edges = HashSet::new();
-        live_edges.insert(Liveness::Always);
-        for (pred, succ) in trace.iter().zip(trace[1..].iter()) {
-            let mut src = pred.segment;
-            if let Some(ref d) = succ.debug {
-                if d.clear_prev_segment {
-                    continue;
-                }
-                if let Some(prev_segment) = d.prev_segment {
-                    src = prev_segment;
-                }
-            }
-            let dest = succ.segment;
-
-            if let Some(ref edge) = self.edges.get(&(src, dest)) {
-                // `edge` is the liveness flag for the direct edge from `src` to `dest`.
-                edge.set(b, true);
-                live_edges.insert(Liveness::Edge(src, dest));
-            } else {
-                // There is no direct edge, so this connection must go through the routing network.
-                // We set the liveness flags for both sides, and record the input/output indices so
-                // the path through the network can be enabled once the network is constructed.
-                let src_to_net = self.to_net.get(&src)
-                    .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
-                let dest_from_net = self.from_net.get(&dest)
-                    .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
-                src_to_net.set(b, true);
-                dest_from_net.set(b, true);
-                live_edges.insert(Liveness::ToNetwork(src));
-                live_edges.insert(Liveness::FromNetwork(dest));
-
-                self.network_conns.push((src, dest));
-            }
-        }
-
-        // Use default values (`false`) for all unused edge liveness flags.
-        let it = self.edges.values()
-            .chain(self.from_net.values())
-            .chain(self.to_net.values());
-        for s in it {
-            s.apply_default();
-        }
-
-        // Set secrets for all CycleBreak nodes.  For `CycleBreak -> Segment` edges, set the secret
-        // to the segment's initial state; for `Segment -> CycleBreak`, set it to the final state.
-        // Every CycleBreak should be covered by one of these cases; if this doesn't hold, the
-        // trace will likely be marked invalid due to a CycleBreak state being defaulted to the
-        // wrong value.
-
-        let mut set_cycle_breaks = HashSet::new();
-
-        let mut prev_state = self.cpu_init_state.clone();
-        for chunk in trace {
-            let mut init_state = prev_state;
-            if let Some(ref d) = chunk.debug {
-                if let Some(ref state) = d.prev_state {
-                    init_state = state.clone();
-                }
-                if let Some(cycle) = d.cycle {
-                    init_state.cycle = cycle;
-                }
-            }
-
-            for pred in &self.segments[chunk.segment].preds {
-                if !live_edges.contains(&pred.live) {
-                    continue;
-                }
-                match pred.src {
-                    StateSource::CycleBreak(i) => {
-                        if set_cycle_breaks.insert(i) {
-                            self.cycle_breaks[i].secret.set(b, init_state.clone());
-                        }
-                    },
-                    _ => {},
-                }
-            }
-
-            prev_state = chunk.states.last().expect("empty chunk").clone();
-            prev_state.cycle = init_state.cycle + chunk.states.len() as u32;
-        }
-
-        for (i, cbn) in self.cycle_breaks.iter().enumerate() {
-            for pred in &cbn.preds {
-                if !live_edges.contains(&pred.live) {
-                    continue;
-                }
-                match pred.src {
-                    StateSource::Segment(j) => {
-                        if set_cycle_breaks.insert(i) {
-                            let state = trace[j].states.last().expect("empty chunk").clone();
-                            cbn.secret.set(b, state);
-                        }
-                    },
-                    _ => {},
-                }
-            }
-        }
-
-        // Use default values for all unused cycle-break nodes.
-        for cbn in &self.cycle_breaks {
-            cbn.secret.apply_default();
-        }
-    }
-
     /// Get the order in which to construct the segment circuits.  This ordering is guaranteed to
     /// respect dependencies between the segments.  Specifically, calling `get_initial` on element
     /// `k` of the ordering is guaranteed to succeed if `set_final` has been called on all elements
@@ -599,7 +519,7 @@ impl<'a> SegGraphBuilder<'a> {
     }
 
     /// Obtain the initial state to use for a given segment.
-    pub fn get_initial(&mut self, b: &Builder<'a>, idx: usize) -> TWire<'a, RamState> {
+    pub fn get_initial(&mut self, b: &impl Builder<'a>, idx: usize) -> TWire<'a, RamState> {
         let _g = b.scoped_label("seg_graph/get_initial");
         let mut it = self.segments[idx].preds.iter();
         let first_pred = it.next()
@@ -629,10 +549,9 @@ impl<'a> SegGraphBuilder<'a> {
             StateSource::Network(id) => match self.network {
                 NetworkState::Before(_) =>
                     panic!("tried to access {:?} before building network", id),
-                NetworkState::After(ref net) => &net[id.into_raw()],
+                NetworkState::After(ref net) => &net[id.into_raw() as usize],
             },
-            StateSource::CycleBreak(idx) =>
-                self.cycle_breaks[idx].secret.wire(),
+            StateSource::CycleBreak(idx) => &self.cycle_breaks[idx].secret,
         }
     }
 
@@ -693,56 +612,91 @@ impl<'a> SegGraphBuilder<'a> {
         self.cpu_init_mem.set(mem);
     }
 
-    fn liveness_flag(&self, b: &Builder<'a>, l: Liveness) -> TWire<'a, bool> {
+    fn liveness_flag(&self, b: &impl Builder<'a>, l: Liveness) -> TWire<'a, bool> {
         match l {
             Liveness::Always => b.lit(true),
-            Liveness::Edge(a, b) => self.edges[&(a, b)].wire().clone(),
-            Liveness::FromNetwork(i) => self.from_net[&i].wire().clone(),
-            Liveness::ToNetwork(i) => self.to_net[&i].wire().clone(),
+            Liveness::Edge(a, b) => self.edges[&(a, b)],
+            Liveness::FromNetwork(i) => self.from_net[&i],
+            Liveness::ToNetwork(i) => self.to_net[&i],
         }
     }
 
-    fn get_predecessor(&self, b: &Builder<'a>, pred: Predecessor) -> TWire<'a, RamState> {
+    fn get_predecessor(&self, b: &impl Builder<'a>, pred: Predecessor) -> TWire<'a, RamState> {
         let mut wire = self.get_final(pred.src).clone();
         let edge_live = self.liveness_flag(b, pred.live);
         wire.live = b.and(wire.live, edge_live);
         wire
     }
 
-    fn pre_build_network(&mut self, routing: &mut RoutingBuilder<'a, RamState>) {
+    fn pre_build_network(
+        &mut self,
+        b: &impl Builder<'a>,
+        routing: &mut RoutingBuilder<'a, RamState>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) {
         for inp in &self.network_inputs {
             let mut state = self.get_final(inp.pred.src).clone();
             // Force `state.live` to `false` if the edge leading to this network port is not live.
             // Note the edge can't be live unless the source segment is live (this is asserted in
             // `finish`).
-            state.live = *self.to_net[&inp.segment_index].wire();
+            state.live = self.to_net[&inp.segment_index];
             let id = routing.add_input(state);
             assert!(self.segments[inp.segment_index].to_net.is_none(),
                 "impossible: multiple to-net for segment {}?", inp.segment_index);
             self.segments[inp.segment_index].to_net = Some(id);
         }
 
-        for &(src, dest) in &self.network_conns {
-            let src_input = self.segments[src].to_net
-                .unwrap_or_else(|| panic!("no outgoing edge from {} to {}", src, dest));
-            let dest_output = self.segments[dest].from_net
-                .unwrap_or_else(|| panic!("no incoming edge from {} to {}", src, dest));
-            routing.connect(src_input, dest_output);
+        let seg_to_net_map = self.segments.iter().map(|seg| seg.to_net).collect::<Vec<_>>();
+        let seg_to_net_map = b.lit(seg_to_net_map);
+        let seg_from_net_map = self.segments.iter().map(|seg| seg.from_net).collect::<Vec<_>>();
+        let seg_from_net_map = b.lit(seg_from_net_map);
+
+        let n = self.segments.len();
+        let network_conns = b.secret_lazy_derived_sized(
+            &[n],
+            TWire::<(_, _)>::new((seg_to_net_map, seg_from_net_map)),
+            move |w: &MultiExecWitness, deps| {
+                let w = project_witness(w);
+                let (seg_to_net_map, seg_from_net_map) = deps;
+                let mut conns = Vec::with_capacity(n);
+                debug_assert_eq!(n, w.segments.len());
+                for (i, seg) in w.segments.iter().enumerate() {
+                    if seg.to_net {
+                        let src = i;
+                        let dest = seg.succ.unwrap();
+                        let inp = seg_to_net_map[src].unwrap_or_else(|| {
+                            panic!("no outgoing edge from {} to {}", src, dest)
+                        });
+                        let out = seg_from_net_map[dest].unwrap_or_else(|| {
+                            panic!("no incoming edge from {} to {}", src, dest)
+                        });
+                        conns.push((inp, out, true));
+                    } else {
+                        conns.push((InputId::from_raw(0), OutputId::from_raw(0), false));
+                    }
+                }
+                conns
+            });
+
+        for tw in network_conns.repr {
+            let (inp, out, cond) = tw.repr;
+            routing.maybe_connect(cond, inp, out);
         }
     }
 
     pub fn build_network(
         this: &mut Rooted<'a, Projected<Self>>,
         mh: &mut MigrateHandle<'a>,
-        b: &Builder<'a>,
+        b: &impl Builder<'a>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
         let _g = b.scoped_label("seg_graph/build_network");
         let mut routing = Rooted::new(match this.open(mh).network {
-            NetworkState::Before(ref mut rb) => mem::take(rb),
+            NetworkState::Before(ref mut rb) => mem::replace(rb, RoutingBuilder::new(b)),
             NetworkState::After(_) => panic!("already built the routing network"),
         }, mh);
 
-        this.open(mh).pre_build_network(&mut routing.open(mh));
+        this.open(mh).pre_build_network(b, &mut routing.open(mh), project_witness);
 
         let mut r = Rooted::new({
             let default = this.open(mh).default_state.clone();
@@ -757,7 +711,7 @@ impl<'a> SegGraphBuilder<'a> {
         this.open(mh).network = NetworkState::After(outputs);
     }
 
-    pub fn finish(mut self, cx: &Context<'a>, b: &Builder<'a>) {
+    pub fn finish(mut self, cx: &Context<'a>, b: &impl Builder<'a>) {
         let _g = b.scoped_label("seg_graph/finish");
         // Add equality assertions to constrain the CycleBreakNode secrets.  We do this first
         // because the later steps involve dismantling `self` to extract its `TSecretHandle`s.
@@ -769,7 +723,7 @@ impl<'a> SegGraphBuilder<'a> {
                 count = b.add(count, b.cast(state.live));
                 cx.when(b, state.live, |cx| {
                     wire_assert!(
-                        cx, b.eq(cbn.secret.wire().clone(), state),
+                        cx, b, b.eq(cbn.secret.clone(), state),
                         "CycleBreak {} incoming edge {:?} is live, but state doesn't match {:?}",
                         i, pred.live, pred.src,
                     );
@@ -777,9 +731,9 @@ impl<'a> SegGraphBuilder<'a> {
             }
 
             // If the CycleBreakNode's secret state is live, then at least one input must be live.
-            cx.when(b, cbn.secret.wire().live, |cx| {
+            cx.when(b, cbn.secret.live, |cx| {
                 wire_assert!(
-                    cx, b.ne(count, b.lit(0)),
+                    cx, b, b.ne(count, b.lit(0)),
                     "CycleBreak {} has live output but no live inputs",
                     i,
                 );
@@ -808,10 +762,10 @@ impl<'a> SegGraphBuilder<'a> {
 
             let mut wires = Vec::with_capacity(end - start + 1);
             for &(_, j) in &edge_list[start..end] {
-                wires.push(*self.edges[&(i, j)].wire());
+                wires.push(self.edges[&(i, j)]);
             }
-            if let Some(to_net_live) = self.to_net.get(&i) {
-                wires.push(*to_net_live.wire());
+            if let Some(&to_net_live) = self.to_net.get(&i) {
+                wires.push(to_net_live);
             }
             assert!(wires.len() <= u8::MAX as usize);
 
@@ -838,7 +792,7 @@ impl<'a> SegGraphBuilder<'a> {
             };
 
             wire_assert!(
-                cx, ok,
+                cx, b, ok,
                 "segment {} ({}) has {} live successors (expected 0{})",
                 i, cx.eval(segment_live).map(|b| if b { "live" } else { "dead" }),
                 cx.eval(count), if cx.eval(segment_live).0 != Some(false) { " or 1" } else { "" },

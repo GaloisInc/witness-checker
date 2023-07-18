@@ -1,6 +1,6 @@
 use std::fmt::{self, Write};
-use crate::ir::circuit::{self, CircuitTrait, Field, Wire, GateKind, Ty, TyKind};
-use crate::eval::{self, Evaluator, CachingEvaluator, Value};
+use crate::ir::circuit::{self, CircuitBase, Field, Wire, GateKind, Ty, TyKind};
+use crate::eval::{self, EvalWire, CachingEvaluator, Value};
 
 fn write_val(s: &mut String, v: Value) -> Result<(), fmt::Error> {
     match v {
@@ -37,22 +37,23 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
             #[cfg(feature = "gf_scuttlebutt")]
             Field::F64b => { write!(s, "gf64b")?; },
         },
-        TyKind::Bundle(tys) => {
-            for (i, &ty) in tys.iter().enumerate() {
+        TyKind::Bundle(btys) => {
+            for (i, &ty) in btys.tys().iter().enumerate() {
                 if i == 0 { write!(s, "[")?; } else { write!(s, ", ")?; }
                 write_ty(s, ty)?;
             }
             write!(s, "]")?;
         },
+        TyKind::RawBits => { write!(s, "raw_bits")?; },
     }
     Ok(())
 }
 
 pub fn make_graph<'a>(
-    c: &'a impl CircuitTrait<'a>,
+    c: &CircuitBase<'a>,
     ws: impl Iterator<Item = Wire<'a>>,
 ) -> Result<String, fmt::Error> {
-    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new(c);
+    let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
     let mut s = String::new();
     writeln!(s, "digraph {{")?;
@@ -76,7 +77,7 @@ pub fn make_graph<'a>(
             GateKind::Pack(_) => write!(label, "Pack")?,
             GateKind::Extract(_, idx) => write!(label, "Extract {}", idx)?,
             GateKind::Gadget(gk, _) => write!(label, "Gadget {}", gk.name())?,
-            GateKind::Call(f, _, _) => write!(label, "Call {}", f.name)?,
+            GateKind::Call(call) => write!(label, "Call {}", call.func.name)?,
         }
         write!(label, " (")?;
         write_ty(&mut label, w.ty)?;
@@ -84,7 +85,7 @@ pub fn make_graph<'a>(
 
         write!(label, "{}\n", w.label)?;
 
-        let val = ev.eval_wire(w);
+        let val = ev.eval_wire(c, w);
         match val {
             Ok(val) => write_val(&mut label, val)?,
             _ => write!(label, "[eval failed]")?,
@@ -112,8 +113,8 @@ pub fn make_graph<'a>(
             GateKind::Compare(_, a, b) => write_edges(&[a, b])?,
             GateKind::Mux(a, b, c) => write_edges(&[a, b, c])?,
             GateKind::Pack(ws) |
-            GateKind::Gadget(_, ws) |
-            GateKind::Call(_, ws, _) => write_edges(ws)?,
+            GateKind::Gadget(_, ws) => write_edges(ws)?,
+            GateKind::Call(call) => write_edges(call.args)?,
         }
     }
 

@@ -10,3 +10,4 @@ pub mod parse;
 pub mod seg_graph;
 pub mod trace;
 pub mod types;
+pub mod witness;
