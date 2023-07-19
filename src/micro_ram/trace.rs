@@ -423,6 +423,14 @@ fn calc_step_inner<'a>(
     // if `opcode` is known; otherwise, all non-memory ops set this below.
     let mut mem_port_unused = false;
 
+    let x_i64 = b.cast::<_, i64>(x);
+    let y_i64 = b.cast::<_, i64>(y);
+    let y_sh = b.cast(y);
+    let x_neq_zero = b.neq_zero(x);
+    let reg_none = b.lit(REG_NONE);
+    let reg_pc = b.lit(REG_PC);
+    let default = b.lit((0, REG_NONE));
+    let zero = b.lit(0);
 
     case!(Opcode::And, b.and(x, y));
     case!(Opcode::Or, b.or(x, y));
@@ -437,40 +445,42 @@ fn calc_step_inner<'a>(
         high
     });
     case!(Opcode::Smulh, {
-        let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        let (_, high_s) = *b.wide_mul(x_i64, y_i64);
         // TODO: not sure this gives the right overflow value - what if high = -1?
         b.cast::<_, u64>(high_s)
     });
+    // TODO(isweet): CSE, use a single `divmod` gadget
     case!(Opcode::Udiv, b.div(x, y));
     case!(Opcode::Umod, b.mod_(x, y));
 
-    case!(Opcode::Shl, b.shl(x, b.cast(y)));
-    case!(Opcode::Shr, b.shr(x, b.cast(y)));
+    case!(Opcode::Shl, b.shl(x, y_sh));
+    case!(Opcode::Shr, b.shr(x, y_sh));
 
     case!(Opcode::Cmpe, b.cast(b.eq(x, y)));
     case!(Opcode::Cmpa, b.cast(b.gt(x, y)));
     case!(Opcode::Cmpae, b.cast(b.ge(x, y)));
-    case!(Opcode::Cmpg, b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
-    case!(Opcode::Cmpge, b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
+    case!(Opcode::Cmpg, b.cast(b.gt(x_i64, y_i64)));
+    case!(Opcode::Cmpge, b.cast(b.ge(x_i64, y_i64)));
 
     case!(Opcode::Mov, y);
     case!(Opcode::Cmov, {
-        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
+        // TODO(isweet): CSE, one `mux(x_neq_0 ...)` for `Cmov`, `Cjmp`, and `Cnjmp`
+        dest = b.mux(x_neq_zero, instr.dest, reg_none);
         y
     });
 
     case!(Opcode::Jmp, {
-        dest = b.lit(REG_PC);
+        dest = reg_pc;
         y_addr
     });
     // TODO: Double check. Is this `x`?
     // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
     case!(Opcode::Cjmp, {
-        dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
+        dest = b.mux(x_neq_zero, reg_pc, reg_none);
         y_addr
     });
     case!(Opcode::Cnjmp, {
-        dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
+        dest = b.mux(x_neq_zero, reg_none, reg_pc);
         y_addr
     });
 
@@ -493,26 +503,26 @@ fn calc_step_inner<'a>(
     // Store1, Store2, Store4, Store8
     for w in MemOpWidth::iter() {
         case!(w.store_opcode(), {
-            dest = b.lit(REG_NONE);
+            dest = reg_none;
             if opcode == Some(w.store_opcode()) {
                 let (addr, value) = (y_addr, x);
                 kmem.store(b, ev, addr, value, w);
             }
-            b.lit(0)
+            zero
         });
     }
     case!(Opcode::Poison8, {
-        dest = b.lit(REG_NONE);
+        dest = reg_none;
         if opcode == Some(Opcode::Poison8) {
             let (addr, value) = (y_addr, x);
             kmem.poison(b, ev, addr, value, MemOpWidth::W8);
         }
-        b.lit(0)
+        zero
     });
 
     // TODO: dummy implementation of `Answer` as a no-op infinite loop
     case!(Opcode::Answer, {
-        dest = b.lit(REG_PC);
+        dest = reg_pc;
         s1.pc
     });
 
@@ -533,7 +543,7 @@ fn calc_step_inner<'a>(
     // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
     // current `pc`.
     case!(Opcode::Stutter, {
-        dest = b.lit(REG_PC);
+        dest = reg_pc;
         s1.pc
     });
 
@@ -541,8 +551,8 @@ fn calc_step_inner<'a>(
     if is_mode::<AnyTainted>() {
         // Opcode::Sink is a no-op in the standard interpreter.
         case!(Opcode::Sink1, {
-            dest = b.lit(REG_NONE);
-            b.lit(0)
+            dest = reg_none;
+            zero
         });
 
         // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
@@ -558,10 +568,10 @@ fn calc_step_inner<'a>(
         if cases.len() == 1 {
             *cases[0].1
         } else {
-            b.lit((0, REG_NONE)).repr
+            default.repr
         }
     } else {
-        *b.mux_multi(&cases, b.lit((0, REG_NONE)))
+        *b.mux_multi(&cases, default)
     };
 
     let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
@@ -573,7 +583,7 @@ fn calc_step_inner<'a>(
     let (tainted_regs, tainted_im) = tainted::calc_step(
         cx, b, idx, instr, mem_port, &s1.tainted_regs, x, y, dest);
 
-    let pc_is_dest = b.eq(b.lit(REG_PC), dest);
+    let pc_is_dest = b.eq(reg_pc, dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
     let cycle = b.add(s1.cycle, b.lit(1));
