@@ -1,8 +1,7 @@
 use crate::ir::circuit::Bits;
-use super::{WireId, Time, TEMP, Sink, Source, AssertNoWrap};
+use super::{WireId, Time, TEMP, Sink, Source, AssertNoWrap, from_bristol};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use bristol_fashion::{Wire, Gate, Circuit};
 
 /// Add up `n`-bit input `a`, `n`-bit input `b`, and 1-bit input `c0`, producing an `n`-bit result.
 ///
@@ -51,70 +50,8 @@ fn add_common<S: Sink>(
     sink.xor(expire, n, a_xor_b, c)
 }
 
-// Notes:
-//  * Both Bristol Fashion and these arithmetic gadgets assume input and output are little endian
-fn slurp_bristol(sink: &mut impl Sink, expire: Time, circuit: bristol_fashion::Circuit, inputs: Vec<(WireId, u64)>) -> Vec<(WireId, u64)> {
-    // The caller provided the number of expected inputs
-    assert_eq!(circuit.input_sizes.len(), inputs.len());
-
-    // Each input provided by the caller is the expected size
-    for (i, &n) in circuit.input_sizes.iter().enumerate() {
-        assert_eq!(n as u64, inputs[i].1);
-    }
-    
-    let mut wire_map: HashMap<Wire, WireId> = HashMap::new();
-
-    let mut offset = 0;
-    for (w, n) in inputs {
-        for i in 0 .. n {
-            assert!(wire_map.insert((offset + i) as usize, w + i).is_none())
-        }
-        offset += n
-    }
-
-    for g in circuit.gates {
-        match g {
-            Gate::XOR { a, b, out } => {
-                let ret = sink.xor(expire, 1, wire_map[&a], wire_map[&b]);
-                assert!(wire_map.insert(out, ret).is_none())
-            },
-            Gate::AND { a, b, out } => {
-                let ret = sink.and(expire, 1, wire_map[&a], wire_map[&b]);
-                assert!(wire_map.insert(out, ret).is_none())
-            },
-            Gate::INV { a, out } => {
-                let ret = sink.not(expire, 1, wire_map[&a]);
-                assert!(wire_map.insert(out, ret).is_none())
-            },
-            Gate::EQ { lit, out } => {
-                let ret = sink.lit(expire, 1, Bits(&[if lit { 1 } else { 0 }]));
-                assert!(wire_map.insert(out, ret).is_none())
-            },
-            Gate::EQW { a, out } => {
-                let ret = sink.copy(expire, 1, wire_map[&a]);
-                assert!(wire_map.insert(out, ret).is_none())
-            }
-        }
-    }
-
-    let mut offset = circuit.nwires - circuit.output_sizes.iter().sum::<usize>();
-    let mut chunks = Vec::new();
-    let mut outputs = Vec::with_capacity(circuit.output_sizes.len());
-
-    for (i, &n) in circuit.output_sizes.iter().enumerate() {
-        for j in 0 .. n {
-            chunks.push((Source::Wires(wire_map[&(offset + j)]), 1));
-        }
-        outputs.push((sink.concat_chunks(expire, &chunks), n as u64));
-        offset += n;
-        chunks.clear();
-    }
-
-    outputs
-}
-
 fn add_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
-    let outputs = slurp_bristol(sink, expire, bristol_fashion::circuits::add64(), vec![(a, 64), (b, 64)]);
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::add64(), vec![(a, 64), (b, 64)]);
     outputs[0].0
 }
 
@@ -126,7 +63,6 @@ pub fn add(
     b: WireId,
     assert_no_wrap: AssertNoWrap,
 ) -> WireId {
-    // TODO(isweet): Ask James P what to do about `assert_no_wrap`
     if n == 64 && !assert_no_wrap.as_bool() {
         add_opt(sink, expire, a, b)
     } else {
@@ -136,7 +72,7 @@ pub fn add(
 }
 
 fn sub_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
-    let outputs = slurp_bristol(sink, expire, bristol_fashion::circuits::sub64(), vec![(a, 64), (b, 64)]);
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::sub64(), vec![(a, 64), (b, 64)]);
     outputs[0].0
 }
 
@@ -201,15 +137,24 @@ fn add_1<S: Sink>(
     sink.xor(expire, n, a_xor_b, c)
 }
 
+fn neg_opt(sink: &mut impl Sink, expire: Time, a: WireId) -> WireId {
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::neg64(), vec![(a, 64)]);
+    outputs[0].0
+}
+
 pub fn neg(
     sink: &mut impl Sink,
     expire: Time,
     n: u64,
     a: WireId,
 ) -> WireId {
-    let a_inv = sink.not(TEMP, n, a);
-    let b = sink.lit(TEMP, 1, Bits::one());
-    add_1(sink, expire, n, a_inv, b, AssertNoWrap::No)
+    if n == 64 {
+        neg_opt(sink, expire, a)
+    } else {
+        let a_inv = sink.not(TEMP, n, a);
+        let b = sink.lit(TEMP, 1, Bits::one());
+        add_1(sink, expire, n, a_inv, b, AssertNoWrap::No)
+    }
 }
 
 
@@ -594,6 +539,16 @@ fn wide_mul_use_karatsuba(n: u64) -> bool {
     }
 }
 
+fn wide_mul_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
+    let outputs = from_bristol(sink, TEMP, bristol_fashion::circuits::wide_mul64(), vec![(a, 64), (b, 64)]);
+    // Nigel's circuit produces two 64-bit outputs rather than one 128-bit output, for some reason
+    let out = sink.concat_chunks(expire, &[
+        (Source::Wires(outputs[0].0), outputs[0].1),
+        (Source::Wires(outputs[1].0), outputs[1].1),
+    ]);
+    out
+}
+
 pub fn wide_mul(
     sink: &mut impl Sink,
     expire: Time,
@@ -601,10 +556,14 @@ pub fn wide_mul(
     a: WireId,
     b: WireId,
 ) -> WireId {
-    if !wide_mul_use_karatsuba(n) {
-        wide_mul_simple(sink, expire, n, a, b)
+    if n == 64 {
+        wide_mul_opt(sink, expire, a, b)
     } else {
-        wide_mul_karatsuba(sink, expire, n, a, b)
+        if !wide_mul_use_karatsuba(n) {
+            wide_mul_simple(sink, expire, n, a, b)
+        } else {
+            wide_mul_karatsuba(sink, expire, n, a, b)
+        }
     }
 }
 
@@ -618,6 +577,11 @@ fn mul_use_karatsuba(n: u64) -> bool {
     }
 }
 
+fn mul_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::mul64(), vec![(a, 64), (b, 64)]);
+    outputs[0].0
+}
+
 pub fn mul(
     sink: &mut impl Sink,
     expire: Time,
@@ -626,10 +590,14 @@ pub fn mul(
     b: WireId,
     assert_no_wrap: AssertNoWrap,
 ) -> WireId {
-    if !mul_use_karatsuba(n) {
-        mul_simple(sink, expire, n, a, b, assert_no_wrap)
+    if n == 64 && !assert_no_wrap.as_bool() {
+        mul_opt(sink, expire, a, b)
     } else {
-        mul_karatsuba(sink, expire, n, a, b, assert_no_wrap)
+        if !mul_use_karatsuba(n) {
+            mul_simple(sink, expire, n, a, b, assert_no_wrap)
+        } else {
+            mul_karatsuba(sink, expire, n, a, b, assert_no_wrap)
+        }
     }
 }
 
@@ -637,7 +605,7 @@ pub fn mul(
 #[cfg(test)]
 mod test {
     use log::*;
-    use num_bigint::BigUint;
+    use num_bigint::{BigInt, BigUint};
     use crate::ir::circuit::Bits;
     use crate::back::boolean::{Time, WireId, TEMP, Source, Sink, AssertNoWrap};
     use crate::back::boolean::arith;
@@ -879,21 +847,26 @@ mod test {
         }
     }
 
-    fn add_opt_with(lhs: u64, rhs: u64) {
+    // TODO(isweet):
+    //  * Use `scuttlebutt::utils::pack_bits` to launder into `num_bigint::BigInt` and `num_bigint::BigUint`
+    //  * Use `num_bigint::BigInt` for tests relying on two's complement
+    //  * Figure out how to put the `u64 -> Bits` serializing into its own function
+
+    fn add_opt_u64(lhs: u64, rhs: u64) {
         let _ = env_logger::builder().is_test(true).try_init();
         let mut sink = TestNoWrapSink::default();
         
         let n = 64;
-        let a = sink.lit(TEMP, n, Bits(&[lhs as u32]));
-        let b = sink.lit(TEMP, n, Bits(&[rhs as u32]));
+        let a = sink.lit(TEMP, n, Bits(&[lhs as u32, (lhs >> 32) as u32]));
+        let b = sink.lit(TEMP, n, Bits(&[rhs as u32, (rhs >> 32) as u32]));
         let out = arith::add(&mut sink, TEMP, n, a, b, AssertNoWrap::No);
         let out_val = sink.inner.get_uint(n, out);
-        assert_eq!((BigUint::from(lhs) + BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)        
+        assert_eq!((BigUint::from(lhs) + BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)                
     }
 
     #[test]
     fn add_opt() {
-        add_opt_with(1073741825, 1073741825)
+        add_opt_u64(1073741825, 1073741825)
     }
 
     fn sub_opt_with(lhs: u64, rhs: u64) {
@@ -910,8 +883,25 @@ mod test {
     
     #[test]
     fn sub_opt() {
-        add_opt_with(1073741827, 1073741825)
-    }    
+        sub_opt_with(1073741827, 1073741825)
+    }
+
+    fn neg_opt_with(x: u64, expected: BigUint) {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let mut sink = TestNoWrapSink::default();
+        
+        let n = 64;
+        let a = sink.lit(TEMP, n, Bits(&[x as u32]));
+        let out = arith::neg(&mut sink, TEMP, n, a);
+        let out_val = sink.inner.get_uint(n, out);
+        assert_eq!(expected, out_val, "with x = {}", x)
+    }
+
+    #[test]
+    fn neg_opt() {
+        // TODO(isweet): Should really use `BigInt`
+        neg_opt_with(10, BigUint::from_bytes_le(&18446744073709551606_u64.to_le_bytes()))
+    }
 
     #[test]
     fn add_no_wrap() {

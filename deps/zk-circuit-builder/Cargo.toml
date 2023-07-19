@@ -24,7 +24,7 @@ cheesecloth-derive-migrate = { path = "../../derive-migrate" }
 cheesecloth-derive-ir-typed = { path = "../../derive-ir-typed" }
 
 scuttlebutt = { git = "https://gitlab-ext.galois.com/crypto/swanky", rev = "4340fa5449f88eb93afae717476a4c345f7e44d6", optional = true }
-bristol-fashion = { git = "https://gitlab-ext.galois.com/crypto/swanky", rev = "a54b84e0df5bc96547a1c26033bc683238c3d597"}
+bristol-fashion = { git = "https://gitlab-ext.galois.com/crypto/swanky", rev = "13bcf50786b9acb21168006a63e10b9afaa67ddb"}
 
 zkinterface = { optional = true, version = "1.3.3" }
 zkinterface_bellman = { optional = true, version = "1.3.0" }
