@@ -423,15 +423,6 @@ fn calc_step_inner<'a>(
     // if `opcode` is known; otherwise, all non-memory ops set this below.
     let mut mem_port_unused = false;
 
-    let x_i64 = b.cast::<_, i64>(x);
-    let y_i64 = b.cast::<_, i64>(y);
-    let y_sh = b.cast(y);
-    let x_neq_zero = b.neq_zero(x);
-    let reg_none = b.lit(REG_NONE);
-    let reg_pc = b.lit(REG_PC);
-    let default = b.lit((0, REG_NONE));
-    let zero = b.lit(0);
-
     case!(Opcode::And, b.and(x, y));
     case!(Opcode::Or, b.or(x, y));
     case!(Opcode::Xor, b.xor(x, y));
@@ -439,13 +430,11 @@ fn calc_step_inner<'a>(
 
     case!(Opcode::Add, b.add(x, y));
     case!(Opcode::Sub, b.sub(x, y));
-    case!(Opcode::Mull, b.mul(x, y));
-    case!(Opcode::Umulh, {
-        let (_, high) = *b.wide_mul(x, y);
-        high
-    });
+    let (low, high) = *b.wide_mul(x, y);    
+    case!(Opcode::Mull, low);
+    case!(Opcode::Umulh, high);
     case!(Opcode::Smulh, {
-        let (_, high_s) = *b.wide_mul(x_i64, y_i64);
+        let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
         // TODO: not sure this gives the right overflow value - what if high = -1?
         b.cast::<_, u64>(high_s)
     });
@@ -453,34 +442,34 @@ fn calc_step_inner<'a>(
     case!(Opcode::Udiv, b.div(x, y));
     case!(Opcode::Umod, b.mod_(x, y));
 
-    case!(Opcode::Shl, b.shl(x, y_sh));
-    case!(Opcode::Shr, b.shr(x, y_sh));
+    case!(Opcode::Shl, b.shl(x, b.cast(y)));
+    case!(Opcode::Shr, b.shr(x, b.cast(y)));
 
     case!(Opcode::Cmpe, b.cast(b.eq(x, y)));
     case!(Opcode::Cmpa, b.cast(b.gt(x, y)));
     case!(Opcode::Cmpae, b.cast(b.ge(x, y)));
-    case!(Opcode::Cmpg, b.cast(b.gt(x_i64, y_i64)));
-    case!(Opcode::Cmpge, b.cast(b.ge(x_i64, y_i64)));
+    case!(Opcode::Cmpg, b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
+    case!(Opcode::Cmpge, b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
 
     case!(Opcode::Mov, y);
     case!(Opcode::Cmov, {
         // TODO(isweet): CSE, one `mux(x_neq_0 ...)` for `Cmov`, `Cjmp`, and `Cnjmp`
-        dest = b.mux(x_neq_zero, instr.dest, reg_none);
+        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
         y
     });
 
     case!(Opcode::Jmp, {
-        dest = reg_pc;
+        dest = b.lit(REG_PC);
         y_addr
     });
     // TODO: Double check. Is this `x`?
     // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
     case!(Opcode::Cjmp, {
-        dest = b.mux(x_neq_zero, reg_pc, reg_none);
+        dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
         y_addr
     });
     case!(Opcode::Cnjmp, {
-        dest = b.mux(x_neq_zero, reg_none, reg_pc);
+        dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
         y_addr
     });
 
@@ -503,26 +492,26 @@ fn calc_step_inner<'a>(
     // Store1, Store2, Store4, Store8
     for w in MemOpWidth::iter() {
         case!(w.store_opcode(), {
-            dest = reg_none;
+            dest = b.lit(REG_NONE);
             if opcode == Some(w.store_opcode()) {
                 let (addr, value) = (y_addr, x);
                 kmem.store(b, ev, addr, value, w);
             }
-            zero
+            b.lit(0)
         });
     }
     case!(Opcode::Poison8, {
-        dest = reg_none;
+        dest = b.lit(REG_NONE);
         if opcode == Some(Opcode::Poison8) {
             let (addr, value) = (y_addr, x);
             kmem.poison(b, ev, addr, value, MemOpWidth::W8);
         }
-        zero
+        b.lit(0)
     });
 
     // TODO: dummy implementation of `Answer` as a no-op infinite loop
     case!(Opcode::Answer, {
-        dest = reg_pc;
+        dest = b.lit(REG_PC);
         s1.pc
     });
 
@@ -543,7 +532,7 @@ fn calc_step_inner<'a>(
     // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
     // current `pc`.
     case!(Opcode::Stutter, {
-        dest = reg_pc;
+        dest = b.lit(REG_PC);
         s1.pc
     });
 
@@ -551,8 +540,8 @@ fn calc_step_inner<'a>(
     if is_mode::<AnyTainted>() {
         // Opcode::Sink is a no-op in the standard interpreter.
         case!(Opcode::Sink1, {
-            dest = reg_none;
-            zero
+            dest = b.lit(REG_NONE);
+            b.lit(0)
         });
 
         // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
@@ -568,10 +557,10 @@ fn calc_step_inner<'a>(
         if cases.len() == 1 {
             *cases[0].1
         } else {
-            default.repr
+            b.lit((0, REG_NONE)).repr
         }
     } else {
-        *b.mux_multi(&cases, default)
+        *b.mux_multi(&cases, b.lit((0, REG_NONE)))
     };
 
     let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
@@ -583,7 +572,7 @@ fn calc_step_inner<'a>(
     let (tainted_regs, tainted_im) = tainted::calc_step(
         cx, b, idx, instr, mem_port, &s1.tainted_regs, x, y, dest);
 
-    let pc_is_dest = b.eq(reg_pc, dest);
+    let pc_is_dest = b.eq(b.lit(REG_PC), dest);
     let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
 
     let cycle = b.add(s1.cycle, b.lit(1));
