@@ -899,6 +899,14 @@ fn eval_gate_inner<'a, 'b>(
         },
 
         GateKind::Call(call) => eval_call(c, ecx, call)?,
+
+        // Not sure what needs to be done here..
+        // Switch(cond, bs, a) => {
+        //   let rs = map(bs, |(lit, f)| (lit, eval_call(c, ecx, Call(f, a))));
+        //   let r = find_appropriate_branch(cond, rs)
+        //   r
+        // }
+        GateKind::Switch(_, _ , _) => unimplemented!(),
     })
 }
 

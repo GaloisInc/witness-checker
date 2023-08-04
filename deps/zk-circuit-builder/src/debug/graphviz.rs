@@ -78,6 +78,9 @@ pub fn make_graph<'a>(
             GateKind::Extract(_, idx) => write!(label, "Extract {}", idx)?,
             GateKind::Gadget(gk, _) => write!(label, "Gadget {}", gk.name())?,
             GateKind::Call(call) => write!(label, "Call {}", call.func.name)?,
+
+            // TODO: May be name for swich as other
+            GateKind::Switch(.. ) => write!(label, "Switch")?, 
         }
         write!(label, " (")?;
         write_ty(&mut label, w.ty)?;
@@ -115,6 +118,8 @@ pub fn make_graph<'a>(
             GateKind::Pack(ws) |
             GateKind::Gadget(_, ws) => write_edges(ws)?,
             GateKind::Call(call) => write_edges(call.args)?,
+
+            GateKind::Switch(_, _ , _) => unimplemented!(),
         }
     }
 

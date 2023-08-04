@@ -828,6 +828,9 @@ impl<'w, S: Sink> Backend<'w, S> {
 
             // `Call` should be handled by the case above.
             GateKind::Call(..) => unreachable!(),
+            
+            // Making the backend unimplemented for time being
+            GateKind::Switch(..) => unimplemented!(),
         }
     }
 

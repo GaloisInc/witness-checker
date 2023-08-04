@@ -1535,6 +1535,10 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
         GateKind::Pack(ws) |
         GateKind::Gadget(_, ws) => WireDeps::many(ws),
         GateKind::Call(c) => WireDeps::many(c.args),
+
+        // Add match for Switch
+        // Deps : switch constraint, function input
+        GateKind::Switch(c, _, a) => WireDeps::two(c, a),
     }
 }
 
@@ -2105,6 +2109,35 @@ pub enum GateKind<'a> {
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
     /// A function call.  See `CallData` for details.
     Call(Call<'a>),
+
+
+    //Switch(Vec<Wire>, Vec<(Vec<Wire>,Function)>)
+
+    // Can have a siingle wire...
+    // types checks
+    // function return types
+    // eval.rs --> logic for the plugin
+    // New constructor
+    Switch(Wire<'a>, &'a [(Bits<'a>, Function<'a>)], Wire<'a>),
+
+    // Old constructor
+    //Switch(&'a [Wire<'a>], &'a [(&'a [Wire<'a>], Function<'a>)])
+    // Make it compile
+    // ADDING THE CASE FOR SWITCH AND TEST IT
+    // ABOVE US CHEESECLOTH, BELOW BACKEND -> STUBOUT
+    // UPDATE THE SWITCH IN CLEAR TEXT
+    // MODIFY THE CALC_STEP TO USE SWITCH
+    // RUN TO SEE TEST.. CALC_STEP USES SWITCH.. INTERPRETER.. BACKEND..UNIMPLEMENTED
+
+    // Galois_disjunction_v0.switch.strict : N -> [(F^N, fn: F^input -> F^output)] -> (fn : F^N -> F^input -> F^output)
+    //(
+    //  galois_disjunction_v0, 
+    //   switch, 
+    //   <permissiveness>,
+    //    <condition_0>, <func_name_0>, 
+    //    ..., 
+    //    <condition_n>, <func_name_n>
+    //    )
 }
 
 impl<'a> Gate<'a> {
@@ -2136,7 +2169,14 @@ impl<'a> GateKind<'a> {
                 k.typecheck(c.as_base(), &tys)
             },
             GateKind::Call(c) => c.func.result_wire.ty,
+
+            GateKind::Switch(_, branches, _) =>  {
+                // Assume that branches non-empty
+                let (_, f) = branches.iter().next().unwrap(); // grab the first branch
+                // Assume that all branches have same type: F^input -> F^ouput
+                f.result_wire.ty
         }
+    }
     }
 
     pub fn is_lit(&self) -> bool {
@@ -2199,6 +2239,8 @@ impl<'a> GateKind<'a> {
             Extract(_, _) => "Extract",
             Gadget(_, _) => "Gadget",
             Call(_) => "Call",
+
+            Switch(_, _, _) => "Switch", 
         }
     }
 }
@@ -2264,6 +2306,20 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 Gadget(gk, ws)
             },
             Call(c) => Call(v.visit(c)),
+
+            Switch(c, bs, a) => todo!(),
+            
+            // {
+
+            //     let lits = bs.iter().map(|&(bits, _)| v.visit(bits)).collect::Vec<_>>();
+            //     let fs = bs.iter().map(|&(_, f)| v.visit(f)).collect::Vec<_>>();
+            //     let lits = v.new_circuit().intern_bits(&lits);
+            //     let fs = v.new_circuit().intern_wire_list(&fs); // intern_functions?
+            //     Switch(v.visit(c), , v.visit(a))
+
+            //     // zip together &'a and make type expected by Switch...
+            // look for call and modify accrodingly..
+            // }
         }
     }
 }
