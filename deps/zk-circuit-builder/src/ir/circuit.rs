@@ -2328,12 +2328,12 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 
                 
                 let lits: Vec<Bits<'_>>  = bs.iter().map(|&(bits, _)| v.visit(bits)).collect::<Vec<_>>();
-                let fs: Vec<Function<'_>> =  bs.iter().map(|&(_, f)| v.visit(f)).collect::<Vec<_>>();
+                let fs: Vec<Function<'_>> =  bs.iter().map(|&(_, f)| v.visit_function(f)).collect::<Vec<_>>();
                 
 
                 let bs: Vec<(Bits<'_>, Function<'_>)> = lits.iter().cloned().zip(fs.iter().cloned()).collect::<Vec<_>>();
                 
-
+                // Had to introduce the `intern_bits_func_list` to get arround the syntax error, I probabily think the error is because of lifetimes.
                 Switch(v.visit(c), v.new_circuit().intern_bits_func_list(&bs) , v.visit(a))
             },
         }

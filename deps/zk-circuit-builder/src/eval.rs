@@ -2,6 +2,7 @@ use std::any::Any;
 use std::cmp;
 use std::collections::{HashMap, BTreeMap};
 use std::convert::TryFrom;
+use std::env::args;
 use std::iter;
 use std::ptr;
 use num_bigint::BigInt;
@@ -870,7 +871,7 @@ fn eval_gate_inner<'a, 'b>(
                 TyKind::Bundle(btys) => btys,
                 _ => panic!("expected Extract input to have Bundle type"),
             };
-            let pos = btys.digit_offset(i);;
+            let pos = btys.digit_offset(i);
             let end = pos + btys.ty(i).digits();
             let end = cmp::min(end, w_bits.0.len());
             let bits = c.intern_bits(&w_bits.0[pos .. end]);
@@ -906,7 +907,23 @@ fn eval_gate_inner<'a, 'b>(
         //   let r = find_appropriate_branch(cond, rs)
         //   r
         // }
-        GateKind::Switch(_, _ , _) => unimplemented!(),
+        GateKind::Switch(cond, branches , Input) => {
+        
+
+        let rs = branches.iter().map(|&(b, f)| ).collect();
+        
+        
+        let (cond_val, cond_sec) = ecx.get_value(cond)?;
+
+        for (cond_, func) in branches{
+            if cond_val == *cond_{
+                
+            }
+        }
+
+        (branches[0].0, 0==0)
+
+        },
     })
 }
 
@@ -929,6 +946,23 @@ fn eval_call<'a, 'b>(
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
+fn eval_func<'a, 'b>(
+    c: &CircuitBase<'a>,
+    outer_ecx: &'b impl EvalContext<'a, 'b>,
+    func: Function<'a>,
+    input: Wire<'_>
+) -> Result<(Bits<'a>, bool), Error<'a>> {
+
+    let arg_bits= vec![outer_ecx.get_value(input)].into_iter().collect::<Result<Vec<_>, _>>()?;
+
+    // how to resolve project_witness, project_deps variables..
+    
+    let mut inner_eval = outer_ecx.enter_function(c, arg_bits, _ , _);
+
+    // EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire);
+    
+}
+    
 
 pub fn eval_gate<'a, S: SecretEvaluator<'a> + Default>(
     c: &CircuitBase<'a>,
