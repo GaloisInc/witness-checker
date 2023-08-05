@@ -93,6 +93,7 @@ pub struct CircuitBase<'a> {
     intern_ty: RefCell<HashSet<&'a TyKind<'a>>>,
     intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
+    intern_bits_func_list: RefCell<HashSet<&'a [(Bits<'a>, Function<'a>)]>>,
     intern_gadget_kind: RefCell<HashSet<&'a HashDynGadgetKind<'a>>>,
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
@@ -113,6 +114,7 @@ impl<'a> CircuitBase<'a> {
             intern_ty: RefCell::new(HashSet::new()),
             intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
+            intern_bits_func_list: RefCell::new(HashSet::new()),
             intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
@@ -264,6 +266,18 @@ impl<'a> CircuitBase<'a> {
                 let ty_list = self.arena().alloc_slice_copy(ty_list);
                 intern.insert(ty_list);
                 ty_list
+            },
+        }
+    }
+
+    fn intern_bits_func_list(&self, bits_list: &[(Bits<'a>, Function<'a>)]) -> &'a [(Bits<'a>, Function<'a>)] {
+        let mut intern = self.intern_bits_func_list.borrow_mut();
+        match intern.get(bits_list) {
+            Some(&x) => x,
+            None => {
+                let bits_list = self.arena().alloc_slice_copy(bits_list);
+                intern.insert(bits_list);
+                bits_list
             },
         }
     }
@@ -448,7 +462,7 @@ impl<'a> CircuitBase<'a> {
         let CircuitBase {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
-            ref intern_gadget_kind, ref intern_str, ref intern_bits,
+            ref intern_bits_func_list, ref intern_gadget_kind, ref intern_str, ref intern_bits,
             ref current_label,
             is_prover,
             allow_functions,
@@ -468,6 +482,7 @@ impl<'a> CircuitBase<'a> {
             intern_ty: RefCell::new(intern_ty.take()),
             intern_wire_list: RefCell::new(intern_wire_list.take()),
             intern_ty_list: RefCell::new(intern_ty_list.take()),
+            intern_bits_func_list: RefCell::new(intern_bits_func_list.take()),
             intern_gadget_kind: RefCell::new(intern_gadget_kind.take()),
             intern_str: RefCell::new(intern_str.take()),
             intern_bits: RefCell::new(intern_bits.take()),
@@ -2119,6 +2134,8 @@ pub enum GateKind<'a> {
     // eval.rs --> logic for the plugin
     // New constructor
     Switch(Wire<'a>, &'a [(Bits<'a>, Function<'a>)], Wire<'a>),
+    //Switch(Wire<'a>, &'a [Bits<'a>], Wire<'a>),
+
 
     // Old constructor
     //Switch(&'a [Wire<'a>], &'a [(&'a [Wire<'a>], Function<'a>)])
@@ -2307,19 +2324,18 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
             },
             Call(c) => Call(v.visit(c)),
 
-            Switch(c, bs, a) => todo!(),
-            
-            // {
+            Switch(c, bs, a) => {
+                
+                
+                let lits  = bs.iter().map(|&(bits, _)| v.visit(bits)).collect::<Vec<_>>();
+                let fs =  bs.iter().map(|&(_, f)| v.visit(f)).collect::<Vec<_>>();
+                
 
-            //     let lits = bs.iter().map(|&(bits, _)| v.visit(bits)).collect::Vec<_>>();
-            //     let fs = bs.iter().map(|&(_, f)| v.visit(f)).collect::Vec<_>>();
-            //     let lits = v.new_circuit().intern_bits(&lits);
-            //     let fs = v.new_circuit().intern_wire_list(&fs); // intern_functions?
-            //     Switch(v.visit(c), , v.visit(a))
+                let bs= lits.iter().cloned().zip(fs.iter().cloned()).collect::<Vec<_>>();
+                
 
-            //     // zip together &'a and make type expected by Switch...
-            // look for call and modify accrodingly..
-            // }
+                Switch(v.visit(c), v.new_circuit().intern_bits_func_list(&bs) , v.visit(a))
+            },
         }
     }
 }
