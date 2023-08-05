@@ -119,7 +119,7 @@ pub fn make_graph<'a>(
             GateKind::Gadget(_, ws) => write_edges(ws)?,
             GateKind::Call(call) => write_edges(call.args)?,
 
-            GateKind::Switch(_, _ , _) => unimplemented!(),
+            GateKind::Switch(c, branches , I) => todo!(),
         }
     }
 
