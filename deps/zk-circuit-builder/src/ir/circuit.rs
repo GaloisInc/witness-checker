@@ -1452,6 +1452,7 @@ enum WireDepsInner<'a> {
     Small(Range<u8>, [Option<Wire<'a>>; 3]),
     Large(slice::Iter<'a, Wire<'a>>),
     Large2(iter::Chain<slice::Iter<'a, Wire<'a>>, slice::Iter<'a, Wire<'a>>>),
+    SmallLarge(Wire<'a>,slice::Iter<'a, Wire<'a>>)
 }
 
 impl<'a> WireDeps<'a> {
@@ -1488,6 +1489,13 @@ impl<'a> WireDeps<'a> {
             inner: WireDepsInner::Large2(ws1.iter().chain(ws2.iter())),
         }
     }
+
+    fn small_many(ws1: Wire<'a>,  ws2: &'a [Wire<'a>]) -> WireDeps<'a> 
+    {
+        WireDeps {
+            inner: WireDepsInner::SmallLarge(ws1, ws2.iter()),
+        }
+    }
 }
 
 impl<'a> Iterator for WireDepsInner<'a> {
@@ -1500,6 +1508,19 @@ impl<'a> Iterator for WireDepsInner<'a> {
             },
             WireDepsInner::Large(ref mut it) => it.next().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next().cloned(),
+            
+            // Added
+            WireDepsInner::SmallLarge(ref ws1,  ref mut it) =>
+            {
+                let mut i = 0;
+                if i==0{
+                    i+=1;
+                    return Some(*ws1);
+                }
+                else {
+                    return it.next().cloned();
+                }  
+            }
         }
     }
 }
@@ -1513,6 +1534,19 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
             },
             WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next_back().cloned(),
+            
+            // Added
+            WireDepsInner::SmallLarge(ref ws1,  ref mut it) =>
+            {
+                let mut i = 0;
+                if i==0{
+                    i+=1;
+                    return Some(*ws1);
+                }
+                else {
+                    return it.next().cloned();
+                }  
+            }
         }
     }
 }
@@ -1553,14 +1587,16 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
 
         // Add match for Switch
         // Deps : switch constraint, function input
-        GateKind::Switch(c, _, a) => WireDeps::two(c, a),
+        GateKind::Switch(c, _, args) => {
+            WireDeps::small_many(c, args)
+        },
     }
 }
 
 pub fn wire_and_secret_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
     gate_and_secret_deps(w.kind)
 }
-
+ 
 pub fn gate_and_secret_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
     match gk {
         GateKind::Secret(s) => WireDeps::many(s.deps),
@@ -2133,7 +2169,7 @@ pub enum GateKind<'a> {
     // function return types
     // eval.rs --> logic for the plugin
     // New constructor
-    Switch(Wire<'a>, &'a [(Bits<'a>, Function<'a>)], Wire<'a>),
+    Switch(Wire<'a>, &'a [(Bits<'a>, Call<'a>)], &'a [Wire<'a>]),
     //Switch(Wire<'a>, &'a [Bits<'a>], Wire<'a>),
 
 
@@ -2324,17 +2360,23 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
             },
             Call(c) => Call(v.visit(c)),
 
-            Switch(c, bs, a) => {
+            Switch(c, bs, args) => {
                 
                 
                 let lits: Vec<Bits<'_>>  = bs.iter().map(|&(bits, _)| v.visit(bits)).collect::<Vec<_>>();
-                let fs: Vec<Function<'_>> =  bs.iter().map(|&(_, f)| v.visit_function(f)).collect::<Vec<_>>();
+                // Use visit instead of visiti fucntion
+                let fs  =  bs.iter().map(|&(_, f)| v.visit(f)).collect::<Vec<_>>();
                 
 
-                let bs: Vec<(Bits<'_>, Function<'_>)> = lits.iter().cloned().zip(fs.iter().cloned()).collect::<Vec<_>>();
+                let bs  = lits.iter().cloned().zip(fs.iter().cloned()).collect::<Vec<_>>();
                 
+                let args = args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+                let args = v.new_circuit().intern_wire_list(&args);
                 // Had to introduce the `intern_bits_func_list` to get arround the syntax error, I probabily think the error is because of lifetimes.
-                Switch(v.visit(c), v.new_circuit().intern_bits_func_list(&bs) , v.visit(a))
+
+                //Switch(v.visit(c), v.new_circuit().intern_bits_func_list(&bs) , args)
+                Switch(v.visit(c), &bs, args)
+
             },
         }
     }

@@ -2,7 +2,6 @@ use std::any::Any;
 use std::cmp;
 use std::collections::{HashMap, BTreeMap};
 use std::convert::TryFrom;
-use std::env::args;
 use std::iter;
 use std::ptr;
 use num_bigint::BigInt;
@@ -907,14 +906,48 @@ fn eval_gate_inner<'a, 'b>(
         //   let r = find_appropriate_branch(cond, rs)
         //   r
         // }
-        GateKind::Switch(cond, branches , Input) => {
-        
 
-        let rs = branches.iter().map(|&(b, f)| ).collect();
+        GateKind::Switch(cond, branches , Input) => {
+            if cond.ty.is_integer(){
+                match ecx.get_int_value(cond)
+                {
+                    Ok((w_val, w_sec)) => {
+
+                        // Go over all the branches and return on valid match
+                        for (switch_val, call) in branches{
+                                // TODO shall we convert into int and compare
+                                let switch_val = switch_val.to_bigint(cond.ty);
+                                if w_val == switch_val{
+                                    return eval_call(c, ecx, *call);
+                                }
+                                else{
+                                    print!("Branch not met for {switch_val}");
+                                }
+                        }
+                        // default case
+                        panic!("No cond value mathced.. default case hit") 
+                    },
+                    Err(e) =>{
+                        panic!("Error while converting the cond wire into int value");
+                    }   
+                }
+        }
+        else {
+            panic!("Cannot apply Switch on non-int cond wire {:?}", cond);
+        }
+        },
         
+        /*
+        {
+        
+        // First evaluate all the branches, to make the execution constant-time..
+        let rs = branches.iter().map(|&(_, f)| eval_func(c, ecx, f, Input)).collect()?;
+        
+        // Second choose the correct branch from the evaluated function branches
         
         let (cond_val, cond_sec) = ecx.get_value(cond)?;
-
+        
+        // match the corresponding branch based on the `cond` value
         for (cond_, func) in branches{
             if cond_val == *cond_{
                 
@@ -924,6 +957,7 @@ fn eval_gate_inner<'a, 'b>(
         (branches[0].0, 0==0)
 
         },
+        */
     })
 }
 
@@ -946,6 +980,9 @@ fn eval_call<'a, 'b>(
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
+// Prepare functin, project witnees, project deps, call.. args shared..
+
+/*
 fn eval_func<'a, 'b>(
     c: &CircuitBase<'a>,
     outer_ecx: &'b impl EvalContext<'a, 'b>,
@@ -953,16 +990,36 @@ fn eval_func<'a, 'b>(
     input: Wire<'_>
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
 
-    let arg_bits= vec![outer_ecx.get_value(input)].into_iter().collect::<Result<Vec<_>, _>>()?;
+    let arg_bits= vec![outer_ecx.get_value(input)?];
 
-    // how to resolve project_witness, project_deps variables..
+    // how to resolve project_witness, project_deps variables??
     
-    let mut inner_eval = outer_ecx.enter_function(c, arg_bits, _ , _);
+    let mut inner_eval = outer_ecx.enter_function_without_deps(c, arg_bits, func);
 
-    // EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire);
+    //EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire);
+
+
+    // let arg_bits = call.args.iter().map(|&w| {
+    //     outer_ecx.get_value(w)
+    // }).collect::<Result<Vec<_>, _>>()?;
+
+    let arg_bits= vec![outer_ecx.get_value(input)?];
+
+    let dep_bits = call.project_deps.iter().map(|&w| {
+        outer_ecx.get_value(w).map(|(bits, sec)| bits)
+    }).collect::<Result<Vec<_>, _>>()?;
+
+    let mut inner_eval = outer_ecx.enter_function(
+        c, arg_bits, call.project_witness, &dep_bits);
+    EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire);
+
+
+    Ok(arg_bits[0])
     
 }
-    
+*/
+
+
 
 pub fn eval_gate<'a, S: SecretEvaluator<'a> + Default>(
     c: &CircuitBase<'a>,
