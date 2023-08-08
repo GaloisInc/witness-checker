@@ -900,11 +900,11 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::Call(call) => eval_call(c, ecx, call)?,
 
-        // Not sure what needs to be done here..
+        
         // Switch(cond, bs, a) => {
-        //   let rs = map(bs, |(lit, f)| (lit, eval_call(c, ecx, Call(f, a))));
+        //   find appropriate branch and evaluate it.. Don't worry about constant-time for time being
         //   let r = find_appropriate_branch(cond, rs)
-        //   r
+        //   evaluate(r)
         // }
 
         GateKind::Switch(cond, branches , inputs) => {
