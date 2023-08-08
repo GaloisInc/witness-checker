@@ -399,6 +399,22 @@ impl<'a> CircuitBase<'a> {
                     assert_eq!(ty, arg.ty);
                 }
             }
+
+            // Type check for Switch
+            GateKind::Switch(_,bs , input) => {
+                
+                assert!(self.as_base().allow_functions, "function calls are not allowd in this Circuit");
+
+                for (_, c) in bs{
+                    // checking for len of arguments
+                    assert_eq!(c.func.arg_tys.len(), input.len(), "Number of arguments are not equal");
+                    
+                    // checking for types
+                    for (&ty, &arg) in c.func.arg_tys.iter().zip(input.iter()) {
+                        assert_eq!(ty, arg.ty);
+                }
+            }
+            }
             _ => {},
         }
 
