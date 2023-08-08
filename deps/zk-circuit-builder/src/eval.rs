@@ -907,7 +907,7 @@ fn eval_gate_inner<'a, 'b>(
         //   r
         // }
 
-        GateKind::Switch(cond, branches , Input) => {
+        GateKind::Switch(cond, branches , inputs) => {
             if cond.ty.is_integer(){
                 match ecx.get_int_value(cond)
                 {
@@ -918,6 +918,18 @@ fn eval_gate_inner<'a, 'b>(
                                 // TODO shall we convert into int and compare
                                 let switch_val = switch_val.to_bigint(cond.ty);
                                 if w_val == switch_val{
+                                    
+                                    // let mut temp_call = CallData {
+                                    //     func: call.func,
+                                    //     args: inputs,
+                                    //     project_witness: call.project_witness,
+                                    //     project_deps: call.project_deps,
+                                    // };
+                                    
+                                    //call.args = inputs;
+                                    //let mut x = call.clone();
+                                    //x.args = inputs;
+                                    
                                     return eval_call(c, ecx, *call);
                                 }
                                 else{

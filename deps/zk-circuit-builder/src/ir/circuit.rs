@@ -402,7 +402,7 @@ impl<'a> CircuitBase<'a> {
 
             // Type check for Switch
             GateKind::Switch(_,bs , input) => {
-                
+
                 assert!(self.as_base().allow_functions, "function calls are not allowd in this Circuit");
 
                 for (_, c) in bs{
@@ -412,8 +412,8 @@ impl<'a> CircuitBase<'a> {
                     // checking for types
                     for (&ty, &arg) in c.func.arg_tys.iter().zip(input.iter()) {
                         assert_eq!(ty, arg.ty);
+                    }
                 }
-            }
             }
             _ => {},
         }
