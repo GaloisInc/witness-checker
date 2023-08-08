@@ -2192,27 +2192,6 @@ pub enum GateKind<'a> {
     /// A function call.  See `CallData` for details.
     Call(Call<'a>),
 
-
-    //Switch(Vec<Wire>, Vec<(Vec<Wire>,Function)>)
-
-    // Can have a siingle wire...
-    // types checks
-    // function return types
-    // eval.rs --> logic for the plugin
-    // New constructor
-    Switch(Wire<'a>, &'a [(Bits<'a>, Call<'a>)], &'a [Wire<'a>]),
-    //Switch(Wire<'a>, &'a [Bits<'a>], Wire<'a>),
-
-
-    // Old constructor
-    //Switch(&'a [Wire<'a>], &'a [(&'a [Wire<'a>], Function<'a>)])
-    // Make it compile
-    // ADDING THE CASE FOR SWITCH AND TEST IT
-    // ABOVE US CHEESECLOTH, BELOW BACKEND -> STUBOUT
-    // UPDATE THE SWITCH IN CLEAR TEXT
-    // MODIFY THE CALC_STEP TO USE SWITCH
-    // RUN TO SEE TEST.. CALC_STEP USES SWITCH.. INTERPRETER.. BACKEND..UNIMPLEMENTED
-
     // Galois_disjunction_v0.switch.strict : N -> [(F^N, fn: F^input -> F^output)] -> (fn : F^N -> F^input -> F^output)
     //(
     //  galois_disjunction_v0, 
@@ -2222,6 +2201,12 @@ pub enum GateKind<'a> {
     //    ..., 
     //    <condition_n>, <func_name_n>
     //    )
+
+    Switch(Wire<'a>, &'a [(Bits<'a>, Call<'a>)], &'a [Wire<'a>]),
+    //Switch(Wire<'a>, &'a [(Bits<'a>, Function<'a>)], &'a [Wire<'a>]),
+    //Switch(Wire<'a>, &'a [Bits<'a>], Wire<'a>),
+
+    
 }
 
 impl<'a> Gate<'a> {
