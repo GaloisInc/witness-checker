@@ -915,22 +915,11 @@ fn eval_gate_inner<'a, 'b>(
 
                         // Go over all the branches and return on valid match
                         for (switch_val, call) in branches{
-                                // TODO shall we convert into int and compare
                                 let switch_val = switch_val.to_bigint(cond.ty);
                                 if w_val == switch_val{
                                     
-                                    // let mut temp_call = CallData {
-                                    //     func: call.func,
-                                    //     args: inputs,
-                                    //     project_witness: call.project_witness,
-                                    //     project_deps: call.project_deps,
-                                    // };
-                                    
-                                    //call.args = inputs;
-                                    //let mut x = call.clone();
-                                    //x.args = inputs;
-                                    
-                                    return eval_call(c, ecx, *call);
+                                    //return eval_call(c, ecx, *call);
+                                    return eval_switch_call(c, ecx, *call, inputs);
                                 }
                                 else{
                                     print!("Branch not met for {switch_val}");
@@ -989,6 +978,34 @@ fn eval_call<'a, 'b>(
 
     let mut inner_eval = outer_ecx.enter_function(
         c, arg_bits, call.project_witness, &dep_bits);
+    EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
+}
+
+// Trying to mimic the above `eval_call` function
+fn eval_switch_call<'a, 'b>(
+    c: &CircuitBase<'a>,
+    outer_ecx: &'b impl EvalContext<'a, 'b>,
+    call: Call<'a>,
+    explicit_args:  &'a [Wire<'a>],
+) -> Result<(Bits<'a>, bool), Error<'a>> {
+    let func = call.func;
+
+    // let arg_bits = call.args.iter().map(|&w| {
+    //     outer_ecx.get_value(w)
+    // }).collect::<Result<Vec<_>, _>>()?;
+
+    // Using the explicit provided args instead of the ones in Call() struct
+    let explicit_arg_bits = explicit_args.iter().map(|&w| {
+        outer_ecx.get_value(w)
+    }).collect::<Result<Vec<_>, _>>()?;
+
+    let dep_bits = call.project_deps.iter().map(|&w| {
+        outer_ecx.get_value(w).map(|(bits, sec)| bits)
+    }).collect::<Result<Vec<_>, _>>()?;
+
+    let mut inner_eval = outer_ecx.enter_function(
+        c, explicit_arg_bits, call.project_witness, &dep_bits);
+
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
