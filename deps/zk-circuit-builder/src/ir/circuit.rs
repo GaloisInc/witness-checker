@@ -94,6 +94,7 @@ pub struct CircuitBase<'a> {
     intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
     intern_bits_func_list: RefCell<HashSet<&'a [(Bits<'a>, Function<'a>)]>>,
+    intern_bits_call_list: RefCell<HashSet<&'a [(Bits<'a>, Call<'a>)]>>,
     intern_gadget_kind: RefCell<HashSet<&'a HashDynGadgetKind<'a>>>,
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
@@ -115,6 +116,7 @@ impl<'a> CircuitBase<'a> {
             intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
             intern_bits_func_list: RefCell::new(HashSet::new()),
+            intern_bits_call_list: RefCell::new(HashSet::new()),
             intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
@@ -272,6 +274,18 @@ impl<'a> CircuitBase<'a> {
 
     fn intern_bits_func_list(&self, bits_list: &[(Bits<'a>, Function<'a>)]) -> &'a [(Bits<'a>, Function<'a>)] {
         let mut intern = self.intern_bits_func_list.borrow_mut();
+        match intern.get(bits_list) {
+            Some(&x) => x,
+            None => {
+                let bits_list = self.arena().alloc_slice_copy(bits_list);
+                intern.insert(bits_list);
+                bits_list
+            },
+        }
+    }
+
+    fn intern_bits_call_list(&self, bits_list: &[(Bits<'a>, Call<'a>)]) -> &'a [(Bits<'a>, Call<'a>)] {
+        let mut intern = self.intern_bits_call_list.borrow_mut();
         match intern.get(bits_list) {
             Some(&x) => x,
             None => {
@@ -462,7 +476,7 @@ impl<'a> CircuitBase<'a> {
         let CircuitBase {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
-            ref intern_bits_func_list, ref intern_gadget_kind, ref intern_str, ref intern_bits,
+            ref intern_bits_func_list, ref intern_bits_call_list, ref intern_gadget_kind, ref intern_str, ref intern_bits,
             ref current_label,
             is_prover,
             allow_functions,
@@ -483,6 +497,7 @@ impl<'a> CircuitBase<'a> {
             intern_wire_list: RefCell::new(intern_wire_list.take()),
             intern_ty_list: RefCell::new(intern_ty_list.take()),
             intern_bits_func_list: RefCell::new(intern_bits_func_list.take()),
+            intern_bits_call_list: RefCell::new(intern_bits_call_list.take()),
             intern_gadget_kind: RefCell::new(intern_gadget_kind.take()),
             intern_str: RefCell::new(intern_str.take()),
             intern_bits: RefCell::new(intern_bits.take()),
@@ -2227,7 +2242,7 @@ impl<'a> GateKind<'a> {
                 // Assume that branches non-empty
                 let (_, f) = branches.iter().next().unwrap(); // grab the first branch
                 // Assume that all branches have same type: F^input -> F^ouput
-                f.result_wire.ty
+                f.func.result_wire.ty
         }
     }
     }
@@ -2375,7 +2390,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 // Had to introduce the `intern_bits_func_list` to get arround the syntax error, I probabily think the error is because of lifetimes.
 
                 //Switch(v.visit(c), v.new_circuit().intern_bits_func_list(&bs) , args)
-                Switch(v.visit(c), &bs, args)
+                Switch(v.visit(c),  v.new_circuit().intern_bits_call_list(&bs), args)
 
             },
         }
