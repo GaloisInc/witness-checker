@@ -11,7 +11,7 @@ use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
-    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, Call, SecretProjectFn,
+    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, Call, SecretProjectFn, SwitchFunction,
 };
 use crate::util::CowBox;
 
@@ -1001,10 +1001,10 @@ fn eval_call<'a, 'b>(
 fn eval_switch_call<'a, 'b>(
     c: &CircuitBase<'a>,
     outer_ecx: &'b impl EvalContext<'a, 'b>,
-    call: Call<'a>,
+    switch_function: SwitchFunction<'a>,
     explicit_args:  &'a [Wire<'a>],
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    let func = call.func;
+    let func = switch_function.func;
 
     // let arg_bits = call.args.iter().map(|&w| {
     //     outer_ecx.get_value(w)
@@ -1017,13 +1017,13 @@ fn eval_switch_call<'a, 'b>(
 
     
 
-    let dep_bits = call.project_deps.iter().map(|&w| {
+    let dep_bits = switch_function.project_deps.iter().map(|&w| {
         outer_ecx.get_value(w).map(|(bits, sec)| bits)
     }).collect::<Result<Vec<_>, _>>()?;
 
     
     let mut inner_eval = outer_ecx.enter_function(
-        c, explicit_arg_bits, call.project_witness, &dep_bits);
+        c, explicit_arg_bits, switch_function.project_witness, &dep_bits);
 
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }

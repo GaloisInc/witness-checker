@@ -145,9 +145,13 @@ fn function_gate_basic_1() {
         c.lit(ty_i32, 2),
         c.lit(ty_i32, 3),
     ];
-    let call1 = c.define_call(func1, &args1, &[], |_, &(), _| (&()).into());
+    //let call1 = c.define_call(func1, &args1, &[], |_, &(), _| (&()).into());
 
-    let call2 = c.define_call(func2, &args1, &[], |_, &(), _| (&()).into());
+    //let call2 = c.define_call(func2, &args1, &[], |_, &(), _| (&()).into());
+
+    let call1 = c.define_switch_function(func1, &[], |_, &(), _| (&()).into());
+
+    let call2 = c.define_switch_function(func2, &[], |_, &(), _| (&()).into());
 
     let ty_bits = Ty::int(32);
     //let ty_bits = Ty::raw_bits();
