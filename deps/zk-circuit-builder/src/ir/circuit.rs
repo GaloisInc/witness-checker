@@ -82,6 +82,7 @@ pub struct Arenas {
     arena: UnsafeCell<Bump>,
 }
 
+
 pub struct CircuitBase<'a> {
     arenas: &'a Arenas,
     // TODO: clean up interning
@@ -391,6 +392,8 @@ impl<'a> CircuitBase<'a> {
             GateKind::Call(c) => {
                 // We allow function definitions, but not calls, which simplifies some logic in the
                 // MicroRAM circuit builder.
+
+                println!("Coming here");
                 assert!(self.as_base().allow_functions,
                     "function calls are not allowed in this Circuit");
 
@@ -402,6 +405,8 @@ impl<'a> CircuitBase<'a> {
 
             // Type check for Switch
             GateKind::Switch(_,bs , input) => {
+
+                println!("Coming inside switch also");
 
                 assert!(self.as_base().allow_functions, "function calls are not allowd in this Circuit");
 
@@ -952,6 +957,11 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Lit(val, ty))
     }
 
+    fn lit_<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
+        let x =  self.bits(ty, val);
+        x
+    }
+
     fn secret(&self, secret: Secret<'a>) -> Wire<'a> {
         self.gate(GateKind::Secret(secret))
     }
@@ -1124,6 +1134,43 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Call(call))
     }
 
+
+    fn define_call<W, W2, F>(
+        &self,
+        func: Function<'a>,
+        args: &'a [Wire<'a>],
+        project_deps: &'a [Wire<'a>],
+        project_witness: F,
+    ) -> Call<'a>
+    where
+        W: 'static,
+        W2: 'static,
+        F: for<'b, 's> Fn(&CircuitBase<'b>, &'s W, &[Bits<'b>]) -> CowBox<'s, W2>,
+        F: Sized + Copy + 'static,
+    {
+        debug_assert!(TypeId::of::<W>() == self.as_base().witness_type.get() ||
+            TypeId::of::<W>() == TypeId::of::<()>());
+        debug_assert_eq!(TypeId::of::<W2>(), func.witness_type);
+        let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
+        let call = self.as_base().alloc_call(CallData {
+            func,
+            args,
+            project_witness,
+            project_deps,
+        });
+        call
+        //self.gate(GateKind::Call(call))
+    }
+
+    fn switch(
+        &self,
+        cond: Wire<'a>,
+        branches: &'a [(Bits<'a>, Call<'a>)],
+        input_args: &'a [Wire<'a>]
+    ) -> Wire<'a>
+    {
+        self.gate(GateKind::Switch(cond, branches, input_args))
+    }
 
     /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
     /// returns a wire representing the output of the function.
@@ -1483,7 +1530,7 @@ enum WireDepsInner<'a> {
     Small(Range<u8>, [Option<Wire<'a>>; 3]),
     Large(slice::Iter<'a, Wire<'a>>),
     Large2(iter::Chain<slice::Iter<'a, Wire<'a>>, slice::Iter<'a, Wire<'a>>>),
-    SmallLarge(Wire<'a>,slice::Iter<'a, Wire<'a>>)
+    OneMany(iter::Chain<iter::Once<Wire<'a>>, iter::Cloned<slice::Iter<'a, Wire<'a>>>>)
 }
 
 impl<'a> WireDeps<'a> {
@@ -1521,16 +1568,50 @@ impl<'a> WireDeps<'a> {
         }
     }
 
-    fn small_many(ws1: Wire<'a>,  ws2: &'a [Wire<'a>]) -> WireDeps<'a> 
+    fn one_many(ws1: Wire<'a>,  ws2: &'a [Wire<'a>]) -> WireDeps<'a> 
     {
+        
+        //  WireDeps {
+        //      inner: WireDepsInner::Large(ws2.iter()),
+        // }
+
+        
+        let mut one = iter::once(ws1);
+        //let mut many = ws2.iter().map(|&x|x).clone();
+        let mut many = ws2.iter().cloned();
+        
+        //let temp = many.iter().clone();
+
+        let mut combine = one.chain(many);
+        
+    //     WireDeps {
+    //         inner: WireDepsInner::SmallLarge(false, ws1, ws2.iter()),
+    //    }
         WireDeps {
-            inner: WireDepsInner::SmallLarge(ws1, ws2.iter()),
+            inner: WireDepsInner::OneMany(combine)
         }
+
+         
+
+        //  WireDeps {
+        //     inner: WireDepsInner::Large2(slice::from_ref(ws1).iter().chain(ws2.iter())),
+        // }
+
+
+
+
+
+        //Self::many2(&[ws1],ws2)
+        // WireDeps {
+        //     inner: WireDepsInner::Large2([ws1].iter().chain(ws2.iter())),
+        // }
+
     }
 }
 
 impl<'a> Iterator for WireDepsInner<'a> {
     type Item = Wire<'a>;
+    
     fn next(&mut self) -> Option<Wire<'a>> {
         match *self {
             WireDepsInner::Small(ref mut range, ref arr) => {
@@ -1540,18 +1621,28 @@ impl<'a> Iterator for WireDepsInner<'a> {
             WireDepsInner::Large(ref mut it) => it.next().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next().cloned(),
             
+            
             // Added
-            WireDepsInner::SmallLarge(ref ws1,  ref mut it) =>
+            WireDepsInner::OneMany(ref mut it) =>
+            {
+                it.next()
+            }
+            /*
+            WireDepsInner::SmallLarge(ref mut flag, ref mut ws1,  ref mut it) =>
             {
                 let mut i = 0;
+                //println!("Coming into next part");
                 if i==0{
+                    println!("Coming into if part");
                     i+=1;
                     return Some(*ws1);
+
                 }
                 else {
                     return it.next().cloned();
                 }  
             }
+            */
         }
     }
 }
@@ -1566,9 +1657,15 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
             WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next_back().cloned(),
             
-            // Added
-            WireDepsInner::SmallLarge(ref ws1,  ref mut it) =>
+            WireDepsInner::OneMany(ref mut it) =>
             {
+                it.next_back()
+            }
+            // Added
+            /*
+            WireDepsInner::SmallLarge(_,  ref mut it) =>
+            {
+                /*
                 let mut i = 0;
                 if i==0{
                     i+=1;
@@ -1576,8 +1673,20 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
                 }
                 else {
                     return it.next().cloned();
-                }  
+                } 
+                */
+
+                // if ws1.is_valid(){
+                //     // Consume wire1 and return it
+                // let wire = std::mem::replace(&mut self.ws1, Wire::default());
+                // Some(wire)
+                // } 
+                // else {
+                //     it.next_back().cloned(),
+                // }
+                it.next_back().cloned()
             }
+            */
         }
     }
 }
@@ -1619,7 +1728,33 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
         // Add match for Switch
         // Deps : switch constraint, function input
         GateKind::Switch(c, _, args) => {
-            WireDeps::small_many(c, args)
+            /*
+            println!("Coming into deps");
+            let mut x = vec![c];
+            for &i in args{
+                x.push(i);
+            }
+            */
+
+
+            //WireDeps::many(args)
+            
+            // let x = 
+            
+            // let args_len = args.len();
+            // let mut wire_deps_vec: Vec<Wire<'_>>= Vec::with_capacity(1+args_len);
+            // wire_deps_vec[0] = c;
+
+            // for (i, &arg) in args.iter().enumerate(){
+            //     wire_deps_vec[i+1] = arg;
+            // }
+
+
+            //WireDeps::small(1+args_len, wire_deps_vec)
+
+            //WireDeps::small_many(c, args)
+            //WireDeps::many(args)
+            WireDeps::one_many(c, args)
         },
     }
 }
@@ -2201,7 +2336,8 @@ pub enum GateKind<'a> {
     //    ..., 
     //    <condition_n>, <func_name_n>
     //    )
-
+    //Switch(Wire<'a>, &'a [(Bits<'a>, Call<'a>)], &'a [Wire<'a>]),
+    
     Switch(Wire<'a>, &'a [(Bits<'a>, Call<'a>)], &'a [Wire<'a>]),
     //Switch(Wire<'a>, &'a [(Bits<'a>, Function<'a>)], &'a [Wire<'a>]),
     //Switch(Wire<'a>, &'a [Bits<'a>], Wire<'a>),
@@ -2388,10 +2524,13 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 
                 let args = args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
                 let args = v.new_circuit().intern_wire_list(&args);
+
+                //let c = c.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
+                //let c = v.new_circuit().intern_wire_list(&c);
                 // Had to introduce the `intern_bits_func_list` to get arround the syntax error, I probabily think the error is because of lifetimes.
 
-                //Switch(v.visit(c), v.new_circuit().intern_bits_func_list(&bs) , args)
-                Switch(v.visit(c),  v.new_circuit().intern_bits_call_list(&bs), args)
+                Switch(v.visit(c), v.new_circuit().intern_bits_call_list(&bs) , args)
+                //Switch(c,  v.new_circuit().intern_bits_call_list(&bs), args)
 
             },
         }

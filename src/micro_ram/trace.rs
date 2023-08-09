@@ -386,7 +386,7 @@ fn calc_step_inner_using_switch<'a>(
 
     //let mut cases = Vec::new();
     //(instr.opcode==opcode, opcode_num, result, des)
-    let mut switch_cases: Vec<TWire<'_, (bool, (u8, u64, u8))>> = Vec::new();
+    let mut switch_cases: Vec<TWire<'_, (bool, (_, _, _))>> = Vec::new();
     // This has to be defined outside the macro so it's visible to the body expressions passed to
     // `case!` below.
     let mut dest: TWire<u8>;
@@ -435,15 +435,18 @@ fn calc_step_inner_using_switch<'a>(
     // if `opcode` is known; otherwise, all non-memory ops set this below.
     let mut mem_port_unused = false;
 
-
+    // TODO Try to do only for the following. Later see how to changes the arguments...do not even understanding :(
     case!(Opcode::And, b.and(x, y));
     case!(Opcode::Or, b.or(x, y));
     case!(Opcode::Xor, b.xor(x, y));
-    case!(Opcode::Not, b.not(y));
-
+    //case!(Opcode::Not, b.not(y));
+    
     case!(Opcode::Add, b.add(x, y));
     case!(Opcode::Sub, b.sub(x, y));
     case!(Opcode::Mull, b.mul(x, y));
+
+
+    /*
     case!(Opcode::Umulh, {
         let (_, high) = *b.wide_mul(x, y);
         high
@@ -566,18 +569,27 @@ fn calc_step_inner_using_switch<'a>(
         });
     }
 
+    */
+
+
     let (result, dest) = if opcode.is_some() {
-        if cases.len() == 1 {
-            *cases[0].1
+        if switch_cases.len() == 1 {
+            (switch_cases[0].1.1, switch_cases[0].1.2)
         } else {
             b.lit((0, REG_NONE)).repr
         }
     } else {
-        *b.mux_multi(&cases, b.lit((0, REG_NONE)))
+        //b.mux_multi(&switch_cases, b.lit((0, REG_NONE)).repr
+        let mut val = b.lit((0, REG_NONE)).repr; // default value
+
+        //val = b.switch(switch_cond, &switch_cases, explicit_input_args);
+
+        val
     };
 
 
 
+    // LEAVE THE BELOW AS IT IS:: NO idea :(
     let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
     for (i, &v_old) in s1.regs.iter().enumerate() {
         let is_dest = b.eq(b.lit(i as u8), dest);
