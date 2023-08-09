@@ -971,7 +971,7 @@ fn eval_switch_function<'a, 'b>(
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let func = switch_function.func;
 
-    // Using the explicit provided args instead of the ones in Call() struct
+    // Using the explicit provided args provided in the Switch Gate and pass it to function
     let explicit_arg_bits = explicit_args.iter().map(|&w| {
         outer_ecx.get_value(w)
     }).collect::<Result<Vec<_>, _>>()?;

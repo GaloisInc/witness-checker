@@ -1147,7 +1147,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
             project_deps,
         });
         switchfunction
-        //self.gate(GateKind::Call(call))
     }
 
     fn switch(
