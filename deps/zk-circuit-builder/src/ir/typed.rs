@@ -323,19 +323,11 @@ pub trait BuilderExt<'a>: Builder<'a> {
         val
     }
 
-    //b.switch(switch_cond, &switch_cases, explicit_input_args, b.lit((0, REG_NONE)).repr);
+    // fn switch<C,A>(
+    //     &self, 
+    //     cases: &[TWire<'a, (C,A)>],
 
-    /* Uncomment it and it will start producting errors
-    fn switch<A: Switch<'a, B>,B: Repr<'a>>(
-         &self, 
-         switch_cond: TWire<'a, T>,
-         switch_cases: &[TWire<'a, (C,A)>],
-         explicit_input_args: &[TWire<'a, T>],
-    )
-    {
-         TWire::new(switch(switch_cond, switch_cases, explicit_input_args))
-    }
-    */
+    // )
 
     fn index<I, T>(
         &self,
@@ -756,7 +748,6 @@ define_bin_ops! {
     Le::le;
     Gt::gt;
     Ge::ge;
-
 }
 
 pub trait Mux<'a, Cond, Other = Self>

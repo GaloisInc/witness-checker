@@ -449,11 +449,7 @@ where S: SecretEvaluator<'a> + Default {
         c: &C,
         w: Wire<'a>,
     ) -> Result<(Bits<'a>, bool), Error<'a>> {
-
-        println!("Coming at the beginning of the eval_wire_bits");
         let c = c.as_base();
-        //println!("Base circuit{:?}", c);
-        //print("Base circuti")
         let order = circuit::walk_wires_ex(
             iter::once(w),
             |w| {
@@ -465,9 +461,8 @@ where S: SecretEvaluator<'a> + Default {
             },
         ).collect::<Vec<_>>();
 
-        println!("Vector: {:?}", order);
+        //println!("Circuit: {:?}", order);
 
-        println!("Coming into eval wire bits");
         for w in order {
             let (opt_bits, sec) = match eval_gate_inner(c, self, w.ty, w.kind) {
                 Ok((bits, sec)) => (Some(bits), sec),
@@ -764,8 +759,6 @@ fn eval_gate_inner<'a, 'b>(
     ty: Ty<'a>,
     gk: GateKind<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    println!("Coming into eval_gate_inner");
-   
     Ok(match gk {
         GateKind::Lit(bits, _) => (bits, false),
 
@@ -917,9 +910,7 @@ fn eval_gate_inner<'a, 'b>(
         // }
 
         GateKind::Switch(cond, branches , inputs) => {
-            println!("The value of cond is {:?}", cond);
             if cond.ty.is_integer(){
-                println!("geet value {:?}", ecx.get_int_value(cond));
                 match ecx.get_int_value(cond)
                 {
                     Ok((w_val, w_sec)) => {
@@ -927,16 +918,13 @@ fn eval_gate_inner<'a, 'b>(
                         // Go over all the branches and return on valid match
                         for (switch_val, call) in branches{
 
-                                println!("Coming into main logic");
                                 let switch_val = switch_val.to_bigint(cond.ty);
                                 if w_val == switch_val{
                                     
-                                    //return eval_call(c, ecx, *call);
-                                    println!("coming inside main logic");
-                                    return eval_switch_call(c, ecx, *call, inputs);
+                                    return eval_switch_function(c, ecx, *call, inputs);
                                 }
                                 else{
-                                    print!("Branch not met for {switch_val}");
+                                    println!("Branch not met for {switch_val}");
                                 }
                         }
                         // default case
@@ -951,28 +939,6 @@ fn eval_gate_inner<'a, 'b>(
             panic!("Cannot apply Switch on non-int cond wire {:?}", cond);
         }
         },
-        
-        /*
-        {
-        
-        // First evaluate all the branches, to make the execution constant-time..
-        let rs = branches.iter().map(|&(_, f)| eval_func(c, ecx, f, Input)).collect()?;
-        
-        // Second choose the correct branch from the evaluated function branches
-        
-        let (cond_val, cond_sec) = ecx.get_value(cond)?;
-        
-        // match the corresponding branch based on the `cond` value
-        for (cond_, func) in branches{
-            if cond_val == *cond_{
-                
-            }
-        }
-
-        (branches[0].0, 0==0)
-
-        },
-        */
     })
 }
 
@@ -982,7 +948,6 @@ fn eval_call<'a, 'b>(
     call: Call<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
 
-    println!("Coming into eval call");
     let func = call.func;
 
     let arg_bits = call.args.iter().map(|&w| {
@@ -998,7 +963,7 @@ fn eval_call<'a, 'b>(
 }
 
 // Trying to mimic the above `eval_call` function
-fn eval_switch_call<'a, 'b>(
+fn eval_switch_function<'a, 'b>(
     c: &CircuitBase<'a>,
     outer_ecx: &'b impl EvalContext<'a, 'b>,
     switch_function: SwitchFunction<'a>,
@@ -1006,10 +971,6 @@ fn eval_switch_call<'a, 'b>(
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let func = switch_function.func;
 
-    // let arg_bits = call.args.iter().map(|&w| {
-    //     outer_ecx.get_value(w)
-    // }).collect::<Result<Vec<_>, _>>()?;
-    println!("Not going beyond");
     // Using the explicit provided args instead of the ones in Call() struct
     let explicit_arg_bits = explicit_args.iter().map(|&w| {
         outer_ecx.get_value(w)
@@ -1027,46 +988,6 @@ fn eval_switch_call<'a, 'b>(
 
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
-
-// Prepare functin, project witnees, project deps, call.. args shared..
-
-/*
-fn eval_func<'a, 'b>(
-    c: &CircuitBase<'a>,
-    outer_ecx: &'b impl EvalContext<'a, 'b>,
-    func: Function<'a>,
-    input: Wire<'_>
-) -> Result<(Bits<'a>, bool), Error<'a>> {
-
-    let arg_bits= vec![outer_ecx.get_value(input)?];
-
-    // how to resolve project_witness, project_deps variables??
-    
-    let mut inner_eval = outer_ecx.enter_function_without_deps(c, arg_bits, func);
-
-    //EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire);
-
-
-    // let arg_bits = call.args.iter().map(|&w| {
-    //     outer_ecx.get_value(w)
-    // }).collect::<Result<Vec<_>, _>>()?;
-
-    let arg_bits= vec![outer_ecx.get_value(input)?];
-
-    let dep_bits = call.project_deps.iter().map(|&w| {
-        outer_ecx.get_value(w).map(|(bits, sec)| bits)
-    }).collect::<Result<Vec<_>, _>>()?;
-
-    let mut inner_eval = outer_ecx.enter_function(
-        c, arg_bits, call.project_witness, &dep_bits);
-    EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire);
-
-
-    Ok(arg_bits[0])
-    
-}
-*/
-
 
 
 pub fn eval_gate<'a, S: SecretEvaluator<'a> + Default>(
@@ -1096,7 +1017,6 @@ pub fn eval_wire<'a, S: SecretEvaluator<'a> + Default>(
     c: &CircuitBase<'a>,
     w: Wire<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    println!("Coming into eval_wire");
     let mut ev = CachingEvaluator::<S>::new();
     EvalWire::eval_wire_bits(&mut ev, c, w)
 }
