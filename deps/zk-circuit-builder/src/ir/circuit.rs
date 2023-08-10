@@ -945,11 +945,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Lit(val, ty))
     }
 
-    fn lit_<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Bits<'a> {
-        let x =  self.bits(ty, val);
-        x
-    }
-
     fn secret(&self, secret: Secret<'a>) -> Wire<'a> {
         self.gate(GateKind::Secret(secret))
     }

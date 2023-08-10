@@ -48,10 +48,10 @@ fn function_gate_basic() {
         eval::Value::SingleInteger(5_i32.into()),
     );
 
-    // assert_eq!(
-    //     eval::eval_wire_public(c.as_base(), result2).unwrap(),
-    //     eval::Value::SingleInteger(26_i32.into()),
-    // );
+    assert_eq!(
+        eval::eval_wire_public(c.as_base(), result2).unwrap(),
+        eval::Value::SingleInteger(26_i32.into()),
+    );
 }
 
 #[test]
@@ -154,8 +154,8 @@ fn switch_gate_basic() {
     let ty_bits = Ty::int(32);
 
 
-    let f1_switch_const = c.lit_(ty_bits, 10);
-    let f2_switch_const = c.lit_(ty_bits, 5);
+    let f1_switch_const = c.bits(ty_bits, 10);
+    let f2_switch_const = c.bits(ty_bits, 5);
 
     //println!("Value of x: {:?}", f1_switch_const);
 
