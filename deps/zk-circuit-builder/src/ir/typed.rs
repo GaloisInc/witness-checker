@@ -323,12 +323,6 @@ pub trait BuilderExt<'a>: Builder<'a> {
         val
     }
 
-    // fn switch<C,A>(
-    //     &self, 
-    //     cases: &[TWire<'a, (C,A)>],
-
-    // )
-
     fn index<I, T>(
         &self,
         arr: &[TWire<'a, T>],

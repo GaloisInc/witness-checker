@@ -11,7 +11,7 @@ use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
-    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, Call, SecretProjectFn, SwitchFunction,
+    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, Call, SecretProjectFn, SwitchCase
 };
 use crate::util::CowBox;
 
@@ -902,42 +902,33 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::Call(call) => eval_call(c, ecx, call)?,
 
-        
-        // Switch(cond, bs, a) => {
-        //   find appropriate branch and evaluate it.. Don't worry about constant-time for time being
-        //   let r = find_appropriate_branch(cond, rs)
-        //   evaluate(r)
-        // }
 
         GateKind::Switch(cond, branches , inputs) => {
             if cond.ty.is_integer(){
-                match ecx.get_int_value(cond)
-                {
+                match ecx.get_int_value(cond){
                     Ok((w_val, w_sec)) => {
-
                         // Go over all the branches and return on valid match
-                        for (switch_val, call) in branches{
-
+                        for b in branches{
+                                let switch_val = b.bits;
                                 let switch_val = switch_val.to_bigint(cond.ty);
                                 if w_val == switch_val{
-                                    
-                                    return eval_switch_function(c, ecx, *call, inputs);
+                                    return eval_switch_case(c, ecx, *b, inputs);
                                 }
                                 else{
-                                    println!("Branch not met for {switch_val}");
+                                    //println!("Branch not met for {switch_val}");
                                 }
                         }
                         // default case
                         panic!("No cond value mathced.. default case hit") 
                     },
-                    Err(e) =>{
+                    Err(e) => {
                         panic!("Error while converting the cond wire into int value");
                     }   
                 }
-        }
-        else {
+            }
+            else{
             panic!("Cannot apply Switch on non-int cond wire {:?}", cond);
-        }
+            }
         },
     })
 }
@@ -962,14 +953,14 @@ fn eval_call<'a, 'b>(
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
-// Trying to mimic the above `eval_call` function
-fn eval_switch_function<'a, 'b>(
+// Trying to mimic the above `eval_call`
+fn eval_switch_case<'a, 'b>(
     c: &CircuitBase<'a>,
     outer_ecx: &'b impl EvalContext<'a, 'b>,
-    switch_function: SwitchFunction<'a>,
+    switch_case: SwitchCase<'a>,
     explicit_args:  &'a [Wire<'a>],
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    let func = switch_function.func;
+    let func = switch_case.func;
 
     // Using the explicit provided args provided in the Switch Gate and pass it to function
     let explicit_arg_bits = explicit_args.iter().map(|&w| {
@@ -978,13 +969,13 @@ fn eval_switch_function<'a, 'b>(
 
     
 
-    let dep_bits = switch_function.project_deps.iter().map(|&w| {
+    let dep_bits = switch_case.project_deps.iter().map(|&w| {
         outer_ecx.get_value(w).map(|(bits, sec)| bits)
     }).collect::<Result<Vec<_>, _>>()?;
 
     
     let mut inner_eval = outer_ecx.enter_function(
-        c, explicit_arg_bits, switch_function.project_witness, &dep_bits);
+        c, explicit_arg_bits, switch_case.project_witness, &dep_bits);
 
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }

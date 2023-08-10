@@ -147,19 +147,18 @@ fn switch_gate_basic() {
     ];
 
 
-    let call1 = c.define_switch_function(func1, &[], |_, &(), _| (&()).into());
-
-    let call2 = c.define_switch_function(func2, &[], |_, &(), _| (&()).into());
-
     let ty_bits = Ty::int(32);
 
+    let s1_const = c.bits(ty_bits, 10);
+    let s2_const = c.bits(ty_bits, 5);
 
-    let f1_switch_const = c.bits(ty_bits, 10);
-    let f2_switch_const = c.bits(ty_bits, 5);
+    let switch_call1 = c.define_switch_case(s1_const, func1, &[], |_, &(), _| (&()).into());
+
+    let switch_call2 = c.define_switch_case(s2_const, func2, &[], |_, &(), _| (&()).into());
 
     //println!("Value of x: {:?}", f1_switch_const);
 
-    let branches = &[(f1_switch_const,call1), (f2_switch_const, call2)];
+    let branches = &[switch_call1, switch_call2];
 
     
     let cond = c.lit(Ty::int(32), 5);

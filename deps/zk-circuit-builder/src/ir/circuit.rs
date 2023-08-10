@@ -94,7 +94,7 @@ pub struct CircuitBase<'a> {
     intern_ty: RefCell<HashSet<&'a TyKind<'a>>>,
     intern_wire_list: RefCell<HashSet<&'a [Wire<'a>]>>,
     intern_ty_list: RefCell<HashSet<&'a [Ty<'a>]>>,
-    intern_bits_switch_function_list: RefCell<HashSet<&'a [(Bits<'a>, SwitchFunction<'a>)]>>,
+    intern_switch_case_list: RefCell<HashSet<&'a [SwitchCase<'a>]>>,
     intern_gadget_kind: RefCell<HashSet<&'a HashDynGadgetKind<'a>>>,
     intern_str: RefCell<HashSet<&'a str>>,
     intern_bits: RefCell<HashSet<&'a [u32]>>,
@@ -115,7 +115,7 @@ impl<'a> CircuitBase<'a> {
             intern_ty: RefCell::new(HashSet::new()),
             intern_wire_list: RefCell::new(HashSet::new()),
             intern_ty_list: RefCell::new(HashSet::new()),
-            intern_bits_switch_function_list: RefCell::new(HashSet::new()),
+            intern_switch_case_list: RefCell::new(HashSet::new()),
             intern_gadget_kind: RefCell::new(HashSet::new()),
             intern_str: RefCell::new(HashSet::new()),
             intern_bits: RefCell::new(HashSet::new()),
@@ -272,14 +272,14 @@ impl<'a> CircuitBase<'a> {
     }
 
     
-    fn intern_bits_switch_function_list(&self, bits_list: &[(Bits<'a>, SwitchFunction<'a>)]) -> &'a [(Bits<'a>, SwitchFunction<'a>)] {
-        let mut intern = self.intern_bits_switch_function_list.borrow_mut();
-        match intern.get(bits_list) {
+    fn intern_switch_case_list(&self, cases_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
+        let mut intern = self.intern_switch_case_list.borrow_mut();
+        match intern.get(cases_list) {
             Some(&x) => x,
             None => {
-                let bits_list = self.arena().alloc_slice_copy(bits_list);
-                intern.insert(bits_list);
-                bits_list
+                let cases_list = self.arena().alloc_slice_copy(cases_list);
+                intern.insert(cases_list);
+                cases_list
             },
         }
     }
@@ -330,8 +330,8 @@ impl<'a> CircuitBase<'a> {
         Call(self.arena().alloc(call))
     }
 
-    fn alloc_switchfunction(&self, switchfunction: SwitchFunctionData<'a>) -> SwitchFunction<'a> {
-        SwitchFunction(self.arena().alloc(switchfunction))
+    fn alloc_switch_case(&self, switchdata: SwitchCaseData<'a>) -> SwitchCase<'a> {
+        SwitchCase(self.arena().alloc(switchdata))
     }
 
 
@@ -399,12 +399,12 @@ impl<'a> CircuitBase<'a> {
 
                 assert!(self.as_base().allow_functions, "function calls are not allowd in this Circuit");
 
-                for (_, c) in bs{
+                for b in bs{
                     // checking for len of arguments
-                    assert_eq!(c.func.arg_tys.len(), input.len(), "Number of arguments are not equal");
+                    assert_eq!(b.func.arg_tys.len(), input.len(), "Number of arguments are not equal");
                     
                     // checking for types
-                    for (&ty, &arg) in c.func.arg_tys.iter().zip(input.iter()) {
+                    for (&ty, &arg) in b.func.arg_tys.iter().zip(input.iter()) {
                         assert_eq!(ty, arg.ty);
                     }
                 }
@@ -486,7 +486,7 @@ impl<'a> CircuitBase<'a> {
         let CircuitBase {
             ref arenas,
             ref intern_gate, ref intern_ty, ref intern_wire_list, ref intern_ty_list,
-            ref intern_bits_switch_function_list, ref intern_gadget_kind, ref intern_str, ref intern_bits,
+            ref intern_switch_case_list, ref intern_gadget_kind, ref intern_str, ref intern_bits,
             ref current_label,
             is_prover,
             allow_functions,
@@ -506,7 +506,7 @@ impl<'a> CircuitBase<'a> {
             intern_ty: RefCell::new(intern_ty.take()),
             intern_wire_list: RefCell::new(intern_wire_list.take()),
             intern_ty_list: RefCell::new(intern_ty_list.take()),
-            intern_bits_switch_function_list: RefCell::new(intern_bits_switch_function_list.take()),
+            intern_switch_case_list: RefCell::new(intern_switch_case_list.take()),
             intern_gadget_kind: RefCell::new(intern_gadget_kind.take()),
             intern_str: RefCell::new(intern_str.take()),
             intern_bits: RefCell::new(intern_bits.take()),
@@ -1118,12 +1118,13 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
-    fn define_switch_function<W, W2, F>(
+    fn define_switch_case<W, W2, F>(
         &self,
+        bits: Bits<'a>,
         func: Function<'a>,
         project_deps: &'a [Wire<'a>],
         project_witness: F,
-    ) -> SwitchFunction<'a>
+    ) -> SwitchCase<'a>
     where
         W: 'static,
         W2: 'static,
@@ -1136,18 +1137,19 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
         
 
-        let switchfunction = self.as_base().alloc_switchfunction(SwitchFunctionData {
+        let switchcase = self.as_base().alloc_switch_case(SwitchCaseData {
+            bits,
             func,
             project_witness,
             project_deps,
         });
-        switchfunction
+        switchcase
     }
 
     fn switch(
         &self,
         cond: Wire<'a>,
-        branches: &'a [(Bits<'a>, SwitchFunction<'a>)],
+        branches: &'a [SwitchCase<'a>],
         input_args: &'a [Wire<'a>]
     ) -> Wire<'a>
     {
@@ -1638,9 +1640,6 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
         GateKind::Pack(ws) |
         GateKind::Gadget(_, ws) => WireDeps::many(ws),
         GateKind::Call(c) => WireDeps::many(c.args),
-
-        // Add match for Switch
-        // Deps : switch constraint, function input
         GateKind::Switch(c, _, args) => {
             WireDeps::one_many(c, args)
         },
@@ -2214,19 +2213,8 @@ pub enum GateKind<'a> {
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
     /// A function call.  See `CallData` for details.
     Call(Call<'a>),
-
-    // Galois_disjunction_v0.switch.strict : N -> [(F^N, fn: F^input -> F^output)] -> (fn : F^N -> F^input -> F^output)
-    //(
-    //  galois_disjunction_v0, 
-    //   switch, 
-    //   <permissiveness>,
-    //    <condition_0>, <func_name_0>, 
-    //    ..., 
-    //    <condition_n>, <func_name_n>
-    //    )
-   
-
-    Switch(Wire<'a>, &'a [(Bits<'a>, SwitchFunction<'a>)], &'a [Wire<'a>]),
+   /// Switch(cond, branches[const, Function], input): depending on `cond`, select a branch and run its function on `input`
+    Switch(Wire<'a>, &'a [SwitchCase<'a>], &'a [Wire<'a>]),
 
     
 }
@@ -2263,9 +2251,9 @@ impl<'a> GateKind<'a> {
 
             GateKind::Switch(_, branches, _) =>  {
                 // Assume that branches non-empty
-                let (_, f) = branches.iter().next().unwrap(); // grab the first branch
+                let b = branches.iter().next().unwrap(); // grab the first branch
                 // Assume that all branches have same type: F^input -> F^ouput
-                f.func.result_wire.ty
+                b.func.result_wire.ty
         }
     }
     }
@@ -2400,21 +2388,13 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
 
             Switch(c, bs, args) => {
                 
-                
-                let lits: Vec<Bits<'_>>  = bs.iter().map(|&(bits, _)| v.visit(bits)).collect::<Vec<_>>();
-                // Use visit instead of visiti fucntion
-                let fs  =  bs.iter().map(|&(_, f)| v.visit(f)).collect::<Vec<_>>();
-                
-
-                let bs  = lits.iter().cloned().zip(fs.iter().cloned()).collect::<Vec<_>>();
-                
                 let args = args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
                 let args = v.new_circuit().intern_wire_list(&args);
 
-                // Had to introduce the `intern_bits_switch_function_list` to get arround the syntax error, I probabily think the error is because of lifetimes.
-
-                Switch(v.visit(c), v.new_circuit().intern_bits_switch_function_list(&bs) , args)
-
+                let bs = bs.iter().map(|&b| v.visit(b)).collect::<Vec<_>>();
+                let bs = v.new_circuit().intern_switch_case_list(&bs);
+     
+                Switch(v.visit(c), bs , args)
             },
         }
     }
@@ -2953,20 +2933,6 @@ pub struct CallData<'a> {
     pub project_deps: &'a [Wire<'a>],
 }
 
-declare_interned_pointer! {
-    /// A call to a circuit function.
-    #[derive(Debug)]
-    pub struct SwitchFunction<'a> => SwitchFunctionData<'a>;
-}
-
-#[derive(Clone, Debug)]
-pub struct SwitchFunctionData<'a> {
-    pub func: Function<'a>,
-    pub project_witness: SecretProjectFn<'a>,
-    pub project_deps: &'a [Wire<'a>],
-}
-
-
 impl<'a, 'b> Migrate<'a, 'b> for CallData<'a> {
     type Output = CallData<'b>;
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> CallData<'b> {
@@ -2992,14 +2958,29 @@ impl<'a, 'b> Migrate<'a, 'b> for Call<'a> {
     }
 }
 
-impl<'a, 'b> Migrate<'a, 'b> for SwitchFunctionData<'a> {
-    type Output = SwitchFunctionData<'b>;
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SwitchFunctionData<'b> {
+declare_interned_pointer! {
+    /// A call to a circuit function.
+    #[derive(Debug)]
+    pub struct SwitchCase<'a> => SwitchCaseData<'a>;
+}
+
+#[derive(Clone, Debug)]
+pub struct SwitchCaseData<'a> {
+    pub bits: Bits<'a>,
+    pub func: Function<'a>,
+    pub project_witness: SecretProjectFn<'a>,
+    pub project_deps: &'a [Wire<'a>],
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for SwitchCaseData<'a> {
+    type Output = SwitchCaseData<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SwitchCaseData<'b> {
         //let args = self.args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
         //let args = v.new_circuit().intern_wire_list(&args);
         let project_deps = self.project_deps.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
         let project_deps = v.new_circuit().arena().alloc_slice_copy(&project_deps);
-        SwitchFunctionData {
+        SwitchCaseData {
+            bits: v.visit(self.bits),
             func: v.visit(self.func),
             project_witness: v.visit(self.project_witness),
             project_deps,
@@ -3007,12 +2988,12 @@ impl<'a, 'b> Migrate<'a, 'b> for SwitchFunctionData<'a> {
     }
 }
 
-impl<'a, 'b> Migrate<'a, 'b> for SwitchFunction<'a> {
-    type Output = SwitchFunction<'b>;
+impl<'a, 'b> Migrate<'a, 'b> for SwitchCase<'a> {
+    type Output = SwitchCase<'b>;
 
-    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SwitchFunction<'b> {
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SwitchCase<'b> {
         let new = v.visit((*self).clone());
-        v.new_circuit().alloc_switchfunction(new)
+        v.new_circuit().alloc_switch_case(new)
     }
 }
 
