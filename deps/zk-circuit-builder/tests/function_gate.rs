@@ -138,8 +138,6 @@ fn switch_gate_basic() {
     let func1 = c.define_function::<(), _>("func1", &[ty_i32, ty_i32, ty_i32], MyFunc1);
     let func2 = c.define_function::<(), _>("func2", &[ty_i32, ty_i32, ty_i32], MyFunc2);
 
-
-    //let result = c.swich
     let args1 = [
         c.lit(ty_i32, 1),
         c.lit(ty_i32, 2),
@@ -156,18 +154,12 @@ fn switch_gate_basic() {
 
     let switch_call2 = c.switch_case(s2_const, func2, &[], |_, &(), _| (&()).into());
 
-    //println!("Value of x: {:?}", f1_switch_const);
-
     let branches = &[switch_call1, switch_call2];
 
-    
     let cond = c.lit(Ty::int(32), 5);
 
-    //println!("Value of cond {:?}", cond);
-    
     let result = c.switch(cond, branches, &args1);
 
-    
     assert_eq!(
         eval::eval_wire_public(c.as_base(), result).unwrap(),
         eval::Value::SingleInteger(9_i32.into()),

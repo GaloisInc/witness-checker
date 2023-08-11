@@ -461,8 +461,6 @@ where S: SecretEvaluator<'a> + Default {
             },
         ).collect::<Vec<_>>();
 
-        //println!("Circuit: {:?}", order);
-
         for w in order {
             let (opt_bits, sec) = match eval_gate_inner(c, self, w.ty, w.kind) {
                 Ok((bits, sec)) => (Some(bits), sec),

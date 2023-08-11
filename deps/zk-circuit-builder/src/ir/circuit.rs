@@ -2975,8 +2975,6 @@ pub struct SwitchCaseData<'a> {
 impl<'a, 'b> Migrate<'a, 'b> for SwitchCaseData<'a> {
     type Output = SwitchCaseData<'b>;
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> SwitchCaseData<'b> {
-        //let args = self.args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
-        //let args = v.new_circuit().intern_wire_list(&args);
         let project_deps = self.project_deps.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
         let project_deps = v.new_circuit().arena().alloc_slice_copy(&project_deps);
         SwitchCaseData {
