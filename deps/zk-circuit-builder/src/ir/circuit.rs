@@ -2966,6 +2966,7 @@ declare_interned_pointer! {
 
 #[derive(Clone, Debug)]
 pub struct SwitchCaseData<'a> {
+    /// `bits` value is mathced with switch variable to decide whether to evaluate the related function or not 
     pub bits: Bits<'a>,
     pub func: Function<'a>,
     pub project_witness: SecretProjectFn<'a>,
