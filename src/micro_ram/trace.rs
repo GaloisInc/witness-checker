@@ -367,7 +367,6 @@ pub fn define_calc_step_function<'a>(
         CalcStepFunction { num_regs, privilege_levels })
 }
 
-
 fn calc_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
@@ -564,8 +563,6 @@ fn calc_step_inner<'a>(
     } else {
         *b.mux_multi(&cases, b.lit((0, REG_NONE)))
     };
-
-
 
     let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
     for (i, &v_old) in s1.regs.iter().enumerate() {

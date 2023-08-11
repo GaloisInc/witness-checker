@@ -575,7 +575,6 @@ impl<'a, T: Repr<'a>> DerefMut for TWire<'a, T> {
 }
 
 
-
 pub trait Repr<'a> {
     type Repr;
 }
