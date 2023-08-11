@@ -78,8 +78,6 @@ pub fn make_graph<'a>(
             GateKind::Extract(_, idx) => write!(label, "Extract {}", idx)?,
             GateKind::Gadget(gk, _) => write!(label, "Gadget {}", gk.name())?,
             GateKind::Call(call) => write!(label, "Call {}", call.func.name)?,
-
-            // TODO: May be name for swich as other
             GateKind::Switch(.. ) => write!(label, "Switch")?, 
         }
         write!(label, " (")?;

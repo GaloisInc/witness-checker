@@ -1118,7 +1118,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     }
 
 
-    fn define_switch_case<W, W2, F>(
+    fn switch_case<W, W2, F>(
         &self,
         bits: Bits<'a>,
         func: Function<'a>,
@@ -2959,7 +2959,7 @@ impl<'a, 'b> Migrate<'a, 'b> for Call<'a> {
 }
 
 declare_interned_pointer! {
-    /// A call to a circuit function.
+    /// A pointer to a switch case containing condition value and the respective function
     #[derive(Debug)]
     pub struct SwitchCase<'a> => SwitchCaseData<'a>;
 }

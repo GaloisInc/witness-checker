@@ -914,9 +914,6 @@ fn eval_gate_inner<'a, 'b>(
                                 if w_val == switch_val{
                                     return eval_switch_case(c, ecx, *b, inputs);
                                 }
-                                else{
-                                    //println!("Branch not met for {switch_val}");
-                                }
                         }
                         // default case
                         panic!("No cond value mathced.. default case hit") 

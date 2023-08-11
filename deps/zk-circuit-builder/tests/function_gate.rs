@@ -152,9 +152,9 @@ fn switch_gate_basic() {
     let s1_const = c.bits(ty_bits, 10);
     let s2_const = c.bits(ty_bits, 5);
 
-    let switch_call1 = c.define_switch_case(s1_const, func1, &[], |_, &(), _| (&()).into());
+    let switch_call1 = c.switch_case(s1_const, func1, &[], |_, &(), _| (&()).into());
 
-    let switch_call2 = c.define_switch_case(s2_const, func2, &[], |_, &(), _| (&()).into());
+    let switch_call2 = c.switch_case(s2_const, func2, &[], |_, &(), _| (&()).into());
 
     //println!("Value of x: {:?}", f1_switch_const);
 
