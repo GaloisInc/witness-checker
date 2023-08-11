@@ -298,6 +298,123 @@ fn calc_step<'a>(
     (s2, ci)
 }
 
+// Modifying it according to the switch
+fn calc_step_switch<'a>(
+    cx: &Context<'a>,
+    b: &impl Builder<'a>,
+    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    privilege_levels: bool,
+    calc_step_func: Function<'a>,
+    idx: usize,
+    instr: TWire<'a, RamInstr>,
+    mem_port: &TWire<'a, MemPort>,
+    advice: TWire<'a, u64>,
+    s1: &TWire<'a, RamState>,
+    kmem: &mut KnownMem<'a>,
+) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
+    let opcode = ev.eval_typed(b.circuit(), instr.opcode).and_then(Opcode::from_raw);
+    if opcode.is_some() || !b.circuit().allow_functions() {
+        return calc_step_inner(
+            cx, b, ev, privilege_levels, idx, opcode, instr, mem_port, advice, s1, kmem);
+    }
+
+    // The opcode is unknown, so it could be performing any store at any address.
+    kmem.clear();
+
+    let c = b.circuit();
+
+
+    
+
+    let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
+    let y = operand_value(b, s1, instr.op2, instr.imm);
+
+    let x_type = x.ty;
+    let y_type = y.ty;
+
+    let function_arg_types = &[x_type, y_type];
+    
+    let switches_call_list = vec![];
+
+    macro_rules! case {
+        ($op:expr, $body:expr) => {
+            if opcode.is_none() || opcode == Some($op) {
+
+                // Define the function for the opcode struct
+                struct OpcodeFunc;
+                impl<'b> DefineFunction<'b> for OpcodeFunc {
+                fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                    let &[x, y, z]: &[Wire; 3] = args.try_into().unwrap();
+                    $body
+                }
+                let func = c.define_function::<(), _>($op, function_arg_types, OpcodeFunc);
+                
+                // define the switch case
+                let switch_call = c.define_switch_case($op, func, &[], |_, s: &MultiExecWitness, _| s.into());
+                
+                switches_call_list.push(switch_call);
+                }
+            }
+        };
+    }
+
+    case!(Opcode::And, c.and(x, y));
+    case!(Opcode::Or, c.or(x, y));
+    case!(Opcode::Xor, c.xor(x, y));
+    //case!(Opcode::Not, b.not(y));
+    
+    case!(Opcode::Add, c.add(x, y));
+    case!(Opcode::Sub, c.sub(x, y));
+    case!(Opcode::Mull, c.mul(x, y));
+
+    
+    // This would be the first argument for the switch gatekind
+    let switch_cond  = instr.opcode;
+    // This would be the third argument for the switch gatekind
+    
+    let explicit_input_args = &[x,y];
+
+    let result = c.switch(switch_cond, &switches_call_list, &function_args);
+
+
+
+
+    let args_typed = TWire::<CalcStepArgs>::new((instr, mem_port.clone(), advice, s1.clone()));
+    let num_regs = s1.regs.len();
+    let (args_wires, args_sizes) = typed::to_wire_list(&args_typed);
+    let w = c.call(
+        calc_step_func, c.wire_list(&args_wires), &[], |_, s: &MultiExecWitness, _| s.into());
+
+    let num_result_wires = CalcStepResult::expected_num_wires(&mut args_sizes.iter().copied());
+    let result_wires = (0..num_result_wires).map(|i| c.extract(w, i)).collect::<Vec<_>>();
+    // There are no variable-sized data structures in any of the input or output types except
+    // `RamState`, and there is one `RamState` in the input and one in the output, so the output
+    // sizes should be the same as the input sizes.
+    let result = typed::from_wire_list::<CalcStepResult>(c.as_base(), &result_wires, &args_sizes);
+
+    let (
+        s2,
+        ci,
+        asserts_ok, found_bug,
+    ) = result.repr;
+    let (x, y, result, label_x, label_y_joined, label_result, addr_offset, mem_op_addr) = ci.repr;
+    let ci = CalcIntermediate {
+        x, y, result,
+        tainted: IfMode::new(|pf| TaintCalcIntermediate {
+            label_x: label_x.unwrap(&pf),
+            label_y_joined: label_y_joined.unwrap(&pf),
+            label_result: label_result.unwrap(&pf),
+            addr_offset: addr_offset.unwrap(&pf),
+        }),
+        mem_port_unused: false,
+        mem_op_addr,
+    };
+    wire_assert!(cx, b, asserts_ok, "assert failed in step {}", idx);
+    wire_bug_if!(cx, b, found_bug, "found bug in step {}", idx);
+
+    (s2, ci)
+}
+
 pub fn define_calc_step_function<'a>(
     b: &impl Builder<'a>,
     num_regs: usize,
@@ -365,6 +482,269 @@ pub fn define_calc_step_function<'a>(
     CalcStepArgs::for_each_expected_wire_type(c, &mut sizes.iter().copied(), |t| arg_tys.push(t));
     c.define_function::<MultiExecWitness, _>("calc_step", &arg_tys,
         CalcStepFunction { num_regs, privilege_levels })
+}
+
+fn calc_step_inner_using_switch<'a>(
+    cx: &Context<'a>,
+    b: &impl Builder<'a>,
+    ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    privilege_levels: bool,
+    idx: usize,
+    opcode: Option<Opcode>,
+    instr: TWire<'a, RamInstr>,
+    mem_port: &TWire<'a, MemPort>,
+    advice: TWire<'a, u64>,
+    s1: &TWire<'a, RamState>,
+    kmem: &mut KnownMem<'a>,
+) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
+    let _g = b.scoped_label("calc_step");
+
+    //let mut cases = Vec::new();
+    //(instr.opcode==opcode, opcode_num, result, des)
+    let mut switch_cases: Vec<TWire<'_, (bool, (_, _, _))>> = Vec::new();
+
+    // For switch this would be something like switch(instr.opcode, (opcode<const>, respective function), instr.operands)
+
+    
+
+
+
+    // This has to be defined outside the macro so it's visible to the body expressions passed to
+    // `case!` below.
+    let mut dest: TWire<u8>;
+    macro_rules! case {
+
+        ($op:expr, $body:expr) => {
+            if opcode.is_none() || opcode == Some($op) {
+                // This write is dead in some cases.
+                #[allow(unused)] {
+                    dest = instr.dest;
+                }
+                let result: TWire<u64> = $body;
+                let op_match = if opcode.is_none() {
+                    b.eq(b.lit($op as u8), instr.opcode)
+                } else {
+                    b.lit(true)
+                };
+                let parts = TWire::<(_, _, _)>::new((b.lit($op as u8), result, dest));
+                switch_cases.push(TWire::<(_, _)>::new((op_match, parts)));
+            }
+        };
+    }
+
+    let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
+    let y = operand_value(b, s1, instr.op2, instr.imm);
+
+    // This would be the first argument for the switch gatekind
+    let switch_cond  = instr.opcode;
+    // This would be the third argument for the switch gatekind
+    let explicit_input_args = &[x,y];
+
+
+
+    let y_addr: TWire<u64>;
+
+    if privilege_levels {
+        // Mask for jump and load/store addresses.  All bits are one except for bit 31, which
+        // matches bit 31 of the PC.
+        let addr_mask = b.or(s1.pc, b.lit(0xffff_ffff_7fff_ffff_u64));
+        y_addr = b.and(y, addr_mask);
+    } else {
+        y_addr = y;
+    }
+
+    // This flag is set if the `MemPort` is publicly known to be unused.  `Load*` ops may set this
+    // if `opcode` is known; otherwise, all non-memory ops set this below.
+    let mut mem_port_unused = false;
+
+    // TODO Try to do only for the following. Later see how to changes the arguments...do not even understanding :(
+    case!(Opcode::And, b.and(x, y));
+    case!(Opcode::Or, b.or(x, y));
+    case!(Opcode::Xor, b.xor(x, y));
+    //case!(Opcode::Not, b.not(y));
+    
+    case!(Opcode::Add, b.add(x, y));
+    case!(Opcode::Sub, b.sub(x, y));
+    case!(Opcode::Mull, b.mul(x, y));
+
+
+    /*
+    case!(Opcode::Umulh, {
+        let (_, high) = *b.wide_mul(x, y);
+        high
+    });
+    case!(Opcode::Smulh, {
+        let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+        // TODO: not sure this gives the right overflow value - what if high = -1?
+        b.cast::<_, u64>(high_s)
+    });
+    case!(Opcode::Udiv, b.div(x, y));
+    case!(Opcode::Umod, b.mod_(x, y));
+
+    case!(Opcode::Shl, b.shl(x, b.cast(y)));
+    case!(Opcode::Shr, b.shr(x, b.cast(y)));
+
+    case!(Opcode::Cmpe, b.cast(b.eq(x, y)));
+    case!(Opcode::Cmpa, b.cast(b.gt(x, y)));
+    case!(Opcode::Cmpae, b.cast(b.ge(x, y)));
+    case!(Opcode::Cmpg, b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
+    case!(Opcode::Cmpge, b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
+
+    case!(Opcode::Mov, y);
+    case!(Opcode::Cmov, {
+        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
+        y
+    });
+
+    case!(Opcode::Jmp, {
+        dest = b.lit(REG_PC);
+        y_addr
+    });
+    // TODO: Double check. Is this `x`?
+    // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
+    case!(Opcode::Cjmp, {
+        dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
+        y_addr
+    });
+    case!(Opcode::Cnjmp, {
+        dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
+        y_addr
+    });
+
+    // Load1, Load2, Load4, Load8
+    for w in MemOpWidth::iter() {
+        case!(w.load_opcode(), {
+            let known_value = if opcode == Some(w.load_opcode()) {
+                kmem.load(b, ev, y_addr, w)
+            } else {
+                None
+            };
+            if let Some(known_value) = known_value {
+                mem_port_unused = true;
+                known_value
+            } else {
+                extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w)
+            }
+        });
+    }
+    // Store1, Store2, Store4, Store8
+    for w in MemOpWidth::iter() {
+        case!(w.store_opcode(), {
+            dest = b.lit(REG_NONE);
+            if opcode == Some(w.store_opcode()) {
+                let (addr, value) = (y_addr, x);
+                kmem.store(b, ev, addr, value, w);
+            }
+            b.lit(0)
+        });
+    }
+    case!(Opcode::Poison8, {
+        dest = b.lit(REG_NONE);
+        if opcode == Some(Opcode::Poison8) {
+            let (addr, value) = (y_addr, x);
+            kmem.poison(b, ev, addr, value, MemOpWidth::W8);
+        }
+        b.lit(0)
+    });
+
+    // TODO: dummy implementation of `Answer` as a no-op infinite loop
+    case!(Opcode::Answer, {
+        dest = b.lit(REG_PC);
+        s1.pc
+    });
+
+    case!(Opcode::Advise, {
+        if opcode == Some(Opcode::Advise) {
+            if let Some(max) = ev.eval_typed(b.circuit(), y) {
+                wire_assert!(
+                    cx, b, b.le(advice, b.lit(max)),
+                    "step {}: advice value {} is out of range (expected <= {})",
+                    idx, cx.eval(advice), max,
+                );
+                kmem.set_wire_range(advice, max);
+            }
+        }
+        advice
+    });
+
+    // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
+    // current `pc`.
+    case!(Opcode::Stutter, {
+        dest = b.lit(REG_PC);
+        s1.pc
+    });
+
+
+    if is_mode::<AnyTainted>() {
+        // Opcode::Sink is a no-op in the standard interpreter.
+        case!(Opcode::Sink1, {
+            dest = b.lit(REG_NONE);
+            b.lit(0)
+        });
+
+        // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
+        // later taint handling step. We set the value back to itself so that taint operations are treated
+        // like `mov rX rX`.
+        case!(Opcode::Taint1, {
+            dest = instr.op1;
+            x
+        });
+    }
+
+    */
+
+
+    let (result, dest) = if opcode.is_some() {
+        if switch_cases.len() == 1 {
+            (switch_cases[0].1.1, switch_cases[0].1.2)
+        } else {
+            b.lit((0, REG_NONE)).repr
+        }
+    } else {
+        //b.mux_multi(&switch_cases, b.lit((0, REG_NONE)).repr
+        let mut val = b.lit((0, REG_NONE)).repr; // default value
+
+        //val = b.switch(switch_cond, &switch_cases, explicit_input_args);
+
+        val
+    };
+
+
+
+    // LEAVE THE BELOW AS IT IS:: NO idea :(
+    let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
+    for (i, &v_old) in s1.regs.iter().enumerate() {
+        let is_dest = b.eq(b.lit(i as u8), dest);
+        regs.push(b.mux(is_dest, result, v_old));
+    }
+
+    let (tainted_regs, tainted_im) = tainted::calc_step(
+        cx, b, idx, instr, mem_port, &s1.tainted_regs, x, y, dest);
+
+    let pc_is_dest = b.eq(b.lit(REG_PC), dest);
+    let pc = b.mux(pc_is_dest, result, b.add(s1.pc, b.lit(1)));
+
+    let cycle = b.add(s1.cycle, b.lit(1));
+    let live = s1.live;
+
+    if let Some(opcode) = opcode {
+        if !opcode.is_mem() {
+            mem_port_unused = true;
+        }
+    } else {
+        // The opcode is unknown, so it could be performing any store at any address.
+        kmem.clear();
+    }
+
+    let s2 = RamStateRepr { cycle, pc, regs, live, tainted_regs };
+    let im = CalcIntermediate {
+        x, y, result,
+        tainted: tainted_im,
+        mem_port_unused,
+        mem_op_addr: y_addr,
+    };
+    (TWire::new(s2), im)
+
 }
 
 fn calc_step_inner<'a>(

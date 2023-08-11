@@ -325,6 +325,19 @@ pub trait BuilderExt<'a>: Builder<'a> {
         val
     }
 
+
+    //Uncomment it and it will start producting errors
+    fn switch<A: SwitchCase<'a, B>,B: Repr<'a>>(
+         &self, 
+         switch_cond: TWire<'a, T>,
+         switch_cases: &[TWire<'a, (C,A)>],
+         explicit_input_args: &[TWire<'a, T>],
+    )
+    {
+         TWire::new(switch(switch_cond, switch_cases, explicit_input_args))
+    }
+    
+
     fn index<I, T>(
         &self,
         arr: &[TWire<'a, T>],
@@ -749,6 +762,17 @@ pub trait Mux<'a, Cond, Other = Self>
 where Cond: Repr<'a>, Self: Repr<'a>, Other: Repr<'a> {
     type Output: Repr<'a>;
     fn mux(
+        bld: &impl Builder<'a>,
+        c: Cond::Repr,
+        t: Self::Repr,
+        e: Other::Repr,
+    ) -> <Self::Output as Repr<'a>>::Repr;
+}
+
+pub trait Switch<'a, Cond, Branches, Other = Self>
+where Cond: Repr<'a>, Branches: Vec<TWire<'a>>, Self: Repr<'a>, Other: Repr<'a> {
+    type Output: Repr<'a>;
+    fn switch(
         bld: &impl Builder<'a>,
         c: Cond::Repr,
         t: Self::Repr,
