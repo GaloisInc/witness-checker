@@ -9,6 +9,50 @@
 //!   trait abstracts over `Circuit` and `CircuitRef`.
 //! * The `CircuitExt` trait adds higher-level helper methods, so callers can use convenient
 //!   `add`/`sub` methods instead of manually constructing a `GateKind::Add`.
+//!
+//!
+//! # Lazy secrets and witness types
+//!
+//! `GateKind::Secret` produces a secret input known only to the prover.  However, `Secret` gates
+//! are lazily evaluated: rather than have `GateKind::Secret` contain the secret value (or nothing,
+//! when building the circuit in verifier mode), it contains a function that can be called later to
+//! compute the secret value (`SecretInitFn`).
+//!
+//! This design helps support circuit functions.  The precise number of `Secret` gates a function
+//! contains and their relationship to the arguments is an implementation detail of the function;
+//! when the abstract circuit contains a `Call` gate, it shouldn't need to know how many secrets to
+//! pass and how exactly to compute the proper values.  With lazy secrets, the caller doesn't need
+//! to know, since no values are provided at the time of the call.  Instead, the lazy secrets
+//! within the function body are evaluated during circuit lowering, and they're evaulated
+//! separately for each call to the function, so the secret values produced can depend on the
+//! context of the call.  For example, a division function can use lazy secrets to get the quotient
+//! and remainder as advice; these will be evaluated separately for each call of the division
+//! function, so they can depend on the actual numerator and denominator argument values of each
+//! call.
+//!
+//! A lazy secret closure can depend on two types of context.  First, it can depend on wire values.
+//! These are called its "wire dependencies" or just "deps"; secrets that use this feature are
+//! sometimes called "derived secrets".  When the closure is evaluated, it will be passed the
+//! values (as `Bits`) carried on the wires listed in the `SecretData::deps` field.  In the
+//! division function example, this form of lazy secret would be used to compute the quotient and
+//! remainder from the argument wires.
+//!
+//! Second, a lazy secret closure can depend on an "abstract witness" value of type `W`.  This is
+//! a high-level representation of the prover's secret input as a Rust data type.  For example, the
+//! Cheesecloth MicroRAM circuit uses a representation of the execution trace as its abstract
+//! witness type `W`.  The prover has a value of type `W`, which is passed to each lazy secret
+//! closure when generating the concrete witness as part of circuit lowering; the verifier does not
+//! have such a value, so it cannot compute the concrete witness.
+//!
+//! Each circuit, including both the top-level circuit and all function bodies, has its own witness
+//! type `W`.  The closure of every `Secret` within that circuit receives a reference `&W` to the
+//! witness value.  For `Call` gates, since the caller circuit and the callee's body may have
+//! different witness types, the `Call` contains a closure called the "projection function"
+//! (the `CallData::project_witness` field, whose type is `SecretProjectFn`) for converting the
+//! caller's witness value to a value of the callee's witness type.  Like lazy secret closures,
+//! witness projection closures can depend on wire values; these wire dependencies are listed in
+//! `CallData::project_deps`.
+
 use std::alloc::Layout;
 use std::any::{self, Any, TypeId, type_name};
 use std::cell::{self, Cell, RefCell, UnsafeCell};
@@ -493,13 +537,6 @@ impl<'a> Drop for ArenasAndCircuit<'a> {
 /// This works because we provide no "open" or "reveal" operation.  The only way to produce a
 /// public/cleartext value is with `GateKind::Lit`, which contains a compile-time constant, so any
 /// operations over literals can be computed entirely at compile time.
-///
-/// If a witness is available, the `Circuit` includes its values.  This allows circuit
-/// transformations to make corresponding changes to the witness if necessary, such as splitting a
-/// 64-bit secret into a pair of 32-bit secrets that together make up the original value.  The full
-/// witness is not represented explicitly, but the individual values are accessible through the
-/// `GateKind::Secret` gates present in the circuit.  Use the `walk_secrets` function to obtain the
-/// witness values that are used to compute some set of `Wire`s.
 pub struct Circuit<'a, F: ?Sized> {
     base: CircuitBase<'a>,
     /// The filter is wrapped in an `UnsafeCell` so it can be mutated by the `migrate_filter`
@@ -2346,10 +2383,6 @@ declare_interned_pointer! {
     /// is never represented explicitly.  Instead, individual `Secret`s can be created at any point
     /// and used or discarded as needed.  During lowering to a concrete circuit, each `Secret` in
     /// use within the circuit is added to the witness in an arbitrary order.
-    ///
-    /// With the addition of call gates, we consider each stack frame to have a separate witness.
-    /// `Secret`s within a function body access the witness of the current call frame rather than
-    /// the global witness of the entire circuit.
     #[derive(Debug)]
     pub struct Secret<'a> => SecretData<'a>;
 }
