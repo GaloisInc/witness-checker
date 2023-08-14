@@ -459,6 +459,9 @@ impl<'a> Backend<'a> {
             }
 
             GateKind::Call(_) => unimplemented!("Call"),
+
+            // Making the backend unimplemented for time being
+            GateKind::Switch(..) => unimplemented!(),
         };
 
         self.representer.new_repr(repr)
