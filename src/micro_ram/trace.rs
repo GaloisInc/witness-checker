@@ -336,6 +336,12 @@ fn calc_step_switch<'a>(
     
     let switches_call_list = vec![];
 
+    //switch (cond, branches, args)
+    case!(Opcode::Cmov, {
+        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
+        y
+    });
+    //(dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE)), y)
     macro_rules! case {
         ($op:expr, $body:expr) => {
             if opcode.is_none() || opcode == Some($op) {
@@ -345,7 +351,8 @@ fn calc_step_switch<'a>(
                 impl<'b> DefineFunction<'b> for OpcodeFunc {
                 fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
                     let &[x, y, z]: &[Wire; 3] = args.try_into().unwrap();
-                    $body
+                    //$body
+                    b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
                 }
                 let func = c.define_function::<(), _>($op, function_arg_types, OpcodeFunc);
                 
@@ -512,6 +519,8 @@ fn calc_step_inner_using_switch<'a>(
     // This has to be defined outside the macro so it's visible to the body expressions passed to
     // `case!` below.
     let mut dest: TWire<u8>;
+    
+
     macro_rules! case {
 
         ($op:expr, $body:expr) => {
@@ -766,6 +775,12 @@ fn calc_step_inner<'a>(
     // This has to be defined outside the macro so it's visible to the body expressions passed to
     // `case!` below.
     let mut dest: TWire<u8>;
+
+    case!(Opcode::Cmov, {
+        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
+        y
+    });
+
     macro_rules! case {
         ($op:expr, $body:expr) => {
             if opcode.is_none() || opcode == Some($op) {
