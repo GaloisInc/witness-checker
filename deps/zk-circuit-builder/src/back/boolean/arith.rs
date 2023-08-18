@@ -1,6 +1,7 @@
 use crate::ir::circuit::Bits;
-use super::{WireId, Time, TEMP, Sink, Source, AssertNoWrap};
-
+use super::{WireId, Time, TEMP, Sink, Source, AssertNoWrap, from_bristol};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Add up `n`-bit input `a`, `n`-bit input `b`, and 1-bit input `c0`, producing an `n`-bit result.
 ///
@@ -49,6 +50,11 @@ fn add_common<S: Sink>(
     sink.xor(expire, n, a_xor_b, c)
 }
 
+fn add_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::add64(), vec![(a, 64), (b, 64)]);
+    outputs[0].0
+}
+
 pub fn add(
     sink: &mut impl Sink,
     expire: Time,
@@ -57,8 +63,17 @@ pub fn add(
     b: WireId,
     assert_no_wrap: AssertNoWrap,
 ) -> WireId {
-    let c0 = sink.lit(TEMP, 1, Bits::zero());
-    add_common(sink, expire, n, a, b, c0, assert_no_wrap)
+    if n == 64 && !assert_no_wrap.as_bool() {
+        add_opt(sink, expire, a, b)
+    } else {
+        let c0 = sink.lit(TEMP, 1, Bits::zero());
+        add_common(sink, expire, n, a, b, c0, assert_no_wrap)
+    }
+}
+
+fn sub_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::sub64(), vec![(a, 64), (b, 64)]);
+    outputs[0].0
 }
 
 pub fn sub(
@@ -68,9 +83,13 @@ pub fn sub(
     a: WireId,
     b: WireId,
 ) -> WireId {
-    let b_inv = sink.not(TEMP, n, b);
-    let c0 = sink.lit(TEMP, 1, Bits::one());
-    add_common(sink, expire, n, a, b_inv, c0, AssertNoWrap::No)
+    if n == 64 {
+        sub_opt(sink, expire, a, b)
+    } else {
+        let b_inv = sink.not(TEMP, n, b);
+        let c0 = sink.lit(TEMP, 1, Bits::one());
+        add_common(sink, expire, n, a, b_inv, c0, AssertNoWrap::No)
+    }
 }
 
 
@@ -118,15 +137,24 @@ fn add_1<S: Sink>(
     sink.xor(expire, n, a_xor_b, c)
 }
 
+fn neg_opt(sink: &mut impl Sink, expire: Time, a: WireId) -> WireId {
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::neg64(), vec![(a, 64)]);
+    outputs[0].0
+}
+
 pub fn neg(
     sink: &mut impl Sink,
     expire: Time,
     n: u64,
     a: WireId,
 ) -> WireId {
-    let a_inv = sink.not(TEMP, n, a);
-    let b = sink.lit(TEMP, 1, Bits::one());
-    add_1(sink, expire, n, a_inv, b, AssertNoWrap::No)
+    if n == 64 {
+        neg_opt(sink, expire, a)
+    } else {
+        let a_inv = sink.not(TEMP, n, a);
+        let b = sink.lit(TEMP, 1, Bits::one());
+        add_1(sink, expire, n, a_inv, b, AssertNoWrap::No)
+    }
 }
 
 
@@ -507,8 +535,19 @@ pub fn mul_karatsuba(
 fn wide_mul_use_karatsuba(n: u64) -> bool {
     match n {
         18 | 20 | 22 => true,
+        63 => false,
         _ => n >= 24,
     }
+}
+
+fn wide_mul_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
+    let outputs = from_bristol(sink, TEMP, bristol_fashion::circuits::wide_mul64(), vec![(a, 64), (b, 64)]);
+    // Nigel's circuit produces two 64-bit outputs rather than one 128-bit output, for some reason
+    let out = sink.concat_chunks(expire, &[
+        (Source::Wires(outputs[0].0), outputs[0].1),
+        (Source::Wires(outputs[1].0), outputs[1].1),
+    ]);
+    out
 }
 
 pub fn wide_mul(
@@ -518,10 +557,14 @@ pub fn wide_mul(
     a: WireId,
     b: WireId,
 ) -> WireId {
-    if !wide_mul_use_karatsuba(n) {
-        wide_mul_simple(sink, expire, n, a, b)
+    if n == 64 {
+        wide_mul_opt(sink, expire, a, b)
     } else {
-        wide_mul_karatsuba(sink, expire, n, a, b)
+        if !wide_mul_use_karatsuba(n) {
+            wide_mul_simple(sink, expire, n, a, b)
+        } else {
+            wide_mul_karatsuba(sink, expire, n, a, b)
+        }
     }
 }
 
@@ -535,6 +578,11 @@ fn mul_use_karatsuba(n: u64) -> bool {
     }
 }
 
+fn mul_opt(sink: &mut impl Sink, expire: Time, a: WireId, b: WireId) -> WireId {
+    let outputs = from_bristol(sink, expire, bristol_fashion::circuits::mul64(), vec![(a, 64), (b, 64)]);
+    outputs[0].0
+}
+
 pub fn mul(
     sink: &mut impl Sink,
     expire: Time,
@@ -543,10 +591,14 @@ pub fn mul(
     b: WireId,
     assert_no_wrap: AssertNoWrap,
 ) -> WireId {
-    if !mul_use_karatsuba(n) {
-        mul_simple(sink, expire, n, a, b, assert_no_wrap)
+    if n == 64 && !assert_no_wrap.as_bool() {
+        mul_opt(sink, expire, a, b)
     } else {
-        mul_karatsuba(sink, expire, n, a, b, assert_no_wrap)
+        if !mul_use_karatsuba(n) {
+            mul_simple(sink, expire, n, a, b, assert_no_wrap)
+        } else {
+            mul_karatsuba(sink, expire, n, a, b, assert_no_wrap)
+        }
     }
 }
 
@@ -554,7 +606,7 @@ pub fn mul(
 #[cfg(test)]
 mod test {
     use log::*;
-    use num_bigint::BigUint;
+    use num_bigint::{BigInt, BigUint};
     use crate::ir::circuit::Bits;
     use crate::back::boolean::{Time, WireId, TEMP, Source, Sink, AssertNoWrap};
     use crate::back::boolean::arith;
@@ -794,6 +846,62 @@ mod test {
         fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
             self.inner.permute_private_values(num_items, perm)
         }
+    }
+
+    // TODO(isweet):
+    //  * Use `scuttlebutt::utils::pack_bits` to launder into `num_bigint::BigInt` and `num_bigint::BigUint`
+    //  * Use `num_bigint::BigInt` for tests relying on two's complement
+    //  * Figure out how to put the `u64 -> Bits` serializing into its own function
+
+    fn add_opt_u64(lhs: u64, rhs: u64) {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let mut sink = TestNoWrapSink::default();
+        
+        let n = 64;
+        let a = sink.lit(TEMP, n, Bits(&[lhs as u32, (lhs >> 32) as u32]));
+        let b = sink.lit(TEMP, n, Bits(&[rhs as u32, (rhs >> 32) as u32]));
+        let out = arith::add(&mut sink, TEMP, n, a, b, AssertNoWrap::No);
+        let out_val = sink.inner.get_uint(n, out);
+        assert_eq!((BigUint::from(lhs) + BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)                
+    }
+
+    #[test]
+    fn add_opt() {
+        add_opt_u64(1073741825, 1073741825)
+    }
+
+    fn sub_opt_with(lhs: u64, rhs: u64) {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let mut sink = TestNoWrapSink::default();
+        
+        let n = 64;
+        let a = sink.lit(TEMP, n, Bits(&[lhs as u32]));
+        let b = sink.lit(TEMP, n, Bits(&[rhs as u32]));
+        let out = arith::sub(&mut sink, TEMP, n, a, b);
+        let out_val = sink.inner.get_uint(n, out);
+        assert_eq!((BigUint::from(lhs) - BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)        
+    }
+    
+    #[test]
+    fn sub_opt() {
+        sub_opt_with(1073741827, 1073741825)
+    }
+
+    fn neg_opt_with(x: u64, expected: BigUint) {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let mut sink = TestNoWrapSink::default();
+        
+        let n = 64;
+        let a = sink.lit(TEMP, n, Bits(&[x as u32]));
+        let out = arith::neg(&mut sink, TEMP, n, a);
+        let out_val = sink.inner.get_uint(n, out);
+        assert_eq!(expected, out_val, "with x = {}", x)
+    }
+
+    #[test]
+    fn neg_opt() {
+        // TODO(isweet): Should really use `BigInt`
+        neg_opt_with(10, BigUint::from_bytes_le(&18446744073709551606_u64.to_le_bytes()))
     }
 
     #[test]
