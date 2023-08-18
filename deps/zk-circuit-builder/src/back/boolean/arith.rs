@@ -535,6 +535,7 @@ pub fn mul_karatsuba(
 fn wide_mul_use_karatsuba(n: u64) -> bool {
     match n {
         18 | 20 | 22 => true,
+        63 => false,
         _ => n >= 24,
     }
 }
