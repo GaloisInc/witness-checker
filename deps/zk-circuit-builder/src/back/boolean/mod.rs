@@ -208,7 +208,7 @@ fn from_bristol(sink: &mut impl Sink, expire: Time, circuit: bristol_fashion::Ci
     let mut offset = 0;
     for (w, n) in inputs {
         for i in 0 .. n {
-            assert!(wire_map.insert((offset + i), w + i).is_none())
+            assert!(wire_map.insert(offset + i, w + i).is_none())
         }
         offset += n
     }
