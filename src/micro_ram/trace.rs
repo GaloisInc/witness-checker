@@ -423,7 +423,6 @@ fn calc_step_inner<'a>(
     // if `opcode` is known; otherwise, all non-memory ops set this below.
     let mut mem_port_unused = false;
 
-
     case!(Opcode::And, b.and(x, y));
     case!(Opcode::Or, b.or(x, y));
     case!(Opcode::Xor, b.xor(x, y));
@@ -431,16 +430,15 @@ fn calc_step_inner<'a>(
 
     case!(Opcode::Add, b.add(x, y));
     case!(Opcode::Sub, b.sub(x, y));
-    case!(Opcode::Mull, b.mul(x, y));
-    case!(Opcode::Umulh, {
-        let (_, high) = *b.wide_mul(x, y);
-        high
-    });
+    let (low, high) = *b.wide_mul(x, y);    
+    case!(Opcode::Mull, low);
+    case!(Opcode::Umulh, high);
     case!(Opcode::Smulh, {
         let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
         // TODO: not sure this gives the right overflow value - what if high = -1?
         b.cast::<_, u64>(high_s)
     });
+    // TODO(isweet): CSE, use a single `divmod` gadget
     case!(Opcode::Udiv, b.div(x, y));
     case!(Opcode::Umod, b.mod_(x, y));
 
@@ -455,6 +453,7 @@ fn calc_step_inner<'a>(
 
     case!(Opcode::Mov, y);
     case!(Opcode::Cmov, {
+        // TODO(isweet): CSE, one `mux(x_neq_0 ...)` for `Cmov`, `Cjmp`, and `Cnjmp`
         dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
         y
     });
