@@ -2213,10 +2213,8 @@ pub enum GateKind<'a> {
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
     /// A function call.  See `CallData` for details.
     Call(Call<'a>),
-   /// Switch(cond, branches[const, Function], input): depending on `cond`, select a branch and run its function on `input`
+    /// Switch(cond, branches[const, Function], input): depending on `cond`, select a branch and run its function on `input`
     Switch(Wire<'a>, &'a [SwitchCase<'a>], &'a [Wire<'a>]),
-
-    
 }
 
 impl<'a> Gate<'a> {

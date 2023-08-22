@@ -900,29 +900,21 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::Call(call) => eval_call(c, ecx, call)?,
 
+        GateKind::Switch(cond, branches, inputs) => {
+            if cond.ty.is_integer() {
+                let (w_val, w_sec) = ecx.get_int_value(cond).unwrap();
+                for b in branches{
+                    let switch_val = b.bits.to_bigint(cond.ty);
 
-        GateKind::Switch(cond, branches , inputs) => {
-            if cond.ty.is_integer(){
-                match ecx.get_int_value(cond){
-                    Ok((w_val, w_sec)) => {
-                        // Go over all the branches and return on valid match
-                        for b in branches{
-                                let switch_val = b.bits;
-                                let switch_val = switch_val.to_bigint(cond.ty);
-                                if w_val == switch_val{
-                                    return eval_switch_case(c, ecx, *b, inputs);
-                                }
-                        }
-                        // default case
-                        panic!("No cond value mathced.. default case hit") 
-                    },
-                    Err(e) => {
-                        panic!("Error while converting the cond wire into int value");
-                    }   
+                    if w_val == switch_val {
+                        // TODO: Could evaluate this by constructing a `Call` and then calling `eval_call` instead.
+                        return eval_switch_case(c, ecx, *b, inputs);
+                    }
                 }
-            }
-            else{
-            panic!("Cannot apply Switch on non-int cond wire {:?}", cond);
+
+                panic!("The `Switch` gate requires at least one branch to match, but none did.")
+            } else {
+                unimplemented!("The `Switch` gate does not support guards with non-integer type.")
             }
         },
     })
@@ -933,7 +925,6 @@ fn eval_call<'a, 'b>(
     outer_ecx: &'b impl EvalContext<'a, 'b>,
     call: Call<'a>,
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-
     let func = call.func;
 
     let arg_bits = call.args.iter().map(|&w| {
@@ -948,30 +939,23 @@ fn eval_call<'a, 'b>(
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
-// Trying to mimic the above `eval_call`
 fn eval_switch_case<'a, 'b>(
     c: &CircuitBase<'a>,
     outer_ecx: &'b impl EvalContext<'a, 'b>,
     switch_case: SwitchCase<'a>,
-    explicit_args:  &'a [Wire<'a>],
+    args:  &'a [Wire<'a>],
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
     let func = switch_case.func;
 
-    // Using the explicit provided args provided in the Switch Gate and pass it to function
-    let explicit_arg_bits = explicit_args.iter().map(|&w| {
+    let arg_bits = args.iter().map(|&w| {
         outer_ecx.get_value(w)
     }).collect::<Result<Vec<_>, _>>()?;
-
-    
-
     let dep_bits = switch_case.project_deps.iter().map(|&w| {
         outer_ecx.get_value(w).map(|(bits, sec)| bits)
     }).collect::<Result<Vec<_>, _>>()?;
-
     
     let mut inner_eval = outer_ecx.enter_function(
-        c, explicit_arg_bits, switch_case.project_witness, &dep_bits);
-
+        c, arg_bits, switch_case.project_witness, &dep_bits);
     EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
 }
 
