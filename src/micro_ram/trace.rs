@@ -298,6 +298,7 @@ fn calc_step<'a>(
     (s2, ci)
 }
 
+/*
 // Modifying it according to the switch
 fn calc_step_switch<'a>(
     cx: &Context<'a>,
@@ -421,6 +422,7 @@ fn calc_step_switch<'a>(
 
     (s2, ci)
 }
+ */
 
 pub fn define_calc_step_function<'a>(
     b: &impl Builder<'a>,
@@ -491,6 +493,7 @@ pub fn define_calc_step_function<'a>(
         CalcStepFunction { num_regs, privilege_levels })
 }
 
+/*
 fn calc_step_inner_using_switch<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
@@ -755,6 +758,7 @@ fn calc_step_inner_using_switch<'a>(
     (TWire::new(s2), im)
 
 }
+*/
 
 fn calc_step_inner<'a>(
     cx: &Context<'a>,
@@ -775,12 +779,6 @@ fn calc_step_inner<'a>(
     // This has to be defined outside the macro so it's visible to the body expressions passed to
     // `case!` below.
     let mut dest: TWire<u8>;
-
-    case!(Opcode::Cmov, {
-        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
-        y
-    });
-
     macro_rules! case {
         ($op:expr, $body:expr) => {
             if opcode.is_none() || opcode == Some($op) {
