@@ -113,8 +113,6 @@ fn function_gate_lazy_secret() {
 
 #[test]
 fn switch_gate_basic() {
-
-    
     init_circuit!(c);
 
     let ty_i32 = Ty::int(32);
