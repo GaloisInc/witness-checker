@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use log::info;
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::hash::sha256::Sha256;
-use zk_circuit_builder::ir::circuit::Function;
+use zk_circuit_builder::ir::circuit::{Bits, Function};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
@@ -24,6 +24,7 @@ pub struct ExecBuilder<'a> {
     expect_zero: bool,
     privilege_levels: bool,
     calc_step_func: Function<'a>,
+    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
     check_step_func: Function<'a>,
     /// If set, then the trace is valid only if the program writes a 1 to this address before
     /// terminating.
@@ -84,6 +85,7 @@ impl<'a> ExecBuilder<'a> {
         debug_segment_graph_path: Option<String>,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> ExecBuilder<'a> {
+        let calc_step_inner_cases = trace::define_calc_step_inner_cases(b);
         ExecBuilder {
             init_state: init_state.clone(),
             check_steps,
@@ -91,9 +93,11 @@ impl<'a> ExecBuilder<'a> {
             privilege_levels: exec.params.privilege_levels,
             calc_step_func: trace::define_calc_step_function(
                 b,
+                calc_step_inner_cases.clone(),
                 exec.params.num_regs,
                 exec.params.privilege_levels,
             ),
+            calc_step_inner_cases,
             check_step_func: trace::define_check_step_function(b),
             expect_write,
             debug_segment_graph_path,
@@ -237,6 +241,7 @@ impl<'a> ExecBuilder<'a> {
             ev: &mut self.ev,
             privilege_levels: self.privilege_levels,
             calc_step_func: self.calc_step_func,
+            calc_step_inner_cases: self.calc_step_inner_cases.clone(),
             check_step_func: self.check_step_func,
             mem: &mut self.mem,
             fetch: &mut self.fetch,

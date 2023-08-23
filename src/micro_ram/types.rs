@@ -291,7 +291,7 @@ macro_rules! mk_named_enum {
         }
 
         impl $Name {
-            const COUNT: usize = 0 $( + {
+            pub const COUNT: usize = 0 $( + {
                 #[allow(bad_style)] let $Variant = 1;
                 $Variant
             } )*;
