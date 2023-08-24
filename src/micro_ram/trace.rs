@@ -42,7 +42,7 @@ pub struct SegmentBuilder<'a, 'b, B> {
     pub ev: &'b mut CachingEvaluator<'a, 'static, eval::Public>,
     pub privilege_levels: bool,
     pub calc_step_func: Function<'a>,
-    pub calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
+    pub calc_step_inner_cases: &'b [(Bits<'a>, Function<'a>); Opcode::COUNT],
     pub check_step_func: Function<'a>,
     pub mem: &'b mut Memory<'a>,
     pub fetch: &'b mut Fetch<'a>,
@@ -142,7 +142,7 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             });
 
             let (calc_state, calc_im) =
-                calc_step(cx, b, ev, self.privilege_levels, self.calc_step_func, self.calc_step_inner_cases.clone(),
+                calc_step(cx, b, ev, self.privilege_levels, self.calc_step_func, self.calc_step_inner_cases,
                     i, instr, &mem_port, advice, &prev_state, &mut kmem);
             if calc_im.mem_port_unused {
                 mem_ports.set_unused(i);
@@ -249,7 +249,7 @@ fn calc_step<'a>(
     ev: &mut CachingEvaluator<'a, '_, eval::Public>,
     privilege_levels: bool,
     calc_step_func: Function<'a>,
-    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
+    calc_step_inner_cases: &[(Bits<'a>, Function<'a>); Opcode::COUNT],
     idx: usize,
     instr: TWire<'a, RamInstr>,
     mem_port: &TWire<'a, MemPort>,
@@ -305,19 +305,19 @@ fn calc_step<'a>(
 
 pub fn define_calc_step_function<'a>(
     b: &impl Builder<'a>,
-    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
+    calc_step_inner_cases: &[(Bits<'a>, Function<'a>); Opcode::COUNT],
     num_regs: usize,
     privilege_levels: bool,
 ) -> Function<'a> {
-    struct CalcStepFunction<'a> {
-        calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
+    struct CalcStepFunction<'a, 'b> {
+        calc_step_inner_cases: &'b [(Bits<'a>, Function<'a>); Opcode::COUNT],
         num_regs: usize,
         privilege_levels: bool,
     }
 
-    impl<'b> DefineFunction<'b> for CalcStepFunction<'b> {
-        fn build_body<C>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b>
-        where C: CircuitTrait<'b> {
+    impl<'a, 'b> DefineFunction<'a> for CalcStepFunction<'a, 'b> {
+        fn build_body<C>(self, c: &C, args_wires: &[Wire<'a>]) -> Wire<'a>
+        where C: CircuitTrait<'a> {
             let sizes = [self.num_regs, self.num_regs];
             let args = typed::from_wire_list::<CalcStepArgs>(c.as_base(), &args_wires, &sizes);
             let (instr, mem_port, advice, s1) = args.repr;
@@ -375,14 +375,28 @@ pub fn define_calc_step_function<'a>(
         CalcStepFunction { calc_step_inner_cases, num_regs, privilege_levels })
 }
 
+// Editor's note: the 'K' suffix is for 'Kontinuation'
+
+// An example of a Rust function that implements a MicroRAM instruction
+fn and_k<'a>(
+    b: &impl Builder<'a>,
+    l: TWire<'a, u64>,
+    r: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.and(l, r), dest))
+}
+
+// Produces a map from each `Opcode` to its `circuit::Function` interpretation.
+//
+// TODO(isweet): Consider renaming this to something less verbose like `define_opcodes`
 pub fn define_calc_step_inner_cases<'a>(
     b: &impl Builder<'a>,
-) -> Vec<(Bits<'a>, Function<'a>)> {
+) -> [(Bits<'a>, Function<'a>); Opcode::COUNT] {
     let c = b.circuit();
-    let mut ret = Vec::with_capacity(Opcode::COUNT);
-
+    
     macro_rules! define_opcode {
-        ($Opcode:path, $Name:ident, $body:expr) => {
+        ($Opcode:path, $Name:ident, $k:expr) => {{
             struct $Name;
 
             impl<'b> DefineFunction<'b> for $Name {
@@ -391,9 +405,9 @@ pub fn define_calc_step_inner_cases<'a>(
                     let args = typed::from_wire_list::<CalcStepInnerArgs>(c.as_base(), &args_wires, &[]);
                     let (dest, x, y) = args.repr;
 
-                    let result = $body(b, dest, x, y);
+                    let result = $k(b, x, y, dest);
 
-                    let (result_wires, _result_sizes) = typed::to_wire_list(&TWire::<(u8, u64)>::new(result));
+                    let (result_wires, _result_sizes) = typed::to_wire_list(&result);
                     c.pack(&result_wires)
                 }
             }
@@ -402,23 +416,20 @@ pub fn define_calc_step_inner_cases<'a>(
             let num_args = CalcStepInnerArgs::expected_num_wires(&mut iter::empty());
             let mut arg_tys = Vec::with_capacity(num_args);
             CalcStepInnerArgs::for_each_expected_wire_type(c, &mut iter::empty(), |t| arg_tys.push(t));
-            let k = b.circuit().define_function::<(), _>(stringify!($Name), &arg_tys, $Name);
-
-            ret.push((discriminant, k));
-        }
+            let k = c.define_function::<(), _>(stringify!($Name), &arg_tys, $Name);
+            (discriminant, k)
+        }}
     }
-    
-    // Editor's note: the 'K' suffix is for 'Kontinuation'
-    define_opcode!(Opcode::And, AndK, |b: &BuilderImpl<_>, dest, x, y| (dest, b.and(x, y)));
 
-    ret
+    [ define_opcode!(Opcode::And, AndK, and_k); Opcode::COUNT ]
+    // TODO(isweet): All the other opcodes
 }
 
 fn calc_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     ev: &mut CachingEvaluator<'a, '_, eval::Public>,
-    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>, // TODO(isweet): This should not be an owned `Vec`
+    calc_step_inner_cases: &[(Bits<'a>, Function<'a>); Opcode::COUNT],
     privilege_levels: bool,
     idx: usize,
     opcode: Option<Opcode>,
@@ -430,14 +441,14 @@ fn calc_step_inner<'a>(
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let _g = b.scoped_label("calc_step");
 
-    // TODO(isweet): Create a `switch` gate
-    let _calc_step_inner_cases = calc_step_inner_cases.into_iter().map(
-        |(discriminee, k)| b.circuit().switch_case(discriminee, k, &[], |_, &(), _| (&()).into())
-    ).collect::<Vec<_>>();
+    // TODO(isweet):
+    //  Secret + Functions    => `switch` over second projection of `calc_step_inner_cases`
+    //  Secret + No Functions => `mux` over first projection of `calc_step_inner_cases`
+    //  Public                => inline corresponding first projection in `calc_step_inner_cases`
 
-    let mut cases = Vec::new();
     // This has to be defined outside the macro so it's visible to the body expressions passed to
     // `case!` below.
+    let mut cases = Vec::new();
     let mut dest: TWire<u8>;
     macro_rules! case {
         ($op:expr, $body:expr) => {
@@ -606,6 +617,17 @@ fn calc_step_inner<'a>(
         });
     }
 
+    let (result, dest) = match opcode {
+        None => if b.circuit().allow_functions() {
+            todo!()
+        } else {
+            todo!()
+        },
+        Some(Opcode::And) => and_k(b, x, y, instr.dest).repr,
+        _ => unreachable!()
+    };
+
+    
     let (result, dest) = if opcode.is_some() {
         if cases.len() == 1 {
             *cases[0].1

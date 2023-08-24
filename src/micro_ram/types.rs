@@ -431,7 +431,7 @@ macro_rules! mk_named_enum {
 }
 
 mk_named_enum! {
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Migrate)]
     pub enum Opcode {
         And = 0,
         Or = 1,
@@ -500,7 +500,6 @@ impl Opcode {
         }
     }
 }
-
 
 pub const MEM_PORT_FINAL_CYCLE: u32 = !0 - 2;
 pub const MEM_PORT_UNUSED_CYCLE: u32 = !0 - 1;

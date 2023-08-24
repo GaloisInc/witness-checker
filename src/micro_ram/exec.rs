@@ -12,7 +12,7 @@ use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::mem::{Memory, EquivSegments};
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use crate::micro_ram::trace::{self, SegmentBuilder, InstrLookup};
-use crate::micro_ram::types::{Commitment, ExecBody, RamState, RamInstrRepr};
+use crate::micro_ram::types::{Commitment, ExecBody, RamState, RamInstrRepr, Opcode};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 
 
@@ -24,7 +24,7 @@ pub struct ExecBuilder<'a> {
     expect_zero: bool,
     privilege_levels: bool,
     calc_step_func: Function<'a>,
-    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
+    calc_step_inner_cases: [(Bits<'a>, Function<'a>); Opcode::COUNT],
     check_step_func: Function<'a>,
     /// If set, then the trace is valid only if the program writes a 1 to this address before
     /// terminating.
@@ -93,7 +93,7 @@ impl<'a> ExecBuilder<'a> {
             privilege_levels: exec.params.privilege_levels,
             calc_step_func: trace::define_calc_step_function(
                 b,
-                calc_step_inner_cases.clone(),
+                &calc_step_inner_cases,
                 exec.params.num_regs,
                 exec.params.privilege_levels,
             ),
@@ -241,7 +241,7 @@ impl<'a> ExecBuilder<'a> {
             ev: &mut self.ev,
             privilege_levels: self.privilege_levels,
             calc_step_func: self.calc_step_func,
-            calc_step_inner_cases: self.calc_step_inner_cases.clone(),
+            calc_step_inner_cases: &self.calc_step_inner_cases,
             check_step_func: self.check_step_func,
             mem: &mut self.mem,
             fetch: &mut self.fetch,
