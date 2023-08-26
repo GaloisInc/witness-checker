@@ -271,8 +271,7 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
-    
-    fn intern_switch_case_list(&self, cases_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
+    pub fn intern_switch_case_list(&self, cases_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
         let mut intern = self.intern_switch_case_list.borrow_mut();
         match intern.get(cases_list) {
             Some(&x) => x,
@@ -422,6 +421,10 @@ impl<'a> CircuitBase<'a> {
 
     fn wire_list(&self, wire_list: &[Wire<'a>]) -> &'a [Wire<'a>] {
         self.intern_wire_list(wire_list)
+    }
+
+    fn switch_case_list(&self, switch_case_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
+        self.intern_switch_case_list(switch_case_list)
     }
 
     fn ty(&self, kind: TyKind<'a>) -> Ty<'a> {
@@ -940,6 +943,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.as_base().wire_list(wire_list)
     }
 
+    fn switch_case_list(&self, switch_case_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
+        self.as_base().switch_case_list(switch_case_list)
+    }
+
     fn lit<T: AsBits>(&self, ty: Ty<'a>, val: T) -> Wire<'a> {
         let val = self.bits(ty, val);
         self.gate(GateKind::Lit(val, ty))
@@ -1117,7 +1124,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Call(call))
     }
 
-
     fn switch_case<W, W2, F>(
         &self,
         bits: Bits<'a>,
@@ -1135,8 +1141,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
             TypeId::of::<W>() == TypeId::of::<()>());
         debug_assert_eq!(TypeId::of::<W2>(), func.witness_type);
         let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
-        
-
         let switchcase = self.as_base().alloc_switch_case(SwitchCaseData {
             bits,
             func,

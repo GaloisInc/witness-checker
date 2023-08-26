@@ -234,8 +234,8 @@ type CalcIntermediateTypes = (
 
 type CalcStepArgs = (RamInstr, MemPort, u64, RamState);
 
-// `(d, x, y)` where `d` is the destination index, `x` is the first operand, and `y` is the second operand
-type CalcStepInnerArgs = (u8, u64, u64);
+// `(x, y, d)` where `x` is the first operand, `y` is the second operand, and `d` is the destination index
+type CalcStepInnerArgs = (u64, u64, u8);
 
 type CalcStepResult = (
     RamState,
@@ -377,14 +377,233 @@ pub fn define_calc_step_function<'a>(
 
 // Editor's note: the 'K' suffix is for 'Kontinuation'
 
-// An example of a Rust function that implements a MicroRAM instruction
 fn and_k<'a>(
     b: &impl Builder<'a>,
-    l: TWire<'a, u64>,
-    r: TWire<'a, u64>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
     dest: TWire<'a, u8>,
 ) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.and(l, r), dest))
+    TWire::new((b.and(x, y), dest))
+}
+
+fn or_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.or(x, y), dest))
+}
+
+fn xor_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.xor(x, y), dest))
+}
+
+fn not_k<'a>(
+    b: &impl Builder<'a>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.not(y), dest))
+}
+
+fn add_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.add(x, y), dest))
+}
+
+fn sub_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.sub(x, y), dest))
+}
+
+fn mull_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    let (low, _) = b.wide_mul(x, y).repr;
+    TWire::new((low, dest))
+}
+
+fn umulh_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    let (_, high) = b.wide_mul(x, y).repr;
+    TWire::new((high, dest))
+}
+
+fn smulh_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
+    // TODO: not sure this gives the right overflow value - what if high = -1?
+    TWire::new((b.cast::<_, u64>(high_s), dest))
+}
+
+fn udiv_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.div(x, y), dest))
+}
+
+fn umod_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.mod_(x, y), dest))
+}
+
+fn shl_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.shl(x, b.cast(y)), dest))
+}
+
+fn shr_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.shr(x, b.cast(y)), dest))
+}
+
+fn cmpe_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.eq(x, y)), dest))
+}
+
+fn cmpa_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.gt(x, y)), dest))
+}
+
+fn cmpae_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.ge(x, y)), dest))
+}
+
+fn cmpg_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))), dest))
+}
+
+fn cmpge_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))), dest))
+}
+
+fn mov_k<'a>(
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((y, dest))
+}
+
+fn cmov_k<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((y, b.mux(b.neq_zero(x), dest, b.lit(REG_NONE))))
+}
+
+fn config_addr<'a>(
+    privilege_levels: bool,
+    b: &impl Builder<'a>,
+    pc: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+) -> TWire<'a, u64> {
+    if privilege_levels {
+        // Mask for jump and load/store addresses.  All bits are one except for bit 31, which
+        // matches bit 31 of the PC.
+        let addr_mask = b.or(pc, b.lit(0xffff_ffff_7fff_ffff_u64));
+        b.and(y, addr_mask)
+    } else {
+        y
+    }
+}
+
+fn jmp_k<'a>(
+    privilege_levels: bool,
+    b: &impl Builder<'a>,
+    pc: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+) -> TWire<'a, (u64, u8)> {
+    let y_addr = config_addr(privilege_levels, b, pc, y);
+    TWire::new((y_addr, b.lit(REG_PC)))
+}
+
+fn cjmp_k<'a>(
+    privilege_levels: bool,
+    b: &impl Builder<'a>,
+    pc: TWire<'a, u64>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+) -> TWire<'a, (u64, u8)> {
+    let y_addr = config_addr(privilege_levels, b, pc, y);
+    TWire::new((y_addr, b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE))))
+}
+
+fn cnjmp_k<'a>(
+    privilege_levels: bool,
+    b: &impl Builder<'a>,
+    pc: TWire<'a, u64>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+) -> TWire<'a, (u64, u8)> {
+    let y_addr = config_addr(privilege_levels, b, pc, y);
+    TWire::new((y_addr, b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC))))
 }
 
 // Produces a map from each `Opcode` to its `circuit::Function` interpretation.
@@ -403,7 +622,7 @@ pub fn define_calc_step_inner_cases<'a>(
                 fn build_body<C: CircuitTrait<'b>>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b> {
                     let b = BuilderImpl::from_ref(c);
                     let args = typed::from_wire_list::<CalcStepInnerArgs>(c.as_base(), &args_wires, &[]);
-                    let (dest, x, y) = args.repr;
+                    let (x, y, dest) = args.repr;
 
                     let result = $k(b, x, y, dest);
 
@@ -441,30 +660,18 @@ fn calc_step_inner<'a>(
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let _g = b.scoped_label("calc_step");
 
-    // TODO(isweet):
-    //  Secret + Functions    => `switch` over second projection of `calc_step_inner_cases`
-    //  Secret + No Functions => `mux` over first projection of `calc_step_inner_cases`
-    //  Public                => inline corresponding first projection in `calc_step_inner_cases`
-
-    // This has to be defined outside the macro so it's visible to the body expressions passed to
-    // `case!` below.
     let mut cases = Vec::new();
-    let mut dest: TWire<u8>;
     macro_rules! case {
         ($op:expr, $body:expr) => {
             if opcode.is_none() || opcode == Some($op) {
-                // This write is dead in some cases.
-                #[allow(unused)] {
-                    dest = instr.dest;
-                }
-                let result: TWire<u64> = $body;
                 let op_match = if opcode.is_none() {
                     b.eq(b.lit($op as u8), instr.opcode)
                 } else {
                     b.lit(true)
                 };
-                let parts = TWire::<(_, _)>::new((result, dest));
-                cases.push(TWire::<(_, _)>::new((op_match, parts)));
+                let result: TWire<(u64, u8)> = $body;
+
+                cases.push(TWire::<(_, _)>::new((op_match, result)));
             }
         };
     }
@@ -472,74 +679,60 @@ fn calc_step_inner<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
-    let y_addr: TWire<u64>;
-
-    if privilege_levels {
-        // Mask for jump and load/store addresses.  All bits are one except for bit 31, which
-        // matches bit 31 of the PC.
-        let addr_mask = b.or(s1.pc, b.lit(0xffff_ffff_7fff_ffff_u64));
-        y_addr = b.and(y, addr_mask);
-    } else {
-        y_addr = y;
-    }
-
     // This flag is set if the `MemPort` is publicly known to be unused.  `Load*` ops may set this
     // if `opcode` is known; otherwise, all non-memory ops set this below.
     let mut mem_port_unused = false;
 
-    case!(Opcode::And, b.and(x, y));
-    case!(Opcode::Or, b.or(x, y));
-    case!(Opcode::Xor, b.xor(x, y));
-    case!(Opcode::Not, b.not(y));
+    case!(Opcode::And, and_k(b, x, y, instr.dest));
+    case!(Opcode::Or, or_k(b, x, y, instr.dest));
+    case!(Opcode::Xor, xor_k(b, x, y, instr.dest));
+    case!(Opcode::Not, not_k(b, y, instr.dest));
 
-    case!(Opcode::Add, b.add(x, y));
-    case!(Opcode::Sub, b.sub(x, y));
-    let (low, high) = *b.wide_mul(x, y);    
-    case!(Opcode::Mull, low);
-    case!(Opcode::Umulh, high);
-    case!(Opcode::Smulh, {
-        let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
-        // TODO: not sure this gives the right overflow value - what if high = -1?
-        b.cast::<_, u64>(high_s)
-    });
-    // TODO(isweet): CSE, use a single `divmod` gadget
-    case!(Opcode::Udiv, b.div(x, y));
-    case!(Opcode::Umod, b.mod_(x, y));
+    case!(Opcode::Add, add_k(b, x, y, instr.dest));
+    case!(Opcode::Sub, sub_k(b, x, y, instr.dest));
+    case!(Opcode::Mull, mull_k(b, x, y, instr.dest));
+    case!(Opcode::Umulh, umulh_k(b, x, y, instr.dest));
+    case!(Opcode::Smulh, smulh_k(b, x, y, instr.dest));
+    case!(Opcode::Udiv, udiv_k(b, x, y, instr.dest));
+    case!(Opcode::Umod, umod_k(b, x, y, instr.dest));
 
-    case!(Opcode::Shl, b.shl(x, b.cast(y)));
-    case!(Opcode::Shr, b.shr(x, b.cast(y)));
+    case!(Opcode::Shl, shl_k(b, x, y, instr.dest));
+    case!(Opcode::Shr, shr_k(b, x, y, instr.dest));
 
-    case!(Opcode::Cmpe, b.cast(b.eq(x, y)));
-    case!(Opcode::Cmpa, b.cast(b.gt(x, y)));
-    case!(Opcode::Cmpae, b.cast(b.ge(x, y)));
-    case!(Opcode::Cmpg, b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
-    case!(Opcode::Cmpge, b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))));
+    case!(Opcode::Cmpe, cmpe_k(b, x, y, instr.dest));
+    case!(Opcode::Cmpa, cmpa_k(b, x, y, instr.dest));
+    case!(Opcode::Cmpae, cmpae_k(b, x, y, instr.dest));
+    case!(Opcode::Cmpg, cmpg_k(b, x, y, instr.dest));
+    case!(Opcode::Cmpge, cmpge_k(b, x, y, instr.dest));
 
-    case!(Opcode::Mov, y);
-    case!(Opcode::Cmov, {
-        // TODO(isweet): CSE, one `mux(x_neq_0 ...)` for `Cmov`, `Cjmp`, and `Cnjmp`
-        dest = b.mux(b.neq_zero(x), instr.dest, b.lit(REG_NONE));
-        y
-    });
+    case!(Opcode::Mov, mov_k(y, instr.dest));
+    case!(Opcode::Cmov, cmov_k(b, x, y, instr.dest));
 
-    case!(Opcode::Jmp, {
-        dest = b.lit(REG_PC);
-        y_addr
-    });
+    case!(Opcode::Jmp, jmp_k(privilege_levels, b, s1.pc, y));
     // TODO: Double check. Is this `x`?
     // https://gitlab-ext.galois.com/fromager/cheesecloth/MicroRAM/-/merge_requests/33/diffs#d54c6573feb6cf3e6c98b0191e834c760b02d5c2_94_71
-    case!(Opcode::Cjmp, {
-        dest = b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE));
-        y_addr
-    });
-    case!(Opcode::Cnjmp, {
-        dest = b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC));
-        y_addr
-    });
+    case!(Opcode::Cjmp, cjmp_k(privilege_levels, b, s1.pc, x, y));
+    case!(Opcode::Cnjmp, cnjmp_k(privilege_levels, b, s1.pc, x, y));
 
+    // TODO(isweet): Figure out how to deal with conditional on public and `mem_port_unused`.
+    // The most obvious solution is to pass `opcode.is_some()` to `load_k` and return `mem_port_unused`
+    // So: case!(w.load_opcode(), {
+    //   let (rd, mpu) = load_k(opcode.is_some(), b, ev, y_addr, w, mem_port.value, mem_port.addr);
+    //   mem_port_unused = mpu;
+    //   rd
+    // });
+    //
+    // And in the `switch` function: load_k(false, b, ev, y_addr, w, mem_port.value, mem_port.addr)
+    //
+    // But `ev` and `y_addr` are only necessary for the public evaluation. Maybe break load
+    // into `loadp_k` and `loads_k` so that `switch` function can just call `loads_k`?
+    //
+    // Ugh, gross...
+/*
     // Load1, Load2, Load4, Load8
     for w in MemOpWidth::iter() {
         case!(w.load_opcode(), {
+            // TODO(isweet): What purpose does this conditional serve?
             let known_value = if opcode == Some(w.load_opcode()) {
                 kmem.load(b, ev, y_addr, w)
             } else {
@@ -616,26 +809,25 @@ fn calc_step_inner<'a>(
             x
         });
     }
-
-    let (result, dest) = match opcode {
-        None => if b.circuit().allow_functions() {
-            todo!()
-        } else {
-            todo!()
-        },
-        Some(Opcode::And) => and_k(b, x, y, instr.dest).repr,
-        _ => unreachable!()
-    };
-
+         */
     
     let (result, dest) = if opcode.is_some() {
         if cases.len() == 1 {
             *cases[0].1
         } else {
-            b.lit((0, REG_NONE)).repr
+            b.lit((0, REG_NONE)).repr // TODO(isweet): Ask Stuart about this case. Only possible when a `case!` has been duplicated with same opcode accidentally?
         }
     } else {
-        *b.mux_multi(&cases, b.lit((0, REG_NONE)))
+        if b.circuit().allow_functions() {
+            let c = b.circuit();
+            let discriminee = *instr.opcode;
+            let cases = calc_step_inner_cases.map(|(discriminant, k)| c.switch_case(discriminant, k, &[], |_, s: &(), _| s.into()));
+            let args = [*x, *y, *instr.dest];
+            let r = c.switch(discriminee, c.switch_case_list(&cases), c.wire_list(&args));
+            typed::from_wire_list::<(u64, u8)>(c.as_base(), &[r], &[]).repr // TODO(isweet): Confirm this is correct understanding of typed `pack`
+        } else {
+            *b.mux_multi(&cases, b.lit((0, REG_NONE)))
+        }
     };
 
     let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
@@ -667,7 +859,8 @@ fn calc_step_inner<'a>(
         x, y, result,
         tainted: tainted_im,
         mem_port_unused,
-        mem_op_addr: y_addr,
+        // TODO(isweet): Factor `y_addr` back into this function
+        mem_op_addr: config_addr(privilege_levels, b, s1.pc, y),
     };
     (TWire::new(s2), im)
 }
