@@ -375,187 +375,352 @@ pub fn define_calc_step_function<'a>(
         CalcStepFunction { calc_step_inner_cases, num_regs, privilege_levels })
 }
 
-// Editor's note: the 'K' suffix is for 'Kontinuation'
-
-fn and_k<'a>(
+// TODO(isweet): Maybe reduce boilerplate with macro?
+fn op_and<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.and(x, y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.and(x, y), dest)), public)
 }
 
-fn or_k<'a>(
+fn op_or<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.or(x, y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.or(x, y), dest)), public)
 }
 
-fn xor_k<'a>(
+fn op_xor<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.xor(x, y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.xor(x, y), dest)), public)
 }
 
-fn not_k<'a>(
+fn op_not<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
+    _x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.not(y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.not(y), dest)), public)
 }
 
-fn add_k<'a>(
+fn op_add<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.add(x, y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.add(x, y), dest)), public)
 }
 
-fn sub_k<'a>(
+fn op_sub<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.sub(x, y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.sub(x, y), dest)), public)
 }
 
-fn mull_k<'a>(
+fn op_mull<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    let (low, _) = b.wide_mul(x, y).repr;
-    TWire::new((low, dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    // A disjunction protocol makes `mul` cheaper, but otherwise use `wide_mul` for deduplication w/ other instructions
+    let result = if switch {
+        b.mul(x, y)
+    } else {
+        b.wide_mul(x, y).repr.0
+    };
+    (TWire::new((result, dest)), public)
 }
 
-fn umulh_k<'a>(
+fn op_umulh<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    let (_, high) = b.wide_mul(x, y).repr;
-    TWire::new((high, dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.wide_mul(x, y).repr.1, dest)), public)
 }
 
-fn smulh_k<'a>(
+fn op_smulh<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    let (_, high_s) = *b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y));
-    // TODO: not sure this gives the right overflow value - what if high = -1?
-    TWire::new((b.cast::<_, u64>(high_s), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    // TODO: not sure this gives the right overflow value - what if high = -1?    
+    (TWire::new((b.cast::<_, u64>(b.wide_mul(b.cast::<_, i64>(x), b.cast::<_, i64>(y)).repr.1), dest)), public)
 }
 
-fn udiv_k<'a>(
+fn op_udiv<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.div(x, y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.div(x, y), dest)), public)
 }
 
-fn umod_k<'a>(
+fn op_umod<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.mod_(x, y), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.mod_(x, y), dest)), public)
 }
 
-fn shl_k<'a>(
+fn op_shl<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.shl(x, b.cast(y)), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.shl(x, b.cast(y)), dest)), public)
 }
 
-fn shr_k<'a>(
+fn op_shr<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.shr(x, b.cast(y)), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.shr(x, b.cast(y)), dest)), public)
 }
 
-fn cmpe_k<'a>(
+fn op_cmpe<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.cast(b.eq(x, y)), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.cast(b.eq(x, y)), dest)), public)
 }
 
-fn cmpa_k<'a>(
+fn op_cmpa<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.cast(b.gt(x, y)), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.cast(b.gt(x, y)), dest)), public)
 }
 
-fn cmpae_k<'a>(
+fn op_cmpae<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.cast(b.ge(x, y)), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.cast(b.ge(x, y)), dest)), public)
 }
 
-fn cmpg_k<'a>(
+fn op_cmpg<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.cast(b.gt(b.cast::<_, i64>(x), b.cast::<_, i64>(y))), dest)), public)
 }
 
-fn cmpge_k<'a>(
+fn op_cmpge<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))), dest))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((b.cast(b.ge(b.cast::<_, i64>(x), b.cast::<_, i64>(y))), dest)), public)
 }
 
-fn mov_k<'a>(
-    y: TWire<'a, u64>,
-    dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((y, dest))
-}
-
-fn cmov_k<'a>(
+fn op_mov<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
+    _x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
+    dest: TWire<'a, u8>,
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((y, dest)), public)
+}
+
+fn op_cmov<'a>(
+    _cx: &Context<'a>,
+    b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    _privilege_levels: bool,
+    public: bool,
+    _switch: bool,
     x: TWire<'a, u64>,
     y: TWire<'a, u64>,
+    _pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
     dest: TWire<'a, u8>,
-) -> TWire<'a, (u64, u8)> {
-    TWire::new((y, b.mux(b.neq_zero(x), dest, b.lit(REG_NONE))))
+) -> (TWire<'a, (u64, u8)>, bool) {
+    (TWire::new((y, b.mux(b.neq_zero(x), dest, b.lit(REG_NONE)))), public)
 }
 
 fn config_addr<'a>(
@@ -574,14 +739,40 @@ fn config_addr<'a>(
     }
 }
 
-fn jmp_k<'a>(
-    privilege_levels: bool,
+fn op_jmp<'a>(
+    _cx: &Context<'a>,
     b: &impl Builder<'a>,
-    pc: TWire<'a, u64>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    privilege_levels: bool,
+    public: bool,
+    _switch: bool,
+    _x: TWire<'a, u64>,
     y: TWire<'a, u64>,
-) -> TWire<'a, (u64, u8)> {
+    pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
+    dest: TWire<'a, u8>,
+) -> (TWire<'a, (u64, u8)>, bool) {
     let y_addr = config_addr(privilege_levels, b, pc, y);
-    TWire::new((y_addr, b.lit(REG_PC)))
+    (TWire::new((y_addr, b.lit(REG_PC))), public)
+}
+
+fn op_jmp<'a>(
+    _cx: &Context<'a>,
+    b: &impl Builder<'a>,
+    _ev: &mut CachingEvaluator<'a, '_, eval::Public>,
+    privilege_levels: bool,
+    public: bool,
+    _switch: bool,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    pc: TWire<'a, u64>,
+    _mem_port: &TWire<'a, MemPort>,
+    _kmem: &mut KnownMem<'a>,
+    dest: TWire<'a, u8>,
+) -> (TWire<'a, (u64, u8)>, bool) {
+    let y_addr = config_addr(privilege_levels, b, pc, y);
+    (TWire::new((y_addr, b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE)))), public)
 }
 
 fn cjmp_k<'a>(
@@ -679,7 +870,7 @@ fn calc_step_inner<'a>(
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
     let y = operand_value(b, s1, instr.op2, instr.imm);
 
-    // This flag is set if the `MemPort` is publicly known to be unused.  `Load*` ops may set this
+0    // This flag is set if the `MemPort` is publicly known to be unused.  `Load*` ops may set this
     // if `opcode` is known; otherwise, all non-memory ops set this below.
     let mut mem_port_unused = false;
 
