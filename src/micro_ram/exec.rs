@@ -24,7 +24,7 @@ pub struct ExecBuilder<'a> {
     expect_zero: bool,
     privilege_levels: bool,
     calc_step_func: Function<'a>,
-    calc_step_inner_cases: [(Bits<'a>, Function<'a>); Opcode::COUNT],
+    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
     check_step_func: Function<'a>,
     /// If set, then the trace is valid only if the program writes a 1 to this address before
     /// terminating.
@@ -85,7 +85,7 @@ impl<'a> ExecBuilder<'a> {
         debug_segment_graph_path: Option<String>,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> ExecBuilder<'a> {
-        let calc_step_inner_cases = trace::define_calc_step_inner_cases(b);
+        let calc_step_inner_cases = trace::define_calc_step_inner_cases(b, exec.params.privilege_levels);
         ExecBuilder {
             init_state: init_state.clone(),
             check_steps,
