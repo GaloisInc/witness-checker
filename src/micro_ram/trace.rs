@@ -460,6 +460,7 @@ pub fn define_calc_step_inner_cases<'a>(
             impl<'b> DefineFunction<'b> for $Name {
                 fn build_body<C: CircuitTrait<'b>>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b> {
                     let b = BuilderImpl::from_ref(c);
+                    // There are no variable-sized data structures in `OpArgs`, so `sizes` is empty
                     let args = typed::from_wire_list::<OpArgs>(c.as_base(), &args_wires, &[]);
                     let (x, y, pc, mem_port, advice, dest) = args.repr;
                     let result = $body(b, self.privilege_levels, x, y, pc, &mem_port, advice, dest);
@@ -507,10 +508,13 @@ fn calc_step_inner<'a>(
     macro_rules! case {
         ($op:expr, $body:expr) => {{
             if opcode.is_none() && !c.allow_functions() || opcode == Some($op) {
-                let discriminant = $op;
                 let result = $body;
-
-                cases.push((discriminant, result));
+                let op_match = if opcode.is_none() {
+                    b.eq(b.lit($op as u8), instr.opcode)
+                } else {
+                    b.lit(true)
+                };
+                cases.push(TWire::<(_, _)>::new((op_match, result)));
             }
         }};
     }
@@ -532,18 +536,18 @@ fn calc_step_inner<'a>(
         if cases.len() == 1 {
             cases[0].1.repr
         } else {
-            (b.lit(0), b.lit(REG_NONE))
+            b.lit((0, REG_NONE)).repr
         }
     } else if c.allow_functions() {
-        let c = b.circuit();
+        debug_assert!(cases.is_empty());
         let discriminee = instr.opcode.repr;
         let cases = calc_step_inner_cases.iter().map(|(discriminant, k)| c.switch_case(*discriminant, *k, &[], |_, s: &(), _| s.into())).collect::<Vec<_>>();
-        let args = [x.repr, y.repr, s1.pc.repr, /*(*mem_port).repr,*/ advice.repr, instr.dest.repr];
-        let r = c.switch(discriminee, c.switch_case_list(&cases), c.wire_list(&args));
-        let (result, dest) = typed::from_wire_list::<(u64, u8)>(c.as_base(), &[r], &[]).repr; // TODO(isweet): Confirm this is correct understanding of typed `pack`
-        (result, dest)
+        let (args_wires, _args_sizes) = typed::to_wire_list(&TWire::<OpArgs>::new((x, y, s1.pc, *mem_port, advice, instr.dest)));
+        let w = c.switch(discriminee, c.switch_case_list(&cases), c.wire_list(&args_wires));
+        let num_result_wires = <(u64, u8)>::expected_num_wires(&mut iter::empty());
+        let result_wires = (0..num_result_wires).map(|i| c.extract(w, i)).collect::<Vec<_>>();
+        typed::from_wire_list::<(u64, u8)>(c.as_base(), &result_wires, &[]).repr
     } else {
-        let cases = cases.iter().map(|(discriminant, v)| TWire::<(_, _)>::new((b.eq(b.lit(*discriminant as u8), instr.opcode), *v))).collect::<Vec<_>>();
         b.mux_multi(&cases, b.lit((0, REG_NONE))).repr
     };
 
@@ -576,7 +580,6 @@ fn calc_step_inner<'a>(
         x, y, result,
         tainted: tainted_im,
         mem_port_unused,
-        // TODO(isweet): Factor `y_addr` back into this function
         mem_op_addr: privileged_addr(b, privilege_levels, s1.pc, y),
     };
     (TWire::new(s2), im)
