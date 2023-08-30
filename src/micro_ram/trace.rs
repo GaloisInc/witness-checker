@@ -386,6 +386,32 @@ fn op_and<'a>(
     TWire::new((b.and(x, y), dest))
 }
 
+fn op_or<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.or(x, y), dest))
+}
+
+fn op_xor<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.xor(x, y), dest))
+}
+
+fn op_not<'a>(
+    b: &impl Builder<'a>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.not(y), dest))
+}
+
 fn privileged_addr<'a>(
     b: &impl Builder<'a>,
     privilege_levels: bool,
@@ -480,6 +506,9 @@ pub fn define_calc_step_inner_cases<'a>(
     }
 
     case!(Opcode::And, OpAnd, |b, _, x, y, _, _, _, dest| op_and(b, x, y, dest));
+    case!(Opcode::Or, OpOr, |b, _, x, y, _, _, _, dest| op_or(b, x, y, dest));
+    case!(Opcode::Xor, OpXor, |b, _, x, y, _, _, _, dest| op_xor(b, x, y, dest));
+    case!(Opcode::Not, OpNot, |b, _, _, y, _, _, _, dest| op_not(b, y, dest));    
     case!(Opcode::Jmp, OpJmp, |b, privilege_levels, _, y, pc, _, _, _| op_jmp(b, privilege_levels, pc, y));
     case!(Opcode::Load1, OpLoad1, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W1, dest));
 
@@ -527,6 +556,10 @@ fn calc_step_inner<'a>(
     let mut mem_port_unused = false;
 
     case!(Opcode::And, op_and(b, x, y, instr.dest));
+    case!(Opcode::Or, op_or(b, x, y, instr.dest));
+    case!(Opcode::Xor, op_xor(b, x, y, instr.dest));
+    case!(Opcode::Not, op_not(b, y, instr.dest));
+
     case!(Opcode::Jmp, op_jmp(b, privilege_levels, s1.pc, y));
     
     let pub_load_args = opcode.map(|_| (ev, &mut *kmem, privilege_levels, s1.pc, y, &mut mem_port_unused));    
