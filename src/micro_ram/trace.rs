@@ -484,6 +484,73 @@ fn op_umod<'a>(
     TWire::new((b.mod_(x, y), dest))
 }
 
+fn op_shl<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.shl(x, b.cast(y)), dest))
+}
+
+fn op_shr<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.shr(x, b.cast(y)), dest))
+}
+
+fn op_cmpe<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.eq(x, y)), dest))
+}
+
+fn op_cmpa<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.gt(x, y)), dest))
+}
+
+fn op_cmpae<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.cast(b.ge(x, y)), dest))
+}
+
+fn op_cmpg<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    let signed_x = b.cast::<_, i64>(x);
+    let signed_y = b.cast::<_, i64>(y);
+    TWire::new((b.cast(b.gt(signed_x, signed_y)), dest))
+}
+
+fn op_cmpge<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    let signed_x = b.cast::<_, i64>(x);
+    let signed_y = b.cast::<_, i64>(y);    
+    TWire::new((b.cast(b.ge(signed_x, signed_y)), dest))
+}
+
 fn privileged_addr<'a>(
     b: &impl Builder<'a>,
     privilege_levels: bool,
@@ -589,6 +656,15 @@ pub fn define_calc_step_inner_cases<'a>(
     case!(Opcode::Smulh, OpSmulh, |b, _, x, y, _, _, _, dest| op_smulh(b, x, y, dest));
     case!(Opcode::Udiv, OpUdiv, |b, _, x, y, _, _, _, dest| op_udiv(b, x, y, dest));
     case!(Opcode::Umod, OpUmod, |b, _, x, y, _, _, _, dest| op_umod(b, x, y, dest));
+
+    case!(Opcode::Shl, OpShl, |b, _, x, y, _, _, _, dest| op_shl(b, x, y, dest));
+    case!(Opcode::Shr, OpShr, |b, _, x, y, _, _, _, dest| op_shr(b, x, y, dest));
+
+    case!(Opcode::Cmpe, OpCmpe, |b, _, x, y, _, _, _, dest| op_cmpe(b, x, y, dest));
+    case!(Opcode::Cmpa, OpCmpa, |b, _, x, y, _, _, _, dest| op_cmpa(b, x, y, dest));
+    case!(Opcode::Cmpae, OpCmpae, |b, _, x, y, _, _, _, dest| op_cmpae(b, x, y, dest));
+    case!(Opcode::Cmpg, OpCmpg, |b, _, x, y, _, _, _, dest| op_cmpg(b, x, y, dest));
+    case!(Opcode::Cmpge, OpCmpge, |b, _, x, y, _, _, _, dest| op_cmpge(b, x, y, dest));
     
     case!(Opcode::Jmp, OpJmp, |b, privilege_levels, _, y, pc, _, _, _| op_jmp(b, privilege_levels, pc, y));
     case!(Opcode::Load1, OpLoad1, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W1, dest));
@@ -648,6 +724,15 @@ fn calc_step_inner<'a>(
     case!(Opcode::Smulh, op_smulh(b, x, y, instr.dest));
     case!(Opcode::Udiv, op_udiv(b, x, y, instr.dest));
     case!(Opcode::Umod, op_umod(b, x, y, instr.dest));
+
+    case!(Opcode::Shl, op_shl(b, x, y, instr.dest));
+    case!(Opcode::Shr, op_shr(b, x, y, instr.dest));
+
+    case!(Opcode::Cmpe, op_cmpe(b, x, y, instr.dest));
+    case!(Opcode::Cmpa, op_cmpa(b, x, y, instr.dest));
+    case!(Opcode::Cmpae, op_cmpae(b, x, y, instr.dest));
+    case!(Opcode::Cmpg, op_cmpg(b, x, y, instr.dest));
+    case!(Opcode::Cmpge, op_cmpge(b, x, y, instr.dest));
 
     case!(Opcode::Jmp, op_jmp(b, privilege_levels, s1.pc, y));
     
