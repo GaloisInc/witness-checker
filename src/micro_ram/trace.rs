@@ -644,6 +644,12 @@ fn op_load<'a>(
     TWire::new((result, dest))
 }
 
+fn no_op<'a>(
+    b: &impl Builder<'a>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((b.lit(0), b.lit(REG_NONE)))
+}
+
 fn op_store<'a>(
     b: &impl Builder<'a>,
     pub_store_args: Option<(
@@ -661,7 +667,7 @@ fn op_store<'a>(
         let (addr, value) = (y_addr, x);
         kmem.store(b, ev, addr, value, w);
     }
-    TWire::new((b.lit(0), b.lit(REG_NONE)))
+    no_op(b)
 }
 
 fn op_poison8<'a>(
@@ -680,7 +686,7 @@ fn op_poison8<'a>(
         let (addr, value) = (y_addr, x);
         kmem.poison(b, ev, addr, value, MemOpWidth::W8);
     }
-    TWire::new((b.lit(0), b.lit(REG_NONE)))
+    no_op(b)
 }
 
 fn op_answer<'a>(
@@ -729,7 +735,7 @@ fn op_sink1<'a>(
     b: &impl Builder<'a>,
 ) -> TWire<'a, (u64, u8)> {
     // Opcode::Sink is a no-op in the standard interpreter.
-    TWire::new((b.lit(0), b.lit(REG_NONE)))
+    no_op(b)
 }
 
 fn op_taint1<'a>(
@@ -920,8 +926,7 @@ fn calc_step_inner<'a>(
     case!(Opcode::Store2, op_store(b, pub_store_args!(MemOpWidth::W2)));
     case!(Opcode::Store4, op_store(b, pub_store_args!(MemOpWidth::W4)));
     case!(Opcode::Store8, op_store(b, pub_store_args!(MemOpWidth::W8)));
-    let pub_poison8_args = if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, x, y)) } else { None };
-    case!(Opcode::Poison8, op_poison8(b, pub_poison8_args));
+    case!(Opcode::Poison8, op_poison8(b, if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, x, y)) } else { None }));
 
     case!(Opcode::Answer, op_answer(b, s1.pc));
 
