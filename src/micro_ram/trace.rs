@@ -720,7 +720,8 @@ fn op_stutter<'a>(
     b: &impl Builder<'a>,
     pc: TWire<'a, u64>,
 ) -> TWire<'a, (u64, u8)> {
-    // TODO: dummy implementation of `Answer` as a no-op infinite loop
+    // A no-op that doesn't advance the `pc`.  Specifically, this works by jumping to the
+    // current `pc`.
     TWire::new((pc, b.lit(REG_PC)))
 }
 
