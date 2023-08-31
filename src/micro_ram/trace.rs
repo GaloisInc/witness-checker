@@ -857,7 +857,7 @@ fn calc_step_inner<'a>(
 
     let mut cases = Vec::new();
     macro_rules! case {
-        ($op:expr, $body:expr) => {{
+        ($op:expr, $body:expr) => {
             if opcode.is_none() && !c.allow_functions() || opcode == Some($op) {
                 let result = $body;
                 let op_match = if opcode.is_none() {
@@ -867,7 +867,7 @@ fn calc_step_inner<'a>(
                 };
                 cases.push(TWire::<(_, _)>::new((op_match, result)));
             }
-        }};
+        };
     }
 
     let x = b.index(&s1.regs, instr.op1, |b, i| b.lit(i as u8));
@@ -931,6 +931,8 @@ fn calc_step_inner<'a>(
     case!(Opcode::Answer, op_answer(b, s1.pc));
 
     case!(Opcode::Advise, op_advise(advice, if opcode.is_some() { Some((cx, b, ev, kmem, y, idx)) } else { None }, instr.dest));
+
+    case!(Opcode::Stutter, op_stutter(b, s1.pc));
 
     if is_mode::<AnyTainted>() {
         case!(Opcode::Sink1, op_sink1(b));
