@@ -663,7 +663,66 @@ fn op_store<'a>(
     }
     TWire::new((b.lit(0), b.lit(REG_NONE)))
 }
-    
+
+fn op_poison8<'a>(
+    b: &impl Builder<'a>,
+    pub_poison8_args: Option<(
+        &mut CachingEvaluator<'a, '_, eval::Public>,
+        &mut KnownMem<'a>,
+        bool,
+        TWire<'a, u64>,
+        TWire<'a, u64>,
+        TWire<'a, u64>,
+    )>,
+) -> TWire<'a, (u64, u8)> {
+    if let Some((ev, kmem, privilege_levels, pc, x, y)) = pub_poison8_args {
+        let y_addr = privileged_addr(b, privilege_levels, pc, y);
+        let (addr, value) = (y_addr, x);
+        kmem.poison(b, ev, addr, value, MemOpWidth::W8);
+    }
+    TWire::new((b.lit(0), b.lit(REG_NONE)))
+}
+
+fn op_answer<'a>(
+    b: &impl Builder<'a>,
+    pc: TWire<'a, u64>,
+) -> TWire<'a, (u64, u8)> {
+    // TODO: dummy implementation of `Answer` as a no-op infinite loop
+    TWire::new((pc, b.lit(REG_PC)))
+}
+
+fn op_advise<'a, B: Builder<'a>>(
+    advice: TWire<'a, u64>,
+    pub_advise_args: Option<(
+        &Context<'a>,
+        &B,
+        &mut CachingEvaluator<'a, '_, eval::Public>,
+        &mut KnownMem<'a>,
+        TWire<'a, u64>,
+        usize,        
+    )>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    if let Some((cx, b, ev, kmem, y, idx)) = pub_advise_args {
+        if let Some(max) = ev.eval_typed(b.circuit(), y) {
+            wire_assert!(
+                cx, b, b.le(advice, b.lit(max)),
+                "step {}: advice value {} is out of range (expected <= {})",
+                idx, cx.eval(advice), max,
+            );
+            kmem.set_wire_range(advice, max);
+        }
+    }
+    TWire::new((advice, dest))
+}
+
+fn op_stutter<'a>(
+    b: &impl Builder<'a>,
+    pc: TWire<'a, u64>,
+) -> TWire<'a, (u64, u8)> {
+    // TODO: dummy implementation of `Answer` as a no-op infinite loop
+    TWire::new((pc, b.lit(REG_PC)))
+}
 
 // TODO(isweet): Consider renaming this to something less verbose like `define_opcodes`
 // Produces a vector of each `Opcode`'s discriminant value and `circuit::Function` interpretation.
@@ -735,11 +794,17 @@ pub fn define_calc_step_inner_cases<'a>(
     case!(Opcode::Load2, OpLoad2, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W2, dest));
     case!(Opcode::Load4, OpLoad4, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W4, dest));
     case!(Opcode::Load8, OpLoad8, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W8, dest));
-
     case!(Opcode::Store1, OpStore1, |b, _, _, _, _, _, _, _| op_store(b, None));
     case!(Opcode::Store2, OpStore2, |b, _, _, _, _, _, _, _| op_store(b, None));
     case!(Opcode::Store4, OpStore4, |b, _, _, _, _, _, _, _| op_store(b, None));
-    case!(Opcode::Store8, OpStore8, |b, _, _, _, _, _, _, _| op_store(b, None));    
+    case!(Opcode::Store8, OpStore8, |b, _, _, _, _, _, _, _| op_store(b, None));
+    case!(Opcode::Poison8, OpPoison8, |b, _, _, _, _, _, _, _| op_poison8(b, None));
+
+    case!(Opcode::Answer, OpAnswer, |b, _, _, _, pc, _, _, _| op_answer(b, pc));
+
+    case!(Opcode::Advise, OpAdvise, |_, _, _, _, _, _, advice, dest| op_advise::<BuilderImpl<CircuitBase>>(advice, None, dest));
+
+    case!(Opcode::Stutter, OpStutter, |b, _, _, _, pc, _, _, _| op_stutter(b, pc));
 
     cases
     // TODO(isweet): All the other opcodes
@@ -822,20 +887,23 @@ fn calc_step_inner<'a>(
     macro_rules! pub_load_args {
         () => { if opcode.is_some() { Some((ev, kmem, privilege_levels, s1.pc, y, &mut mem_port_unused)) } else { None } }
     }
-
     case!(Opcode::Load1, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W1, instr.dest));
     case!(Opcode::Load2, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W2, instr.dest));
     case!(Opcode::Load4, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W4, instr.dest));
     case!(Opcode::Load8, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W8, instr.dest));
-
     macro_rules! pub_store_args {
         ($w:expr) => { if opcode.is_some() { Some((ev, kmem, privilege_levels, s1.pc, x, y, $w)) } else { None } }
     }
-
     case!(Opcode::Store1, op_store(b, pub_store_args!(MemOpWidth::W1)));
     case!(Opcode::Store2, op_store(b, pub_store_args!(MemOpWidth::W2)));
     case!(Opcode::Store4, op_store(b, pub_store_args!(MemOpWidth::W4)));
     case!(Opcode::Store8, op_store(b, pub_store_args!(MemOpWidth::W8)));
+    let pub_poison8_args = if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, x, y)) } else { None };
+    case!(Opcode::Poison8, op_poison8(b, pub_poison8_args));
+
+    case!(Opcode::Answer, op_answer(b, s1.pc));
+
+    case!(Opcode::Advise, op_advise(advice, if opcode.is_some() { Some((cx, b, ev, kmem, y, idx)) } else { None }, instr.dest));
 
     let (result, dest) = if opcode.is_some() {
         if cases.len() == 1 {
