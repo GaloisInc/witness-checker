@@ -725,6 +725,23 @@ fn op_stutter<'a>(
     TWire::new((pc, b.lit(REG_PC)))
 }
 
+fn op_sink1<'a>(
+    b: &impl Builder<'a>,
+) -> TWire<'a, (u64, u8)> {
+    // Opcode::Sink is a no-op in the standard interpreter.
+    TWire::new((b.lit(0), b.lit(REG_NONE)))
+}
+
+fn op_taint1<'a>(
+    x: TWire<'a, u64>,
+    op1: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    // Opcode::Taint is a no-op in the standard intepreter, but we need to set the dest for the
+    // later taint handling step. We set the value back to itself so that taint operations are treated
+    // like `mov rX rX`.
+    TWire::new((x, op1))
+}
+
 // TODO(isweet): Consider renaming this to something less verbose like `define_opcodes`
 // Produces a vector of each `Opcode`'s discriminant value and `circuit::Function` interpretation.
 pub fn define_calc_step_inner_cases<'a>(
@@ -807,8 +824,12 @@ pub fn define_calc_step_inner_cases<'a>(
 
     case!(Opcode::Stutter, OpStutter, |b, _, _, _, pc, _, _, _, _| op_stutter(b, pc));
 
+    if is_mode::<AnyTainted>() {
+        case!(Opcode::Sink1, OpSink1, |b, _, _, _, _, _, _, _, _| op_sink1(b));
+        case!(Opcode::Taint1, OpTaint1, |_, _, x, _, _, _, _, op1, _| op_taint1(x, op1));
+    }
+
     cases
-    // TODO(isweet): All the other opcodes
 }
 
 fn calc_step_inner<'a>(
@@ -905,6 +926,11 @@ fn calc_step_inner<'a>(
     case!(Opcode::Answer, op_answer(b, s1.pc));
 
     case!(Opcode::Advise, op_advise(advice, if opcode.is_some() { Some((cx, b, ev, kmem, y, idx)) } else { None }, instr.dest));
+
+    if is_mode::<AnyTainted>() {
+        case!(Opcode::Sink1, op_sink1(b));
+        case!(Opcode::Taint1, op_taint1(x, instr.op1));
+    }
 
     let (result, dest) = if opcode.is_some() {
         if cases.len() == 1 {
