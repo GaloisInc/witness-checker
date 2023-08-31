@@ -593,6 +593,28 @@ fn op_jmp<'a>(
     TWire::new((y_addr, b.lit(REG_PC)))
 }
 
+fn op_cjmp<'a>(
+    b: &impl Builder<'a>,
+    privilege_levels: bool,
+    pc: TWire<'a, u64>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+) -> TWire<'a, (u64, u8)> {
+    let y_addr = privileged_addr(b, privilege_levels, pc, y);
+    TWire::new((y_addr, b.mux(b.neq_zero(x), b.lit(REG_PC), b.lit(REG_NONE))))
+}
+
+fn op_cnjmp<'a>(
+    b: &impl Builder<'a>,
+    privilege_levels: bool,
+    pc: TWire<'a, u64>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+) -> TWire<'a, (u64, u8)> {
+    let y_addr = privileged_addr(b, privilege_levels, pc, y);
+    TWire::new((y_addr, b.mux(b.neq_zero(x), b.lit(REG_NONE), b.lit(REG_PC))))
+}
+
 fn op_load<'a>(
     b: &impl Builder<'a>,
     pub_load_args: Option<(
@@ -686,6 +708,9 @@ pub fn define_calc_step_inner_cases<'a>(
     case!(Opcode::Cmov, OpCmov, |b, _, x, y, _, _, _, dest| op_cmov(b, x, y, dest));
     
     case!(Opcode::Jmp, OpJmp, |b, privilege_levels, _, y, pc, _, _, _| op_jmp(b, privilege_levels, pc, y));
+    case!(Opcode::Cjmp, OpCjmp, |b, privilege_levels, x, y, pc, _, _, _| op_cjmp(b, privilege_levels, pc, x, y));
+    case!(Opcode::Cnjmp, OpCnjmp, |b, privilege_levels, x, y, pc, _, _, _| op_cnjmp(b, privilege_levels, pc, x, y));    
+    
     case!(Opcode::Load1, OpLoad1, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W1, dest));
 
     cases
@@ -757,6 +782,9 @@ fn calc_step_inner<'a>(
     case!(Opcode::Cmov, op_cmov(b, x, y, instr.dest));
 
     case!(Opcode::Jmp, op_jmp(b, privilege_levels, s1.pc, y));
+    case!(Opcode::Cjmp, op_cjmp(b, privilege_levels, s1.pc, x, y));
+    case!(Opcode::Cnjmp, op_cnjmp(b, privilege_levels, s1.pc, x, y));    
+    
     
     let pub_load_args = opcode.map(|_| (ev, &mut *kmem, privilege_levels, s1.pc, y, &mut mem_port_unused));    
     case!(Opcode::Load1, op_load(b, pub_load_args, mem_port, MemOpWidth::W1, instr.dest));
