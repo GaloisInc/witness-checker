@@ -551,6 +551,22 @@ fn op_cmpge<'a>(
     TWire::new((b.cast(b.ge(signed_x, signed_y)), dest))
 }
 
+fn op_mov<'a>(
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((y, dest))
+}
+
+fn op_cmov<'a>(
+    b: &impl Builder<'a>,
+    x: TWire<'a, u64>,
+    y: TWire<'a, u64>,
+    dest: TWire<'a, u8>,
+) -> TWire<'a, (u64, u8)> {
+    TWire::new((y, b.mux(b.neq_zero(x), dest, b.lit(REG_NONE))))
+}
+
 fn privileged_addr<'a>(
     b: &impl Builder<'a>,
     privilege_levels: bool,
@@ -665,6 +681,9 @@ pub fn define_calc_step_inner_cases<'a>(
     case!(Opcode::Cmpae, OpCmpae, |b, _, x, y, _, _, _, dest| op_cmpae(b, x, y, dest));
     case!(Opcode::Cmpg, OpCmpg, |b, _, x, y, _, _, _, dest| op_cmpg(b, x, y, dest));
     case!(Opcode::Cmpge, OpCmpge, |b, _, x, y, _, _, _, dest| op_cmpge(b, x, y, dest));
+
+    case!(Opcode::Mov, OpMov, |_, _, _, y, _, _, _, dest| op_mov(y, dest));
+    case!(Opcode::Cmov, OpCmov, |b, _, x, y, _, _, _, dest| op_cmov(b, x, y, dest));
     
     case!(Opcode::Jmp, OpJmp, |b, privilege_levels, _, y, pc, _, _, _| op_jmp(b, privilege_levels, pc, y));
     case!(Opcode::Load1, OpLoad1, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W1, dest));
@@ -733,6 +752,9 @@ fn calc_step_inner<'a>(
     case!(Opcode::Cmpae, op_cmpae(b, x, y, instr.dest));
     case!(Opcode::Cmpg, op_cmpg(b, x, y, instr.dest));
     case!(Opcode::Cmpge, op_cmpge(b, x, y, instr.dest));
+
+    case!(Opcode::Mov, op_mov(y, instr.dest));
+    case!(Opcode::Cmov, op_cmov(b, x, y, instr.dest));
 
     case!(Opcode::Jmp, op_jmp(b, privilege_levels, s1.pc, y));
     
