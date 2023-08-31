@@ -789,7 +789,11 @@ fn calc_step_inner<'a>(
     case!(Opcode::Cnjmp, op_cnjmp(b, privilege_levels, s1.pc, x, y));
 
     // Can't let-bind due to re-borrowing `ev` and `kmem`
-    // Another option is making `op_load` take an `&mut Option`, but that feels like a deceptive type?
+    //
+    // - Another option is making `op_load` take an `&mut Option`, but that feels like a deceptive type?
+    // - Yet another option is to:
+    //         let mut pub_load_args = opcode.map(|_| (ev, kmem, privilege_levels, s1.pc, y, &mut mem_port_unused));
+    //         ... pub_load_args.as_mut().map(|r| { let (e, km, pl, pc, y, mpu) = &mut *r; (&mut **e, &mut **km, *pl, *pc, *y, &mut **mpu) }) ...
     macro_rules! pub_load_args {
         () => { if opcode.is_some() { Some((ev, kmem, privilege_levels, s1.pc, y, &mut mem_port_unused)) } else { None } }
     }
