@@ -161,7 +161,7 @@ impl<'a> SegGraphBuilder<'a> {
                 assert!(!sg.edges.contains_key(&(i, j)), "duplicate edge {} -> {}", i, j);
                 sg.edges.insert((i, j), b.secret_lazy(move |w| {
                     let w: &ExecWitness = project_witness(w);
-                    w.segments[i].succ == Some(j)
+                    w.segments[j].pred == Some(i)
                 }));
 
                 sg.segments[j].preds.push(Predecessor {
