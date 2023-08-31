@@ -712,6 +712,9 @@ pub fn define_calc_step_inner_cases<'a>(
     case!(Opcode::Cnjmp, OpCnjmp, |b, privilege_levels, x, y, pc, _, _, _| op_cnjmp(b, privilege_levels, pc, x, y));    
     
     case!(Opcode::Load1, OpLoad1, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W1, dest));
+    case!(Opcode::Load2, OpLoad2, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W2, dest));
+    case!(Opcode::Load4, OpLoad4, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W4, dest));
+    case!(Opcode::Load8, OpLoad8, |b, _, _, _, _, mem_port, _, dest| op_load(b, None, mem_port, MemOpWidth::W8, dest));    
 
     cases
     // TODO(isweet): All the other opcodes
@@ -783,11 +786,18 @@ fn calc_step_inner<'a>(
 
     case!(Opcode::Jmp, op_jmp(b, privilege_levels, s1.pc, y));
     case!(Opcode::Cjmp, op_cjmp(b, privilege_levels, s1.pc, x, y));
-    case!(Opcode::Cnjmp, op_cnjmp(b, privilege_levels, s1.pc, x, y));    
-    
-    
-    let pub_load_args = opcode.map(|_| (ev, &mut *kmem, privilege_levels, s1.pc, y, &mut mem_port_unused));    
-    case!(Opcode::Load1, op_load(b, pub_load_args, mem_port, MemOpWidth::W1, instr.dest));
+    case!(Opcode::Cnjmp, op_cnjmp(b, privilege_levels, s1.pc, x, y));
+
+    // Can't let-bind due to re-borrowing `ev` and `kmem`
+    // Another option is making `op_load` take an `&mut Option`, but that feels like a deceptive type?
+    macro_rules! pub_load_args {
+        () => { if opcode.is_some() { Some((ev, kmem, privilege_levels, s1.pc, y, &mut mem_port_unused)) } else { None } }
+    }
+
+    case!(Opcode::Load1, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W1, instr.dest));
+    case!(Opcode::Load2, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W2, instr.dest));
+    case!(Opcode::Load4, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W4, instr.dest));
+    case!(Opcode::Load8, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W8, instr.dest));        
 
     let (result, dest) = if opcode.is_some() {
         if cases.len() == 1 {
