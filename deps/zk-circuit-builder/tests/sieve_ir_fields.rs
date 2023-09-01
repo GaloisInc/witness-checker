@@ -1,7 +1,7 @@
 #![cfg(feature = "sieve_ir")]
 #![cfg(feature = "gf_scuttlebutt")]
 
-use scuttlebutt::field::{FiniteField, SmallBinaryField, Gf40, Gf45, F56b, F63b, F64b};
+use scuttlebutt::field::{FiniteField, SmallBinaryField, F40b, F45b, F56b, F63b, F64b};
 use zk_circuit_builder::eval::{self, CachingEvaluator, EvalWire};
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitFilter, DynCircuit, FilterNil, TyKind, Wire,
@@ -73,13 +73,13 @@ where
 
 #[test]
 fn inverse_f40b() {
-    let x = Gf40::from_lower_bits(1234);
+    let x = F40b::from_lower_bits(1234);
     inverse(x)
 }
 
 #[test]
 fn inverse_f45b() {
-    let x = Gf45::from_lower_bits(1234);
+    let x = F45b::from_lower_bits(1234);
     inverse(x)
 }
 

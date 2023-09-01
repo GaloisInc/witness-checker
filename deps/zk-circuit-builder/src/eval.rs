@@ -7,7 +7,7 @@ use std::ptr;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 #[cfg(feature = "gf_scuttlebutt")]
-use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
+use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
@@ -611,9 +611,9 @@ pub fn eval_unop_galois_field<'a>(
 
     match field {
         #[cfg(feature = "gf_scuttlebutt")]
-        Field::F40b => helper::<Gf40>(c, op, a_bits, field),
+        Field::F40b => helper::<F40b>(c, op, a_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
-        Field::F45b => helper::<Gf45>(c, op, a_bits, field),
+        Field::F45b => helper::<F45b>(c, op, a_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
         Field::F56b => helper::<F56b>(c, op, a_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
@@ -677,9 +677,9 @@ pub fn eval_binop_galois_field<'a>(
 
     match field {
         #[cfg(feature = "gf_scuttlebutt")]
-        Field::F40b => helper::<Gf40>(c, op, a_bits, b_bits, field),
+        Field::F40b => helper::<F40b>(c, op, a_bits, b_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
-        Field::F45b => helper::<Gf45>(c, op, a_bits, b_bits, field),
+        Field::F45b => helper::<F45b>(c, op, a_bits, b_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
         Field::F56b => helper::<F56b>(c, op, a_bits, b_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
@@ -738,9 +738,9 @@ pub fn eval_cmp_galois_field<'a>(
 
     match field {
         #[cfg(feature = "gf_scuttlebutt")]
-        Field::F40b => helper::<Gf40>(c, op, a_bits, b_bits),
+        Field::F40b => helper::<F40b>(c, op, a_bits, b_bits),
         #[cfg(feature = "gf_scuttlebutt")]
-        Field::F45b => helper::<Gf45>(c, op, a_bits, b_bits),
+        Field::F45b => helper::<F45b>(c, op, a_bits, b_bits),
         #[cfg(feature = "gf_scuttlebutt")]
         Field::F56b => helper::<F56b>(c, op, a_bits, b_bits),
         #[cfg(feature = "gf_scuttlebutt")]

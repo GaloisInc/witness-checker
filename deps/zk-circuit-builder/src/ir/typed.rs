@@ -11,7 +11,9 @@ use generic_array::{ArrayLength, GenericArray};
 use generic_array::typenum::{Sum, Quot, U3, U4};
 use num_traits::Zero;
 #[cfg(feature = "gf_scuttlebutt")]
-use scuttlebutt::field::{FiniteField, Gf40, Gf45, F56b, F63b, F64b};
+use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b};
+#[cfg(feature = "gf_scuttlebutt")]
+use scuttlebutt::serialization::CanonicalSerialize;
 use crate::eval::EvalWire;
 use crate::ir::circuit::{
     AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize,
@@ -1153,7 +1155,7 @@ macro_rules! field_impls {
         impl FromBits for $T {
             fn from_bits<'a>(b:Bits<'a>) -> Self {
                 let b = b.0.try_into().expect("Error deserializing field from bits. Invalid length.");
-                let arr = u32_to_u8::<<$T as FiniteField>::ByteReprLen>(b);
+                let arr = u32_to_u8::<<$T as CanonicalSerialize>::ByteReprLen>(b);
                 Self::from_bytes(&arr)
                     .expect("Error deserializing field from bits")
             }
@@ -1215,7 +1217,7 @@ macro_rules! field_impls {
                 bits: &mut impl Iterator<Item = Bits<'a>>,
             ) -> $T {
                 let bits = bits.next().unwrap();
-                let mut bs = GenericArray::<u8, <$T as FiniteField>::ByteReprLen>::default();
+                let mut bs = GenericArray::<u8, <$T as CanonicalSerialize>::ByteReprLen>::default();
                 for (i, &word) in bits.0.iter().enumerate() {
                     let word_bytes = word.to_le_bytes();
                     let j = i * word_bytes.len();
@@ -1234,9 +1236,9 @@ macro_rules! field_impls {
 }
 
 #[cfg(feature = "gf_scuttlebutt")]
-field_impls!(Gf40, F40b);
+field_impls!(F40b, F40b);
 #[cfg(feature = "gf_scuttlebutt")]
-field_impls!(Gf45, F45b);
+field_impls!(F45b, F45b);
 #[cfg(feature = "gf_scuttlebutt")]
 field_impls!(F56b, F56b);
 #[cfg(feature = "gf_scuttlebutt")]
