@@ -697,11 +697,11 @@ fn op_answer<'a>(
     TWire::new((pc, b.lit(REG_PC)))
 }
 
-fn op_advise<'a, B: Builder<'a>>(
+fn op_advise<'a>(
+    b: &impl Builder<'a>,
     advice: TWire<'a, u64>,
     pub_advise_args: Option<(
         &Context<'a>,
-        &B,
         &mut CachingEvaluator<'a, '_, eval::Public>,
         &mut KnownMem<'a>,
         TWire<'a, u64>,
@@ -709,7 +709,7 @@ fn op_advise<'a, B: Builder<'a>>(
     )>,
     dest: TWire<'a, u8>,
 ) -> TWire<'a, (u64, u8)> {
-    if let Some((cx, b, ev, kmem, y, idx)) = pub_advise_args {
+    if let Some((cx, ev, kmem, y, idx)) = pub_advise_args {
         if let Some(max) = ev.eval_typed(b.circuit(), y) {
             wire_assert!(
                 cx, b, b.le(advice, b.lit(max)),
@@ -826,7 +826,7 @@ pub fn define_calc_step_inner_cases<'a>(
 
     case!(Opcode::Answer, OpAnswer, |b, _, _, _, pc, _, _, _, _| op_answer(b, pc));
 
-    case!(Opcode::Advise, OpAdvise, |_, _, _, _, _, _, advice, _, dest| op_advise::<BuilderImpl<CircuitBase>>(advice, None, dest));
+    case!(Opcode::Advise, OpAdvise, |b, _, _, _, _, _, advice, _, dest| op_advise(b, advice, None, dest));
 
     case!(Opcode::Stutter, OpStutter, |b, _, _, _, pc, _, _, _, _| op_stutter(b, pc));
 
@@ -930,7 +930,7 @@ fn calc_step_inner<'a>(
 
     case!(Opcode::Answer, op_answer(b, s1.pc));
 
-    case!(Opcode::Advise, op_advise(advice, if opcode.is_some() { Some((cx, b, ev, kmem, y, idx)) } else { None }, instr.dest));
+    case!(Opcode::Advise, op_advise(b, advice, if opcode.is_some() { Some((cx, ev, kmem, y, idx)) } else { None }, instr.dest));
 
     case!(Opcode::Stutter, op_stutter(b, s1.pc));
 
