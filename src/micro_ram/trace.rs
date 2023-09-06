@@ -906,26 +906,14 @@ fn calc_step_inner<'a>(
     case!(Opcode::Cjmp, op_cjmp(b, privilege_levels, s1.pc, x, y));
     case!(Opcode::Cnjmp, op_cnjmp(b, privilege_levels, s1.pc, x, y));
 
-    // Can't let-bind due to re-borrowing `ev` and `kmem`
-    //
-    // - Another option is making `op_load` take an `&mut Option`, but that feels like a deceptive type?
-    // - Yet another option is to:
-    //         let mut pub_load_args = opcode.map(|_| (ev, kmem, privilege_levels, s1.pc, y, &mut mem_port_unused));
-    //         ... pub_load_args.as_mut().map(|r| { let (e, km, pl, pc, y, mpu) = &mut *r; (&mut **e, &mut **km, *pl, *pc, *y, &mut **mpu) }) ...
-    macro_rules! pub_load_args {
-        () => { if opcode.is_some() { Some((ev, kmem, privilege_levels, s1.pc, y, &mut mem_port_unused)) } else { None } }
+    for w in MemOpWidth::iter() {
+        let pub_load_args = if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, y, &mut mem_port_unused)) } else { None };
+        case!(w.load_opcode(), op_load(b, pub_load_args, mem_port, w, instr.dest));
     }
-    case!(Opcode::Load1, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W1, instr.dest));
-    case!(Opcode::Load2, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W2, instr.dest));
-    case!(Opcode::Load4, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W4, instr.dest));
-    case!(Opcode::Load8, op_load(b, pub_load_args!(), mem_port, MemOpWidth::W8, instr.dest));
-    macro_rules! pub_store_args {
-        ($w:expr) => { if opcode.is_some() { Some((ev, kmem, privilege_levels, s1.pc, x, y, $w)) } else { None } }
+    for w in MemOpWidth::iter() {
+        let pub_store_args = if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, x, y, w)) } else { None };
+        case!(w.store_opcode(), op_store(b, pub_store_args));
     }
-    case!(Opcode::Store1, op_store(b, pub_store_args!(MemOpWidth::W1)));
-    case!(Opcode::Store2, op_store(b, pub_store_args!(MemOpWidth::W2)));
-    case!(Opcode::Store4, op_store(b, pub_store_args!(MemOpWidth::W4)));
-    case!(Opcode::Store8, op_store(b, pub_store_args!(MemOpWidth::W8)));
     case!(Opcode::Poison8, op_poison8(b, if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, x, y)) } else { None }));
 
     case!(Opcode::Answer, op_answer(b, s1.pc));
