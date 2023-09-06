@@ -440,7 +440,7 @@ fn op_mull<'a>(
     let body = if switch {
         b.mul(x, y)
     } else {
-        b.wide_mul(x, y).repr.0
+        b.wide_mul(x, y).0
     };
     TWire::new((body, dest))
 }
@@ -451,7 +451,7 @@ fn op_umulh<'a>(
     y: TWire<'a, u64>,
     dest: TWire<'a, u8>,
 ) -> TWire<'a, (u64, u8)> {
-    TWire::new((b.wide_mul(x, y).repr.1, dest))
+    TWire::new((b.wide_mul(x, y).1, dest))
 }
 
 fn op_smulh<'a>(
@@ -463,7 +463,7 @@ fn op_smulh<'a>(
     let x_signed = b.cast::<_, i64>(x);
     let y_signed = b.cast::<_, i64>(y);
     // TODO: not sure this gives the right overflow value - what if high = -1?
-    TWire::new((b.cast::<_, u64>(b.wide_mul(x_signed, y_signed).repr.1), dest))
+    TWire::new((b.cast::<_, u64>(b.wide_mul(x_signed, y_signed).1), dest))
 }
 
 fn op_udiv<'a>(
@@ -639,7 +639,7 @@ fn op_load<'a>(
         *mem_port_unused = true;
         known_value
     } else {
-        extract_bytes_at_offset(b, mem_port.repr.value, mem_port.repr.addr, w)
+        extract_bytes_at_offset(b, mem_port.value, mem_port.addr, w)
     };
     TWire::new((result, dest))
 }
@@ -941,22 +941,22 @@ fn calc_step_inner<'a>(
 
     let (result, dest) = if opcode.is_some() {
         if cases.len() == 1 {
-            cases[0].1.repr
+            cases[0].1
         } else {
-            b.lit((0, REG_NONE)).repr
+            b.lit((0, REG_NONE))
         }
     } else if c.allow_functions() {
         debug_assert!(cases.is_empty());
-        let discriminee = instr.opcode.repr;
+        let discriminee = instr.opcode;
         let cases = calc_step_inner_cases.iter().map(|(discriminant, k)| c.switch_case(*discriminant, *k, &[], |_, s: &(), _| s.into())).collect::<Vec<_>>();
         let (args_wires, _args_sizes) = typed::to_wire_list(&TWire::<OpArgs>::new((x, y, s1.pc, *mem_port, advice, instr.op1, instr.dest)));
-        let w = c.switch(discriminee, c.switch_case_list(&cases), c.wire_list(&args_wires));
+        let w = c.switch(discriminee.repr, c.switch_case_list(&cases), c.wire_list(&args_wires));
         let num_result_wires = <(u64, u8)>::expected_num_wires(&mut iter::empty());
         let result_wires = (0..num_result_wires).map(|i| c.extract(w, i)).collect::<Vec<_>>();
-        typed::from_wire_list::<(u64, u8)>(c.as_base(), &result_wires, &[]).repr
+        typed::from_wire_list::<(u64, u8)>(c.as_base(), &result_wires, &[])
     } else {
-        b.mux_multi(&cases, b.lit((0, REG_NONE))).repr
-    };
+        b.mux_multi(&cases, b.lit((0, REG_NONE)))
+    }.repr;
 
     let mut regs = TWire::<Vec<_>>::new(Vec::with_capacity(s1.regs.len()));
     for (i, &v_old) in s1.regs.iter().enumerate() {
