@@ -758,81 +758,95 @@ pub fn define_calc_step_inner_cases<'a>(
 
     let mut cases = Vec::new();
     macro_rules! case {
-        ($op:expr, $Name:ident, $body:expr) => {
-            struct $Name {
-                privilege_levels: bool,
-            }
-
-            impl<'b> DefineFunction<'b> for $Name {
-                fn build_body<C: CircuitTrait<'b>>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b> {
-                    let b = BuilderImpl::from_ref(c);
-                    // There are no variable-sized data structures in `OpArgs`, so `sizes` is empty
-                    let args = typed::from_wire_list::<OpArgs>(c.as_base(), &args_wires, &[]);
-                    let (x, y, pc, mem_port, advice, op1, dest) = args.repr;
-                    let result = $body(b, self.privilege_levels, x, y, pc, &mem_port, advice, op1, dest);
-                    let (result_wires, _result_sizes) = typed::to_wire_list(&result);
-                    c.pack(&result_wires)
+        (
+            args ($b:ident, $privilege_levels:ident, $x:ident, $y:ident, $pc:ident, $mem_port:ident, $advice:ident, $op1:ident, $dest:ident);
+            $($opcode:expr, $Name:ident => $body:expr;)*
+        ) => {
+            $(
+                struct $Name {
+                    privilege_levels: bool,
                 }
-            }
 
-            let discriminant = c.bits(Ty::uint(8), $op as u8);
-            let num_args = OpArgs::expected_num_wires(&mut iter::empty());
-            let mut arg_tys = Vec::with_capacity(num_args);
-            OpArgs::for_each_expected_wire_type(c, &mut iter::empty(), |t| arg_tys.push(t));
-            let k = c.define_function::<(), _>(stringify!($Name), &arg_tys, $Name { privilege_levels });
+                impl<'b> DefineFunction<'b> for $Name {
+                    fn build_body<C: CircuitTrait<'b>>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b> {
+                        let $b = BuilderImpl::from_ref(c);
+                        let $privilege_levels = self.privilege_levels;
+                        // There are no variable-sized data structures in `OpArgs`, so `sizes` is empty
+                        let args = typed::from_wire_list::<OpArgs>(c.as_base(), &args_wires, &[]);
+                        let ($x, $y, $pc, $mem_port, $advice, $op1, $dest) = args.repr;
+                        let result = $body;
+                        let (result_wires, _result_sizes) = typed::to_wire_list(&result);
+                        c.pack(&result_wires)
+                    }
+                }
 
-            cases.push((discriminant, k));
-        };
+                let discriminant = c.bits(Ty::uint(8), $opcode as u8);
+                let num_args = OpArgs::expected_num_wires(&mut iter::empty());
+                let mut arg_tys = Vec::with_capacity(num_args);
+                OpArgs::for_each_expected_wire_type(c, &mut iter::empty(), |t| arg_tys.push(t));
+                let k = c.define_function::<(), _>(stringify!($Name), &arg_tys, $Name { privilege_levels });
+
+                cases.push((discriminant, k));
+            )*
+        }
     }
 
-    case!(Opcode::And, OpAnd, |b, _, x, y, _, _, _, _, dest| op_and(b, x, y, dest));
-    case!(Opcode::Or, OpOr, |b, _, x, y, _, _, _, _, dest| op_or(b, x, y, dest));
-    case!(Opcode::Xor, OpXor, |b, _, x, y, _, _, _, _, dest| op_xor(b, x, y, dest));
-    case!(Opcode::Not, OpNot, |b, _, _, y, _, _, _, _, dest| op_not(b, y, dest));
+    case! {
+        args (b, privilege_levels, x, y, pc, mem_port, advice, op1, dest);
+        
+        Opcode::And, OpAnd => op_and(b, x, y, dest);
+        Opcode::Or, OpOr => op_or(b, x, y, dest);
+        Opcode::Xor, OpXor => op_xor(b, x, y, dest);
+        Opcode::Not, OpNot => op_not(b, y, dest);
+        
+        Opcode::Add, OpAdd => op_add(b, x, y, dest);
+        Opcode::Sub, OpSub => op_sub(b, x, y, dest);
+        Opcode::Mull, OpMull => op_mull(b, true, x, y, dest);
+        Opcode::Umulh, OpUmulh => op_umulh(b, x, y, dest);
+        Opcode::Smulh, OpSmulh => op_smulh(b, x, y, dest);
+        Opcode::Udiv, OpUdiv => op_udiv(b, x, y, dest);
+        Opcode::Umod, OpUmod => op_umod(b, x, y, dest);
 
-    case!(Opcode::Add, OpAdd, |b, _, x, y, _, _, _, _, dest| op_add(b, x, y, dest));
-    case!(Opcode::Sub, OpSub, |b, _, x, y, _, _, _, _, dest| op_sub(b, x, y, dest));
-    case!(Opcode::Mull, OpMull, |b, _, x, y, _, _, _, _, dest| op_mull(b, true, x, y, dest));
-    case!(Opcode::Umulh, OpUmulh, |b, _, x, y, _, _, _, _, dest| op_umulh(b, x, y, dest));
-    case!(Opcode::Smulh, OpSmulh, |b, _, x, y, _, _, _, _, dest| op_smulh(b, x, y, dest));
-    case!(Opcode::Udiv, OpUdiv, |b, _, x, y, _, _, _, _, dest| op_udiv(b, x, y, dest));
-    case!(Opcode::Umod, OpUmod, |b, _, x, y, _, _, _, _, dest| op_umod(b, x, y, dest));
+        Opcode::Shl, OpShl => op_shl(b, x, y, dest);
+        Opcode::Shr, OpShr => op_shr(b, x, y, dest);
 
-    case!(Opcode::Shl, OpShl, |b, _, x, y, _, _, _, _, dest| op_shl(b, x, y, dest));
-    case!(Opcode::Shr, OpShr, |b, _, x, y, _, _, _, _, dest| op_shr(b, x, y, dest));
+        Opcode::Cmpe, OpCmpe => op_cmpe(b, x, y, dest);
+        Opcode::Cmpa, OpCmpa => op_cmpa(b, x, y, dest);
+        Opcode::Cmpae, OpCmpae => op_cmpae(b, x, y, dest);
+        Opcode::Cmpg, OpCmpg => op_cmpg(b, x, y, dest);
+        Opcode::Cmpge, OpCmpge => op_cmpge(b, x, y, dest);
 
-    case!(Opcode::Cmpe, OpCmpe, |b, _, x, y, _, _, _, _, dest| op_cmpe(b, x, y, dest));
-    case!(Opcode::Cmpa, OpCmpa, |b, _, x, y, _, _, _, _, dest| op_cmpa(b, x, y, dest));
-    case!(Opcode::Cmpae, OpCmpae, |b, _, x, y, _, _, _, _, dest| op_cmpae(b, x, y, dest));
-    case!(Opcode::Cmpg, OpCmpg, |b, _, x, y, _, _, _, _, dest| op_cmpg(b, x, y, dest));
-    case!(Opcode::Cmpge, OpCmpge, |b, _, x, y, _, _, _, _, dest| op_cmpge(b, x, y, dest));
+        Opcode::Mov, OpMov => op_mov(y, dest);
+        Opcode::Cmov, OpCmov => op_cmov(b, x, y, dest);
 
-    case!(Opcode::Mov, OpMov, |_, _, _, y, _, _, _, _, dest| op_mov(y, dest));
-    case!(Opcode::Cmov, OpCmov, |b, _, x, y, _, _, _, _, dest| op_cmov(b, x, y, dest));
-    
-    case!(Opcode::Jmp, OpJmp, |b, privilege_levels, _, y, pc, _, _, _, _| op_jmp(b, privilege_levels, pc, y));
-    case!(Opcode::Cjmp, OpCjmp, |b, privilege_levels, x, y, pc, _, _, _, _| op_cjmp(b, privilege_levels, pc, x, y));
-    case!(Opcode::Cnjmp, OpCnjmp, |b, privilege_levels, x, y, pc, _, _, _, _| op_cnjmp(b, privilege_levels, pc, x, y));    
-    
-    case!(Opcode::Load1, OpLoad1, |b, _, _, _, _, mem_port, _, _, dest| op_load(b, None, mem_port, MemOpWidth::W1, dest));
-    case!(Opcode::Load2, OpLoad2, |b, _, _, _, _, mem_port, _, _, dest| op_load(b, None, mem_port, MemOpWidth::W2, dest));
-    case!(Opcode::Load4, OpLoad4, |b, _, _, _, _, mem_port, _, _, dest| op_load(b, None, mem_port, MemOpWidth::W4, dest));
-    case!(Opcode::Load8, OpLoad8, |b, _, _, _, _, mem_port, _, _, dest| op_load(b, None, mem_port, MemOpWidth::W8, dest));
-    case!(Opcode::Store1, OpStore1, |b, _, _, _, _, _, _, _, _| op_store(b, None));
-    case!(Opcode::Store2, OpStore2, |b, _, _, _, _, _, _, _, _| op_store(b, None));
-    case!(Opcode::Store4, OpStore4, |b, _, _, _, _, _, _, _, _| op_store(b, None));
-    case!(Opcode::Store8, OpStore8, |b, _, _, _, _, _, _, _, _| op_store(b, None));
-    case!(Opcode::Poison8, OpPoison8, |b, _, _, _, _, _, _, _, _| op_poison8(b, None));
+        Opcode::Jmp, OpJmp => op_jmp(b, privilege_levels, pc, y);
+        Opcode::Cjmp, OpCjmp => op_cjmp(b, privilege_levels, pc, x, y);
+        Opcode::Cnjmp, OpCnjmp => op_cnjmp(b, privilege_levels, pc, x, y);
 
-    case!(Opcode::Answer, OpAnswer, |b, _, _, _, pc, _, _, _, _| op_answer(b, pc));
+        Opcode::Load1, OpLoad1 => op_load(b, None, &mem_port, MemOpWidth::W1, dest);
+        Opcode::Load2, OpLoad2 => op_load(b, None, &mem_port, MemOpWidth::W2, dest);
+        Opcode::Load4, OpLoad4 => op_load(b, None, &mem_port, MemOpWidth::W4, dest);
+        Opcode::Load8, OpLoad8 => op_load(b, None, &mem_port, MemOpWidth::W8, dest);
+        Opcode::Store1, OpStore1 => op_store(b, None);
+        Opcode::Store2, OpStore2 => op_store(b, None);
+        Opcode::Store4, OpStore4 => op_store(b, None);
+        Opcode::Store8, OpStore8 => op_store(b, None);
+        Opcode::Poison8, OpPoison8 => op_poison8(b, None);
 
-    case!(Opcode::Advise, OpAdvise, |b, _, _, _, _, _, advice, _, dest| op_advise(b, advice, None, dest));
+        Opcode::Answer, OpAnswer => op_answer(b, pc);
 
-    case!(Opcode::Stutter, OpStutter, |b, _, _, _, pc, _, _, _, _| op_stutter(b, pc));
+        Opcode::Advise, OpAdvise => op_advise(b, advice, None, dest);
+
+        Opcode::Stutter, OpStutter => op_stutter(b, pc);
+    }
 
     if is_mode::<AnyTainted>() {
-        case!(Opcode::Sink1, OpSink1, |b, _, _, _, _, _, _, _, _| op_sink1(b));
-        case!(Opcode::Taint1, OpTaint1, |_, _, x, _, _, _, _, op1, _| op_taint1(x, op1));
+        case! {
+            args (b, _privilege_levels, x, _y, _pc, _mem_port, _advice, op1, _dest);
+
+            Opcode::Sink1, OpSink1 => op_sink1(b);
+            Opcode::Taint1, OpTaint1 => op_taint1(x, op1);
+        }
     }
 
     cases
