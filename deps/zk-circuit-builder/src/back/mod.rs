@@ -53,6 +53,8 @@ pub enum BackendFeature {
     WideMul,
     /// `Permute` gadget.
     Permute,
+    /// `Switch` gadget.
+    Switch,
 }
 
 

@@ -872,7 +872,7 @@ fn calc_step_inner<'a>(
     let mut cases = Vec::new();
     macro_rules! case {
         ($op:expr, $body:expr) => {
-            if opcode.is_none() && !c.allow_functions() || opcode == Some($op) {
+            if opcode.is_none() && !c.allow_switches() || opcode == Some($op) {
                 let result = $body;
                 let op_match = if opcode.is_none() {
                     b.eq(b.lit($op as u8), instr.opcode)
@@ -947,7 +947,7 @@ fn calc_step_inner<'a>(
         } else {
             b.lit((0, REG_NONE))
         }
-    } else if c.allow_functions() {
+    } else if c.allow_switches() {
         debug_assert!(cases.is_empty());
         let discriminee = instr.opcode;
         let cases = calc_step_inner_cases.iter().map(|(discriminant, k)| c.switch_case(*discriminant, *k, &[], |_, s: &(), _| s.into())).collect::<Vec<_>>();

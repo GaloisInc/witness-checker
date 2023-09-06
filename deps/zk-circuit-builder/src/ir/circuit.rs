@@ -102,6 +102,7 @@ pub struct CircuitBase<'a> {
     current_label: Cell<&'a str>,
     is_prover: bool,
     allow_functions: bool,
+    allow_switches: bool,
     functions: RefCell<Vec<Function<'a>>>,
     witness_type: Cell<TypeId>,
     in_function: Cell<bool>,
@@ -122,6 +123,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(""),
             is_prover,
             allow_functions: true,
+            allow_switches: true,
             functions: RefCell::new(Vec::new()),
             witness_type: Cell::new(TypeId::of::<W>()),
             in_function: Cell::new(false),
@@ -157,6 +159,11 @@ impl<'a> CircuitBase<'a> {
 
     pub fn set_allow_functions(mut self, allow_functions: bool) -> Self {
         self.allow_functions = allow_functions;
+        self
+    }
+
+    pub fn set_allow_switches(mut self, allow_switches: bool) -> Self {
+        self.allow_switches = allow_switches;
         self
     }
 
@@ -493,6 +500,7 @@ impl<'a> CircuitBase<'a> {
             ref current_label,
             is_prover,
             allow_functions,
+            allow_switches,
             ref functions,
             ref witness_type,
             ref in_function,
@@ -516,6 +524,7 @@ impl<'a> CircuitBase<'a> {
             current_label: Cell::new(current_label.replace("")),
             is_prover,
             allow_functions,
+            allow_switches,
             functions: RefCell::new(functions.take()),
             witness_type: Cell::new(witness_type.get()),
             in_function: Cell::new(false),
@@ -596,6 +605,11 @@ impl<'a, F> Circuit<'a, F> {
 
     pub fn set_allow_functions(mut self, allow_functions: bool) -> Self {
         self.base = self.base.set_allow_functions(allow_functions);
+        self
+    }
+
+    pub fn set_allow_switches(mut self, allow_switches: bool) -> Self {
+        self.base = self.base.set_allow_switches(allow_switches);
         self
     }
 }
@@ -810,6 +824,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
     fn allow_functions(&self) -> bool {
         self.as_base().allow_functions
+    }
+
+    fn allow_switches(&self) -> bool {
+        self.as_base().allow_switches
     }
 
     fn as_ref(&self) -> DynCircuitRef<'a, '_> {
