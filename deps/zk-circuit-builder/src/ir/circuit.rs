@@ -271,7 +271,7 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
-    pub fn intern_switch_case_list(&self, cases_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
+    fn intern_switch_case_list(&self, cases_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
         let mut intern = self.intern_switch_case_list.borrow_mut();
         match intern.get(cases_list) {
             Some(&x) => x,
