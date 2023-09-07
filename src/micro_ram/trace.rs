@@ -760,14 +760,14 @@ pub fn define_calc_step_inner_cases<'a>(
     macro_rules! case {
         (
             args ($b:ident, $privilege_levels:ident, $x:ident, $y:ident, $pc:ident, $mem_port:ident, $advice:ident, $op1:ident, $dest:ident);
-            $($opcode:expr, $Name:ident => $body:expr;)*
+            $($OpcodeName:ident => $body:expr;)*
         ) => {
             $(
-                struct $Name {
+                struct $OpcodeName {
                     privilege_levels: bool,
                 }
 
-                impl<'b> DefineFunction<'b> for $Name {
+                impl<'b> DefineFunction<'b> for $OpcodeName {
                     fn build_body<C: CircuitTrait<'b>>(self, c: &C, args_wires: &[Wire<'b>]) -> Wire<'b> {
                         let $b = BuilderImpl::from_ref(c);
                         let $privilege_levels = self.privilege_levels;
@@ -780,11 +780,11 @@ pub fn define_calc_step_inner_cases<'a>(
                     }
                 }
 
-                let discriminant = c.bits(Ty::uint(8), $opcode as u8);
+                let discriminant = c.bits(Ty::uint(8), Opcode::$OpcodeName as u8);
                 let num_args = OpArgs::expected_num_wires(&mut iter::empty());
                 let mut arg_tys = Vec::with_capacity(num_args);
                 OpArgs::for_each_expected_wire_type(c, &mut iter::empty(), |t| arg_tys.push(t));
-                let k = c.define_function::<(), _>(stringify!($Name), &arg_tys, $Name { privilege_levels });
+                let k = c.define_function::<(), _>(stringify!($OpcodeName), &arg_tys, $OpcodeName { privilege_levels });
 
                 cases.push((discriminant, k));
             )*
@@ -792,60 +792,61 @@ pub fn define_calc_step_inner_cases<'a>(
     }
 
     case! {
-        args (b, privilege_levels, x, y, pc, mem_port, advice, op1, dest);
+        args (b, privilege_levels, x, y, pc, mem_port, advice, _op1, dest);
+
+        // The identifiers here must match the constructors of the `Opcode` enum
+        And => op_and(b, x, y, dest);
+        Or  => op_or(b, x, y, dest);
+        Xor => op_xor(b, x, y, dest);
+        Not => op_not(b, y, dest);
         
-        Opcode::And, OpAnd => op_and(b, x, y, dest);
-        Opcode::Or, OpOr => op_or(b, x, y, dest);
-        Opcode::Xor, OpXor => op_xor(b, x, y, dest);
-        Opcode::Not, OpNot => op_not(b, y, dest);
-        
-        Opcode::Add, OpAdd => op_add(b, x, y, dest);
-        Opcode::Sub, OpSub => op_sub(b, x, y, dest);
-        Opcode::Mull, OpMull => op_mull(b, true, x, y, dest);
-        Opcode::Umulh, OpUmulh => op_umulh(b, x, y, dest);
-        Opcode::Smulh, OpSmulh => op_smulh(b, x, y, dest);
-        Opcode::Udiv, OpUdiv => op_udiv(b, x, y, dest);
-        Opcode::Umod, OpUmod => op_umod(b, x, y, dest);
+        Add   => op_add(b, x, y, dest);
+        Sub   => op_sub(b, x, y, dest);
+        Mull  => op_mull(b, true, x, y, dest);
+        Umulh => op_umulh(b, x, y, dest);
+        Smulh => op_smulh(b, x, y, dest);
+        Udiv  => op_udiv(b, x, y, dest);
+        Umod  => op_umod(b, x, y, dest);
 
-        Opcode::Shl, OpShl => op_shl(b, x, y, dest);
-        Opcode::Shr, OpShr => op_shr(b, x, y, dest);
+        Shl => op_shl(b, x, y, dest);
+        Shr => op_shr(b, x, y, dest);
 
-        Opcode::Cmpe, OpCmpe => op_cmpe(b, x, y, dest);
-        Opcode::Cmpa, OpCmpa => op_cmpa(b, x, y, dest);
-        Opcode::Cmpae, OpCmpae => op_cmpae(b, x, y, dest);
-        Opcode::Cmpg, OpCmpg => op_cmpg(b, x, y, dest);
-        Opcode::Cmpge, OpCmpge => op_cmpge(b, x, y, dest);
+        Cmpe  => op_cmpe(b, x, y, dest);
+        Cmpa  => op_cmpa(b, x, y, dest);
+        Cmpae => op_cmpae(b, x, y, dest);
+        Cmpg  => op_cmpg(b, x, y, dest);
+        Cmpge => op_cmpge(b, x, y, dest);
 
-        Opcode::Mov, OpMov => op_mov(y, dest);
-        Opcode::Cmov, OpCmov => op_cmov(b, x, y, dest);
+        Mov  => op_mov(y, dest);
+        Cmov => op_cmov(b, x, y, dest);
 
-        Opcode::Jmp, OpJmp => op_jmp(b, privilege_levels, pc, y);
-        Opcode::Cjmp, OpCjmp => op_cjmp(b, privilege_levels, pc, x, y);
-        Opcode::Cnjmp, OpCnjmp => op_cnjmp(b, privilege_levels, pc, x, y);
+        Jmp   => op_jmp(b, privilege_levels, pc, y);
+        Cjmp  => op_cjmp(b, privilege_levels, pc, x, y);
+        Cnjmp => op_cnjmp(b, privilege_levels, pc, x, y);
 
-        Opcode::Load1, OpLoad1 => op_load(b, None, &mem_port, MemOpWidth::W1, dest);
-        Opcode::Load2, OpLoad2 => op_load(b, None, &mem_port, MemOpWidth::W2, dest);
-        Opcode::Load4, OpLoad4 => op_load(b, None, &mem_port, MemOpWidth::W4, dest);
-        Opcode::Load8, OpLoad8 => op_load(b, None, &mem_port, MemOpWidth::W8, dest);
-        Opcode::Store1, OpStore1 => op_store(b, None);
-        Opcode::Store2, OpStore2 => op_store(b, None);
-        Opcode::Store4, OpStore4 => op_store(b, None);
-        Opcode::Store8, OpStore8 => op_store(b, None);
-        Opcode::Poison8, OpPoison8 => op_poison8(b, None);
+        Load1   => op_load(b, None, &mem_port, MemOpWidth::W1, dest);
+        Load2   => op_load(b, None, &mem_port, MemOpWidth::W2, dest);
+        Load4   => op_load(b, None, &mem_port, MemOpWidth::W4, dest);
+        Load8   => op_load(b, None, &mem_port, MemOpWidth::W8, dest);
+        Store1  => op_store(b, None);
+        Store2  => op_store(b, None);
+        Store4  => op_store(b, None);
+        Store8  => op_store(b, None);
+        Poison8 => op_poison8(b, None);
 
-        Opcode::Answer, OpAnswer => op_answer(b, pc);
+        Answer => op_answer(b, pc);
 
-        Opcode::Advise, OpAdvise => op_advise(b, advice, None, dest);
+        Advise => op_advise(b, advice, None, dest);
 
-        Opcode::Stutter, OpStutter => op_stutter(b, pc);
+        Stutter => op_stutter(b, pc);
     }
 
     if is_mode::<AnyTainted>() {
         case! {
             args (b, _privilege_levels, x, _y, _pc, _mem_port, _advice, op1, _dest);
 
-            Opcode::Sink1, OpSink1 => op_sink1(b);
-            Opcode::Taint1, OpTaint1 => op_taint1(x, op1);
+            Sink1  => op_sink1(b);
+            Taint1 => op_taint1(x, op1);
         }
     }
 
