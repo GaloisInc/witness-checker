@@ -113,12 +113,11 @@ fn function_gate_lazy_secret() {
 
 #[test]
 fn switch_gate_basic() {
-
-    
     init_circuit!(c);
 
     let ty_i32 = Ty::int(32);
     let ty_i16 = Ty::int(16);
+   
     struct MyFunc1;
     impl<'b> DefineFunction<'b> for MyFunc1 {
         fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {

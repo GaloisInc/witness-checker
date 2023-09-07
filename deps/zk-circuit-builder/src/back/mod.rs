@@ -53,6 +53,8 @@ pub enum BackendFeature {
     WideMul,
     /// `Permute` gadget.
     Permute,
+    /// `Switch` gadget.
+    Switch,
 }
 
 
@@ -570,6 +572,8 @@ pub fn new_stats<'a>() -> Box<dyn Backend<'a> + 'a> {
                 | BackendFeature::ConcatExtractBits
                 | BackendFeature::WideMul
                 | BackendFeature::Permute
+                | BackendFeature::Function
+                | BackendFeature::Switch
             )
         }
     }

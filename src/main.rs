@@ -306,7 +306,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
     let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf)
-        .set_allow_functions(backend.has_feature(BackendFeature::Function));
+        .set_allow_functions(backend.has_feature(BackendFeature::Function))
+        .set_allow_switches(backend.has_feature(BackendFeature::Switch));
     let c = &c;
 
     let b = BuilderImpl::from_ref(c);

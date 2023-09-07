@@ -756,7 +756,6 @@ where Cond: Repr<'a>, Self: Repr<'a>, Other: Repr<'a> {
     ) -> <Self::Output as Repr<'a>>::Repr;
 }
 
-
 pub trait Cast<'a, Target = Self>
 where Self: Repr<'a>, Target: Repr<'a> {
     fn cast(
