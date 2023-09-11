@@ -8,7 +8,7 @@ use std::slice;
 use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
-use crate::eval::{self, Evaluator, CachingEvaluator, RevealSecrets};
+use crate::eval::{self, Evaluator, CachingEvaluator, RevealSecrets, EvalWire};
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
@@ -134,6 +134,8 @@ pub trait Sink: Sized {
     fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId;
 
     const HAS_PERMUTE: bool;
+    /// Emit a permutation circuit that takes as input a list of wires as well as a description
+    /// of a permutation as a witness, and outputs the permuted wires.
     fn permute(
         &mut self,
         expire: Time,
@@ -143,8 +145,16 @@ pub trait Sink: Sized {
     ) -> WireId;
     /// Emit private values corresponding to a `permute` operation.  `perm` should be an array of
     /// `num_items` 32-bit indices, each referring to a distinct element in the range `0 ..
-    /// num_items`.
-    fn permute_private_values(&mut self, num_items: u64, perm: Bits);
+    /// num_items`. When the `assert_permutation` plugin is available, `input_values` and `wire_widths` will also
+    /// be used to generate a witness as the actual permuted values.
+    /// Suppose we are permuting 3 items, where each item (in the abstract circuit) consists of one
+    /// `Uint(8)` wire and one `Uint(16)` wire.  The input values are the three pairs `(0_u8, 1_u16),
+    /// (10_u8, 11_u16), (20_u8, 21_u16)`, and the permutation is `[1, 0, 2]`.  In the generated SIEVE IR,
+    /// each abstract wire is flattened into some number of bits (boolean wires), and the bits are
+    /// appended together to make the input wire range, whose length is `(8 + 16) * 3 = 72`.  The
+    /// first 8 of those 72 bits would hold the value `0_u8`, the next 16 would be `1_u16`, the next 8
+    /// would be `10_u8`, and so on.
+    fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]);
 
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -284,6 +294,8 @@ trait PrivateOps<'a> {
         sink: &mut impl Sink,
         num_items: u64,
         perm: Wire<'a>,
+        permuted_wires: Vec<Wire<'a>>,
+        wire_widths: Vec<u64>
     );
 }
 
@@ -348,7 +360,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
                 PrivateOp::Emit(w) => sub_ops.emit(c, sink, w),
                 PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
                 PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
-                PrivateOp::Permute(n, perm) => sub_ops.emit_permute(c, sink, n, perm),
+                PrivateOp::Permute(n, perm, permuted_wires, wire_widths) => sub_ops.emit_permute(c, sink, n, perm, permuted_wires, wire_widths),
             }
         }
     }
@@ -359,9 +371,12 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         sink: &mut impl Sink,
         num_items: u64,
         perm: Wire<'a>,
+        input_wires: Vec<Wire<'a>>,
+        wire_widths: Vec<u64>
     ) {
         let bits = self.ev.eval_wire_bits(c, perm).unwrap().0;
-        sink.permute_private_values(num_items, bits);
+        let input_values = input_wires.iter().map(|&x| self.ev.eval_wire_bits(c, x).unwrap().0).collect();
+        sink.permute_private_values(num_items, bits, input_values, &wire_widths);
     }
 }
 
@@ -370,7 +385,7 @@ enum PrivateOp<'a> {
     Emit(Wire<'a>),
     QuotRem(Wire<'a>, Wire<'a>),
     Call(Call<'a>),
-    Permute(u64, Wire<'a>),
+    Permute(u64, Wire<'a>, Vec<Wire<'a>>, Vec<u64>),
 }
 
 struct PrivateLog<'a> {
@@ -423,8 +438,10 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         _sink: &mut impl Sink,
         num_items: u64,
         perm: Wire<'a>,
+        permuted_wires: Vec<Wire<'a>>,
+        wire_widths: Vec<u64>
     ) {
-        self.log.push(PrivateOp::Permute(num_items, perm));
+        self.log.push(PrivateOp::Permute(num_items, perm, permuted_wires, wire_widths));
     }
 }
 
@@ -571,11 +588,16 @@ impl<'w, S: Sink> Backend<'w, S> {
                 if let Some(g) = gk.cast::<Permute>() {
                     assert!(S::HAS_PERMUTE, "Permute gadget is unsupported with this Sink");
                     let mut chunks = Vec::with_capacity(g.items * g.wires_per_item);
+                    let mut wire_widths = Vec::with_capacity(g.wires_per_item);
                     for i in 0 .. g.items {
                         for j in 0 .. g.wires_per_item {
                             let w = ws[1 + i * g.wires_per_item + j];
                             chunks.push((Source::Wires(self.wire_map[&w]), type_bits(w.ty)));
                         }
+                    }
+                    for j in 0 .. g.wires_per_item {
+                        let w = ws[1 + j];
+                        wire_widths.push(type_bits(w.ty));
                     }
                     let a = self.sink.concat_chunks(TEMP, &chunks);
 
@@ -594,6 +616,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                             &mut self.sink,
                             u64::try_from(g.items).unwrap(),
                             ws[0],
+                            ws[1..].to_vec(),
+                            wire_widths
                         );
                     }
 
@@ -1292,7 +1316,7 @@ mod test {
         ) -> WireId {
             unimplemented!()
         }
-        fn permute_private_values(&mut self, _num_items: u64, _perm: Bits) {
+        fn permute_private_values(&mut self, _num_items: u64, _perm: Bits, _input_values: Vec<Bits>, _wire_widths: &[u64]) {
             unimplemented!()
         }
     }
@@ -1408,8 +1432,8 @@ mod test {
         ) -> WireId {
             self.inner.permute(expire, wires_per_item, num_items, inputs)
         }
-        fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
-            self.inner.permute_private_values(num_items, perm)
+        fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
+            self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
         }
     }
 
