@@ -99,7 +99,7 @@ macro_rules! declare_use_plugins {
         }
     };
 }
-declare_use_plugins!(mux_v0);
+declare_use_plugins!(mux_v0, permutation_check_v1);
 
 
 #[cfg(feature = "bellman")]

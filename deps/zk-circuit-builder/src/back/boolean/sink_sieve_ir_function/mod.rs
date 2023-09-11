@@ -89,6 +89,7 @@ pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
 
     // Plugins
     use_plugin_mux_v0: bool,
+    use_plugin_permutation_check_v1: bool,
 
     _marker: PhantomData<IR>,
 }
@@ -117,6 +118,9 @@ enum FunctionDesc {
     /// `Permute(n, m)`: permutation function from `m` inputs to `m` outputs, with each item being
     /// `n` bits.
     Permute(u64, u32),
+    /// `AssertPermute(n, m)`: Assert permutation of `m` inputs and `m` permuted inputs, with each item being
+    /// `n` bits.
+    AssertPermute(u64, u32),
     /// `PermuteLayerShuffle(n, m, i)`: shuffle layer `l` of `Permute(n, m)`.  This is a helper
     /// function used to reduce the peak message size in the SIEVE IR output.
     PermuteLayerShuffle(u64, u32, usize),
@@ -158,6 +162,7 @@ impl FunctionDesc {
             FunctionDesc::Neg(n) => format!("neg_{}", n),
             FunctionDesc::Mux(n) => format!("mux_{}", n),
             FunctionDesc::Permute(n, m) => format!("permute_{}_{}", n, m),
+            FunctionDesc::AssertPermute(n, m) => format!("assert_permute_{}_{}", n, m),
             FunctionDesc::PermuteLayerShuffle(n, m, l) =>
                 format!("permute_layer_shuffle_{}_{}_{}", n, m, l),
             FunctionDesc::PermuteLayerSwitches(n, m, l) =>
@@ -224,6 +229,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             func_map: HashMap::new(),
             emitted_relation: false,
             use_plugin_mux_v0: use_plugins.mux_v0,
+            use_plugin_permutation_check_v1: use_plugins.permutation_check_v1,
             _marker: PhantomData,
         }
     }
@@ -296,6 +302,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             func_map: mem::take(&mut self.func_map),
             emitted_relation: false,
             use_plugin_mux_v0: self.use_plugin_mux_v0,
+            use_plugin_permutation_check_v1: self.use_plugin_permutation_check_v1,
             _marker: PhantomData,
         }
     }
@@ -388,9 +395,37 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                         vec![],
                     ));
                     return idx;
-                },
+                }
 
-                _ => {},
+                FunctionDesc::AssertPermute(n, m) if self.use_plugin_permutation_check_v1 => {
+                    let argc = n * m as u64;
+                    let (idx, name) = self.add_func_info(desc, &[], &[argc, argc]);
+
+                    self.functions.push(IR::new_plugin_function(
+                        name.clone(),
+                        [],
+                        [argc, argc],
+                        "permutation_check_v1".into(),
+                        "assert_perm".into(),
+                        vec![n.to_string()],
+                    ));
+                    return idx;
+                }
+
+                // The rest of the permutation gadgets should be unreachable when using the permutation plugin.
+                FunctionDesc::PermuteLayerShuffle(..)
+                | FunctionDesc::PermuteLayerSwitches(..)
+                | FunctionDesc::PermuteSwitch(..)
+                | FunctionDesc::PermuteSwitches(..)
+                | FunctionDesc::PermuteSwitchPublic(..)
+                | FunctionDesc::PermuteShuffle(..) =>
+                {
+                    if self.use_plugin_permutation_check_v1 {
+                        unreachable!("{:?}", desc);
+                    }
+                }
+
+                _ => {}
             }
         }
 
@@ -493,7 +528,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             },
 
             FunctionDesc::Permute(n, m) => {
-                sub_sink.permute_body(n, m)
+                match self.use_plugin_permutation_check_v1 {
+                    true => sub_sink.permute_body_plugin(n, m),
+                    false => sub_sink.permute_body(n, m),
+                }
+            },
+            FunctionDesc::AssertPermute(n, m) => {
+                unreachable!();
             },
             FunctionDesc::PermuteLayerShuffle(n, m, l) => {
                 sub_sink.permute_layer_shuffle(n, m, l)
@@ -664,6 +705,28 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         (vec![n * m_rounded as u64], vec![n * m as u64])
     }
 
+    fn permute_body_plugin(&mut self, n: u64, m: u32) -> (Vec<u64>, Vec<u64>) {
+        let m_rounded = m.next_power_of_two();
+        let num_wires = n * m_rounded as u64;
+
+        // Allocate n * m input wires and n * m_rounded output wires
+        let [out, inp1] = self.alloc.preallocate([num_wires, n * m as u64]);
+
+        // Get output from witness
+        self.private_into(out, n * m as u64);
+
+        // Pad the rest of the wires with zero
+        self.lit_zero_into(out + n * m as u64, num_wires - n * m as u64);
+
+        // Allocate a dummy wire to hold to outcome of the assertion
+        let assert_out = self.alloc_wires(TEMP, 0);
+        
+        // Call assert_permute. Assert_permute plugin doesn't have an output
+        self.call_into(assert_out, FunctionDesc::AssertPermute(n, m), &[inp1, out]);
+
+        (vec![num_wires], vec![n * m as u64])
+    }
+
     fn permute_layer_shuffle(&mut self, n: u64, m: u32, l: usize) -> (Vec<u64>, Vec<u64>) {
         let mut bn = BenesNetwork::new(m, m);
         let m_rounded = 2 * bn.layer_size as u32;
@@ -803,6 +866,51 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 (w, w + n - 1)
             }),
         ));
+    }
+
+    /// Compute the witness of the assert_permute plugin.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `num_items` - The number of items to be permuted.
+    /// * `perm` - The description of the permutation. perm.0 contains the permutation vector.
+    /// * `input_values` - The values to be permuted.
+    /// * `wire_widths` - The bit widths of the wires of each item.
+    fn permute_private_values_plugin(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
+        let permutation_vector = perm.0;
+        let chunk_size = wire_widths.len();
+        assert_eq!(num_items as usize * chunk_size, input_values.len(), "The length of the input values vector must equal the number of items times the chunk size");
+
+        let num_items = u32::try_from(num_items).unwrap();
+        for output in 0..num_items {
+            let permuted_index = permutation_vector.get(output as usize).copied().unwrap_or(0);
+            for (i, &width) in wire_widths.iter().enumerate() {
+                let value = input_values[permuted_index as usize * chunk_size + i];
+                self.private_value(width, value);
+            }
+        }
+    }
+
+    fn permute_private_values_no_plugin(&mut self, num_items: u64, perm: Bits) {
+        let num_items = u32::try_from(num_items).unwrap();
+        let mut bn = BenesNetwork::new(num_items, num_items);
+        let mut routes = Vec::with_capacity(num_items as usize);
+        for output in 0 .. num_items {
+            let input = perm.0.get(output as usize).copied().unwrap_or(0);
+            routes.push(benes::Route { input, output, public: false });
+        }
+        bn.set_routes(&routes);
+
+        for l in 0 .. bn.num_layers {
+            for i in 0 .. bn.layer_size {
+                let flags = bn.flags(l, i);
+                if flags.contains(benes::SwitchFlags::F_PUBLIC) {
+                    continue;
+                }
+                let swap = flags.contains(benes::SwitchFlags::F_SWAP);
+                self.private_bits.push(swap);
+            }
+        }
     }
 }
 
@@ -966,25 +1074,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let num_items = u32::try_from(num_items).unwrap();
         self.emit_call(expire, FunctionDesc::Permute(wires_per_item, num_items), &[inputs])
     }
-    fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
-        let num_items = u32::try_from(num_items).unwrap();
-        let mut bn = BenesNetwork::new(num_items, num_items);
-        let mut routes = Vec::with_capacity(num_items as usize);
-        for output in 0 .. num_items {
-            let input = perm.0.get(output as usize).copied().unwrap_or(0);
-            routes.push(benes::Route { input, output, public: false });
-        }
-        bn.set_routes(&routes);
 
-        for l in 0 .. bn.num_layers {
-            for i in 0 .. bn.layer_size {
-                let flags = bn.flags(l, i);
-                if flags.contains(benes::SwitchFlags::F_PUBLIC) {
-                    continue;
-                }
-                let swap = flags.contains(benes::SwitchFlags::F_SWAP);
-                self.private_bits.push(swap);
-            }
+    fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
+        // If the permutation plugin is available, use the `input_values` and `perm` to compute the
+        // permuted values as the witness. Otherwise, use `perm` as the witness.
+        if self.use_plugin_permutation_check_v1 {
+            self.permute_private_values_plugin(num_items, perm, input_values, wire_widths);
+        } else {
+            self.permute_private_values_no_plugin(num_items, perm);
         }
     }
 }
@@ -1099,6 +1196,9 @@ impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
         if !self.emitted_relation {
             if self.use_plugin_mux_v0 {
                 r.plugins.push("mux_v0".into());
+            }
+            if self.use_plugin_permutation_check_v1 {
+                r.plugins.push("permutation_check_v1".into());
             }
             r.types = vec![Type::Field(vec![2])];
 

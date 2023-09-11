@@ -843,8 +843,8 @@ mod test {
         ) -> WireId {
             self.inner.permute(expire, wires_per_item, num_items, inputs)
         }
-        fn permute_private_values(&mut self, num_items: u64, perm: Bits) {
-            self.inner.permute_private_values(num_items, perm)
+        fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
+            self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
         }
     }
 
