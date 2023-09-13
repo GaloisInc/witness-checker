@@ -7,7 +7,7 @@ use std::ptr;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 #[cfg(feature = "gf_scuttlebutt")]
-use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b};
+use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
@@ -344,6 +344,11 @@ fn safe_div(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x / y }
 }
 
+#[cfg(feature = "gf_scuttlebutt")]
+fn safe_div_galois_field<F: FiniteField>(x: F, y: F) -> F {
+    if y.is_zero() { F::ZERO } else { x / y }
+}
+
 fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { x } else { x % y }
 }
@@ -620,6 +625,8 @@ pub fn eval_unop_galois_field<'a>(
         Field::F63b => helper::<F63b>(c, op, a_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
         Field::F64b => helper::<F64b>(c, op, a_bits, field),
+        #[cfg(feature = "gf_scuttlebutt")]
+        Field::F128p => helper::<F128p>(c, op, a_bits, field),
     }
 }
 
@@ -666,11 +673,11 @@ pub fn eval_binop_galois_field<'a>(
             BinOp::Add => a_val + b_val,
             BinOp::Sub => a_val - b_val,
             BinOp::Mul => a_val * b_val,
-            BinOp::Div | // safe_div(a_val, b_val),
-            BinOp::Mod | // safe_mod(a_val, b_val),
-            BinOp::And | // a_val & b_val,
-            BinOp::Or  | // a_val | b_val,
-            BinOp::Xor => panic!("Unsupported operation {:?}", op), // a_val ^ b_val,
+            BinOp::Div => safe_div_galois_field(a_val, b_val),
+            BinOp::Mod |
+            BinOp::And |
+            BinOp::Or  |
+            BinOp::Xor => panic!("Unsupported operation {:?}", op),
         };
         val.as_bits(c, field.bit_size())
     }
@@ -686,6 +693,8 @@ pub fn eval_binop_galois_field<'a>(
         Field::F63b => helper::<F63b>(c, op, a_bits, b_bits, field),
         #[cfg(feature = "gf_scuttlebutt")]
         Field::F64b => helper::<F64b>(c, op, a_bits, b_bits, field),
+        #[cfg(feature = "gf_scuttlebutt")]
+        Field::F128p => helper::<F128p>(c, op, a_bits, b_bits, field),
     }
 }
 
@@ -747,6 +756,8 @@ pub fn eval_cmp_galois_field<'a>(
         Field::F63b => helper::<F63b>(c, op, a_bits, b_bits),
         #[cfg(feature = "gf_scuttlebutt")]
         Field::F64b => helper::<F64b>(c, op, a_bits, b_bits),
+        #[cfg(feature = "gf_scuttlebutt")]
+        Field::F128p => helper::<F128p>(c, op, a_bits, b_bits),
     }
 }
 

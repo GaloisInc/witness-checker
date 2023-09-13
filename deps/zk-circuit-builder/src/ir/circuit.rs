@@ -1825,6 +1825,9 @@ pub enum Field {
     F63b,
     #[cfg(feature = "gf_scuttlebutt")]
     F64b,
+    // Large prime fields.
+    #[cfg(feature = "gf_scuttlebutt")]
+    F128p,
 }
 
 impl Field {
@@ -1840,6 +1843,8 @@ impl Field {
             Field::F63b => IntSize(64),
             #[cfg(feature = "gf_scuttlebutt")]
             Field::F64b => IntSize(64),
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F128p => IntSize(128),
         }
     }
 }

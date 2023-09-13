@@ -11,7 +11,7 @@ use generic_array::{ArrayLength, GenericArray};
 use generic_array::typenum::{Sum, Quot, U3, U4};
 use num_traits::Zero;
 #[cfg(feature = "gf_scuttlebutt")]
-use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b};
+use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
 #[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::serialization::CanonicalSerialize;
 use crate::eval::EvalWire;
@@ -1244,6 +1244,8 @@ field_impls!(F56b, F56b);
 field_impls!(F63b, F63b);
 #[cfg(feature = "gf_scuttlebutt")]
 field_impls!(F64b, F64b);
+#[cfg(feature = "gf_scuttlebutt")]
+field_impls!(F128p, F128p);
 
 macro_rules! tuple_impl {
     ($($A:ident $B:ident),*) => {

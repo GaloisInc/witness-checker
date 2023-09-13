@@ -36,6 +36,8 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
             Field::F63b => { write!(s, "gf63b")?; },
             #[cfg(feature = "gf_scuttlebutt")]
             Field::F64b => { write!(s, "gf64b")?; },
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F128p => { write!(s, "gf128p")?; },
         },
         TyKind::Bundle(btys) => {
             for (i, &ty) in btys.tys().iter().enumerate() {
