@@ -352,9 +352,17 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { x } else { x % y }
 }
 
-fn safe_mod_galois_field<F: FiniteField>(x: F, y: F) -> F {
-    let quot = safe_div_galois_field(x, y);
-    y - x * quot
+#[inline(always)]
+fn safe_mod_galois_field<F: FiniteField>(_x: F, _y: F) -> F {
+    // x = y * (x / y) + (x % y)    [Def.]
+    // x = y * (x * y^-1) + (x % y) [Def. of field division]
+    // x = y * (y^-1 * x) + (x % y) [Comm. of *]
+    // x = (y * y^-1) * x + (x % y) [Assoc. of *]
+    // x = 1 * x + (x % y)          [Inv. of *]
+    // x = x + (x % y)              [Id. of *]
+    // 0 = x + (x % y) - x          [Inv. of +]
+    // 0 = x % y                    [Inv. of +]
+    F::ZERO
 }
 
 trait EvalContext<'a, 'b> {
