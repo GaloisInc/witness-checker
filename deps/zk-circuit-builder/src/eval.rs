@@ -344,6 +344,7 @@ fn safe_div(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x / y }
 }
 
+#[cfg(feature = "gf_scuttlebutt")]
 fn safe_div_galois_field<F: FiniteField>(x: F, y: F) -> F {
     if y.is_zero() { F::ZERO } else { x / y }
 }
@@ -352,6 +353,7 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { x } else { x % y }
 }
 
+#[cfg(feature = "gf_scuttlebutt")]
 #[inline(always)]
 fn safe_mod_galois_field<F: FiniteField>(_x: F, _y: F) -> F {
     // x = y * (x / y) + (x % y)    [Def.]
