@@ -353,20 +353,6 @@ fn safe_mod(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { x } else { x % y }
 }
 
-#[cfg(feature = "gf_scuttlebutt")]
-#[inline(always)]
-fn safe_mod_galois_field<F: FiniteField>(_x: F, _y: F) -> F {
-    // x = y * (x / y) + (x % y)    [Def.]
-    // x = y * (x * y^-1) + (x % y) [Def. of field division]
-    // x = y * (y^-1 * x) + (x % y) [Comm. of *]
-    // x = (y * y^-1) * x + (x % y) [Assoc. of *]
-    // x = 1 * x + (x % y)          [Inv. of *]
-    // x = x + (x % y)              [Id. of *]
-    // 0 = x + (x % y) - x          [Inv. of +]
-    // 0 = x % y                    [Inv. of +]
-    F::ZERO
-}
-
 trait EvalContext<'a, 'b> {
     /// Get the value of `w` as `Bits` and a flag indicating whether the value is derived from
     /// secrets.
@@ -688,10 +674,10 @@ pub fn eval_binop_galois_field<'a>(
             BinOp::Sub => a_val - b_val,
             BinOp::Mul => a_val * b_val,
             BinOp::Div => safe_div_galois_field(a_val, b_val),
-            BinOp::Mod => safe_mod_galois_field(a_val, b_val),
-            BinOp::And | // a_val & b_val,
-            BinOp::Or  | // a_val | b_val,
-            BinOp::Xor => panic!("Unsupported operation {:?}", op), // a_val ^ b_val,
+            BinOp::Mod |
+            BinOp::And |
+            BinOp::Or  |
+            BinOp::Xor => panic!("Unsupported operation {:?}", op),
         };
         val.as_bits(c, field.bit_size())
     }
