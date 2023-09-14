@@ -924,6 +924,10 @@ fn eval_gate_inner<'a, 'b>(
                 unimplemented!("The `Switch` gate does not support guards with non-integer type.")
             }
         },
+
+        GateKind::Seq(_a, b) => {
+            ecx.get_value(b)?
+        },
     })
 }
 
