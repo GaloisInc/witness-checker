@@ -1303,17 +1303,17 @@ macro_rules! tuple_impl {
             }
         }
 
+        // In the zero-element case (`tuple_impl!()`), the arguments of these functions are unused
+        #[allow(unused)]
         impl<'a, $($A: LazySecret<'a>,)*> FromWireList<'a> for ($($A,)*) {
             fn expected_num_wires(#[allow(unused)] sizes: &mut impl Iterator<Item = usize>) -> usize {
                 0 $( + $A::expected_num_wires(sizes) )*
             }
 
             fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
-                #[allow(unused)]                
+
                 c: &C,
-                #[allow(unused)]
                 sizes: &mut impl Iterator<Item = usize>,
-                #[allow(unused)]                
                 mut f: impl FnMut(Ty<'a>),
             ) {
                 $( $A::for_each_expected_wire_type(c, sizes, |t| f(t)); )*
@@ -1324,15 +1324,16 @@ macro_rules! tuple_impl {
                 sizes: &mut impl Iterator<Item = usize>,
                 build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
             ) -> Self::Repr {
-                #![allow(unused)]       // Arguments are unused in the zero-element case
                 (
                     $( TWire::<$A>::new($A::build_repr_from_wires(c, sizes, build_wire)), )*
                 )
             }
         }
 
+        // In the zero-element case (`tuple_impl!()`), the arguments of these functions are unused
+        #[allow(unused)]
         impl<'a, $($A: LazySecret<'a>,)*> LazySecret<'a> for ($($A,)*) {
-            fn expected_word_len(#[allow(unused)] sizes: &mut impl Iterator<Item = usize>) -> usize {
+            fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
                 0 $( + $A::expected_word_len(sizes) )*
             }
             fn word_len(&self) -> usize {
@@ -1342,7 +1343,6 @@ macro_rules! tuple_impl {
             }
             fn push_words(&self, out: &mut Vec<u32>) {
                 #![allow(bad_style)]    // Capitalized variable names $A
-                #![allow(unused)]       // `out` in the zero-element case
                 let ($(ref $A,)*) = *self;
                 $( $A.push_words(out); )*
             }

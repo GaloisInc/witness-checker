@@ -1,13 +1,13 @@
 use std::cmp;
-use std::collections::btree_map::{BTreeMap};
+use std::collections::btree_map::BTreeMap;
 use std::collections::hash_map::{self, HashMap};
 use std::convert::TryFrom;
-use std::iter::{self};
+use std::iter;
 use std::mem;
 use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
-use crate::eval::{Evaluator};
+use crate::eval::Evaluator;
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{

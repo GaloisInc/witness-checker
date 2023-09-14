@@ -1,4 +1,4 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
 use std::marker::PhantomData;
@@ -190,8 +190,7 @@ impl FunctionInfo {
         &self.counts[0 .. self.num_outputs]
     }
 
-    #[allow(unused)]
-    fn sig(&self) -> (&[u64], &[u64]) {
+    fn _sig(&self) -> (&[u64], &[u64]) {
         self.counts.split_at(self.num_outputs)
     }
 }

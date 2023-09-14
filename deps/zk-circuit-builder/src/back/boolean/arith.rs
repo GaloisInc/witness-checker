@@ -33,7 +33,7 @@ fn add_common<S: Sink>(
         c_out
     };
 
-    for _i in 0 .. n - 1 {
+    for _ in 0 .. n - 1 {
         let c_out = next_carry(sink, &carries);
         carries.push(c_out);
         concat_parts.push((Source::Wires(c_out), 1));
@@ -120,7 +120,7 @@ fn add_1<S: Sink>(
         c_out
     };
 
-    for _i in 0 .. n - 1 {
+    for _ in 0 .. n - 1 {
         let c_out = next_carry(sink, &carries);
         carries.push(c_out);
         concat_parts.push((Source::Wires(c_out), 1));
@@ -219,8 +219,7 @@ fn zero_extend(
 }
 
 /// Sign-extend input `a` from `n` bits to `m` bits.
-#[allow(unused)]
-fn sign_extend(
+fn _sign_extend(
     sink: &mut impl Sink,
     expire: Time,
     n: u64,

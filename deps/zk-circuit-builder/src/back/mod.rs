@@ -6,11 +6,6 @@ use crate::ir::circuit::{CircuitBase, Wire, EraseVisitor, MigrateVisitor};
 use crate::ir::migrate;
 use crate::stats::Stats;
 
-
-#[cfg(feature = "sieve_ir")]
-mod multi_file_sink;
-
-
 /// Trait for abstracting over backends.  `post_erase` and `post_migrate` are callbacks to be
 /// invoked during `MigrateHandle::erase_and_migrate`.  `finish` is used to finish writing the
 /// low-level circuit.
