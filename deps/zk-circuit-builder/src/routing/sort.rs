@@ -1,9 +1,6 @@
-use std::cmp::Ordering;
-use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::CircuitTrait;
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{
-    Builder, BuilderExt, TWire, Repr, Mux, Le, Lt, EvaluatorExt, SecretDep, ToWireList,
+    Builder, BuilderExt, TWire, Repr, Mux, Le, Lt, SecretDep, ToWireList,
     FromWireList,
 };
 use crate::routing::{RoutingBuilder, FinishRouting, InputId, OutputId};

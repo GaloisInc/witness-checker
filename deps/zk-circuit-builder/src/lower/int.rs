@@ -1,10 +1,6 @@
-use std::convert::TryFrom;
-use num_bigint::BigUint;
-use num_traits::Zero;
-
 use crate::ir::circuit::{
-    CircuitTrait, CircuitExt, CircuitRef, CircuitFilter, Ty, Wire, GateKind, TyKind, IntSize,
-    BinOp, ShiftOp, CmpOp,
+    CircuitTrait, CircuitExt, CircuitRef, CircuitFilter, Wire, GateKind, TyKind, IntSize,
+    BinOp, CmpOp,
 };
 
 // TODO: mod -> div + sub

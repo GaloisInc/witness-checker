@@ -34,7 +34,7 @@ impl MultiFile {
     }
 }
 
-
+#[allow(unused)]
 pub fn clean_workspace(workspace: impl AsRef<Path>) -> io::Result<()> {
     let workspace = workspace.as_ref();
 
@@ -72,12 +72,14 @@ pub struct MultiFileSink {
 }
 
 impl MultiFileSink {
+    #[allow(unused)]
     pub fn new_clean(workspace: &impl AsRef<Path>) -> io::Result<MultiFileSink> {
         fs::create_dir_all(workspace)?;
         clean_workspace(workspace)?;
         Self::new_no_cleanup(workspace)
     }
 
+    #[allow(unused)]
     pub fn new_no_cleanup(workspace: &impl AsRef<Path>) -> io::Result<MultiFileSink> {
         Ok(MultiFileSink {
             workspace: workspace.as_ref().to_path_buf(),
@@ -95,6 +97,7 @@ impl MultiFileSink {
         ))
     }
 
+    #[allow(unused)]
     pub fn public_inputs_paths(workspace: &impl AsRef<Path>, length: usize) -> Vec<PathBuf> {
         (0..length)
             .map(|count| {
@@ -112,6 +115,7 @@ impl MultiFileSink {
         ))
     }
 
+    #[allow(unused)]
     pub fn private_inputs_paths(workspace: &impl AsRef<Path>, length: usize) -> Vec<PathBuf> {
         (0..length)
             .map(|count| {
@@ -122,12 +126,14 @@ impl MultiFileSink {
             .collect()
     }
 
+    #[allow(unused)]
     pub fn relation_path(workspace: &impl AsRef<Path>) -> PathBuf {
         workspace
             .as_ref()
             .join(format!("002_relation"))
     }
 
+    #[allow(unused)]
     pub fn print_filenames(&self) {
         Self::public_inputs_paths(&self.workspace, self.public_inputs_files.len())
             .iter()

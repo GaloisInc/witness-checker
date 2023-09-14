@@ -406,7 +406,7 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
 
                 self.backend.enforce_true(c, ev, accepted);
                 let bool_sink = self.backend.finish();
-                let sink = bool_sink.finish();
+                let _sink = bool_sink.finish();
 
                 eprintln!();
 
@@ -443,7 +443,6 @@ pub fn new_boolean_sieve_ir_v2<'a>(
     {
         use self::boolean::Backend;
         use self::boolean::sink_sieve_ir_function::SieveIrV2Sink;
-        use self::multi_file_sink::MultiFileSink;
         use zki_sieve_v3::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -485,7 +484,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
 
                 self.backend.enforce_true(c, ev, accepted);
                 let bool_sink = self.backend.finish();
-                let sink = bool_sink.finish();
+                let _sink = bool_sink.finish();
 
                 eprintln!();
 

@@ -1,6 +1,4 @@
-use crate::ir::circuit::Bits;
-use super::{WireId, Time, TEMP, Sink, Source, AssertNoWrap};
-
+use super::{WireId, Time, TEMP, Sink, Source};
 
 /// Generate a mux operation, which returns the value of `t` ("then") if `c` ("cond") is 1 and
 /// returns `e` ("else") otherwise.  `c` is a 1-bit input, `t` and `e` are both `n`-bit inputs, and

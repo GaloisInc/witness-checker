@@ -1,7 +1,5 @@
 use crate::ir::circuit::Bits;
 use super::{WireId, Time, TEMP, Sink, Source, AssertNoWrap, from_bristol};
-use std::cell::RefCell;
-use std::collections::HashMap;
 
 /// Add up `n`-bit input `a`, `n`-bit input `b`, and 1-bit input `c0`, producing an `n`-bit result.
 ///
@@ -35,7 +33,7 @@ fn add_common<S: Sink>(
         c_out
     };
 
-    for i in 0 .. n - 1 {
+    for _i in 0 .. n - 1 {
         let c_out = next_carry(sink, &carries);
         carries.push(c_out);
         concat_parts.push((Source::Wires(c_out), 1));
@@ -122,7 +120,7 @@ fn add_1<S: Sink>(
         c_out
     };
 
-    for i in 0 .. n - 1 {
+    for _i in 0 .. n - 1 {
         let c_out = next_carry(sink, &carries);
         carries.push(c_out);
         concat_parts.push((Source::Wires(c_out), 1));
@@ -179,7 +177,7 @@ fn mul_1(
 /// value did not wrap around modulo `2^m` (when viewed as an unsigned integer).
 fn truncate(
     sink: &mut impl Sink,
-    expire: Time,
+    _expire: Time,
     n: u64,
     a: WireId,
     m: u64,
@@ -221,6 +219,7 @@ fn zero_extend(
 }
 
 /// Sign-extend input `a` from `n` bits to `m` bits.
+#[allow(unused)]
 fn sign_extend(
     sink: &mut impl Sink,
     expire: Time,

@@ -84,7 +84,7 @@ impl<'a> ToWireList<'a> for InputId {
     fn num_wires(x: &Self::Repr) -> usize {
         u32::num_wires(x)
     }
-    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+    fn for_each_wire(x: &Self::Repr, #[allow(unused_mut)] mut f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
@@ -151,7 +151,7 @@ impl<'a> ToWireList<'a> for OutputId {
     fn num_wires(x: &Self::Repr) -> usize {
         u32::num_wires(x)
     }
-    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+    fn for_each_wire(x: &Self::Repr, #[allow(unused_mut)] mut f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
@@ -369,7 +369,7 @@ where
     }
 }
 
-
+#[allow(unused)]
 fn benes_switch<'a, T>(
     b: &impl Builder<'a>,
     x: TWire<'a, T>,
@@ -407,7 +407,7 @@ pub struct FinishRouting<'a, T: Repr<'a>> {
 
 impl<'a, T> FinishRouting<'a, T>
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
-    pub fn trivial(b: &impl Builder<'a>, ws: Vec<TWire<'a, T>>) -> FinishRouting<'a, T> {
+    pub fn trivial(_b: &impl Builder<'a>, ws: Vec<TWire<'a, T>>) -> FinishRouting<'a, T> {
         FinishRouting {
             outputs: ws,
         }
@@ -419,7 +419,7 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
     }
 
     /// Run one step of circuit construction.
-    pub fn step(&mut self, b: &impl Builder<'a>) {
+    pub fn step(&mut self, _b: &impl Builder<'a>) {
         assert!(!self.is_ready());
         unreachable!();
     }

@@ -1,14 +1,13 @@
 use std::cmp;
-use std::collections::btree_map::{BTreeMap, Entry};
+use std::collections::btree_map::{BTreeMap};
 use std::collections::hash_map::{self, HashMap};
 use std::convert::TryFrom;
-use std::iter::{self, FromIterator};
+use std::iter::{self};
 use std::mem;
-use std::slice;
 use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
-use crate::eval::{self, Evaluator, CachingEvaluator, RevealSecrets, EvalWire};
+use crate::eval::{Evaluator};
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
@@ -252,7 +251,7 @@ fn from_bristol(sink: &mut impl Sink, expire: Time, circuit: bristol_fashion::Ci
     let mut chunks = Vec::new();
     let mut outputs = Vec::with_capacity(circuit.output_sizes().len());
 
-    for (i, &n) in circuit.output_sizes().iter().enumerate() {
+    for &n in circuit.output_sizes().iter() {
         for j in 0 .. n {
             chunks.push((Source::Wires(wire_map[&(offset + j)]), 1));
         }
@@ -855,7 +854,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 self.sink.mux(expire, n, c, t, e)
             },
 
-            GateKind::Cast(aw, ty) => {
+            GateKind::Cast(aw, _ty) => {
                 let a = self.wire_map[&aw];
                 let m = type_bits(aw.ty);
 
@@ -940,7 +939,6 @@ impl<'w, S: Sink> Backend<'w, S> {
                     args: args.to_owned(),
                     bundle_ty_offsets: HashMap::new(),
                 };
-                let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
 
                 let out_wires = backend.convert_wires(c, &mut private_log, &[f.result_wire]);
                 let out_wire = out_wires[0];

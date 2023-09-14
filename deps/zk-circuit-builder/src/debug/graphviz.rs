@@ -118,8 +118,7 @@ pub fn make_graph<'a>(
             GateKind::Pack(ws) |
             GateKind::Gadget(_, ws) => write_edges(ws)?,
             GateKind::Call(call) => write_edges(call.args)?,
-
-            GateKind::Switch(c, branches , I) => todo!(),
+            GateKind::Switch(..) => todo!(),
         }
     }
 
