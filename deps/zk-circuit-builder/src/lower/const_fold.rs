@@ -142,9 +142,9 @@ fn const_foldable(gk: GateKind) -> bool {
         GateKind::Extract(..) => false,
         GateKind::Gadget(_, ws) => ws.iter().all(|&w| w.is_lit()),
         GateKind::Call(c) => c.args.iter().all(|&w| w.is_lit()),
-        
         // Making it false assuming that switch can't be folded
         GateKind::Switch(..) => false,
+        GateKind::Seq(a, b) => a.is_lit() && b.is_lit(),
     }
 }
 

@@ -915,6 +915,10 @@ impl<'w, S: Sink> Backend<'w, S> {
             
             // Making the backend unimplemented for time being
             GateKind::Switch(..) => unimplemented!(),
+
+            GateKind::Seq(_aw, bw) => {
+                self.wire_map[&bw]
+            }
         }
     }
 
