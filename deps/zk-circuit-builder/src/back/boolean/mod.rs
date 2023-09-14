@@ -1846,4 +1846,9 @@ mod test {
         test_gate_skip_v2_eval([1, 3, 3], |c, [x, y, z]| c.mux(x, y, z));
         test_gate_skip_v2_eval([1, -3, -3], |c, [x, y, z]| c.mux(x, y, z));
     }
+
+    #[test]
+    fn seq_3() {
+        test_gate([3, 3], |c, [a, b]| c.seq(a, b));
+    }
 }
