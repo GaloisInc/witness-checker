@@ -84,11 +84,7 @@ impl<'a> ToWireList<'a> for InputId {
     fn num_wires(x: &Self::Repr) -> usize {
         u32::num_wires(x)
     }
-    fn for_each_wire(
-        x: &Self::Repr,
-        #[allow(unused_mut)]
-        mut f: impl FnMut(Wire<'a>)
-    ) {
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
@@ -155,11 +151,7 @@ impl<'a> ToWireList<'a> for OutputId {
     fn num_wires(x: &Self::Repr) -> usize {
         u32::num_wires(x)
     }
-    fn for_each_wire(
-        x: &Self::Repr,
-        #[allow(unused_mut)]
-        mut f: impl FnMut(Wire<'a>)
-    ) {
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
