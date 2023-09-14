@@ -449,15 +449,8 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
             // Making the backend unimplemented for time being
             GateKind::Switch(..) => unimplemented!(),
 
-            GateKind::Seq(_a, b) => {
-                let bw = self.represent(b);
-                match *b.ty {
-                    TyKind::BOOL => WireRepr::from(self.get_boolean(bw)),
-                    TyKind::Uint(_) |
-                    TyKind::Int(_) => WireRepr::from(self.get_num(bw)),
-                    _ => unimplemented!(),
-                }
-            }
+            // `a` is pre-evaluated, and so can be ignored
+            GateKind::Seq(_a, b) => return self.represent(b),
         };
 
         self.representer.new_repr(repr)

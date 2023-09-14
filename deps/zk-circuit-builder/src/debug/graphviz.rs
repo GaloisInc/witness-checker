@@ -81,7 +81,7 @@ pub fn make_graph<'a>(
             GateKind::Gadget(gk, _) => write!(label, "Gadget {}", gk.name())?,
             GateKind::Call(call) => write!(label, "Call {}", call.func.name)?,
             GateKind::Switch(.. ) => write!(label, "Switch")?,
-            GateKind::Seq(_, _) => write!(label, "Switch")?,
+            GateKind::Seq(_, _) => write!(label, "Seq")?,
         }
         write!(label, " (")?;
         write_ty(&mut label, w.ty)?;

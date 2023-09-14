@@ -925,6 +925,7 @@ fn eval_gate_inner<'a, 'b>(
             }
         },
 
+        // `a` is pre-evaluated, based on the dependencies of `Seq`, so no need to use it
         GateKind::Seq(_a, b) => {
             ecx.get_value(b)?
         },
