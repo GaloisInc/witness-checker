@@ -21,7 +21,7 @@ where
     pub val: TWire<'a, T>,
 }
 
-impl<'a, T: Repr<'a>> Clone for ROMPortRepr<'a, T> 
+impl<'a, T: Repr<'a>> Clone for ROMPortRepr<'a, T>
 where
     <T as Repr<'a>>::Repr: std::marker::Copy,
 {
@@ -59,9 +59,10 @@ where
     }
 }
 
-impl<'a, T: Repr<'a> + SecretDep<'a, Decoded = T>> SecretDep<'a> for ROMPort<T>
+impl<'a, T> SecretDep<'a> for ROMPort<T>
 where
-    <T as Repr<'a>>::Repr: std::marker::Copy,
+    T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
+    <T as Repr<'a>>::Repr: Copy + Clone,
 {
     type Decoded = ROMPort<T>;
     fn from_bits_iter(
@@ -75,9 +76,10 @@ where
     }
 }
 
-pub struct ROM<'a, T: Repr<'a>>
+pub struct ROM<'a, T>
 where
-    <T as Repr<'a>>::Repr: std::marker::Copy,
+    T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
+    <T as Repr<'a>>::Repr: Copy + Clone,
 {
     ports: Vec<TWire<'a, ROMPort<T>>>,
     length: u64,
@@ -97,10 +99,8 @@ where
 
 impl<'a, T> ROM<'a, T>
 where
-    // T: for<'b> LazySecret<'b>,
-    <T as Repr<'a>>::Repr: Copy,
-    // T: for<'b> SecretDep<'b, Decoded = T>,
-    T: Clone + Repr<'a>,
+    T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone + 'static,
+    <T as Repr<'a>>::Repr: Copy + Clone,
 {
     pub fn new(b: &impl Builder<'a>, values: Vec<TWire<'a, T>>) -> ROM<'a, T> {
         let length = values.len() as u64;
@@ -117,26 +117,22 @@ where
         ROM { ports, length }
     }
 
-    pub fn load(&mut self, b: &impl Builder<'a>, index: TWire<'a, u64>) -> TWire<'a, T>
-    where
-    //     <T as Repr<'a>>::Repr: Clone,
-        T: SecretDep<'a, Decoded = T>,
-        T: for<'b> LazySecret<'b>,
-    {
+    pub fn load(&mut self, b: &impl Builder<'a>, index: TWire<'a, u64>) -> TWire<'a, T> {
         // - Assert that index is in bounds ()
         // For now we assume that every input is in bounds
         // addr = index
         let addr = index;
         // create a secret for the value
         let inp = TWire::<(u64, Vec<ROMPort<T>>)>::new((
-                index,
-                TWire::new(self.ports[..self.length as usize].to_vec()),
-            ));
-        let val = b.secret_derived_sized(
-            &[self.length as usize],
-            inp,
-            |(i, w): (u64, Vec<ROMPort<T>>)| w[i as usize].val.clone(),
-        );
+            index,
+            TWire::new(self.ports[..self.length as usize].to_vec()),
+        ));
+
+        let map_to_index: fn(<(u64, Vec<ROMPort<T>>) as SecretDep<'a>>::Decoded) -> T =
+            |(i, w)| w[i as usize].val.clone();
+
+        let val: TWire<'a, T> = b.secret_derived_sized(&[self.length as usize], inp, map_to_index);
+
         // create a new rom port
         let port = TWire::new(ROMPortRepr { addr, val });
         // add it to the vec
@@ -156,9 +152,10 @@ where
     }
 }
 
-impl<'a, T: Repr<'a>> FromIterator<TWire<'a, T>> for ROM<'a, T>
+impl<'a, T> FromIterator<TWire<'a, T>> for ROM<'a, T>
 where
-    <T as Repr<'a>>::Repr: std::marker::Copy,
+    T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
+    <T as Repr<'a>>::Repr: Copy + Clone,
 {
     fn from_iter<I: IntoIterator<Item = TWire<'a, T>>>(iter: I) -> Self {
         unimplemented! {}
