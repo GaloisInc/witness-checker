@@ -917,7 +917,10 @@ impl<'w, S: Sink> Backend<'w, S> {
             GateKind::Switch(..) => unimplemented!(),
 
             GateKind::Seq(_aw, bw) => {
-                self.wire_map[&bw]
+                // `a` is pre-evaluated, so it can be ignored
+                let b = self.wire_map[&bw];                
+                let width = type_bits(bw.ty);
+                self.sink.copy(expire, width, b)
             }
         }
     }
