@@ -233,8 +233,10 @@ where
 #[cfg(test)]
 mod test {
     use std::convert::TryInto;
+    use crate::eval;
+    use crate::eval::CachingEvaluator;
     use crate::ir::circuit::{Arenas, Circuit, FilterNil};
-    use crate::ir::typed::BuilderImpl;
+    use crate::ir::typed::{BuilderImpl, EvaluatorExt};
     use super::*;
 
     fn init() {

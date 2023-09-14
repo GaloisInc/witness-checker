@@ -1,7 +1,7 @@
 use num_bigint::{BigInt, BigUint};
 use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
-    CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
+    CircuitTrait, CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
     GadgetKindRef,
 };
 use crate::ir::typed::{Builder, Repr, TWire};
