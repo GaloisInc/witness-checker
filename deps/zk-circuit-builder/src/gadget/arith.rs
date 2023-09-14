@@ -1,7 +1,7 @@
 use num_bigint::{BigInt, BigUint};
 use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
-    CircuitTrait, CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
+    CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
     GadgetKindRef,
 };
 use crate::ir::typed::{Builder, Repr, TWire};
@@ -456,7 +456,7 @@ impl<'a> WideMulTrait<'a> for i64 {
 #[cfg(test)]
 mod test {
     use crate::eval;
-    use crate::ir::circuit::{Circuit, FilterNil, Arenas};
+    use crate::ir::circuit::{Circuit, CircuitTrait, FilterNil, Arenas};
     use crate::lower::gadget::DecomposeGadgets;
     use super::*;
 
