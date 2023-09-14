@@ -6,20 +6,18 @@ use std::hash::{Hash, Hasher};
 use std::iter;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
-use std::ptr;
 use generic_array::{ArrayLength, GenericArray};
 use generic_array::typenum::{Sum, Quot, U3, U4};
 use num_traits::Zero;
 #[cfg(feature = "gf_scuttlebutt")]
-use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
+use scuttlebutt::field::{F40b, F45b, F56b, F63b, F64b, F128p};
 #[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::serialization::CanonicalSerialize;
 use crate::eval::EvalWire;
 use crate::ir::circuit::{
-    AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, DynCircuit, Field, FromBits, IntSize,
+    AsBits, Bits, CircuitBase, CircuitTrait, CircuitExt, Field, FromBits, IntSize,
     Wire, Ty, TyKind, CellResetGuard, GateKind,
 };
-use crate::ir::migrate::{self, Migrate};
 
 pub use cheesecloth_derive_ir_typed::{FromWireList, ToWireList, LazySecret, SecretDep};
 
@@ -820,7 +818,7 @@ impl<'a> FromEval<'a> for bool {
 }
 
 impl<'a> FromWireList<'a> for bool {
-    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
 
     fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
@@ -832,7 +830,7 @@ impl<'a> FromWireList<'a> for bool {
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
-        sizes: &mut impl Iterator<Item = usize>,
+        _sizes: &mut impl Iterator<Item = usize>,
         build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
     ) -> Self::Repr {
         build_wire(Self::wire_type(c))
@@ -848,12 +846,12 @@ impl<'a> LazySecret<'a> for bool {
 }
 
 impl<'a> ToWireList<'a> for bool {
-    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn num_wires(_x: &Self::Repr) -> usize { 1 }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         f(*x);
     }
-    fn num_sizes(x: &Self::Repr) -> usize { 0 }
-    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+    fn num_sizes(_x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(_x: &Self::Repr, _f: impl FnMut(usize)) {}
 }
 
 impl<'a> SecretDep<'a> for bool {
@@ -929,7 +927,7 @@ macro_rules! integer_impls {
         }
 
         impl<'a> FromWireList<'a> for $T {
-            fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+            fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
 
             fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
                 c: &C,
@@ -941,7 +939,7 @@ macro_rules! integer_impls {
 
             fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
                 c: &C,
-                sizes: &mut impl Iterator<Item = usize>,
+                _sizes: &mut impl Iterator<Item = usize>,
                 build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
             ) -> Self::Repr {
                 build_wire(Self::wire_type(c))
@@ -969,12 +967,12 @@ macro_rules! integer_impls {
         }
 
         impl<'a> ToWireList<'a> for $T {
-            fn num_wires(x: &Self::Repr) -> usize { 1 }
+            fn num_wires(_x: &Self::Repr) -> usize { 1 }
             fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
                 f(*x);
             }
-            fn num_sizes(x: &Self::Repr) -> usize { 0 }
-            fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+            fn num_sizes(_x: &Self::Repr) -> usize { 0 }
+            fn for_each_size(_x: &Self::Repr, _f: impl FnMut(usize)) {}
         }
 
         impl<'a> SecretDep<'a> for $T {
@@ -1161,7 +1159,7 @@ macro_rules! field_impls {
         }
 
         impl<'a> FromWireList<'a> for $T {
-            fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+            fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
 
             fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
                 c: &C,
@@ -1173,7 +1171,7 @@ macro_rules! field_impls {
 
             fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
                 c: &C,
-                sizes: &mut impl Iterator<Item = usize>,
+                _sizes: &mut impl Iterator<Item = usize>,
                 build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
             ) -> Self::Repr {
                 build_wire(Self::wire_type(c))
@@ -1201,12 +1199,12 @@ macro_rules! field_impls {
         }
 
         impl<'a> ToWireList<'a> for $T {
-            fn num_wires(x: &Self::Repr) -> usize { 1 }
+            fn num_wires(_x: &Self::Repr) -> usize { 1 }
             fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
                 f(*x);
             }
-            fn num_sizes(x: &Self::Repr) -> usize { 0 }
-            fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+            fn num_sizes(_x: &Self::Repr) -> usize { 0 }
+            fn for_each_size(_x: &Self::Repr, _f: impl FnMut(usize)) {}
         }
 
         impl<'a> SecretDep<'a> for $T {
@@ -1305,12 +1303,15 @@ macro_rules! tuple_impl {
             }
         }
 
+        // In the zero-element case (`tuple_impl!()`), the arguments of these functions are unused
+        #[allow(unused)]
         impl<'a, $($A: LazySecret<'a>,)*> FromWireList<'a> for ($($A,)*) {
-            fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+            fn expected_num_wires(#[allow(unused)] sizes: &mut impl Iterator<Item = usize>) -> usize {
                 0 $( + $A::expected_num_wires(sizes) )*
             }
 
             fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
+
                 c: &C,
                 sizes: &mut impl Iterator<Item = usize>,
                 mut f: impl FnMut(Ty<'a>),
@@ -1323,13 +1324,14 @@ macro_rules! tuple_impl {
                 sizes: &mut impl Iterator<Item = usize>,
                 build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
             ) -> Self::Repr {
-                #![allow(unused)]       // Arguments are unused in the zero-element case
                 (
                     $( TWire::<$A>::new($A::build_repr_from_wires(c, sizes, build_wire)), )*
                 )
             }
         }
 
+        // In the zero-element case (`tuple_impl!()`), the arguments of these functions are unused
+        #[allow(unused)]
         impl<'a, $($A: LazySecret<'a>,)*> LazySecret<'a> for ($($A,)*) {
             fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
                 0 $( + $A::expected_word_len(sizes) )*
@@ -1341,7 +1343,6 @@ macro_rules! tuple_impl {
             }
             fn push_words(&self, out: &mut Vec<u32>) {
                 #![allow(bad_style)]    // Capitalized variable names $A
-                #![allow(unused)]       // `out` in the zero-element case
                 let ($(ref $A,)*) = *self;
                 $( $A.push_words(out); )*
             }
@@ -1957,19 +1958,19 @@ impl<'a, T: LazySecret<'a>> Lit<'a> for FlatBits<T> {
 }
 
 impl<'a, T: LazySecret<'a>> FromWireList<'a> for FlatBits<T> {
-    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
+    fn expected_num_wires(_sizes: &mut impl Iterator<Item = usize>) -> usize { 1 }
 
     fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
-        c: &C,
-        sizes: &mut impl Iterator<Item = usize>,
+        _c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
         mut f: impl FnMut(Ty<'a>),
     ) {
         f(Ty::raw_bits());
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
-        c: &C,
-        sizes: &mut impl Iterator<Item = usize>,
+        _c: &C,
+        _sizes: &mut impl Iterator<Item = usize>,
         build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
     ) -> Self::Repr {
         build_wire(Ty::raw_bits())
@@ -1989,12 +1990,12 @@ impl<'a, T: LazySecret<'a>> LazySecret<'a> for FlatBits<T> {
 }
 
 impl<'a, T: ToWireList<'a>> ToWireList<'a> for FlatBits<T> {
-    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn num_wires(_x: &Self::Repr) -> usize { 1 }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         f(*x);
     }
-    fn num_sizes(x: &Self::Repr) -> usize { 0 }
-    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+    fn num_sizes(_x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(_x: &Self::Repr, _f: impl FnMut(usize)) {}
 }
 
 impl<'a, T: SecretDep<'a>> SecretDep<'a> for FlatBits<T> {
@@ -2027,12 +2028,12 @@ impl<'a> Lit<'a> for RawBits {
 }
 
 impl<'a> ToWireList<'a> for RawBits {
-    fn num_wires(x: &Self::Repr) -> usize { 1 }
+    fn num_wires(_x: &Self::Repr) -> usize { 1 }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
         f(*x);
     }
-    fn num_sizes(x: &Self::Repr) -> usize { 0 }
-    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {}
+    fn num_sizes(_x: &Self::Repr) -> usize { 0 }
+    fn for_each_size(_x: &Self::Repr, _f: impl FnMut(usize)) {}
 }
 
 impl<'a> SecretDep<'a> for RawBits {

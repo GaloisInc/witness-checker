@@ -28,7 +28,7 @@ use std::mem;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-use crate::eval::{Evaluator, CachingEvaluator, RevealSecrets};
+use crate::eval::{Evaluator};
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp, Wire, EraseVisitor,

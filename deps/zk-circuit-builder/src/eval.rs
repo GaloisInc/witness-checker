@@ -1,9 +1,8 @@
 use std::any::Any;
 use std::cmp;
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{HashMap};
 use std::convert::TryFrom;
 use std::iter;
-use std::ptr;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 #[cfg(feature = "gf_scuttlebutt")]
@@ -11,7 +10,7 @@ use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
-    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Function, Call, SecretProjectFn, SwitchCase
+    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Call, SecretProjectFn, SwitchCase
 };
 use crate::util::CowBox;
 
@@ -60,7 +59,7 @@ impl Value {
             (&Value::SingleInteger(ref v), TyKind::Uint(sz)) => {
                 v.as_bits(c, sz)
             },
-            (&Value::SingleField(ref v), TyKind::GF(field)) => {
+            (&Value::SingleField(ref v), TyKind::GF(_field)) => {
                 c.intern_bits(v)
             }
             (&Value::Bundle(ref vs), TyKind::Bundle(btys)) => {
@@ -313,7 +312,7 @@ impl<'a> EvalWire<'a> for LiteralEvaluator {
 
     fn eval_wire_bits<C: CircuitTrait<'a> + ?Sized>(
         &mut self,
-        c: &C,
+        _c: &C,
         w: Wire<'a>,
     ) -> Result<(Bits<'a>, bool), Error<'a>> {
         match w.kind {
@@ -328,8 +327,8 @@ impl<'a> Evaluator<'a> for LiteralEvaluator {
 
     fn enter_call<'b>(
         &'b mut self,
-        c: &CircuitBase<'a>,
-        call: Call<'a>,
+        _c: &CircuitBase<'a>,
+        _call: Call<'a>,
     ) -> Self::FunctionEvaluator<'b> {
         LiteralEvaluator
     }
@@ -498,13 +497,11 @@ where S: SecretEvaluator<'a> + Default {
         c: &CircuitBase<'a>,
         call: Call<'a>,
     ) -> CachingEvaluator<'a, 'b, S> {
-        let func = call.func;
-
         let arg_bits = call.args.iter().map(|&w| {
             EvalWire::eval_wire_bits(self, c, w)
         }).collect::<Result<Vec<_>, _>>().unwrap();
         let dep_bits = call.project_deps.iter().map(|&w| {
-            EvalWire::eval_wire_bits(self, c, w).map(|(bits, sec)| bits)
+            EvalWire::eval_wire_bits(self, c, w).map(|(bits, _sec)| bits)
         }).collect::<Result<Vec<_>, _>>().unwrap();
 
         self.enter_function(c, arg_bits, call.project_witness, &dep_bits)
@@ -913,16 +910,15 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::Switch(cond, branches, inputs) => {
             if cond.ty.is_integer() {
-                let (w_val, w_sec) = ecx.get_int_value(cond).unwrap();
-                for b in branches{
+                // TODO(isweet): Is secrecy being propagated correctly here?
+                let (w_val, _w_sec) = ecx.get_int_value(cond).unwrap();
+                for b in branches {
                     let switch_val = b.bits.to_bigint(cond.ty);
 
                     if w_val == switch_val {
-                        // TODO: Could evaluate this by constructing a `Call` and then calling `eval_call` instead.
                         return eval_switch_case(c, ecx, *b, inputs);
                     }
                 }
-
                 panic!("The `Switch` gate requires at least one branch to match, but none did.")
             } else {
                 unimplemented!("The `Switch` gate does not support guards with non-integer type.")
@@ -942,7 +938,7 @@ fn eval_call<'a, 'b>(
         outer_ecx.get_value(w)
     }).collect::<Result<Vec<_>, _>>()?;
     let dep_bits = call.project_deps.iter().map(|&w| {
-        outer_ecx.get_value(w).map(|(bits, sec)| bits)
+        outer_ecx.get_value(w).map(|(bits, _sec)| bits)
     }).collect::<Result<Vec<_>, _>>()?;
 
     let mut inner_eval = outer_ecx.enter_function(
@@ -962,7 +958,7 @@ fn eval_switch_case<'a, 'b>(
         outer_ecx.get_value(w)
     }).collect::<Result<Vec<_>, _>>()?;
     let dep_bits = switch_case.project_deps.iter().map(|&w| {
-        outer_ecx.get_value(w).map(|(bits, sec)| bits)
+        outer_ecx.get_value(w).map(|(bits, _sec)| bits)
     }).collect::<Result<Vec<_>, _>>()?;
     
     let mut inner_eval = outer_ecx.enter_function(

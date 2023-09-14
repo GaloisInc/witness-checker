@@ -126,13 +126,13 @@ impl zki_sieve_v3::Sink for VecSink<SieveIrV2> {
 
     fn get_public_inputs_writer(
         &mut self,
-        type_value: Type,
+        _type_value: Type,
     ) -> zki_sieve_v3::Result<&mut Self::Write> {
         unimplemented!()
     }
     fn get_private_inputs_writer(
         &mut self,
-        type_value: Type,
+        _type_value: Type,
     ) -> zki_sieve_v3::Result<&mut Self::Write> {
         unimplemented!()
     }

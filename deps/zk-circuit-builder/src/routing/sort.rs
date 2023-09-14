@@ -1,9 +1,6 @@
-use std::cmp::Ordering;
-use crate::eval::{self, CachingEvaluator};
-use crate::ir::circuit::CircuitTrait;
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::typed::{
-    Builder, BuilderExt, TWire, Repr, Mux, Le, Lt, EvaluatorExt, SecretDep, ToWireList,
+    Builder, BuilderExt, TWire, Repr, Mux, Le, Lt, SecretDep, ToWireList,
     FromWireList,
 };
 use crate::routing::{RoutingBuilder, FinishRouting, InputId, OutputId};
@@ -236,8 +233,10 @@ where
 #[cfg(test)]
 mod test {
     use std::convert::TryInto;
+    use crate::eval;
+    use crate::eval::CachingEvaluator;
     use crate::ir::circuit::{Arenas, Circuit, FilterNil};
-    use crate::ir::typed::BuilderImpl;
+    use crate::ir::typed::{BuilderImpl, EvaluatorExt};
     use super::*;
 
     fn init() {

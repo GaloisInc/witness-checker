@@ -84,7 +84,7 @@ impl<'a> ToWireList<'a> for InputId {
     fn num_wires(x: &Self::Repr) -> usize {
         u32::num_wires(x)
     }
-    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
@@ -151,7 +151,7 @@ impl<'a> ToWireList<'a> for OutputId {
     fn num_wires(x: &Self::Repr) -> usize {
         u32::num_wires(x)
     }
-    fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
+    fn for_each_wire(x: &Self::Repr, f: impl FnMut(Wire<'a>)) {
         u32::for_each_wire(x, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
@@ -369,45 +369,13 @@ where
     }
 }
 
-
-fn benes_switch<'a, T>(
-    b: &impl Builder<'a>,
-    x: TWire<'a, T>,
-    y: TWire<'a, T>,
-    bn: &benes::BenesNetwork,
-    secret_swap_flags: TWire<'a, RawBits>,
-    l: usize,
-    i: usize,
-) -> (TWire<'a, T>, TWire<'a, T>)
-where
-    T: Mux<'a, bool, T, Output = T>,
-    T::Repr: Clone,
-{
-    let public_flags = bn.flags(l, i);
-    if public_flags.contains(benes::SwitchFlags::F_PUBLIC) {
-        if public_flags.contains(benes::SwitchFlags::F_SWAP) {
-            return (y, x);
-        } else {
-            return (x, y);
-        }
-    }
-
-    let idx = bn.node_index(l, i);
-    let swap = b.secret_derived(secret_swap_flags, move |flags| {
-        flags.get(idx)
-    });
-    let x2 = b.mux(swap, y.clone(), x.clone());
-    let y2 = b.mux(swap, x, y);
-    (x2, y2)
-}
-
 pub struct FinishRouting<'a, T: Repr<'a>> {
     outputs: Vec<TWire<'a, T>>,
 }
 
 impl<'a, T> FinishRouting<'a, T>
 where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
-    pub fn trivial(b: &impl Builder<'a>, ws: Vec<TWire<'a, T>>) -> FinishRouting<'a, T> {
+    pub fn trivial(_b: &impl Builder<'a>, ws: Vec<TWire<'a, T>>) -> FinishRouting<'a, T> {
         FinishRouting {
             outputs: ws,
         }
@@ -419,7 +387,7 @@ where T: Mux<'a, bool, T, Output = T>, T::Repr: Clone {
     }
 
     /// Run one step of circuit construction.
-    pub fn step(&mut self, b: &impl Builder<'a>) {
+    pub fn step(&mut self, _b: &impl Builder<'a>) {
         assert!(!self.is_ready());
         unreachable!();
     }

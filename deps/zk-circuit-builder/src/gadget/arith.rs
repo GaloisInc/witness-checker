@@ -1,10 +1,10 @@
 use num_bigint::{BigInt, BigUint};
 use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
-    CircuitExt, CircuitBase, CircuitTrait, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
+    CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
     GadgetKindRef,
 };
-use crate::ir::typed::{Builder, BuilderExt as _, Repr, TWire};
+use crate::ir::typed::{Builder, Repr, TWire};
 
 
 fn overflow_result(ty: Ty, raw: BigInt) -> Value {
@@ -135,11 +135,7 @@ impl<'a> GadgetKind<'a> for WideMulSplit {
 
         let uty = c.ty(TyKind::Uint(sz_round_up));
         let ity = c.ty(TyKind::Int(sz_round_up));
-        let high_ty = if sign {
-            c.ty(TyKind::Int(sz_round_up))
-        } else {
-            c.ty(TyKind::Uint(sz_round_up))
-        };
+        let high_ty = if sign { ity } else { uty };
 
         let n = sz.bits();
         let m = (sz.bits() + 1) / 2;
@@ -316,8 +312,7 @@ impl<'a> GadgetKind<'a> for WideMul {
         out
     }
 
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
-        let sz = arg_tys[0].integer_size();
+    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
         let a = args[0].as_ref()?.as_single().unwrap();
         let b = args[1].as_ref()?.as_single().unwrap();
         let product = a * b;
@@ -461,7 +456,7 @@ impl<'a> WideMulTrait<'a> for i64 {
 #[cfg(test)]
 mod test {
     use crate::eval;
-    use crate::ir::circuit::{Circuit, FilterNil, Arenas};
+    use crate::ir::circuit::{Circuit, CircuitTrait, FilterNil, Arenas};
     use crate::lower::gadget::DecomposeGadgets;
     use super::*;
 

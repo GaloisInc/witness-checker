@@ -1,10 +1,8 @@
-use num_bigint::{BigInt, BigUint};
-use crate::eval::{self, Value, EvalResult};
+use crate::eval::{self};
 use crate::ir::circuit::{
-    CircuitExt, CircuitBase, CircuitTrait, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
+    CircuitExt, CircuitBase, CircuitTrait, DynCircuitRef, Wire, Ty, TyKind, GadgetKind,
     GadgetKindRef, Bits,
 };
-use crate::ir::typed::{Builder, BuilderExt as _, Repr, TWire};
 use crate::routing::benes::{self, BenesNetwork};
 
 /// Permute a sequence of items according to secret flags.
@@ -47,7 +45,7 @@ impl<'a> GadgetKind<'a> for Permute {
 
     fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
         let m = self.items;
-        let mut bn = BenesNetwork::new(m as u32, m as u32);
+        let bn = BenesNetwork::new(m as u32, m as u32);
         let m_rounded = 2 * bn.layer_size;
 
         let out_to_inp = args[0];
@@ -115,7 +113,7 @@ impl<'a> GadgetKind<'a> for Permute {
         c: &CircuitBase<'a>,
         arg_tys: &[Ty<'a>],
         args: &[Result<Bits<'a>, eval::Error<'a>>],
-        result_ty: Ty<'a>,
+        _result_ty: Ty<'a>,
     ) -> Result<Bits<'a>, eval::Error<'a>> {
         let perm = args[0]?;
         let arg_tys = &arg_tys[1..];

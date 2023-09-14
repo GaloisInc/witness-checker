@@ -37,7 +37,7 @@ impl SieveIrFormat for SieveIrV1 {
     fn gate_not(out: WireId, a: WireId) -> Gate {
         Gate::Not(out, a)
     }
-    fn gate_new(start: WireId, end: WireId) -> Gate {
+    fn gate_new(_start: WireId, _end: WireId) -> Gate {
         unimplemented!()
     }
     fn gate_delete(start: WireId, end: WireId) -> Gate {

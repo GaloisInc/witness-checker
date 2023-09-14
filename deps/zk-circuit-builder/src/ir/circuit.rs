@@ -54,7 +54,7 @@
 //! `CallData::project_deps`.
 
 use std::alloc::Layout;
-use std::any::{self, Any, TypeId, type_name};
+use std::any::{self, Any, TypeId};
 use std::cell::{self, Cell, RefCell, UnsafeCell};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -3142,7 +3142,7 @@ pub trait GadgetKind<'a>: GadgetKindSupport<'a> + 'a {
     }
 
     /// Evaluate this gadget on the provided inputs.
-    fn eval(&self, arg_tys: &[Ty<'a>], args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a> {
+    fn eval(&self, _arg_tys: &[Ty<'a>], _args: &[eval::EvalResult<'a>]) -> eval::EvalResult<'a> {
         // Provided in case the user would prefer to implement only `eval_bits`.
         unimplemented!()
     }

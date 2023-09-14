@@ -1,12 +1,9 @@
-use std::cmp::{self, Ordering};
-use std::collections::{HashMap, BinaryHeap};
+use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io;
 use std::iter;
 use std::marker::PhantomData;
 use std::mem;
 use log::*;
-use num_bigint::BigUint;
 use zki_sieve;
 use zki_sieve_v3;
 use crate::back::UsePlugins;
@@ -193,7 +190,7 @@ impl FunctionInfo {
         &self.counts[0 .. self.num_outputs]
     }
 
-    fn sig(&self) -> (&[u64], &[u64]) {
+    fn _sig(&self) -> (&[u64], &[u64]) {
         self.counts.split_at(self.num_outputs)
     }
 }
@@ -533,7 +530,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     false => sub_sink.permute_body(n, m),
                 }
             },
-            FunctionDesc::AssertPermute(n, m) => {
+            FunctionDesc::AssertPermute(_n, _m) => {
                 unreachable!();
             },
             FunctionDesc::PermuteLayerShuffle(n, m, l) => {
@@ -1128,7 +1125,6 @@ impl<IR: SieveIrFormat> Default for VecSink<IR> {
 
 impl<S: zki_sieve::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV1> {
     fn flush(&mut self, free_all_pages: bool) {
-        use zki_sieve::Sink;
         use zki_sieve_v3::structs::IR_VERSION;
         use zki_sieve::structs::gates::Gate;
         use zki_sieve::structs::header::Header;
@@ -1179,7 +1175,6 @@ impl<S: zki_sieve::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV1> {
 
 impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
     fn emit_sieve_v2(&mut self, directives: Vec<zki_sieve_v3::structs::directives::Directive>) {
-        use zki_sieve_v3::Sink;
         use zki_sieve_v3::structs::IR_VERSION;
         use zki_sieve_v3::structs::public_inputs::PublicInputs;
         use zki_sieve_v3::structs::relation::Relation;
@@ -1203,7 +1198,7 @@ impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
             r.types = vec![Type::Field(vec![2])];
 
             // Ensure every circuit contains at least one public input message.
-            let mut p = PublicInputs {
+            let p = PublicInputs {
                 version: IR_VERSION.to_string(),
                 type_value: Type::Field(vec![2]),
                 inputs: vec![],
@@ -1302,7 +1297,7 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
                 if chunk_inputs.len() == 0 {
                     break;
                 }
-                let mut p = PrivateInputs {
+                let p = PrivateInputs {
                     version: IR_VERSION.to_string(),
                     type_value: Type::Field(vec![2]),
                     inputs: chunk_inputs,
