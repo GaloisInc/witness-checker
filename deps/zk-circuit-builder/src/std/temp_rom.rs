@@ -204,9 +204,11 @@ where
             })
         }).collect();
         let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(ports);
+        let inp: TWire::<(u64, Vec<ROMPort<T>>)> = TWire::new((index, ports));
         // let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(self.ports.clone());
-        let val: TWire<'a, T> = b.secret_derived_sized(&[ports.len()], ports, move |ps| {
-            ps[0].val.clone()
+        // JP: Should this be `secret_derived`?
+        let val: TWire<'a, T> = b.secret_derived_sized(&[self.ports.len()], inp, move |(i,ps)| {
+            ps[i as usize].val.clone()
         });
 
         // let ports: TWire<'a, Vec<u32>> = TWire::new(vec![0,1,2,3]);
@@ -215,16 +217,14 @@ where
         //     ps[0]
         // });
 
-        unimplemented!{}
-
-        // // create a new rom port
-        // let port = TWire::new(ROMPortRepr { addr, val });
-        // // add it to the vec
-        // self.ports.push(port);
-        // val
+        // create a new rom port
+        let port = TWire::new(ROMPortRepr { addr: index, val });
+        // add it to the vec
+        self.ports.push(port);
+        val
     }
 
-    pub fn assert_consistent(self, b: &impl Builder<'a>) {
+    pub fn finalize(self, b: &impl Builder<'a>) {
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
         // In circuit, check that the secrets are sorted
