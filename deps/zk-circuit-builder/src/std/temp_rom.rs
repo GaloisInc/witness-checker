@@ -7,6 +7,8 @@ use crate::ir::circuit::Wire;
 
 use std::iter::FromIterator;
 
+/// A ROM entry with an address and a value.
+#[derive(Clone)]
 pub struct ROMPort<T> {
     pub addr: u64,
     pub val: T,
@@ -227,9 +229,32 @@ where
     pub fn finalize(self, b: &impl Builder<'a>) {
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
+        // TWire<Vec<T>>::Repr == Vec<TWire<T>>
+        // sorted_ports.sort_by(|a, b| a.addr.cmp(&b.addr));
+
+        let ports: Vec<TWire<ROMPort<T>>> = self
+            .ports
+            .iter()
+            .map(|w| {
+                TWire::new(ROMPortRepr {
+                    addr: w.repr.addr,
+                    val: w.repr.val,
+                })
+            })
+            .collect();
+        let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(ports);
+
+        let sorted_ports: TWire<'a, Vec<ROMPort<T>>> =
+            b.secret_derived_sized(&[self.ports.len()], ports, move |ps| {
+                let mut sorted = ps.clone();
+                sorted.sort_by(|a, b| a.addr.cmp(&b.addr));
+                sorted
+            });
+
         // In circuit, check that the secrets are sorted
         // Build permutation check that ROMPorts and sorted ROMPorts are permutation
         // Assert that the final address is equal to the length - 1.
+        b.assert_perm(&self.ports, &sorted_ports);
 
         // mh: &mut MigrateHandle<'a>,
         // cx: &mut Rooted<'a, Context<'a>>,

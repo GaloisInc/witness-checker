@@ -343,6 +343,17 @@ pub trait BuilderExt<'a>: Builder<'a> {
         val
     }
 
+    fn assert_perm<T>(
+        &self,
+        arr1: &[TWire<'a, T>],
+        arr2: &[TWire<'a, T>],
+    ) -> TWire<'a, bool>
+    where
+        T: Repr<'a>
+    {
+        todo!();
+    }
+
     fn index_with_default<I, T>(
         &self,
         arr: &[TWire<'a, T>],
