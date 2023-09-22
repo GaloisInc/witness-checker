@@ -1,6 +1,12 @@
-use crate::ir::{
-    circuit::{Bits, CircuitTrait, Ty},
-    typed::{Builder, BuilderExt, FromWireList, LazySecret, Lit, Repr, SecretDep, TWire, ToWireList},
+use crate::{
+    ir::{
+        circuit::{Bits, CircuitTrait, Ty},
+        typed::{
+            Builder, BuilderExt, FromWireList, LazySecret, Le, Lit, Mux, Repr, SecretDep, TWire,
+            ToWireList, self,
+        },
+    },
+    routing::sort::{sort_by_key, CompareLe},
 };
 
 use crate::ir::circuit::Wire;
@@ -23,14 +29,16 @@ pub struct ROMPortRepr<'a, T: Repr<'a>>
     pub val: TWire<'a, T>,
 }
 
-// impl<'a, T: Repr<'a>> Clone for ROMPortRepr<'a, T>
-// where
-//     <T as Repr<'a>>::Repr: std::marker::Copy,
-// {
-//     fn clone(&self) -> Self {
-//         unimplemented!()
-//     }
-// }
+impl<'a, T: Repr<'a>> Copy for ROMPortRepr<'a, T> where <T as Repr<'a>>::Repr: Copy {}
+
+impl<'a, T: Repr<'a>> Clone for ROMPortRepr<'a, T>
+where
+    <T as Repr<'a>>::Repr: Copy,
+{
+    fn clone(&self) -> Self {
+        unimplemented!()
+    }
+}
 
 impl<'a, T: Repr<'a>> Repr<'a> for ROMPort<T>
 // where
@@ -39,11 +47,26 @@ impl<'a, T: Repr<'a>> Repr<'a> for ROMPort<T>
     type Repr = ROMPortRepr<'a, T>;
 }
 
+impl<'a, T> Le<'a> for ROMPort<T>
+where
+    T: Repr<'a>,
+{
+    type Output = bool;
+
+    fn le(
+        bld: &impl Builder<'a>,
+        a: ROMPortRepr<'a, T>,
+        b: ROMPortRepr<'a, T>,
+    ) -> <Self::Output as Repr<'a>>::Repr {
+        *bld.le(a.addr, b.addr)
+    }
+}
+
 // impl<'a, T: Repr<'a>> ToWireList<'a> for ROMPort<T>
 impl<'a, T> ToWireList<'a> for ROMPort<T>
 where
     T: Repr<'a>,
-//     <T as Repr<'a>>::Repr: std::marker::Copy,
+    //     <T as Repr<'a>>::Repr: std::marker::Copy,
 {
     fn num_wires(x: &Self::Repr) -> usize {
         // u32::num_wires(x)
@@ -63,11 +86,38 @@ where
     }
 }
 
+impl<'a, C: Repr<'a>, T> Mux<'a, C, ROMPort<T>> for ROMPort<T>
+where
+    T: Repr<'a>,
+    // C::Repr: Clone,
+    // u64: Mux<'a, C, u64, Output = u64>,
+    // T: Mux<'a, C, T, Output = T>,
+    // bool: Mux<'a, C, bool, Output = bool>,
+{
+    type Output = ROMPort<T>;
+
+    fn mux(
+        bld: &impl Builder<'a>,
+        c: C::Repr,
+        t: ROMPortRepr<'a, T>,
+        e: ROMPortRepr<'a, T>,
+    ) -> ROMPortRepr<'a, T> {
+        unimplemented!()
+        // let c: TWire<C> = TWire::new(c);
+        // ROMPortRepr {
+        //     addr: bld.mux(c.clone(), t.addr, e.addr),
+        //     val: bld.mux(c.clone(), t.val, e.val),
+        // }
+    }
+}
+
 impl<'a, T> FromWireList<'a> for ROMPort<T>
 where
-    T: Repr<'a>
+    T: Repr<'a>,
 {
-    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize { unimplemented!{} }
+    fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        unimplemented! {}
+    }
 
     fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
@@ -75,7 +125,7 @@ where
         mut f: impl FnMut(Ty<'a>),
     ) {
         // f(Self::wire_type(c))
-        unimplemented!{}
+        unimplemented! {}
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
@@ -83,22 +133,22 @@ where
         sizes: &mut impl Iterator<Item = usize>,
         build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
     ) -> Self::Repr {
-        unimplemented!{}
+        unimplemented! {}
     }
 }
 impl<'a, T> SecretDep<'a> for ROMPort<T>
 where
     T: Repr<'a>,
-// where
-//     T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
-//     <T as Repr<'a>>::Repr: Copy + Clone,
+    // where
+    //     T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
+    //     <T as Repr<'a>>::Repr: Copy + Clone,
 {
     type Decoded = ROMPort<T>;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
     ) -> Self {
-        unimplemented!{}
+        unimplemented! {}
         // ROMPort {
         //     addr: u64::from_bits_iter(sizes, bits),
         //     val: T::from_bits_iter(sizes, bits),
@@ -111,24 +161,22 @@ where
     T: Repr<'a> + LazySecret<'a>,
 {
     fn expected_word_len(_sizes: &mut impl Iterator<Item = usize>) -> usize {
-        unimplemented!{}
+        unimplemented! {}
     }
     fn word_len(&self) -> usize {
-        unimplemented!{}
+        unimplemented! {}
     }
     fn push_words(&self, out: &mut Vec<u32>) {
-        unimplemented!{}
+        unimplemented! {}
     }
 }
-        
-
 
 pub struct ROM<'a, T>
 where
-    T:Repr<'a>,
-// where
-//     T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
-//     <T as Repr<'a>>::Repr: Copy + Clone,
+    T: Repr<'a>,
+    // where
+    //     T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
+    //     <T as Repr<'a>>::Repr: Copy + Clone,
 {
     ports: Vec<TWire<'a, ROMPort<T>>>,
     length: u64,
@@ -149,13 +197,17 @@ impl<'a, T: Repr<'a> + Lit<'a>> Lit<'a> for ROMPort<T>
 impl<'a, T> ROM<'a, T>
 where
     T: Clone,
+    // T: typed::Eq<'a>,
     T: for<'b> LazySecret<'b>,
     // T: Repr<'a>,
     <T as Repr<'a>>::Repr: Copy,
-// where
-//     T: Repr<'a> + for<'b> LazySecret<'b>,
+    // ROMPort<T>: Mux<'a, bool>,
+    // T: Mux<'a, bool, T, Output = T>,
+    // T: Mux<'a, bool>,
+    // where
+    //     T: Repr<'a> + for<'b> LazySecret<'b>,
     // T: for<'b> LazySecret<'b>, //  + for<'b> SecretDep<'b, Decoded = T> + Clone + 'static,
-//     <T as Repr<'a>>::Repr: Copy + Clone,
+    //     <T as Repr<'a>>::Repr: Copy + Clone,
 {
     pub fn new(b: &impl Builder<'a>, values: Vec<TWire<'a, T>>) -> ROM<'a, T> {
         let length = values.len() as u64;
@@ -188,28 +240,30 @@ where
 
         // let val: TWire<'a, T> = b.secret_derived_sized(&[self.length as usize], inp, map_to_index);
 
-
-
         // let val: TWire<'a, T> = self.ports[0].val;
         // let val: TWire<'a, T> = b.secret_derived(addr, |i| {
         //     self.ports[0].val
         // });
-        
+
         // let val: TWire<'a, T> = b.secret_derived(self.ports[0], |p| {
         //     p.val
         // });
 
-        let ports: Vec<TWire<ROMPort<T>>> = self.ports.iter().map(|w| {
-            TWire::new(ROMPortRepr {
-                addr: w.repr.addr,
-                val: w.repr.val,
+        let ports: Vec<TWire<ROMPort<T>>> = self
+            .ports
+            .iter()
+            .map(|w| {
+                TWire::new(ROMPortRepr {
+                    addr: w.repr.addr,
+                    val: w.repr.val,
+                })
             })
-        }).collect();
+            .collect();
         let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(ports);
-        let inp: TWire::<(u64, Vec<ROMPort<T>>)> = TWire::new((index, ports));
+        let inp: TWire<(u64, Vec<ROMPort<T>>)> = TWire::new((index, ports));
         // let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(self.ports.clone());
         // JP: Should this be `secret_derived`?
-        let val: TWire<'a, T> = b.secret_derived_sized(&[self.ports.len()], inp, move |(i,ps)| {
+        let val: TWire<'a, T> = b.secret_derived_sized(&[self.ports.len()], inp, move |(i, ps)| {
             ps[i as usize].val.clone()
         });
 
@@ -226,39 +280,68 @@ where
         val
     }
 
-    pub fn finalize(self, b: &impl Builder<'a>) {
+    pub fn finalize(self, b: &impl Builder<'a>) -> TWire<bool> {
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
         // TWire<Vec<T>>::Repr == Vec<TWire<T>>
         // sorted_ports.sort_by(|a, b| a.addr.cmp(&b.addr));
 
-        let ports: Vec<TWire<ROMPort<T>>> = self
-            .ports
-            .iter()
-            .map(|w| {
-                TWire::new(ROMPortRepr {
-                    addr: w.repr.addr,
-                    val: w.repr.val,
-                })
-            })
-            .collect();
-        let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(ports);
+        // let ports: Vec<TWire<ROMPort<T>>> = self
+        //     .ports
+        //     .iter()
+        //     .map(|w| {
+        //         TWire::new(ROMPortRepr {
+        //             addr: w.repr.addr,
+        //             val: w.repr.val,
+        //         })
+        //     })
+        //     .collect();
+        // let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(ports);
 
-        let sorted_ports: TWire<'a, Vec<ROMPort<T>>> =
-            b.secret_derived_sized(&[self.ports.len()], ports, move |ps| {
-                let mut sorted = ps.clone();
-                sorted.sort_by(|a, b| a.addr.cmp(&b.addr));
-                sorted
-            });
+        // let f = |p: TWire<ROMPort<T>>| -> TWire<u64> { p.repr.addr };
 
+        // JP: Why does ROMPort need to implement LE?
+        let sort = sort_by_key(
+            b,
+            &self.ports,
+            CompareLe,
+            |p: TWire<ROMPort<T>>| -> TWire<u64> { p.repr.addr },
+        );
+
+        // JP: Do we need Rooted things?
+        let (sorted_ports, is_sorted) = sort.finish(b);
+
+        let mut res = is_sorted;
+        // let sorted_ports: TWire<'a, Vec<ROMPort<T>>> =
+        //     b.secret_derived_sized(&[self.ports.len()], ports, move |ps| {
+        //         let mut sorted = ps.clone();
+        //         sorted.sort_by(|a, b| a.addr.cmp(&b.addr));
+        //         sorted
+        //     });
+
+        for i in 1..sorted_ports.len() {
+            let port0 = sorted_ports[i-1];
+            let port1 = sorted_ports[i];
+            let addr_eq = b.eq(port0.addr, port1.addr);
+            let val_eq: TWire<bool> = b.eq(port0.val, port1.val);
+            res = b.and(res, b.mux(addr_eq, val_eq, b.lit(true)));
+        }
+
+        if self.length > 0 {
+            let is_final_address = b.eq(
+                sorted_ports[sorted_ports.len() - 1].addr,
+                b.lit(self.length - 1),
+            );
+
+            res = b.and(res, is_final_address);
+        }
         // In circuit, check that the secrets are sorted
         // Build permutation check that ROMPorts and sorted ROMPorts are permutation
         // Assert that the final address is equal to the length - 1.
-        b.assert_perm(&self.ports, &sorted_ports);
 
         // mh: &mut MigrateHandle<'a>,
         // cx: &mut Rooted<'a, Context<'a>>,
-        unimplemented! {}
+        res
     }
 }
 

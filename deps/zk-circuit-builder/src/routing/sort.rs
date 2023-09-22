@@ -138,6 +138,11 @@ impl<'a> Sortable<'a> for u32 {
     fn convert_vec(v: TWire<'a, Vec<u32>>) -> TWire<'a, Vec<u32>> { v }
 }
 
+impl<'a> Sortable<'a> for u64 {
+    type Decoded = u64;
+    type AsSecretDep = u64;
+    fn convert_vec(v: TWire<'a, Vec<u64>>) -> TWire<'a, Vec<u64>> { v }
+}
 pub struct Sort<'a, T: Repr<'a>, C> {
     routing: FinishRouting<'a, T>,
     compare: C,
