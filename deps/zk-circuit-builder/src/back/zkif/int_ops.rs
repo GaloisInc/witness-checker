@@ -70,6 +70,19 @@ where
     );
 }
 
+pub fn enforce_zero<Scalar, CS>(mut cs: CS, v_num: &Num<Scalar>)
+where
+    Scalar: PrimeField,
+    CS: ConstraintSystem<Scalar>,
+{
+    cs.enforce(
+        || "enforce zero",
+        |lc| lc + &v_num.lc,
+        |lc| lc + CS::one(),
+        |lc| lc,
+    );
+}
+
 pub fn div<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     numer_num: &Num<Scalar>,

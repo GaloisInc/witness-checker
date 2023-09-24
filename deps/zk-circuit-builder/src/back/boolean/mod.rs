@@ -921,6 +921,15 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let b = self.wire_map[&bw];                
                 let width = type_bits(bw.ty);
                 self.sink.copy(expire, width, b)
+            },
+
+            GateKind::AssertZero(aw) => {
+                let v = self.wire_map[&aw];
+                let width = type_bits(aw.ty);
+                self.sink.assert_zero(width, v);
+                // TODO(isweet): Is this the right way to do this?
+                //  This matches the semantics of an empty pack, see above.
+                self.sink.concat_chunks(expire, &[])
             }
         }
     }

@@ -465,6 +465,14 @@ impl<'a> Backend<'a> {
 
             // `a` is pre-evaluated, and so can be ignored
             GateKind::Seq(_a, b) => return self.wire(b),
+
+            GateKind::AssertZero(a) => {
+                let aw = self.wire(a);
+                let a_num = self.representer.mut_repr(aw).as_num();
+                int_ops::enforce_zero(&mut self.cs, &a_num);
+                // TODO(isweet): If/when this backend supports bundles, mimic an empty bundle
+                todo!()
+            }
         };
 
         self.representer.new_repr(repr)

@@ -929,6 +929,12 @@ fn eval_gate_inner<'a, 'b>(
         GateKind::Seq(_a, b) => {
             ecx.get_value(b)?
         },
+
+        GateKind::AssertZero(a) => {
+            let (a_val, _a_sec) = ecx.get_value(a)?;
+            assert_eq!(a_val, Bits::zero());
+            (Bits::empty(), false)
+        }
     })
 }
 
