@@ -448,6 +448,9 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
 
             // Making the backend unimplemented for time being
             GateKind::Switch(..) => unimplemented!(),
+
+            // `a` is pre-evaluated, and so can be ignored
+            GateKind::Seq(_a, b) => return self.represent(b),
         };
 
         self.representer.new_repr(repr)

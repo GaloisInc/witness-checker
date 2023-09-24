@@ -462,6 +462,9 @@ impl<'a> Backend<'a> {
 
             // Making the backend unimplemented for time being
             GateKind::Switch(..) => unimplemented!(),
+
+            // `a` is pre-evaluated, and so can be ignored
+            GateKind::Seq(_a, b) => return self.wire(b),
         };
 
         self.representer.new_repr(repr)

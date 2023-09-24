@@ -1179,6 +1179,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Switch(cond, branches, input_args))
     }
 
+    fn seq(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
+        self.gate(GateKind::Seq(a, b))
+    }
+
     /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
     /// returns a wire representing the output of the function.
     ///
@@ -1666,6 +1670,7 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
         GateKind::Switch(c, _, args) => {
             WireDeps::one_many(c, args)
         },
+        GateKind::Seq(a, b) => WireDeps::two(a, b),
     }
 }
 
@@ -2243,6 +2248,8 @@ pub enum GateKind<'a> {
     Call(Call<'a>),
     /// Switch(cond, branches[const, Function], input): depending on `cond`, select a branch and run its function on `input`
     Switch(Wire<'a>, &'a [SwitchCase<'a>], &'a [Wire<'a>]),
+    /// `Seq(a, b)`: evaluate `a`, ignore the result, and then evaluate `b`
+    Seq(Wire<'a>, Wire<'a>),
 }
 
 impl<'a> Gate<'a> {
@@ -2274,14 +2281,14 @@ impl<'a> GateKind<'a> {
                 k.typecheck(c.as_base(), &tys)
             },
             GateKind::Call(c) => c.func.result_wire.ty,
-
             GateKind::Switch(_, branches, _) =>  {
                 // Assume that branches non-empty
                 let b = branches.iter().next().unwrap(); // grab the first branch
                 // Assume that all branches have same type: F^input -> F^ouput
                 b.func.result_wire.ty
+            },
+            GateKind::Seq(_, b) => b.ty,
         }
-    }
     }
 
     pub fn is_lit(&self) -> bool {
@@ -2344,8 +2351,8 @@ impl<'a> GateKind<'a> {
             Extract(_, _) => "Extract",
             Gadget(_, _) => "Gadget",
             Call(_) => "Call",
-
-            Switch(_, _, _) => "Switch", 
+            Switch(_, _, _) => "Switch",
+            Seq(_, _) => "Seq",
         }
     }
 }
@@ -2422,6 +2429,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
      
                 Switch(v.visit(c), bs , args)
             },
+            Seq(a, b) => Seq(v.visit(a), v.visit(b)),
         }
     }
 }

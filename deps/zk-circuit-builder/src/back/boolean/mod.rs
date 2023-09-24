@@ -915,6 +915,13 @@ impl<'w, S: Sink> Backend<'w, S> {
             
             // Making the backend unimplemented for time being
             GateKind::Switch(..) => unimplemented!(),
+            
+            // `a` is pre-evaluated, so it can be ignored
+            GateKind::Seq(_aw, bw) => {
+                let b = self.wire_map[&bw];                
+                let width = type_bits(bw.ty);
+                self.sink.copy(expire, width, b)
+            }
         }
     }
 
@@ -1838,5 +1845,10 @@ mod test {
         // plugin we use.
         test_gate_skip_v2_eval([1, 3, 3], |c, [x, y, z]| c.mux(x, y, z));
         test_gate_skip_v2_eval([1, -3, -3], |c, [x, y, z]| c.mux(x, y, z));
+    }
+
+    #[test]
+    fn seq_3() {
+        test_gate([3, 3], |c, [a, b]| c.seq(a, b));
     }
 }
