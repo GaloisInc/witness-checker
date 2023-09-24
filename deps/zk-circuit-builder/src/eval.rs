@@ -932,7 +932,8 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::AssertZero(a) => {
             let (a_val, _a_sec) = ecx.get_value(a)?;
-            assert_eq!(a_val, Bits::zero());
+            // TODO(isweet): If this were an `Error` instead, it could be checked in tests...
+            assert!(a_val.is_zero());
             (Bits::empty(), false)
         }
     })

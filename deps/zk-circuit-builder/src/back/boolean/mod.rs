@@ -623,6 +623,14 @@ impl<'w, S: Sink> Backend<'w, S> {
                     return out;
                 }
             },
+            GateKind::AssertZero(aw) => {
+                let v = self.wire_map[&aw];
+                let width = type_bits(aw.ty);
+                self.sink.assert_zero(width, v);
+                // TODO(isweet): Is this the right way to do this?
+                //  This matches the semantics of an empty pack, see above.
+                return self.sink.concat_chunks(expire, &[]);
+            },
             _ => {},
         }
 
@@ -923,14 +931,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                 self.sink.copy(expire, width, b)
             },
 
-            GateKind::AssertZero(aw) => {
-                let v = self.wire_map[&aw];
-                let width = type_bits(aw.ty);
-                self.sink.assert_zero(width, v);
-                // TODO(isweet): Is this the right way to do this?
-                //  This matches the semantics of an empty pack, see above.
-                self.sink.concat_chunks(expire, &[])
-            }
+            // `AssertZero` should be handled by the case above.
+            GateKind::AssertZero(..) => unreachable!(),
         }
     }
 
@@ -1859,5 +1861,10 @@ mod test {
     #[test]
     fn seq_3() {
         test_gate([3, 3], |c, [a, b]| c.seq(a, b));
+    }
+
+    #[test]
+    fn seq_assert_1() {
+        test_gate([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
     }
 }

@@ -1183,6 +1183,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Seq(a, b))
     }
 
+    fn assert_zero(&self, a: Wire<'a>) -> Wire<'a> {
+        self.gate(GateKind::AssertZero(a))
+    }
+
     /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
     /// returns a wire representing the output of the function.
     ///
