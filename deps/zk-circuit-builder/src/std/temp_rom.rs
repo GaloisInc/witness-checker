@@ -294,42 +294,29 @@ where
     pub fn finalize(self, b: &'a impl Builder<'a>) -> TWire<bool> {
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
-        // TWire<Vec<T>>::Repr == Vec<TWire<T>>
-        // sorted_ports.sort_by(|a, b| a.addr.cmp(&b.addr));
-
-        // let ports: Vec<TWire<ROMPort<T>>> = self
-        //     .ports
-        //     .iter()
-        //     .map(|w| {
-        //         TWire::new(ROMPortRepr {
-        //             addr: w.repr.addr,
-        //             val: w.repr.val,
-        //         })
-        //     })
-        //     .collect();
-        // let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(ports);
-
-        // let f = |p: TWire<ROMPort<T>>| -> TWire<u64> { p.repr.addr };
 
         // JP: Why does ROMPort need to implement LE?
+        // Step 1: Sort Memory Accesses
+        // Instead of handling memory accesses in the order they're executed, 
+        // the circuit first sorts all memory accesses by address.
         let sort = sort_by_key(
             b,
             &self.ports,
             CompareLe,
-            |p: TWire<ROMPort<T>>| -> TWire<u64> { p.repr.addr },
+            |p| { p.repr.addr },
         );
 
         // JP: Do we need Rooted things?
+        // In circuit, check that the secrets are sorted
         let (sorted_ports, is_sorted) = sort.finish(b);
 
         let mut res = is_sorted;
-        // let sorted_ports: TWire<'a, Vec<ROMPort<T>>> =
-        //     b.secret_derived_sized(&[self.ports.len()], ports, move |ps| {
-        //         let mut sorted = ps.clone();
-        //         sorted.sort_by(|a, b| a.addr.cmp(&b.addr));
-        //         sorted
-        //     });
 
+        // Step 2: Validate Memory Accesses
+        // To ensure that the computations are consistent with RAM, 
+        // we verify in circuit the validity of the sorted memory accesses:
+        // If two subsequent accesses have the same address, they must also 
+        // have the same value.
         for i in 1..sorted_ports.len() {
             let port0 = sorted_ports[i-1];
             let port1 = sorted_ports[i];
@@ -338,6 +325,9 @@ where
             res = b.and(res, b.mux(addr_eq, val_eq, b.lit(true)));
         }
 
+        // Step 3: Check highest address
+        // All addresses are expected to be numbered from 0 to n-1.
+        // This guarantees that the final address in the sorted values equals n-1.
         if self.length > 0 {
             let is_final_address = b.eq(
                 sorted_ports[sorted_ports.len() - 1].addr,
@@ -346,12 +336,8 @@ where
 
             res = b.and(res, is_final_address);
         }
-        // In circuit, check that the secrets are sorted
         // Build permutation check that ROMPorts and sorted ROMPorts are permutation
         // Assert that the final address is equal to the length - 1.
-
-        // mh: &mut MigrateHandle<'a>,
-        // cx: &mut Rooted<'a, Context<'a>>,
         res
     }
 }
