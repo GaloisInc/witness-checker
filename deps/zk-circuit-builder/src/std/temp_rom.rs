@@ -196,34 +196,12 @@ impl<'a, T: Repr<'a> + Lit<'a>> Lit<'a> for ROMPort<T>
 
 impl<'a, T> ROM<'a, T>
 where
-    T: Clone,
-    // T: typed::Eq<'a>,
-    T: for<'b> LazySecret<'b>,
-    // T: Repr<'a>,
-    <T as Repr<'a>>::Repr: Copy,
-    // ROMPort<T>: Mux<'a, bool>,
-    // T: Mux<'a, bool, T, Output = T>,
-    // T: Mux<'a, bool>,
-    // where
-    //     T: Repr<'a> + for<'b> LazySecret<'b>,
-    // T: for<'b> LazySecret<'b>, //  + for<'b> SecretDep<'b, Decoded = T> + Clone + 'static,
-    //     <T as Repr<'a>>::Repr: Copy + Clone,
+T: Clone,
+// T: typed::Eq<'a>,
+T: for<'b> LazySecret<'b>,
+// T: Repr<'a>,
+<T as Repr<'a>>::Repr: Copy,
 {
-    pub fn new(b: &impl Builder<'a>, values: Vec<TWire<'a, T>>) -> ROM<'a, T> {
-        let length = values.len() as u64;
-        let ports = values
-            .into_iter()
-            .enumerate()
-            .map(|(i, v)| {
-                TWire::new(ROMPortRepr {
-                    addr: b.lit(i as u64),
-                    val: v,
-                })
-            })
-            .collect();
-        ROM { ports, length }
-    }
-
     pub fn load(&mut self, b: &impl Builder<'a>, index: TWire<'a, u64>) -> TWire<'a, T> {
         // - Assert that index is in bounds ()
         // For now we assume that every input is in bounds
@@ -279,8 +257,41 @@ where
         self.ports.push(port);
         val
     }
+}
 
-    pub fn finalize(self, b: &impl Builder<'a>) -> TWire<bool> {
+
+impl<'a, T> ROM<'a, T>
+where
+    T: Clone,
+    T: typed::Eq<'a, Output = bool>,
+    // T: Repr<'a>,
+    <T as Repr<'a>>::Repr: Copy,
+
+    // ROMPort<T>: Mux<'a, bool>,
+    // T: Mux<'a, bool, T, Output = T>,
+    // T: Mux<'a, bool>,
+    // where
+    //     T: Repr<'a> + for<'b> LazySecret<'b>,
+    // T: for<'b> LazySecret<'b>, //  + for<'b> SecretDep<'b, Decoded = T> + Clone + 'static,
+    //     <T as Repr<'a>>::Repr: Copy + Clone,
+{
+    pub fn new(b: &impl Builder<'a>, values: Vec<TWire<'a, T>>) -> ROM<'a, T> {
+        let length = values.len() as u64;
+        let ports = values
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| {
+                TWire::new(ROMPortRepr {
+                    addr: b.lit(i as u64),
+                    val: v,
+                })
+            })
+            .collect();
+        ROM { ports, length }
+    }
+
+
+    pub fn finalize(self, b: &'a impl Builder<'a>) -> TWire<bool> {
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
         // TWire<Vec<T>>::Repr == Vec<TWire<T>>
