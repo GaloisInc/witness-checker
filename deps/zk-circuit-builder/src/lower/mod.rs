@@ -4,3 +4,4 @@ pub mod int;
 pub mod bundle;
 pub mod gadget;
 pub mod const_fold;
+pub mod int_field_arith;
