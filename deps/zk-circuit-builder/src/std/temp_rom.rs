@@ -2,16 +2,14 @@ use crate::{
     ir::{
         circuit::{Bits, CircuitTrait, Ty},
         typed::{
-            Builder, BuilderExt, FromWireList, LazySecret, Le, Lit, Mux, Repr, SecretDep, TWire,
-            ToWireList, self,
+            self, Builder, BuilderExt, FromWireList, LazySecret, Le, Lit, Mux, Repr, SecretDep,
+            TWire, ToWireList,
         },
     },
     routing::sort::{sort_by_key, CompareLe},
 };
 
 use crate::ir::circuit::Wire;
-
-use std::iter::FromIterator;
 
 /// A ROM entry with an address and a value.
 #[derive(Clone)]
@@ -36,7 +34,10 @@ where
     <T as Repr<'a>>::Repr: Copy,
 {
     fn clone(&self) -> Self {
-        unimplemented!()
+        ROMPortRepr {
+            addr: self.addr,
+            val: self.val,
+        }
     }
 }
 
@@ -62,19 +63,15 @@ where
     }
 }
 
-// impl<'a, T: Repr<'a>> ToWireList<'a> for ROMPort<T>
 impl<'a, T> ToWireList<'a> for ROMPort<T>
 where
     T: Repr<'a>,
-    //     <T as Repr<'a>>::Repr: std::marker::Copy,
 {
-    fn num_wires(x: &Self::Repr) -> usize {
-        // u32::num_wires(x)
-        unimplemented!()
+    fn num_wires(_x: &Self::Repr) -> usize {
+        2
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
-        // u32::for_each_wire(x, f);
-        unimplemented!()
+        // unimplemented!()
     }
     fn num_sizes(x: &Self::Repr) -> usize {
         // u32::num_sizes(x)
@@ -89,9 +86,9 @@ where
 impl<'a, C: Repr<'a>, T> Mux<'a, C, ROMPort<T>> for ROMPort<T>
 where
     T: Repr<'a>,
-    // C::Repr: Clone,
-    // u64: Mux<'a, C, u64, Output = u64>,
-    // T: Mux<'a, C, T, Output = T>,
+    C::Repr: Clone,
+    u64: Mux<'a, C, u64, Output = u64>,
+    T: Mux<'a, C, T, Output = T>,
     // bool: Mux<'a, C, bool, Output = bool>,
 {
     type Output = ROMPort<T>;
@@ -102,12 +99,12 @@ where
         t: ROMPortRepr<'a, T>,
         e: ROMPortRepr<'a, T>,
     ) -> ROMPortRepr<'a, T> {
-        unimplemented!()
-        // let c: TWire<C> = TWire::new(c);
-        // ROMPortRepr {
-        //     addr: bld.mux(c.clone(), t.addr, e.addr),
-        //     val: bld.mux(c.clone(), t.val, e.val),
-        // }
+        let ca: TWire<C> = TWire::new(c.clone());
+        let cv: TWire<C> = TWire::new(c);
+        ROMPortRepr {
+            addr: bld.mux(ca, t.addr, e.addr),
+            val: bld.mux(cv, t.val, e.val),
+        }
     }
 }
 
@@ -116,7 +113,7 @@ where
     T: Repr<'a>,
 {
     fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        unimplemented! {}
+        2
     }
 
     fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
@@ -196,11 +193,11 @@ impl<'a, T: Repr<'a> + Lit<'a>> Lit<'a> for ROMPort<T>
 
 impl<'a, T> ROM<'a, T>
 where
-T: Clone,
-// T: typed::Eq<'a>,
-T: for<'b> LazySecret<'b>,
-// T: Repr<'a>,
-<T as Repr<'a>>::Repr: Copy,
+    T: Clone,
+    // T: typed::Eq<'a>,
+    T: for<'b> LazySecret<'b>,
+    // T: Repr<'a>,
+    <T as Repr<'a>>::Repr: Copy,
 {
     pub fn load(&mut self, b: &impl Builder<'a>, index: TWire<'a, u64>) -> TWire<'a, T> {
         // - Assert that index is in bounds ()
@@ -259,16 +256,14 @@ T: for<'b> LazySecret<'b>,
     }
 }
 
-
 impl<'a, T> ROM<'a, T>
 where
     T: Clone,
     T: typed::Eq<'a, Output = bool>,
     // T: Repr<'a>,
     <T as Repr<'a>>::Repr: Copy,
-
     // ROMPort<T>: Mux<'a, bool>,
-    // T: Mux<'a, bool, T, Output = T>,
+    T: Mux<'a, bool, T, Output = T>,
     // T: Mux<'a, bool>,
     // where
     //     T: Repr<'a> + for<'b> LazySecret<'b>,
@@ -290,21 +285,15 @@ where
         ROM { ports, length }
     }
 
-
     pub fn finalize(self, b: &'a impl Builder<'a>) -> TWire<bool> {
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
 
         // JP: Why does ROMPort need to implement LE?
         // Step 1: Sort Memory Accesses
-        // Instead of handling memory accesses in the order they're executed, 
+        // Instead of handling memory accesses in the order they're executed,
         // the circuit first sorts all memory accesses by address.
-        let sort = sort_by_key(
-            b,
-            &self.ports,
-            CompareLe,
-            |p| { p.repr.addr },
-        );
+        let sort = sort_by_key(b, &self.ports, CompareLe, |p| p.repr.addr);
 
         // JP: Do we need Rooted things?
         // In circuit, check that the secrets are sorted
@@ -313,12 +302,12 @@ where
         let mut res = is_sorted;
 
         // Step 2: Validate Memory Accesses
-        // To ensure that the computations are consistent with RAM, 
+        // To ensure that the computations are consistent with RAM,
         // we verify in circuit the validity of the sorted memory accesses:
-        // If two subsequent accesses have the same address, they must also 
+        // If two subsequent accesses have the same address, they must also
         // have the same value.
         for i in 1..sorted_ports.len() {
-            let port0 = sorted_ports[i-1];
+            let port0 = sorted_ports[i - 1];
             let port1 = sorted_ports[i];
             let addr_eq = b.eq(port0.addr, port1.addr);
             let val_eq: TWire<bool> = b.eq(port0.val, port1.val);
