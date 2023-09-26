@@ -327,7 +327,8 @@ where
 
         // Step 3: Check highest address
         // All addresses are expected to be numbered from 0 to n-1.
-        // This guarantees that the final address in the sorted values equals n-1.
+        // This guarantees that the final address in the sorted values equals n-1
+        // and that no read operations where out-of-bounds.
         if self.length > 0 {
             let is_final_address = b.eq(
                 sorted_ports[sorted_ports.len() - 1].addr,
