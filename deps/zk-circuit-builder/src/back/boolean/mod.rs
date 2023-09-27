@@ -627,8 +627,6 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let v = self.wire_map[&aw];
                 let width = type_bits(aw.ty);
                 self.sink.assert_zero(width, v);
-                // TODO(isweet): Is this the right way to do this?
-                //  This matches the semantics of an empty pack, see above.
                 return self.sink.concat_chunks(expire, &[]);
             },
             _ => {},

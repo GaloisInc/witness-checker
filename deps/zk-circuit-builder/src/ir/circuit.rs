@@ -3392,10 +3392,6 @@ impl<'a> Bits<'a> {
         (digit >> off) & 1 != 0
     }
 
-    pub fn empty() -> Bits<'a> {
-        Bits(&COMMON_BITS_EMPTY)
-    }
-
     pub fn zero() -> Bits<'a> {
         Bits(&COMMON_BITS_ZERO)
     }
@@ -3412,12 +3408,10 @@ impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
     }
 }
 
-static COMMON_BITS_EMPTY: [u32; 0] = [];
 static COMMON_BITS_ZERO: [u32; 1] = [0];
 static COMMON_BITS_ONE: [u32; 1] = [1];
 
 static COMMON_BITS: &[&[u32]] = &[
-    &COMMON_BITS_EMPTY,
     &COMMON_BITS_ZERO,
     &COMMON_BITS_ONE,
 ];
