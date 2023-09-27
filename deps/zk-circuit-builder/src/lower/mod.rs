@@ -4,4 +4,5 @@ pub mod int;
 pub mod bundle;
 pub mod gadget;
 pub mod const_fold;
+#[cfg(feature = "gf_scuttlebutt")]
 pub mod int_field_arith;
