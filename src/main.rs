@@ -14,7 +14,7 @@ use zk_circuit_builder::back::{self, UsePlugins, BackendFeature};
 use zk_circuit_builder::eval::{self, EvalWire, CachingEvaluator};
 use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
-    Circuit, Arenas, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, GadgetKindRef,
+    Circuit, Arenas, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, GadgetKindRef, Field
 };
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, BuilderImpl, TWire};
 use zk_circuit_builder::lower;
@@ -314,6 +314,8 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = cf.add_pass(lower::bundle::unbundle_mux);
     let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
+    #[cfg(feature = "gf_scuttlebutt")]
+    let cf = lower::int_field_arith::IntFieldArith(cf, Some(Field::F128p));
     let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf)
         .set_allow_functions(backend.has_feature(BackendFeature::Function))
         .set_allow_switches(backend.has_feature(BackendFeature::Switch));
