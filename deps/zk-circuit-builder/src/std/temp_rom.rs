@@ -104,7 +104,7 @@ where
         // let cv: TWire<C> = TWire::new(c);
         let c: TWire<C> = TWire::new(c);
         ROMPortRepr {
-            addr: bld.mux(c, t.addr, e.addr),
+            addr: bld.mux(c.clone(), t.addr, e.addr),
             val: bld.mux(c, t.val, e.val),
         }
     }
@@ -201,6 +201,7 @@ where
     T: for<'b> LazySecret<'b>,
     // T: Repr<'a>,
     <T as Repr<'a>>::Repr: Copy,
+    T: for<'b> SecretDep<'b, Decoded = T>,
 {
     pub fn load(&mut self, b: &impl Builder<'a>, index: TWire<'a, u64>) -> TWire<'a, T> {
         // - Assert that index is in bounds ()
@@ -267,6 +268,8 @@ where
     <T as Repr<'a>>::Repr: Copy,
     // ROMPort<T>: Mux<'a, bool>,
     T: Mux<'a, bool, T, Output = T>,
+    T: ToWireList<'a>,
+    T: FromWireList<'a>,
     // T: Mux<'a, bool>,
     // where
     //     T: Repr<'a> + for<'b> LazySecret<'b>,
