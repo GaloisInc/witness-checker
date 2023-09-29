@@ -66,20 +66,21 @@ where
 impl<'a, T> ToWireList<'a> for ROMPort<T>
 where
     T: Repr<'a>,
+    T: ToWireList<'a>,
 {
-    fn num_wires(_x: &Self::Repr) -> usize {
-        2
+    fn num_wires(x: &Self::Repr) -> usize {
+        u64::num_wires(&x.addr.repr) + T::num_wires(&x.val.repr)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
-        // unimplemented!()
+        u64::for_each_wire(&x.addr.repr, f);
+        T::for_each_wire(&x.val.repr, f);
     }
     fn num_sizes(x: &Self::Repr) -> usize {
-        // u32::num_sizes(x)
-        unimplemented!()
+        u64::num_sizes(&x.addr.repr) + T::num_sizes(&x.val.repr)
     }
     fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
-        // u32::for_each_size(x, f);
-        unimplemented!()
+        u64::for_each_size(&x.addr.repr, f);
+        T::for_each_size(&x.val.repr, f);
     }
 }
 
@@ -99,11 +100,12 @@ where
         t: ROMPortRepr<'a, T>,
         e: ROMPortRepr<'a, T>,
     ) -> ROMPortRepr<'a, T> {
-        let ca: TWire<C> = TWire::new(c.clone());
-        let cv: TWire<C> = TWire::new(c);
+        // let ca: TWire<C> = TWire::new(c.clone());
+        // let cv: TWire<C> = TWire::new(c);
+        let c: TWire<C> = TWire::new(c);
         ROMPortRepr {
-            addr: bld.mux(ca, t.addr, e.addr),
-            val: bld.mux(cv, t.val, e.val),
+            addr: bld.mux(c, t.addr, e.addr),
+            val: bld.mux(c, t.val, e.val),
         }
     }
 }
@@ -111,18 +113,19 @@ where
 impl<'a, T> FromWireList<'a> for ROMPort<T>
 where
     T: Repr<'a>,
+    T: FromWireList<'a>,
 {
     fn expected_num_wires(sizes: &mut impl Iterator<Item = usize>) -> usize {
-        2
+        u64::expected_num_wires(sizes) + T::expected_num_wires(sizes)
     }
 
     fn for_each_expected_wire_type<C: CircuitTrait<'a> + ?Sized>(
         c: &C,
-        _sizes: &mut impl Iterator<Item = usize>,
+        sizes: &mut impl Iterator<Item = usize>,
         mut f: impl FnMut(Ty<'a>),
     ) {
-        // f(Self::wire_type(c))
-        unimplemented! {}
+        u64::for_each_expected_wire_type(c, sizes, f);
+        T::for_each_expected_wire_type(c, sizes, f);
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
@@ -130,26 +133,25 @@ where
         sizes: &mut impl Iterator<Item = usize>,
         build_wire: &mut impl FnMut(Ty<'a>) -> Wire<'a>,
     ) -> Self::Repr {
-        unimplemented! {}
+        let addr = TWire::new(u64::build_repr_from_wires(c, sizes, build_wire));
+        let val = TWire::new(T::build_repr_from_wires(c, sizes, build_wire));
+        ROMPortRepr{ addr, val }
     }
 }
 impl<'a, T> SecretDep<'a> for ROMPort<T>
 where
     T: Repr<'a>,
-    // where
-    //     T: for<'b> LazySecret<'b> + for<'b> SecretDep<'b, Decoded = T> + Clone,
-    //     <T as Repr<'a>>::Repr: Copy + Clone,
+    T: SecretDep<'a, Decoded = T>,
 {
     type Decoded = ROMPort<T>;
     fn from_bits_iter(
         sizes: &mut impl Iterator<Item = usize>,
         bits: &mut impl Iterator<Item = Bits<'a>>,
     ) -> Self {
-        unimplemented! {}
-        // ROMPort {
-        //     addr: u64::from_bits_iter(sizes, bits),
-        //     val: T::from_bits_iter(sizes, bits),
-        // }
+        ROMPort {
+            addr: u64::from_bits_iter(sizes, bits),
+            val: T::from_bits_iter(sizes, bits),
+        }
     }
 }
 
@@ -157,14 +159,15 @@ impl<'a, T> LazySecret<'a> for ROMPort<T>
 where
     T: Repr<'a> + LazySecret<'a>,
 {
-    fn expected_word_len(_sizes: &mut impl Iterator<Item = usize>) -> usize {
-        unimplemented! {}
+    fn expected_word_len(sizes: &mut impl Iterator<Item = usize>) -> usize {
+        u64::expected_word_len(sizes) + T::expected_word_len(sizes)
     }
     fn word_len(&self) -> usize {
-        unimplemented! {}
+        u64::word_len(&self.addr) + T::word_len(&self.val)
     }
     fn push_words(&self, out: &mut Vec<u32>) {
-        unimplemented! {}
+        u64::push_words(&self.addr, out);
+        T::push_words(&self.val, out);
     }
 }
 
