@@ -72,15 +72,15 @@ where
         u64::num_wires(&x.addr.repr) + T::num_wires(&x.val.repr)
     }
     fn for_each_wire(x: &Self::Repr, mut f: impl FnMut(Wire<'a>)) {
-        u64::for_each_wire(&x.addr.repr, f);
-        T::for_each_wire(&x.val.repr, f);
+        u64::for_each_wire(&x.addr.repr, |w| f(w));
+        T::for_each_wire(&x.val.repr, |w| f(w));
     }
     fn num_sizes(x: &Self::Repr) -> usize {
         u64::num_sizes(&x.addr.repr) + T::num_sizes(&x.val.repr)
     }
-    fn for_each_size(x: &Self::Repr, f: impl FnMut(usize)) {
-        u64::for_each_size(&x.addr.repr, f);
-        T::for_each_size(&x.val.repr, f);
+    fn for_each_size(x: &Self::Repr, mut f: impl FnMut(usize)) {
+        u64::for_each_size(&x.addr.repr, |w| f(w));
+        T::for_each_size(&x.val.repr, |w| f(w));
     }
 }
 
@@ -124,8 +124,8 @@ where
         sizes: &mut impl Iterator<Item = usize>,
         mut f: impl FnMut(Ty<'a>),
     ) {
-        u64::for_each_expected_wire_type(c, sizes, f);
-        T::for_each_expected_wire_type(c, sizes, f);
+        u64::for_each_expected_wire_type(c, sizes, |w| f(w));
+        T::for_each_expected_wire_type(c, sizes, |w| f(w));
     }
 
     fn build_repr_from_wires<C: CircuitTrait<'a> + ?Sized>(
