@@ -1799,6 +1799,7 @@ dependencies = [
  "byteorder",
  "cheesecloth-derive-ir-typed",
  "cheesecloth-derive-migrate",
+ "crypto-bigint",
  "ff 0.8.0",
  "generic-array",
  "log",

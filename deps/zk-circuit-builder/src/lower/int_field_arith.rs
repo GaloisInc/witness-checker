@@ -2,7 +2,6 @@ use scuttlebutt::ring::FiniteRing;
 use scuttlebutt::field::F128p;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize};
 use crate::ir::migrate::{self, Migrate};
-use std::convert::TryFrom;
 
 trait AsField {
     const AS_FIELD: Field;
@@ -100,7 +99,7 @@ fn int_field_arith<'a, F: FiniteRing + AsField + FromBits + AsBits>(
 //
 //   Q: Also, do wires that have been elaborated away (like `Lit(1, U64)` above) get de-allocated? Will my map
 //      grow to the size of the entire circuit?
-pub struct IntFieldArith<F>(pub F, Option<Field>);
+pub struct IntFieldArith<F>(pub F, pub Option<Field>);
 
 impl<'a, F: CircuitFilter<'a> + 'a> CircuitFilter<'a> for IntFieldArith<F>
 where F: Migrate<'a, 'a, Output = F> {

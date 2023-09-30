@@ -1,10 +1,11 @@
 use std::any::Any;
 use std::cmp;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
+use scuttlebutt::field::PrimeFiniteField;
 #[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
 use crate::ir::migrate::{self, Migrate};
@@ -848,6 +849,24 @@ fn eval_gate_inner<'a, 'b>(
             if a.ty.is_integer() && ty.is_integer() {
                 let (a_val, a_sec) = ecx.get_int_value(a)?;
                 (trunc(c, ty, a_val), a_sec)
+            } else if a.ty.is_integer() && a.ty.integer_size().bits() < 128 {
+                let (a_val, a_sec) = ecx.get_int_value(a)?;
+                if let Some(Field::F128p) = ty.get_galois_field() {
+                    let a_f = F128p::try_from(u128::try_from(a_val).unwrap()).unwrap();
+                    (a_f.as_bits(c, ty.integer_size()), a_sec)
+                } else {
+                    panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
+                }
+            } else if let Some(Field::F128p) = a.ty.get_galois_field() {
+                let (a_val, a_sec) = ecx.get_value(a)?;
+                let a_val = F128p::from_bits(a_val);
+                if ty.is_integer() && ty.integer_size().bits() < 128 {
+                    let a_u128 = u128::from(a_val.into_int());
+                    let a_int = BigInt::from(a_u128);
+                    (a_int.as_bits(c, ty.integer_size()), a_sec)
+                } else {
+                    panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
+                }
             } else {
                 panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
             }

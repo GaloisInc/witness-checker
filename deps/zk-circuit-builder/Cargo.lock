@@ -1600,6 +1600,7 @@ dependencies = [
  "byteorder",
  "cheesecloth-derive-ir-typed",
  "cheesecloth-derive-migrate",
+ "crypto-bigint",
  "env_logger",
  "ff 0.8.0",
  "generic-array",

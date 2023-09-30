@@ -47,6 +47,7 @@ bumpalo = "3.4"
 num-bigint = "0.3.0"
 num-integer = "0.1.43"
 num-traits = "0.2.12"
+crypto-bigint = { version = "0.5.2", features = ["generic-array"] }
 
 generic-array = "*"
 
