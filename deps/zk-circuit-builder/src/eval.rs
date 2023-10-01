@@ -3,7 +3,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use num_bigint::BigInt;
+use num_bigint::{BigInt, Sign};
 use num_traits::{Signed, Zero};
 use scuttlebutt::field::PrimeFiniteField;
 #[cfg(feature = "gf_scuttlebutt")]
@@ -759,6 +759,12 @@ pub fn eval_cmp_galois_field<'a>(
     }
 }
 
+fn bigint_as_u128(a: BigInt, width: u16) -> u128 {
+    let mask = (BigInt::from(1) << width) - 1;
+    let (sign, val) = (a & &mask).into_parts();
+    assert!(sign != Sign::Minus);
+    u128::try_from(val).unwrap()
+}
 
 fn eval_gate_inner<'a, 'b>(
     c: &CircuitBase<'a>,
@@ -851,8 +857,9 @@ fn eval_gate_inner<'a, 'b>(
                 (trunc(c, ty, a_val), a_sec)
             } else if a.ty.is_integer() && a.ty.integer_size().bits() < 128 {
                 let (a_val, a_sec) = ecx.get_int_value(a)?;
+                let a_val = bigint_as_u128(a_val, a.ty.integer_size().bits());
                 if let Some(Field::F128p) = ty.get_galois_field() {
-                    let a_f = F128p::try_from(u128::try_from(a_val).unwrap()).unwrap();
+                    let a_f = F128p::try_from(a_val).unwrap();
                     (a_f.as_bits(c, ty.integer_size()), a_sec)
                 } else {
                     panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)

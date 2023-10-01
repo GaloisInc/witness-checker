@@ -3482,6 +3482,26 @@ impl AsBits for &'_ BigInt {
     }
 }
 
+impl AsBits for i8 {
+    fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
+        if width == IntSize(8) {
+            (*self as u8).as_bits(c, width)
+        } else {
+            BigInt::from(*self).as_bits(c, width)
+        }
+    }
+}
+
+impl AsBits for i16 {
+    fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
+        if width == IntSize(16) {
+            (*self as u16).as_bits(c, width)
+        } else {
+            BigInt::from(*self).as_bits(c, width)
+        }
+    }
+}
+
 impl AsBits for i32 {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
         if width == IntSize(32) {

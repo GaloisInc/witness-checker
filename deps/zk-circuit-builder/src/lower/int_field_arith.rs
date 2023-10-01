@@ -45,7 +45,7 @@ fn int_field_arith<'a, F: FiniteRing + AsField + FromBits + AsBits>(
             let prod_f = c.mul(a_f, b_f);
             c.cast(prod_f, ty)            
         },
-        GateKind::Binary(op @ Div, a, b) | GateKind::Binary(op @ Mod, a, b) if ty.is_int() => {
+        GateKind::Binary(op @ Div, a, b) | GateKind::Binary(op @ Mod, a, b) if ty.is_uint() => {
             let a_f = c.cast(a, field_ty);
             let quot_f = c.secret_derived(field_ty, c.wire_list(&[a, b]), move |c, vs| {
                 match vs {
