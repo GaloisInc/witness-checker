@@ -3,11 +3,10 @@ use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use num_bigint::{BigInt, Sign, BigUint};
+use num_bigint::{BigInt, Sign, BigUint, ToBigInt};
 use num_traits::{Signed, Zero};
-use scuttlebutt::field::PrimeFiniteField;
 #[cfg(feature = "gf_scuttlebutt")]
-use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
+use scuttlebutt::field::{FiniteField, PrimeFiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
@@ -766,28 +765,58 @@ fn bigint_to_biguint(a: BigInt, width: IntSize) -> BigUint {
     val
 }
 
-pub fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: IntSize, f: Field) -> Bits<'a> {
+pub fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: IntSize, field: Field) -> Bits<'a> {
+    #[cfg(feature = "gf_scuttlebutt")]
+    fn biguint_to_prime_field<F: PrimeFiniteField, const LIMBS: usize>(a: BigUint, width: IntSize) -> F {
+        let mut acc = crypto_bigint::Uint::<LIMBS>::ZERO;
+
+        let digits = a.iter_u64_digits().collect::<Vec<_>>();
+
+        for &d in digits.iter().rev() {
+            acc <<= 64;
+            acc |= crypto_bigint::Uint::<LIMBS>::from_u64(d);
+        }
+
+        let one = crypto_bigint::Uint::<LIMBS>::ONE;
+        let mask = (one << width.bits() as usize).wrapping_sub(&one);
+
+        F::try_from_int(acc & mask).unwrap()
+    }
+
     let a = bigint_to_biguint(a, width);
-    match f {
+    match field {
+        #[cfg(feature = "gf_scuttlebutt")]
         Field::F128p => biguint_to_prime_field::<F128p, { F128p::MIN_LIMBS_NEEDED }>(a, width).as_bits(c, Field::F128p.bit_size()),
+        #[cfg(feature = "gf_scuttlebutt")]
         _ => unimplemented!(),
     }
 }
 
-pub fn biguint_to_prime_field<F: PrimeFiniteField, const LIMBS: usize>(a: BigUint, width: IntSize) -> F {
-    let mut acc = crypto_bigint::Uint::<LIMBS>::ZERO;
+pub fn prime_field_bits_to_bigint<'a>(c: &CircuitBase<'a>, a: Bits<'a>, width: IntSize, field: Field) -> BigInt {
+    #[cfg(feature = "gf_scuttlebutt")]
+    fn prime_field_to_biguint<F: PrimeFiniteField, const LIMBS: usize>(a: F, width: IntSize) -> BigUint {
+        let mut acc = BigUint::zero();
 
-    let digits = a.iter_u64_digits().collect::<Vec<_>>();
+        let digits = a.into_int();
+        let digits: &[u64; LIMBS] = digits.as_words();
 
-    for &d in digits.iter().rev() {
-        acc <<= 64;
-        acc |= crypto_bigint::Uint::<LIMBS>::from_u64(d);
+        for &d in digits.iter().rev() {
+            acc <<= usize::BITS;
+            acc |= BigUint::from(d);
+        }
+
+        let one = BigUint::from(1_u64);
+        let mask = (&one << width.bits() as usize) - &one;
+
+        acc & mask
     }
 
-    let one = crypto_bigint::Uint::<LIMBS>::ONE;
-    let mask = (one << width.bits() as usize).wrapping_sub(&one);
-
-    F::try_from_int(acc & mask).unwrap()
+    match field {
+        #[cfg(feature = "gf_scuttlebutt")]
+        Field::F128p => prime_field_to_biguint::<F128p, { F128p::MIN_LIMBS_NEEDED }>(F128p::from_bits(a), width).to_bigint().unwrap(),
+        #[cfg(feature = "gf_scuttlebutt")]
+        _ => unimplemented!(),
+    }
 }
 
 fn eval_gate_inner<'a, 'b>(
@@ -880,7 +909,6 @@ fn eval_gate_inner<'a, 'b>(
                 let (a_val, a_sec) = ecx.get_int_value(a)?;
                 (trunc(c, ty, a_val), a_sec)
             } else if a.ty.is_integer() && a.ty.integer_size().bits() < 128 {
-                // TODO(isweet): Feature gate behind `gf_scuttlebutt`
                 let (a_val, a_sec) = ecx.get_int_value(a)?;
                 if let Some(f) = ty.get_galois_field() {
                     let a_bits = bigint_to_prime_field_bits(c, a_val, a.ty.integer_size(), f);
@@ -888,12 +916,10 @@ fn eval_gate_inner<'a, 'b>(
                 } else {
                     panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
                 }
-            } else if let Some(Field::F128p) = a.ty.get_galois_field() {
+            } else if let Some(f) = a.ty.get_galois_field() {
                 let (a_val, a_sec) = ecx.get_value(a)?;
-                let a_val = F128p::from_bits(a_val);
                 if ty.is_integer() && ty.integer_size().bits() < 128 {
-                    let a_u128 = u128::from(a_val.into_int());
-                    let a_int = BigInt::from(a_u128);
+                    let a_int = prime_field_bits_to_bigint(c, a_val, ty.integer_size(), f);
                     (a_int.as_bits(c, ty.integer_size()), a_sec)
                 } else {
                     panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)

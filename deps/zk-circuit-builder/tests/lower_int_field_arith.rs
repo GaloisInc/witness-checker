@@ -27,7 +27,7 @@ macro_rules! init_circuit {
 macro_rules! define_unary {
     ($rust_type:ident, $ckt_type:ident) => {
         paste! {
-            fn [<unary_ $rust_type _f128p>] (a: $rust_type, op: UnOp, expected: $rust_type) {
+            fn [<unary_ $rust_type _f128p>](a: $rust_type, op: UnOp, expected: $rust_type) {
                 init_circuit!(ckt_e, ckt_a);
             
                 let ty = Ty::$ckt_type($rust_type::BITS as usize);
@@ -68,7 +68,7 @@ macro_rules! define_unary_ops {
 macro_rules! define_binary {
     ($rust_type:ident, $ckt_type:ident) => {
         paste! {
-            fn [<binary_ $rust_type _f128p>] (a: $rust_type, b: $rust_type, op: BinOp, expected: $rust_type) {
+            fn [<binary_ $rust_type _f128p>](a: $rust_type, b: $rust_type, op: BinOp, expected: $rust_type) {
                 init_circuit!(ckt_e, ckt_a);
             
                 let ty = Ty::$ckt_type($rust_type::BITS as usize);
@@ -82,7 +82,7 @@ macro_rules! define_binary {
                 
                 let expected = eval::Value::SingleInteger(num_bigint::BigInt::from(expected));
                 let source = eval::eval_wire_public(ckt_e.as_base(), res_a_e).unwrap();
-                let target = eval::eval_wire_public(ckt_a.as_base(), res_a_a).unwrap();
+                let target = eval::eval_wire_secret(ckt_a.as_base(), res_a_a).unwrap();
                 
                 assert_eq!(expected, source);
                 assert_eq!(source, target);    
@@ -123,16 +123,64 @@ macro_rules! define_bin_ops {
 
             // Div
             fn [<div_ $u_type _f128p>](a: $u_type, b: $u_type) {
-                [<binary_ $u_type _f128p>](a, b, BinOp::Div, if b == 0 { 0 } else { a / b });
+                [<binary_ $u_type _f128p>](a, b, BinOp::Div, if b == 0 { 0 } else { a.wrapping_div(b) });
             }
 
             fn [<div_ $i_type _f128p>](a: $i_type, b: $i_type) {
-                [<binary_ $i_type _f128p>](a, b, BinOp::Div, if b == 0 { 0 } else { a / b });
-            }            
+                [<binary_ $i_type _f128p>](a, b, BinOp::Div, if b == 0 { 0 } else { a.wrapping_div(b) });
+            }
+
+            // Mod
+            fn [<mod_ $u_type _f128p>](a: $u_type, b: $u_type) {
+                [<binary_ $u_type _f128p>](a, b, BinOp::Mod, if b == 0 { a } else { a.wrapping_rem(b) });
+            }
+
+            fn [<mod_ $i_type _f128p>](a: $i_type, b: $i_type) {
+                [<binary_ $i_type _f128p>](a, b, BinOp::Mod, if b == 0 { a } else { a.wrapping_rem(b) });
+            }
         }
     }
 }
 
+macro_rules! define_tests {
+    ($ty:ident) => {
+        paste! {
+            proptest! {
+                #[test]
+                fn [<lower_int_field_ $ty _f128p_neg>](a: $ty) {
+                    [<neg_ $ty _f128p>](a)
+                }
+
+                #[test]
+                fn [<lower_int_field_ $ty _f128p_add>](a: $ty, b: $ty) {
+                    [<add_ $ty _f128p>](a, b)
+                }
+
+                #[test]
+                fn [<lower_int_field_ $ty _f128_sub>](a: $ty, b: $ty) {
+                    [<sub_ $ty _f128p>](a, b)
+                }
+
+                #[test]
+                fn [<lower_int_field_ $ty _f128p_mul>](a: $ty, b: $ty) {
+                    [<mul_ $ty _f128p>](a, b)
+                }
+
+                #[test]
+                fn [<lower_int_field_ $ty _f128p_div>](a: $ty, b: $ty) {
+                    [<div_ $ty _f128p>](a, b)
+                }
+
+                #[test]
+                fn [<lower_int_field_ $ty _f128p_mod>](a: $ty, b: $ty) {
+                    [<mod_ $ty _f128p>](a, b)
+                }
+            }
+        }
+    }
+}
+
+// u8, i8
 define_unary!(u8, uint);
 define_unary!(i8, int);
 define_unary_ops!(u8, i8);
@@ -141,45 +189,44 @@ define_binary!(u8, uint);
 define_binary!(i8, int);
 define_bin_ops!(u8, i8);
 
-proptest! {
-    // Negation    
-    #[test]
-    fn lower_int_field_neg_u8_f128p(a: u8) {
-        neg_u8_f128p(a)
-    }
+define_tests!(u8);
+define_tests!(i8);
 
-    #[test]
-    fn lower_int_field_neg_i8_f128p(a: i8) {
-        neg_i8_f128p(a)
-    }
+// u16, i16
+define_unary!(u16, uint);
+define_unary!(i16, int);
+define_unary_ops!(u16, i16);
 
-    #[test]
-    fn lower_int_field_add_u8_f128p(a: u8, b: u8) {
-        add_u8_f128p(a, b)
-    }
+define_binary!(u16, uint);
+define_binary!(i16, int);
+define_bin_ops!(u16, i16);
 
-    #[test]
-    fn lower_int_field_add_i8_f128p(a: i8, b: i8) {
-        add_i8_f128p(a, b)
-    }
+define_tests!(u16);
+define_tests!(i16);
 
-    #[test]
-    fn lower_int_field_sub_u8_f128p(a: u8, b: u8) {
-        sub_u8_f128p(a, b)
-    }
+// u32, i32
+define_unary!(u32, uint);
+define_unary!(i32, int);
+define_unary_ops!(u32, i32);
 
-    #[test]
-    fn lower_int_field_sub_i8_f128p(a: i8, b: i8) {
-        sub_i8_f128p(a, b)
-    }
+define_binary!(u32, uint);
+define_binary!(i32, int);
+define_bin_ops!(u32, i32);
 
-    #[test]
-    fn lower_int_field_mul_u8_f128p(a: u8, b: u8) {
-        mul_u8_f128p(a, b)
-    }
+define_tests!(u32);
+define_tests!(i32);
 
-    #[test]
-    fn lower_int_field_mul_i8_f128p(a: i8, b: i8) {
-        mul_i8_f128p(a, b)
-    }
-}
+// u64, i64
+define_unary!(u64, uint);
+define_unary!(i64, int);
+define_unary_ops!(u64, i64);
+
+define_binary!(u64, uint);
+define_binary!(i64, int);
+define_bin_ops!(u64, i64);
+
+define_tests!(u64);
+define_tests!(i64);
+
+
+
