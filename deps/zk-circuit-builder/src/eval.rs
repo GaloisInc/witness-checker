@@ -3,7 +3,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter;
-use num_bigint::{BigInt, Sign};
+use num_bigint::{BigInt, Sign, BigUint};
 use num_traits::{Signed, Zero};
 use scuttlebutt::field::PrimeFiniteField;
 #[cfg(feature = "gf_scuttlebutt")]
@@ -11,7 +11,7 @@ use scuttlebutt::field::{FiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitBase, Field, FromBits, Ty, Wire, Secret, Erased, Bits, AsBits,
-    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Call, SecretProjectFn, SwitchCase
+    GateKind, TyKind, UnOp, BinOp, ShiftOp, CmpOp, GateValue, Call, SecretProjectFn, SwitchCase, IntSize,
 };
 use crate::util::CowBox;
 
@@ -759,11 +759,35 @@ pub fn eval_cmp_galois_field<'a>(
     }
 }
 
-fn bigint_as_u128(a: BigInt, width: u16) -> u128 {
-    let mask = (BigInt::from(1) << width) - 1;
+fn bigint_to_biguint(a: BigInt, width: IntSize) -> BigUint {
+    let mask = (BigInt::from(1) << width.bits()) - 1;
     let (sign, val) = (a & &mask).into_parts();
     assert!(sign != Sign::Minus);
-    u128::try_from(val).unwrap()
+    val
+}
+
+fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: IntSize, f: Field) -> Bits<'a> {
+    let a = bigint_to_biguint(a, width);
+    match f {
+        Field::F128p => biguint_to_prime_field::<F128p, { F128p::MIN_LIMBS_NEEDED }>(a, width).as_bits(c, Field::F128p.bit_size()),
+        _ => unimplemented!(),
+    }
+}
+
+pub fn biguint_to_prime_field<F: PrimeFiniteField, const LIMBS: usize>(a: BigUint, width: IntSize) -> F {
+    let mut acc = crypto_bigint::Uint::<LIMBS>::ZERO;
+
+    let digits = a.iter_u64_digits().collect::<Vec<_>>();
+
+    for &d in digits.iter().rev() {
+        acc <<= 64;
+        acc |= crypto_bigint::Uint::<LIMBS>::from_u64(d);
+    }
+
+    let one = crypto_bigint::Uint::<LIMBS>::ONE;
+    let mask = (one << width.bits() as usize).wrapping_sub(&one);
+
+    F::try_from_int(acc & mask).unwrap()
 }
 
 fn eval_gate_inner<'a, 'b>(
@@ -856,11 +880,11 @@ fn eval_gate_inner<'a, 'b>(
                 let (a_val, a_sec) = ecx.get_int_value(a)?;
                 (trunc(c, ty, a_val), a_sec)
             } else if a.ty.is_integer() && a.ty.integer_size().bits() < 128 {
+                // TODO(isweet): Feature gate behind `gf_scuttlebutt`
                 let (a_val, a_sec) = ecx.get_int_value(a)?;
-                let a_val = bigint_as_u128(a_val, a.ty.integer_size().bits());
-                if let Some(Field::F128p) = ty.get_galois_field() {
-                    let a_f = F128p::try_from(a_val).unwrap();
-                    (a_f.as_bits(c, ty.integer_size()), a_sec)
+                if let Some(f) = ty.get_galois_field() {
+                    let a_bits = bigint_to_prime_field_bits(c, a_val, a.ty.integer_size(), f);
+                    (a_bits, a_sec)
                 } else {
                     panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
                 }
@@ -1055,6 +1079,22 @@ pub fn eval_wire_secret<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
 mod test {
     use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
     use super::*;
+
+    #[test]
+    fn cast_prime_field() {
+        let arenas = Arenas::new();
+        let c = CircuitBase::new::<()>(&arenas, true);
+        let ty_i8 = c.ty(TyKind::I8);
+
+        let expected_u = F128p::try_from(1).unwrap().as_bits(&c, Field::F128p.bit_size());
+        let actual_u = bigint_to_prime_field_bits(&c, BigInt::from(1), ty_i8.integer_size(), Field::F128p);
+
+        let expected_s = F128p::try_from(255).unwrap().as_bits(&c, Field::F128p.bit_size());
+        let actual_s = bigint_to_prime_field_bits(&c, BigInt::from(-1), ty_i8.integer_size(), Field::F128p);
+
+        assert_eq!(actual_u, expected_u);
+        assert_eq!(actual_s, expected_s);
+    }
 
     #[test]
     fn value_trunc_uint_to_int() {
