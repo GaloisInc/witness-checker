@@ -1,6 +1,9 @@
+use num_bigint::{BigUint, ToBigInt};
+use num_traits::Zero;
 use scuttlebutt::ring::FiniteRing;
 use scuttlebutt::field::F128p;
-use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize};
+use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize, Ty};
+use crate::eval::bigint_to_prime_field_bits;
 use crate::ir::migrate::{self, Migrate};
 
 trait AsField {
@@ -46,28 +49,40 @@ fn int_field_arith<'a, F: FiniteRing + AsField + FromBits + AsBits>(
             c.cast(prod_f, ty)            
         },
         GateKind::Binary(op @ Div, a, b) | GateKind::Binary(op @ Mod, a, b) if ty.is_uint() => {
-            let a_f = c.cast(a, field_ty);
+            let width = ty.integer_size();
             let quot_f = c.secret_derived(field_ty, c.wire_list(&[a, b]), move |c, vs| {
                 match vs {
                     [a_bits, b_bits] => {
                         let a = a_bits.to_biguint();
                         let b = b_bits.to_biguint();
-                        let quot = a / b;
-                        // TODO(isweet): Convert to a field element
-                        todo!()
+                        let quot = if b.is_zero() { BigUint::zero() } else { a / b };
+                        bigint_to_prime_field_bits(c, quot.to_bigint().unwrap(), width, F::AS_FIELD)
                     }
                     _ => unreachable!(),
                 }
             });
+            let rem_f = c.secret_derived(field_ty, c.wire_list(&[a, b]), move |c, vs| {
+                match vs {
+                    [a_bits, b_bits] => {
+                        let a = a_bits.to_biguint();
+                        let b = b_bits.to_biguint();
+                        let rem = if b.is_zero() { a } else { a % b };
+                        bigint_to_prime_field_bits(c, rem.to_bigint().unwrap(), width, F::AS_FIELD)
+                    }
+                    _ => unreachable!(),
+                }
+            });
+            let a_f = c.cast(a, field_ty);            
             let b_f = c.cast(b, field_ty);
-            let rem_f = todo!();
             let quot_times_denom_f = c.mul(quot_f, b_f);
             let num_minus_rem_f = c.sub(a_f, rem_f);
             let diff_all = c.sub(quot_times_denom_f, num_minus_rem_f);
             c.seq(c.assert_zero(diff_all), {
                 let width = (*b.ty).integer_size().bits();
                 let neg_check_ty = c.ty(TyKind::Int(IntSize(width + 1)));
-                let rem_minus_denom = c.cast(c.sub(rem_f, b_f), neg_check_ty);
+                let rem_int = c.cast(rem_f, neg_check_ty);
+                let b_int = c.cast(b, neg_check_ty);
+                let rem_minus_denom = c.sub(rem_int, b_int);
                 let rem_minus_denom_is_neg = c.lt(rem_minus_denom, c.lit(neg_check_ty, 0));
                 let denom_zero = c.eq(b, c.lit(b.ty, 0));
                 let ok = c.or(rem_minus_denom_is_neg, denom_zero);

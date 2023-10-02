@@ -766,7 +766,7 @@ fn bigint_to_biguint(a: BigInt, width: IntSize) -> BigUint {
     val
 }
 
-fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: IntSize, f: Field) -> Bits<'a> {
+pub fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: IntSize, f: Field) -> Bits<'a> {
     let a = bigint_to_biguint(a, width);
     match f {
         Field::F128p => biguint_to_prime_field::<F128p, { F128p::MIN_LIMBS_NEEDED }>(a, width).as_bits(c, Field::F128p.bit_size()),
@@ -1063,7 +1063,6 @@ pub fn eval_wire<'a, S: SecretEvaluator<'a> + Default>(
 }
 
 pub fn eval_wire_public<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
-
     let (bits, sec) = eval_wire::<Public>(c, w).ok()?;
     debug_assert!(!sec);
     Some(Value::from_bits(w.ty, bits))
