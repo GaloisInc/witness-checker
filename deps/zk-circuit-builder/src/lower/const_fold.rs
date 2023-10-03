@@ -142,9 +142,11 @@ fn const_foldable(gk: GateKind) -> bool {
         GateKind::Extract(..) => false,
         GateKind::Gadget(_, ws) => ws.iter().all(|&w| w.is_lit()),
         GateKind::Call(c) => c.args.iter().all(|&w| w.is_lit()),
-        // Making it false assuming that switch can't be folded
+        // TODO(isweet): fold `Switch` to a `Call` if the guard is a literal.
+        // NOTE(isweet): The `Call` will, recursively, also be folded if arguments are also literals.
         GateKind::Switch(..) => false,
         GateKind::Seq(a, b) => a.is_lit() && b.is_lit(),
+        GateKind::AssertZero(a) => a.is_lit(),
     }
 }
 

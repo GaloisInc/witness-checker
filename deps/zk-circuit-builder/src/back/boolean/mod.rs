@@ -623,6 +623,12 @@ impl<'w, S: Sink> Backend<'w, S> {
                     return out;
                 }
             },
+            GateKind::AssertZero(aw) => {
+                let v = self.wire_map[&aw];
+                let width = type_bits(aw.ty);
+                self.sink.assert_zero(width, v);
+                return self.sink.concat_chunks(expire, &[]);
+            },
             _ => {},
         }
 
@@ -921,7 +927,10 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let b = self.wire_map[&bw];                
                 let width = type_bits(bw.ty);
                 self.sink.copy(expire, width, b)
-            }
+            },
+
+            // `AssertZero` should be handled by the case above.
+            GateKind::AssertZero(..) => unreachable!(),
         }
     }
 
@@ -1850,5 +1859,10 @@ mod test {
     #[test]
     fn seq_3() {
         test_gate([3, 3], |c, [a, b]| c.seq(a, b));
+    }
+
+    #[test]
+    fn seq_assert_1() {
+        test_gate([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
     }
 }

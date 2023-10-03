@@ -1183,6 +1183,10 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Seq(a, b))
     }
 
+    fn assert_zero(&self, a: Wire<'a>) -> Wire<'a> {
+        self.gate(GateKind::AssertZero(a))
+    }
+
     /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
     /// returns a wire representing the output of the function.
     ///
@@ -1671,6 +1675,7 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
             WireDeps::one_many(c, args)
         },
         GateKind::Seq(a, b) => WireDeps::two(a, b),
+        GateKind::AssertZero(a) => WireDeps::one(a),
     }
 }
 
@@ -1874,6 +1879,7 @@ impl TyKind<'_> {
     pub const U32: TyKind<'static> = TyKind::Uint(IntSize(32));
     pub const U64: TyKind<'static> = TyKind::Uint(IntSize(64));
     pub const BOOL: TyKind<'static> = TyKind::Uint(IntSize(1));
+    pub const UNIT: TyKind<'static> = TyKind::Bundle(BundleTypes::EMPTY);
 
     pub fn get_galois_field(&self) -> Option<Field> {
         match *self {
@@ -1949,6 +1955,8 @@ impl TyKind<'_> {
 }
 
 impl<'a> BundleTypes<'a> {
+    pub const EMPTY: BundleTypes<'static> = BundleTypes { tys: &[], offsets: Unhashed(&[]) };
+
     pub fn len(self) -> usize {
         self.tys.len()
     }
@@ -1994,6 +2002,7 @@ impl<'a, 'b> Migrate<'a, 'b> for TyKind<'a> {
     }
 }
 
+static COMMON_TY_UNIT: TyKind = TyKind::UNIT;
 static COMMON_TY_BOOL: TyKind = TyKind::BOOL;
 static COMMON_TY_U8: TyKind = TyKind::U8;
 static COMMON_TY_U16: TyKind = TyKind::U16;
@@ -2006,6 +2015,7 @@ static COMMON_TY_I64: TyKind = TyKind::I64;
 static COMMON_TY_RAW_BITS: TyKind = TyKind::RawBits;
 
 static COMMON_TYPES: &[&TyKind] = &[
+    &COMMON_TY_UNIT,
     &COMMON_TY_BOOL,
     &COMMON_TY_U8,
     &COMMON_TY_U16,
@@ -2019,6 +2029,10 @@ static COMMON_TYPES: &[&TyKind] = &[
 ];
 
 impl Ty<'_> {
+    pub fn unit<'a>() -> Ty<'a> {
+        Ty(&COMMON_TY_UNIT)
+    }
+
     pub fn bool<'a>() -> Ty<'a> {
         Ty(&COMMON_TY_BOOL)
     }
@@ -2250,6 +2264,8 @@ pub enum GateKind<'a> {
     Switch(Wire<'a>, &'a [SwitchCase<'a>], &'a [Wire<'a>]),
     /// `Seq(a, b)`: evaluate `a`, ignore the result, and then evaluate `b`
     Seq(Wire<'a>, Wire<'a>),
+    /// `AssertZero(w)`: evaluate `w`, assert that `w == 0`, and produce the unit type
+    AssertZero(Wire<'a>),
 }
 
 impl<'a> Gate<'a> {
@@ -2288,6 +2304,7 @@ impl<'a> GateKind<'a> {
                 b.func.result_wire.ty
             },
             GateKind::Seq(_, b) => b.ty,
+            GateKind::AssertZero(_) => Ty::unit(),
         }
     }
 
@@ -2353,6 +2370,7 @@ impl<'a> GateKind<'a> {
             Call(_) => "Call",
             Switch(_, _, _) => "Switch",
             Seq(_, _) => "Seq",
+            AssertZero(_) => "AssertZero",
         }
     }
 }
@@ -2430,6 +2448,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
                 Switch(v.visit(c), bs , args)
             },
             Seq(a, b) => Seq(v.visit(a), v.visit(b)),
+            AssertZero(a) => AssertZero(v.visit(a)),
         }
     }
 }

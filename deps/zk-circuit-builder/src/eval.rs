@@ -929,6 +929,15 @@ fn eval_gate_inner<'a, 'b>(
         GateKind::Seq(_a, b) => {
             ecx.get_value(b)?
         },
+
+        GateKind::AssertZero(a) => {
+            let (a_val, _a_sec) = ecx.get_value(a)?;
+            // TODO(isweet): Consider producing `Error::Other` here instead.
+            // NOTE(isweet): If so, error should also properly propagate through `Seq`,
+            //               which can be handled by adding `ecx.get_value(a)?;` above.
+            assert!(a_val.is_zero());
+            (Bits::zero(), false)
+        }
     })
 }
 

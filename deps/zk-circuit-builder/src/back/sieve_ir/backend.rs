@@ -451,6 +451,14 @@ impl<'w, IRB: IRBuilderT> Backend<'w, IRB> {
 
             // `a` is pre-evaluated, and so can be ignored
             GateKind::Seq(_a, b) => return self.represent(b),
+
+            GateKind::AssertZero(a) => {
+                let aw = self.represent(a);
+                let a_num = self.get_num(aw);
+                self.builder.assert_zero(&a_num.zki_wire);
+                // TODO(isweet): If/when this backend supports bundles, mimic an empty bundle
+                todo!()
+            }
         };
 
         self.representer.new_repr(repr)

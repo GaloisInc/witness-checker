@@ -82,6 +82,7 @@ pub fn make_graph<'a>(
             GateKind::Call(call) => write!(label, "Call {}", call.func.name)?,
             GateKind::Switch(.. ) => write!(label, "Switch")?,
             GateKind::Seq(_, _) => write!(label, "Seq")?,
+            GateKind::AssertZero(_) => write!(label, "AssertZero")?,
         }
         write!(label, " (")?;
         write_ty(&mut label, w.ty)?;
@@ -111,6 +112,7 @@ pub fn make_graph<'a>(
             GateKind::Argument(_, _) => {},
             GateKind::Unary(_, a) |
             GateKind::Cast(a, _) |
+            GateKind::AssertZero(a) |
             GateKind::Extract(a, _) => write_edges(&[a])?,
             GateKind::Binary(_, a, b) |
             GateKind::Shift(_, a, b) |
