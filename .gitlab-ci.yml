@@ -1,7 +1,7 @@
 image: rust:1.66
 
 default:
-  tags: [docker]
+  tags: [stardust]
 
 variables:
   GIT_SUBMODULE_STRATEGY: recursive
