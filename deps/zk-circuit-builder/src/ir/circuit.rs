@@ -1974,7 +1974,7 @@ impl<'a> BundleTypes<'a> {
     }
 
     pub fn digits(self) -> usize {
-        *self.offsets.last().unwrap()
+        *self.offsets.last().unwrap_or(&0)
     }
 }
 
