@@ -710,10 +710,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let [out, inp1] = self.alloc.preallocate([num_wires, n * m as u64]);
 
         // Get output from witness
-        self.private_into(out, n * m as u64);
+        for i in 0 .. m as u64 {
+            self.call_into(out + i * n, FunctionDesc::Private(n), &[]);
+        }
 
         // Pad the rest of the wires with zero
-        self.lit_zero_into(out + n * m as u64, num_wires - n * m as u64);
+        for i in m as u64 .. m_rounded as u64 {
+            self.call_into(out + i * n, FunctionDesc::LitZero(n), &[]);
+        }
 
         // Allocate a dummy wire to hold to outcome of the assertion
         let assert_out = self.alloc_wires(TEMP, 0);
