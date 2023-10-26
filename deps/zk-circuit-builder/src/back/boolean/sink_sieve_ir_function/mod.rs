@@ -43,6 +43,19 @@ pub trait SieveIrFormat {
     ) -> Self::Gate;
     fn gate_assert_zero(w: WireId) -> Self::Gate;
 
+    // Multi-wire variants of `gate_private` and `gate_copy`, as defined in the Phase 3 circuit IR.
+    const HAS_GATE_PRIVATE_MULTI: bool = false;
+    fn gate_private_multi(out: (WireId, WireId)) -> Self::Gate {
+        panic!("gate_private_multi is not supported");
+    }
+    const HAS_GATE_COPY_MULTI: bool = false;
+    fn gate_copy_multi(
+        out: (WireId, WireId),
+        a: impl IntoIterator<Item = (WireId, WireId)>,
+    ) -> Self::Gate {
+        panic!("gate_copy_multi is not supported");
+    }
+
     fn new_function(
         name: String,
         outs: impl IntoIterator<Item = u64>,
