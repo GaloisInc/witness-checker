@@ -257,19 +257,19 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         self.alloc.alloc(expire, n, self.gates.len())
     }
 
-    fn lit_zero_into(&mut self, out: WireId, n: u64) {
+    fn lit_zero_gate_into(&mut self, out: WireId, n: u64) {
         for i in 0 .. n {
             self.gates.push(IR::gate_constant(out + i, vec![0]));
         }
     }
 
-    fn lit_one_into(&mut self, out: WireId, n: u64) {
+    fn lit_one_gate_into(&mut self, out: WireId, n: u64) {
         for i in 0 .. n {
             self.gates.push(IR::gate_constant(out + i, vec![1]));
         }
     }
 
-    fn private_into(&mut self, out: WireId, n: u64) {
+    fn private_gate_into(&mut self, out: WireId, n: u64) {
         if IR::HAS_GATE_PRIVATE_MULTI {
             if n > 0 {
                 let first = out;
@@ -283,7 +283,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
-    fn copy_into(&mut self, out: WireId, n: u64, a: WireId) {
+    fn copy_gate_into(&mut self, out: WireId, n: u64, a: WireId) {
         if IR::HAS_GATE_COPY_MULTI {
             if n > 0 {
                 let out_first = out;
@@ -303,7 +303,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     }
 
     /// Copy `n` copies of wire `a` (a single wire) into `out .. out + n`.
-    fn rep_into(&mut self, out: WireId, n: u64, a: WireId) {
+    fn rep_gate_into(&mut self, out: WireId, n: u64, a: WireId) {
         if IR::HAS_GATE_COPY_MULTI {
             if n > 0 {
                 let out_first = out;
@@ -320,19 +320,19 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
-    fn and_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
+    fn and_gate_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
         for i in 0 .. n {
             self.gates.push(IR::gate_and(out + i, a + i, b + i));
         }
     }
 
-    fn xor_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
+    fn xor_gate_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
         for i in 0 .. n {
             self.gates.push(IR::gate_xor(out + i, a + i, b + i));
         }
     }
 
-    fn not_into(&mut self, out: WireId, n: u64, a: WireId) {
+    fn not_gate_into(&mut self, out: WireId, n: u64, a: WireId) {
         for i in 0 .. n {
             self.gates.push(IR::gate_not(out + i, a + i));
         }
@@ -488,26 +488,26 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let (output_count, input_count) = match desc {
             FunctionDesc::LitZero(n) => {
                 let [out] = sub_sink.alloc.preallocate([n]);
-                sub_sink.lit_zero_into(out, n);
+                sub_sink.lit_zero_gate_into(out, n);
                 (vec![n], vec![])
             },
 
             FunctionDesc::Private(n) => {
                 let [out] = sub_sink.alloc.preallocate([n]);
-                sub_sink.private_into(out, n);
+                sub_sink.private_gate_into(out, n);
                 private_count = n;
                 (vec![n], vec![])
             },
 
             FunctionDesc::Copy(n) => {
                 let [out, a] = sub_sink.alloc.preallocate([n, n]);
-                sub_sink.copy_into(out, n, a);
+                sub_sink.copy_gate_into(out, n, a);
                 (vec![n], vec![n])
             },
 
             FunctionDesc::And(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
-                sub_sink.and_into(out, n, a, b);
+                sub_sink.and_gate_into(out, n, a, b);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::Or(n) => {
@@ -515,60 +515,60 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 let a_inv = sub_sink.not(TEMP, n, a);
                 let b_inv = sub_sink.not(TEMP, n, b);
                 let ab_inv = sub_sink.and(TEMP, n, a_inv, b_inv);
-                sub_sink.not_into(out, n, ab_inv);
+                sub_sink.not_gate_into(out, n, ab_inv);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::Xor(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
-                sub_sink.xor_into(out, n, a, b);
+                sub_sink.xor_gate_into(out, n, a, b);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::Not(n) => {
                 let [out, a] = sub_sink.alloc.preallocate([n, n]);
-                sub_sink.not_into(out, n, a);
+                sub_sink.not_gate_into(out, n, a);
                 (vec![n], vec![n])
             },
 
             FunctionDesc::Add(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
                 let ab = arith::add(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::No);
-                sub_sink.copy_into(out, n, ab);
+                sub_sink.copy_gate_into(out, n, ab);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::AddNoWrap(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
                 let ab = arith::add(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::Yes);
-                sub_sink.copy_into(out, n, ab);
+                sub_sink.copy_gate_into(out, n, ab);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::Sub(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
                 let ab = arith::sub(&mut sub_sink, TEMP, n, a, b);
-                sub_sink.copy_into(out, n, ab);
+                sub_sink.copy_gate_into(out, n, ab);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::Mul(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
                 let ab = arith::mul(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::No);
-                sub_sink.copy_into(out, n, ab);
+                sub_sink.copy_gate_into(out, n, ab);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::MulNoWrap(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([n, n, n]);
                 let ab = arith::mul(&mut sub_sink, TEMP, n, a, b, AssertNoWrap::Yes);
-                sub_sink.copy_into(out, n, ab);
+                sub_sink.copy_gate_into(out, n, ab);
                 (vec![n], vec![n, n])
             },
             FunctionDesc::WideMul(n) => {
                 let [out, a, b] = sub_sink.alloc.preallocate([2 * n, n, n]);
                 let ab = arith::wide_mul(&mut sub_sink, TEMP, n, a, b);
-                sub_sink.copy_into(out, 2 * n, ab);
+                sub_sink.copy_gate_into(out, 2 * n, ab);
                 (vec![2 * n], vec![n, n])
             },
             FunctionDesc::Neg(n) => {
                 let [out, a] = sub_sink.alloc.preallocate([n, n]);
                 let a_neg = arith::neg(&mut sub_sink, TEMP, n, a);
-                sub_sink.copy_into(out, n, a_neg);
+                sub_sink.copy_gate_into(out, n, a_neg);
                 (vec![n], vec![n])
             },
             FunctionDesc::Mux(n) => {
@@ -576,7 +576,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 // the `mux_v0` plugin.
                 let [out, c, e, t] = sub_sink.alloc.preallocate([n, 1, n, n]);
                 let mux = ops::mux(&mut sub_sink, TEMP, n, c, t, e);
-                sub_sink.copy_into(out, n, mux);
+                sub_sink.copy_gate_into(out, n, mux);
                 (vec![n], vec![1, n, n])
             },
 
@@ -598,28 +598,28 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             FunctionDesc::PermuteSwitch(n) => {
                 let [out, inp] = sub_sink.alloc.preallocate([2 * n, 2 * n]);
                 let swap = sub_sink.alloc_wires(TEMP, 1);
-                sub_sink.private_into(swap, 1);
-                sub_sink.call_into(out, FunctionDesc::Mux(n), &[swap, inp, inp + n]);
-                sub_sink.call_into(out + n, FunctionDesc::Mux(n), &[swap, inp + n, inp]);
+                sub_sink.private_gate_into(swap, 1);
+                sub_sink.call_gate_into(out, FunctionDesc::Mux(n), &[swap, inp, inp + n]);
+                sub_sink.call_gate_into(out + n, FunctionDesc::Mux(n), &[swap, inp + n, inp]);
                 (vec![2 * n], vec![2 * n])
             },
             FunctionDesc::PermuteSwitches(n, m) => {
                 let [out, inp] = sub_sink.alloc.preallocate([n * 2 * m as u64, n * 2 * m as u64]);
                 if m <= 4 {
                     for i in 0 .. m as u64 {
-                        sub_sink.call_into(
+                        sub_sink.call_gate_into(
                             out + n * 2 * i,
                             FunctionDesc::PermuteSwitch(n),
                             &[inp + n * 2 * i],
                         );
                     }
                 } else if m.is_power_of_two() {
-                    sub_sink.call_into(
+                    sub_sink.call_gate_into(
                         out,
                         FunctionDesc::PermuteSwitches(n, m / 2),
                         &[inp],
                     );
-                    sub_sink.call_into(
+                    sub_sink.call_gate_into(
                         out + n * m as u64,
                         FunctionDesc::PermuteSwitches(n, m / 2),
                         &[inp + n * m as u64],
@@ -631,7 +631,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     while m > 0 {
                         let cur = 1 << (31 - u32::leading_zeros(m));
                         debug_assert!(cur & m == cur);
-                        sub_sink.call_into(
+                        sub_sink.call_gate_into(
                             out + n * 2 * offset,
                             FunctionDesc::PermuteSwitches(n, cur),
                             &[inp + n * 2 * offset],
@@ -645,10 +645,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             FunctionDesc::PermuteSwitchPublic(n, swap) => {
                 let [out, inp] = sub_sink.alloc.preallocate([2 * n, 2 * n]);
                 if swap {
-                    sub_sink.copy_into(out, n, inp + n);
-                    sub_sink.copy_into(out + n, n, inp);
+                    sub_sink.copy_gate_into(out, n, inp + n);
+                    sub_sink.copy_gate_into(out + n, n, inp);
                 } else {
-                    sub_sink.copy_into(out, 2 * n, inp);
+                    sub_sink.copy_gate_into(out, 2 * n, inp);
                 }
                 (vec![2 * n], vec![2 * n])
             },
@@ -656,7 +656,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 let [out, inp] = sub_sink.alloc.preallocate([n * (1 << k), n * (1 << k)]);
                 let out_to_inp = permute_shuffle_sequence(k, flip);
                 for (i, &j) in out_to_inp.iter().enumerate() {
-                    sub_sink.call_into(
+                    sub_sink.call_gate_into(
                         out + n * i as u64,
                         FunctionDesc::Copy(n),
                         &[inp + n * j as u64],
@@ -703,12 +703,12 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             0 => return (vec![0], vec![0]),
             1 => {
                 let [out, inp] = self.alloc.preallocate([n, n]);
-                self.copy_into(out, n, inp);
+                self.copy_gate_into(out, n, inp);
                 return (vec![n], vec![n]);
             },
             2 => {
                 let [out, inp] = self.alloc.preallocate([2 * n, 2 * n]);
-                self.call_into(out, FunctionDesc::PermuteSwitch(n), &[inp]);
+                self.call_gate_into(out, FunctionDesc::PermuteSwitch(n), &[inp]);
                 return (vec![2 * n], vec![2 * n]);
             },
             _ => {},
@@ -725,14 +725,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         // Shuffle layer 0 pads out `inp` with zeros to reach `num_wires`.
         let mut now = 0;
         let mut cur = self.alloc_wires(now + 1, num_wires);
-        self.call_into(cur, FunctionDesc::PermuteLayerShuffle(n, m, 0), &[inp]);
+        self.call_gate_into(cur, FunctionDesc::PermuteLayerShuffle(n, m, 0), &[inp]);
 
         // TODO: insert deletes between layers (use `expire`/`advance`?)
         for l in 0 .. bn.num_layers {
             if l > 0 {
                 // Shuffle
                 let next = self.alloc_wires(now + 1, num_wires);
-                self.call_into(next, FunctionDesc::PermuteLayerShuffle(n, m, l), &[cur]);
+                self.call_gate_into(next, FunctionDesc::PermuteLayerShuffle(n, m, l), &[cur]);
 
                 cur = next;
                 now += 1;
@@ -747,7 +747,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     // Outputs of the last switch layer go directly to the function outputs.
                     out
                 };
-                self.call_into(next, FunctionDesc::PermuteLayerSwitches(n, m, l), &[cur]);
+                self.call_gate_into(next, FunctionDesc::PermuteLayerSwitches(n, m, l), &[cur]);
 
                 cur = next;
                 now += 1;
@@ -767,19 +767,19 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         // Get output from witness
         for i in 0 .. m as u64 {
-            self.call_into(out + i * n, FunctionDesc::Private(n), &[]);
+            self.call_gate_into(out + i * n, FunctionDesc::Private(n), &[]);
         }
 
         // Pad the rest of the wires with zero
         for i in m as u64 .. m_rounded as u64 {
-            self.call_into(out + i * n, FunctionDesc::LitZero(n), &[]);
+            self.call_gate_into(out + i * n, FunctionDesc::LitZero(n), &[]);
         }
 
         // Allocate a dummy wire to hold to outcome of the assertion
         let assert_out = self.alloc_wires(TEMP, 0);
         
         // Call assert_permute. Assert_permute plugin doesn't have an output
-        self.call_into(assert_out, FunctionDesc::AssertPermute(n, m), &[inp1, out]);
+        self.call_gate_into(assert_out, FunctionDesc::AssertPermute(n, m), &[inp1, out]);
 
         (vec![num_wires], vec![n * m as u64])
     }
@@ -794,10 +794,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
             // Pad out `inp` with zeros to reach `num_wires`.
             for i in 0 .. m as u64 {
-                self.call_into(out + n * i, FunctionDesc::Copy(n), &[inp + n * i]);
+                self.call_gate_into(out + n * i, FunctionDesc::Copy(n), &[inp + n * i]);
             }
             for i in m as u64 .. m_rounded as u64 {
-                self.call_into(out + n * i, FunctionDesc::LitZero(n), &[]);
+                self.call_gate_into(out + n * i, FunctionDesc::LitZero(n), &[]);
             }
 
             (vec![n * m_rounded as u64], vec![n * m as u64])
@@ -815,7 +815,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
             let idx = self.get_function(FunctionDesc::PermuteShuffle(n, k, flip));
             for item_idx in (0 .. 2 * bn.layer_size as u64).step_by(1 << k) {
-                self.call_idx_into(
+                self.call_gate_idx_into(
                     out + n * item_idx,
                     idx,
                     &[inp + n * item_idx],
@@ -845,7 +845,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
                 let end = i;
 
-                self.call_into(
+                self.call_gate_into(
                     out + n * 2 * start as u64,
                     FunctionDesc::PermuteSwitches(n, (end - start) as u32),
                     &[inp + n * 2 * start as u64],
@@ -853,7 +853,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
             } else {
                 let swap = flags.contains(benes::SwitchFlags::F_SWAP);
-                self.call_into(
+                self.call_gate_into(
                     out + n * 2 * i as u64,
                     FunctionDesc::PermuteSwitchPublic(n, swap),
                     &[inp + n * 2 * i as u64],
@@ -888,21 +888,21 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             return 0;
         }
         let out = self.alloc_wires(expire, total_out);
-        self.call_idx_into(out, idx, args);
+        self.call_gate_idx_into(out, idx, args);
         out
     }
 
-    fn call_into(
+    fn call_gate_into(
         &mut self,
         out: WireId,
         desc: FunctionDesc,
         args: &[WireId],
     ) {
         let idx = self.get_function(desc);
-        self.call_idx_into(out, idx, args);
+        self.call_gate_idx_into(out, idx, args);
     }
 
-    fn call_idx_into(
+    fn call_gate_idx_into(
         &mut self,
         out: WireId,
         idx: usize,
@@ -999,16 +999,16 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         for &(source, n) in entries {
             match source {
                 Source::Zero => {
-                    self.lit_zero_into(w + pos, n);
+                    self.lit_zero_gate_into(w + pos, n);
                 },
                 Source::One => {
-                    self.lit_one_into(w + pos, n);
+                    self.lit_one_gate_into(w + pos, n);
                 },
                 Source::Wires(a) => {
-                    self.copy_into(w + pos, n, a);
+                    self.copy_gate_into(w + pos, n, a);
                 },
                 Source::RepWire(a) => {
-                    self.rep_into(w + pos, n, a);
+                    self.rep_gate_into(w + pos, n, a);
                 },
             }
             pos += n;
