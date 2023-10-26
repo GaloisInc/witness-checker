@@ -65,6 +65,11 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("DIR/")
              .help("output boolean SIEVE IR v2 (IR0+) circuit representation in this directory"))
+        .arg(Arg::with_name("boolean-sieve-ir-v3-out")
+             .long("boolean-sieve-ir-v3-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output boolean SIEVE IR v3 (Phaes 3 Circuit IR) circuit representation in this directory"))
         .arg(Arg::with_name("field-modulus")
              .long("field-modulus")
              .takes_value(true)
@@ -253,6 +258,10 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
             assert!(modulus.is_none(),
                 "--field-modulus is not supported with --boolean-sieve-ir-v2-out");
             back::new_boolean_sieve_ir_v2(workspace, use_plugins)
+        } else if let Some(workspace) = args.value_of("boolean-sieve-ir-v3-out") {
+            assert!(modulus.is_none(),
+                "--field-modulus is not supported with --boolean-sieve-ir-v3-out");
+            back::new_boolean_sieve_ir_v3(workspace, use_plugins)
         } else if let Some(dest) = args.value_of_os("zkif-out") {
             assert!(modulus.is_none(), "--field-modulus is not supported with --zkif-out");
             back::new_zkif(dest)

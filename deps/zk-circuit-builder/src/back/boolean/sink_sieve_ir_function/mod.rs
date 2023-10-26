@@ -21,6 +21,9 @@ pub use self::v1::SieveIrV1;
 mod v2;
 pub use self::v2::SieveIrV2;
 
+mod v3;
+pub use self::v3::SieveIrV3;
+
 pub trait SieveIrFormat {
     type Gate: std::fmt::Debug;
     type Function;
@@ -104,8 +107,9 @@ pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     _marker: PhantomData<IR>,
 }
 
-pub type SieveIrV1Sink<S> = SieveIrFunctionSink<S, v1::SieveIrV1>;
+pub type SieveIrV1Sink<S> = SieveIrFunctionSink<S, SieveIrV1>;
 pub type SieveIrV2Sink<S> = SieveIrFunctionSink<S, SieveIrV2>;
+pub type SieveIrV3Sink<S> = SieveIrFunctionSink<S, SieveIrV3>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum FunctionDesc {
@@ -266,14 +270,53 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     }
 
     fn private_into(&mut self, out: WireId, n: u64) {
-        for i in 0 .. n {
-            self.gates.push(IR::gate_private(out + i));
+        if IR::HAS_GATE_PRIVATE_MULTI {
+            if n > 0 {
+                let first = out;
+                let last = first + n - 1;
+                self.gates.push(IR::gate_private_multi((first, last)));
+            }
+        } else {
+            for i in 0 .. n {
+                self.gates.push(IR::gate_private(out + i));
+            }
         }
     }
 
     fn copy_into(&mut self, out: WireId, n: u64, a: WireId) {
-        for i in 0 .. n {
-            self.gates.push(IR::gate_copy(out + i, a + i));
+        if IR::HAS_GATE_COPY_MULTI {
+            if n > 0 {
+                let out_first = out;
+                let out_last = out_first + n - 1;
+                let a_first = a;
+                let a_last = a_first + n - 1;
+                self.gates.push(IR::gate_copy_multi(
+                    (out_first, out_last),
+                    iter::once((a_first, a_last)),
+                ));
+            }
+        } else {
+            for i in 0 .. n {
+                self.gates.push(IR::gate_copy(out + i, a + i));
+            }
+        }
+    }
+
+    /// Copy `n` copies of wire `a` (a single wire) into `out .. out + n`.
+    fn rep_into(&mut self, out: WireId, n: u64, a: WireId) {
+        if IR::HAS_GATE_COPY_MULTI {
+            if n > 0 {
+                let out_first = out;
+                let out_last = out_first + n - 1;
+                self.gates.push(IR::gate_copy_multi(
+                    (out_first, out_last),
+                    iter::repeat((a, a)).take(n as usize),
+                ));
+            }
+        } else {
+            for i in 0 .. n {
+                self.gates.push(IR::gate_copy(out + i, a));
+            }
         }
     }
 
@@ -965,9 +1008,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     self.copy_into(w + pos, n, a);
                 },
                 Source::RepWire(a) => {
-                    for i in 0 .. n {
-                        self.gates.push(IR::gate_copy(w + pos + i, a));
-                    }
+                    self.rep_into(w + pos, n, a);
                 },
             }
             pos += n;
@@ -1303,6 +1344,141 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
                 break;
             }
             self.emit_sieve_v2(chunk_directives);
+        }
+
+        if self.private_bits.len() > 0 {
+            let mut private_bits_iter = mem::take(&mut self.private_bits).into_iter();
+            loop {
+                let chunk_inputs = private_bits_iter.by_ref().take(GATE_PAGE_SIZE)
+                    .map(|b| vec![b as u8])
+                    .collect::<Vec<_>>();
+                if chunk_inputs.len() == 0 {
+                    break;
+                }
+                let p = PrivateInputs {
+                    version: IR_VERSION.to_string(),
+                    type_value: Type::Field(vec![2]),
+                    inputs: chunk_inputs,
+                };
+                self.sink.push_private_inputs_message(&p).unwrap();
+            }
+        }
+    }
+}
+
+impl<S: zki_sieve_v5::Sink> SieveIrFunctionSink<S, SieveIrV3> {
+    fn emit_sieve_v3(&mut self, directives: Vec<zki_sieve_v5::structs::directives::Directive>) {
+        use zki_sieve_v5::structs::IR_VERSION;
+        use zki_sieve_v5::structs::public_inputs::PublicInputs;
+        use zki_sieve_v5::structs::relation::Relation;
+        use zki_sieve_v5::structs::types::Type;
+
+        // Build and emit the messages
+        let mut r = Relation {
+            version: IR_VERSION.to_string(),
+            plugins: Vec::new(),
+            types: Vec::new(),
+            conversions: Vec::new(),
+            directives,
+        };
+        if !self.emitted_relation {
+            if self.use_plugin_mux_v0 {
+                r.plugins.push("mux_v0".into());
+            }
+            if self.use_plugin_permutation_check_v1 {
+                r.plugins.push("permutation_check_v1".into());
+            }
+            r.types = vec![Type::Field(vec![2])];
+
+            // Ensure every circuit contains at least one public input message.
+            let p = PublicInputs {
+                version: IR_VERSION.to_string(),
+                type_value: Type::Field(vec![2]),
+                inputs: vec![],
+            };
+            self.sink.push_public_inputs_message(&p).unwrap();
+        }
+        self.sink.push_relation_message(&r).unwrap();
+        self.emitted_relation = true;
+    }
+}
+
+impl<S: zki_sieve_v5::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV3> {
+    fn flush(&mut self, free_all_pages: bool) {
+        use zki_sieve_v5::structs::IR_VERSION;
+        use zki_sieve_v5::structs::directives::Directive;
+        use zki_sieve_v5::structs::function::FunctionBody;
+        use zki_sieve_v5::structs::gates::Gate;
+        use zki_sieve_v5::structs::private_inputs::PrivateInputs;
+        use zki_sieve_v5::structs::types::Type;
+
+
+        // Flush functions first.  Function definitions can always be moved earlier relative to
+        // gates, so we do these first to make it easier to break up the function definitions into
+        // separate messages if needed.
+        let functions = mem::take(&mut self.functions);
+        if functions.len() > 0 {
+            let mut directives = Vec::with_capacity(functions.len());
+            let mut total_gates = 0;
+            let mut emit_directive = |d, len| {
+                if directives.len() > 0 && total_gates + len > GATE_PAGE_SIZE {
+                    self.emit_sieve_v3(mem::take(&mut directives));
+                    total_gates = 0;
+                }
+                directives.push(d);
+                total_gates += len;
+            };
+
+            for function in functions {
+                let len = match function.body {
+                    FunctionBody::Gates(ref gates) => gates.len(),
+                    // We give `PluginBody` a positive cost to bound the number that can be placed
+                    // in a single message.
+                    FunctionBody::PluginBody(_) => 1,
+                };
+                if len > GATE_PAGE_SIZE {
+                    eprintln!("warning: big function: {:?} has {} gates", function.name, len);
+                }
+                emit_directive(Directive::Function(function), len);
+            }
+            if directives.len() > 0 {
+                self.emit_sieve_v3(directives);
+            }
+        }
+
+
+        let allocs = self.alloc.flush();
+
+        if free_all_pages {
+            for free in self.alloc.take_frees() {
+                if free.start != free.end {
+                    self.gates.push(Gate::Delete(0, free.start, free.end - 1));
+                }
+            }
+        }
+
+        let mut directives = Vec::with_capacity(self.gates.len() + allocs.len());
+        let mut iter = mem::take(&mut self.gates).into_iter();
+        let mut prev = 0;
+        for alloc in allocs {
+            let n = alloc.pos - prev;
+            directives.extend(iter.by_ref().take(n).map(|g| Directive::Gate(g)));
+            prev = alloc.pos;
+
+            if alloc.start != alloc.end {
+                directives.push(Directive::Gate(Gate::New(0, alloc.start, alloc.end - 1)));
+            }
+        }
+        directives.extend(iter.map(|g| Directive::Gate(g)));
+
+        let mut directives_iter = directives.into_iter();
+        loop {
+            let chunk_directives =
+                directives_iter.by_ref().take(GATE_PAGE_SIZE).collect::<Vec<_>>();
+            if chunk_directives.len() == 0 {
+                break;
+            }
+            self.emit_sieve_v3(chunk_directives);
         }
 
         if self.private_bits.len() > 0 {
