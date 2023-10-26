@@ -606,6 +606,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "flatbuffers"
+version = "23.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77f5399c2c9c50ae9418e522842ad362f61ee48b346ac106807bd355a8a7c619"
+dependencies = [
+ "bitflags 1.3.2",
+ "rustc_version",
+]
+
+[[package]]
 name = "funty"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1800,6 +1810,7 @@ dependencies = [
  "subtle",
  "zki_sieve 1.0.0",
  "zki_sieve 3.0.0",
+ "zki_sieve 5.0.0",
  "zkinterface",
  "zkinterface_bellman",
 ]
@@ -1827,6 +1838,24 @@ version = "3.0.0"
 dependencies = [
  "colored",
  "flatbuffers 0.6.1",
+ "itertools",
+ "num-bigint 0.3.3",
+ "num-bigint-dig",
+ "num-traits",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "structopt",
+ "zkinterface",
+]
+
+[[package]]
+name = "zki_sieve"
+version = "5.0.0"
+dependencies = [
+ "colored",
+ "flatbuffers 23.1.21",
  "itertools",
  "num-bigint 0.3.3",
  "num-bigint-dig",
