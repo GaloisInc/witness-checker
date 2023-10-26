@@ -1,10 +1,11 @@
+use crate::ir::typed::{Builder, BuilderExt, LazySecret, TWire, Repr};
 
-use crate::ir::typed::{Builder, TWire, Repr};
-
-use std::marker::PhantomData;
-
-pub struct ROM<'a,T> {
-    phantom: PhantomData<&'a T>,
+pub struct ROMCircuitBuilder<'a, T>
+where
+    T: for<'b> LazySecret<'b> + Copy,
+    <T as Repr<'a>>::Repr: Copy,
+{
+    ports: Vec<(TWire<'a, u64>, TWire<'a, T>)>,
 }
 
 impl<'a, T: Repr<'a>> ROM<'a, T> {
@@ -24,4 +25,3 @@ impl<'a, T: Repr<'a>> ROM<'a, T> {
         unimplemented!{}
     }
 }
-
