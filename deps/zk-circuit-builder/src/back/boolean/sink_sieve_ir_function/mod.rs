@@ -49,6 +49,7 @@ pub trait SieveIrFormat {
     // Multi-wire variants of `gate_private` and `gate_copy`, as defined in the Phase 3 circuit IR.
     const HAS_GATE_PRIVATE_MULTI: bool = false;
     fn gate_private_multi(out: (WireId, WireId)) -> Self::Gate {
+        #![allow(unused_variables)]
         panic!("gate_private_multi is not supported");
     }
     const HAS_GATE_COPY_MULTI: bool = false;
@@ -56,6 +57,7 @@ pub trait SieveIrFormat {
         out: (WireId, WireId),
         a: impl IntoIterator<Item = (WireId, WireId)>,
     ) -> Self::Gate {
+        #![allow(unused_variables)]
         panic!("gate_copy_multi is not supported");
     }
 
@@ -335,6 +337,22 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn not_gate_into(&mut self, out: WireId, n: u64, a: WireId) {
         for i in 0 .. n {
             self.gates.push(IR::gate_not(out + i, a + i));
+        }
+    }
+
+    fn private_into(&mut self, out: WireId, n: u64) {
+        if IR::HAS_GATE_PRIVATE_MULTI || n <= 1 {
+            self.private_gate_into(out, n);
+        } else {
+            self.call_gate_into(out, FunctionDesc::Private(n), &[])
+        }
+    }
+
+    fn copy_into(&mut self, out: WireId, n: u64, a: WireId) {
+        if IR::HAS_GATE_COPY_MULTI || n <= 1 {
+            self.copy_gate_into(out, n, a);
+        } else {
+            self.call_gate_into(out, FunctionDesc::Copy(n), &[a])
         }
     }
 
@@ -656,10 +674,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 let [out, inp] = sub_sink.alloc.preallocate([n * (1 << k), n * (1 << k)]);
                 let out_to_inp = permute_shuffle_sequence(k, flip);
                 for (i, &j) in out_to_inp.iter().enumerate() {
-                    sub_sink.call_gate_into(
+                    sub_sink.copy_into(
                         out + n * i as u64,
-                        FunctionDesc::Copy(n),
-                        &[inp + n * j as u64],
+                        n,
+                        inp + n * j as u64,
                     );
                 }
                 (vec![n * (1 << k)], vec![n * (1 << k)])
@@ -767,7 +785,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         // Get output from witness
         for i in 0 .. m as u64 {
-            self.call_gate_into(out + i * n, FunctionDesc::Private(n), &[]);
+            self.private_into(out + i * n, n);
         }
 
         // Pad the rest of the wires with zero
@@ -794,7 +812,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
             // Pad out `inp` with zeros to reach `num_wires`.
             for i in 0 .. m as u64 {
-                self.call_gate_into(out + n * i, FunctionDesc::Copy(n), &[inp + n * i]);
+                self.copy_into(out + n * i, n, inp + n * i);
             }
             for i in m as u64 .. m_rounded as u64 {
                 self.call_gate_into(out + n * i, FunctionDesc::LitZero(n), &[]);
@@ -982,7 +1000,9 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         w
     }
     fn private(&mut self, expire: Time, n: u64) -> WireId {
-        self.emit_call(expire, FunctionDesc::Private(n), &[])
+        let out = self.alloc_wires(expire, n);
+        self.private_into(out, n);
+        out
     }
     fn private_value(&mut self, n: u64, value: Bits) {
         for i in 0 .. n {
@@ -990,7 +1010,9 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
     fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
-        self.emit_call(expire, FunctionDesc::Copy(n), &[a])
+        let out = self.alloc_wires(expire, n);
+        self.copy_into(out, n, a);
+        out
     }
     fn concat_chunks(&mut self, expire: Time, entries: &[(Source, u64)]) -> WireId {
         let total = entries.iter().map(|&(_, n)| n).sum();
@@ -1089,13 +1111,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         let (mut sub_sink, out_wire) = build(sub_sink, &arg_wires);
         if return_n > 0 {
-            let idx = sub_sink.get_function(FunctionDesc::Copy(return_n));
-            let info = &sub_sink.func_info[idx];
-            sub_sink.gates.push(IR::gate_call(
-                info.name.clone(),
-                iter::once((return_wire, return_wire + return_n - 1)),
-                iter::once((out_wire, out_wire + return_n - 1)),
-            ));
+            sub_sink.copy_into(return_wire, return_n, out_wire);
         }
 
         let zki_sink = self.finish_sub_sink(sub_sink);
