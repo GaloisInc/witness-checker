@@ -798,14 +798,14 @@ pub fn prime_field_bits_to_bigint<'a>(c: &CircuitBase<'a>, a: Bits<'a>, width: I
         let mut acc = BigUint::zero();
 
         let digits = a.into_int();
-        let digits: &[u64; LIMBS] = digits.as_words();
+        let digits: &[crypto_bigint::Word; LIMBS] = digits.as_words();
 
         for &d in digits.iter().rev() {
-            acc <<= usize::BITS;
+            acc <<= crypto_bigint::Word::BITS;
             acc |= BigUint::from(d);
         }
 
-        let one = BigUint::from(1_u64);
+        let one = BigUint::from(1 as crypto_bigint::Word);
         let mask = (&one << width.bits() as usize) - &one;
 
         acc & mask
