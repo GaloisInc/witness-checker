@@ -10,10 +10,11 @@ default-run = "cheesecloth"
 default = []
 bellman = ["zk-circuit-builder/bellman"]
 sieve_ir = ["zk-circuit-builder/sieve_ir"]
-gf_scuttlebutt = ["zk-circuit-builder/gf_scuttlebutt"]
+gf_scuttlebutt = ["scuttlebutt", "zk-circuit-builder/gf_scuttlebutt"]
 
 [dependencies]
 zk-circuit-builder = { path = "deps/zk-circuit-builder", default-features = false, features = ["f128p"] }
+scuttlebutt = { path = "deps/swanky/scuttlebutt", optional = true }
 
 # Note: This is an older version of arrayvec, compatible with older Rust
 arrayvec = "0.5.2"

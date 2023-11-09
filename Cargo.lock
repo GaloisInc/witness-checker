@@ -243,6 +243,7 @@ dependencies = [
  "log",
  "num-bigint 0.3.3",
  "num-traits",
+ "scuttlebutt",
  "serde",
  "serde_cbor",
  "serde_json",

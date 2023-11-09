@@ -7,6 +7,7 @@ use crate::eval::bigint_to_prime_field_bits;
 use crate::ir::migrate::{self, Migrate};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::collections::HashMap;
 
 trait AsField {
     const AS_FIELD: Field;
@@ -118,13 +119,25 @@ where
 //
 //   Q: Also, do wires that have been elaborated away (like `Lit(1, U64)` above) get de-allocated? Will my map
 //      grow to the size of the entire circuit?
-pub struct IntFieldArith<F, P> {
+struct NumBounds {
+    valid_bits: u16,
+    real_bits: u16,
+}
+
+pub struct IntFieldArith<'a, F, P> {
     inner: F,
     _field: PhantomData<P>,
     active: bool,
+    bounds: HashMap<Wire<'a>, NumBounds>,
+}
+
+impl<'a, F, P> IntFieldArith<'a, F, P> {
+    pub fn new(inner: F, active: bool) -> Self {
+        IntFieldArith { inner, _field: PhantomData::<P>, active, bounds: HashMap::new() }
+    }
 }
     
-impl<'a, F: CircuitFilter<'a> + 'a, P: PrimeFiniteField + AsField + FromBits + AsBits> CircuitFilter<'a> for IntFieldArith<F, P>
+impl<'a, F: CircuitFilter<'a> + 'a, P: PrimeFiniteField + AsField + FromBits + AsBits> CircuitFilter<'a> for IntFieldArith<'a, F, P>
 where F: Migrate<'a, 'a, Output = F>,
       P::Error: Debug,
 {
@@ -141,12 +154,22 @@ where F: Migrate<'a, 'a, Output = F>,
     }
 }
 
-impl<'a, 'b, F, P> Migrate<'a, 'b> for IntFieldArith<F, P>
+impl<'a, 'b, F, P> Migrate<'a, 'b> for IntFieldArith<'a, F, P>
 where
     F: Migrate<'a, 'b>,
 {
-    type Output = IntFieldArith<F::Output, P>;
+    type Output = IntFieldArith<'b, F::Output, P>;
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Self::Output {
-        IntFieldArith { inner: v.visit(self.inner), _field: PhantomData::<P>, active: self.active }
+        let mut bounds = HashMap::new();
+        for (old_wire, old_repr) in self.bounds {
+            let new_wire = match v.visit_wire_weak(old_wire) {
+                Some(x) => x,
+                None => continue,
+            };
+            
+            bounds.insert(new_wire, old_repr);
+        }
+        
+        IntFieldArith { inner: v.visit(self.inner), _field: PhantomData::<P>, active: self.active, bounds }
     }
 }

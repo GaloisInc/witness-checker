@@ -31,6 +31,8 @@ use cheesecloth::micro_ram::witness::MultiExecWitness;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
+#[cfg(feature = "gf_scuttlebutt")]
+use scuttlebutt::field::F128p;
 
 fn parse_args() -> ArgMatches<'static> {
     App::new("witness-checker")
@@ -315,7 +317,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
     #[cfg(feature = "gf_scuttlebutt")]
-    let cf = lower::int_field_arith::IntFieldArith { inner: cf, _field: PhantomData::<F128p>, active: true };
+    let cf = lower::int_field_arith::IntFieldArith::<_, F128p>::new(cf, true);
     let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf)
         .set_allow_functions(backend.has_feature(BackendFeature::Function))
         .set_allow_switches(backend.has_feature(BackendFeature::Switch));
