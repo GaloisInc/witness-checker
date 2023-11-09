@@ -1,10 +1,12 @@
 use num_bigint::{BigUint, ToBigInt};
 use num_traits::Zero;
-use scuttlebutt::ring::FiniteRing;
+use scuttlebutt::field::PrimeFiniteField;
 use scuttlebutt::field::F128p;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize, Ty};
 use crate::eval::bigint_to_prime_field_bits;
 use crate::ir::migrate::{self, Migrate};
+use std::fmt::Debug;
+use std::marker::PhantomData;
 
 trait AsField {
     const AS_FIELD: Field;
@@ -14,16 +16,19 @@ impl AsField for F128p {
     const AS_FIELD: Field = Field::F128p;
 }
 
-fn int_field_arith<'a, F: FiniteRing + AsField + FromBits + AsBits>(
+fn int_field_arith<'a, F: PrimeFiniteField + AsField + FromBits + AsBits>(
     c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
     gk: GateKind<'a>,
-) -> Wire<'a> {
+) -> Wire<'a>
+where
+    F::Error: Debug,
+{
     let ty = gk.ty(c);
     let field_ty = c.ty(TyKind::GF(F::AS_FIELD));
     match gk {
         GateKind::Unary(Neg, a) if ty.is_integer() => {
             let a_f = c.cast(a, field_ty);
-            let two_f = F::ONE + F::ONE;
+            let two_f = F::try_from(2 as u128).unwrap();
             let max_f = c.lit(field_ty, two_f.pow(ty.integer_size().bits() as u128));
             let neg_a_f = c.sub(max_f, a_f);
             c.cast(neg_a_f, ty)
@@ -97,7 +102,6 @@ fn int_field_arith<'a, F: FiniteRing + AsField + FromBits + AsBits>(
     }
 }
 
-// TODO(isweet): Consider making the field a phantom type instead
 // TODO(isweet): Add `HashMap<Wire<'a>, ...>` to implement lazy truncation.
 //   Q: What order are passes executed in? Does this pass need to be last to work
 //      correctly? My concern is that I'll map some wire `a` to a value, and then `a`
@@ -114,28 +118,35 @@ fn int_field_arith<'a, F: FiniteRing + AsField + FromBits + AsBits>(
 //
 //   Q: Also, do wires that have been elaborated away (like `Lit(1, U64)` above) get de-allocated? Will my map
 //      grow to the size of the entire circuit?
-pub struct IntFieldArith<F>(pub F, pub Option<Field>);
-
-impl<'a, F: CircuitFilter<'a> + 'a> CircuitFilter<'a> for IntFieldArith<F>
-where F: Migrate<'a, 'a, Output = F> {
+pub struct IntFieldArith<F, P> {
+    inner: F,
+    _field: PhantomData<P>,
+    active: bool,
+}
+    
+impl<'a, F: CircuitFilter<'a> + 'a, P: PrimeFiniteField + AsField + FromBits + AsBits> CircuitFilter<'a> for IntFieldArith<F, P>
+where F: Migrate<'a, 'a, Output = F>,
+      P::Error: Debug,
+{
     circuit_filter_common_methods!();
 
     fn gate(&self, base: &CircuitBase<'a>, gk: GateKind<'a>) -> Wire<'a> {
-        let c = CircuitRef { base, filter: &self.0 };
-        match self.1 {
-            None => c.gate(gk),
-            Some(Field::F128p) => int_field_arith::<F128p>(&c, gk),
-            _ => unimplemented!()
+        let c = CircuitRef { base, filter: &self.inner };
+
+        if self.active {
+            return int_field_arith::<P>(&c, gk);
         }
+
+        c.gate(gk)
     }
 }
 
-impl<'a, 'b, F> Migrate<'a, 'b> for IntFieldArith<F>
+impl<'a, 'b, F, P> Migrate<'a, 'b> for IntFieldArith<F, P>
 where
     F: Migrate<'a, 'b>,
 {
-    type Output = IntFieldArith<F::Output>;
+    type Output = IntFieldArith<F::Output, P>;
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> Self::Output {
-        IntFieldArith(v.visit(self.0), self.1)
+        IntFieldArith { inner: v.visit(self.inner), _field: PhantomData::<P>, active: self.active }
     }
 }
