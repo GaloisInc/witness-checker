@@ -167,6 +167,7 @@ where
     T: Repr<'a>,
 {
     ports: Vec<TWire<'a, ROMPort<T>>>,
+    sizes: Vec<usize>,
     length: u64,
 }
 
@@ -190,7 +191,7 @@ where
         let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(self.ports.clone());
         let inp: TWire<(u64, Vec<ROMPort<T>>)> = TWire::new((index, ports));
         // JP: Should this be `secret_derived`?
-        let val: TWire<'a, T> = b.secret_derived_sized(&[self.ports.len()], inp, move |(i, ps)| {
+        let val: TWire<'a, T> = b.secret_derived_sized(&self.sizes, inp, move |(i, ps)| {
             ps[i as usize].val.clone()
         });
 
@@ -213,17 +214,23 @@ where
 {
     pub fn new(b: &impl Builder<'a>, values: Vec<TWire<'a, T>>) -> ROM<'a, T> {
         let length = values.len() as u64;
+        let mut sizes = Vec::new();
+
         let ports = values
             .into_iter()
             .enumerate()
             .map(|(i, v)| {
+                let size = T::num_sizes(&v.repr);
+                sizes.push(size);
+
                 TWire::new(ROMPortRepr {
                     addr: b.lit(i as u64),
                     val: v,
                 })
             })
             .collect();
-        ROM { ports, length }
+
+        ROM { ports, length, sizes }
     }
 
     pub fn finalize(self, b: &'a impl Builder<'a>) -> TWire<bool> {
