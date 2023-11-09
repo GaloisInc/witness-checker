@@ -237,7 +237,6 @@ where
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
 
-        // JP: Why does ROMPort need to implement LE?
         // Step 1: Sort Memory Accesses
         // Instead of handling memory accesses in the order they're executed,
         // the circuit first sorts all memory accesses by address.
