@@ -71,20 +71,25 @@ where
                 let rem = if b.is_zero() { a } else { a % b };
                 bigint_to_prime_field_bits(c, rem.to_bigint().unwrap(), width, F::AS_FIELD)
             });
+            
             let a_f = c.cast(a, field_ty);            
             let b_f = c.cast(b, field_ty);
-            let quot_times_denom_f = c.mul(quot_f, b_f);
-            let num_minus_rem_f = c.sub(a_f, rem_f);
-            let diff_all = c.sub(quot_times_denom_f, num_minus_rem_f);
+            let quot_times_denom_f = c.mul(quot_f, b_f);               // q * b
+            let num_minus_rem_f = c.sub(a_f, rem_f);                   // a - r
+            let diff_all = c.sub(quot_times_denom_f, num_minus_rem_f); // (q * b) - (a - r)
+
+            let width = (*b.ty).integer_size().bits();
+            let neg_check_ty = c.ty(TyKind::Int(IntSize(width + 1)));
+            let rem_int = c.cast(rem_f, neg_check_ty);
+            let b_int = c.cast(b, neg_check_ty);
+            let rem_minus_denom = c.sub(rem_int, b_int);                                // r - b
+            let rem_minus_denom_is_neg = c.lt(rem_minus_denom, c.lit(neg_check_ty, 0)); // r - b < 0 (i.e. r < b)
+            let denom_zero = c.eq(b, c.lit(b.ty, 0));                                   // b == 0
+            let ok = c.or(rem_minus_denom_is_neg, denom_zero);                          // r < b \/ b == 0
+            
+            // Asserts that q * b - (a - r) == 0 (which implies that a == q * b + r)
             c.seq(c.assert_zero(diff_all), {
-                let width = (*b.ty).integer_size().bits();
-                let neg_check_ty = c.ty(TyKind::Int(IntSize(width + 1)));
-                let rem_int = c.cast(rem_f, neg_check_ty);
-                let b_int = c.cast(b, neg_check_ty);
-                let rem_minus_denom = c.sub(rem_int, b_int);
-                let rem_minus_denom_is_neg = c.lt(rem_minus_denom, c.lit(neg_check_ty, 0));
-                let denom_zero = c.eq(b, c.lit(b.ty, 0));
-                let ok = c.or(rem_minus_denom_is_neg, denom_zero);
+                // Asserts that either the remainder is less than the denominator, or the denominator is zero
                 c.seq(c.assert_zero(c.not(ok)), c.cast(match op {
                     Div => quot_f,
                     Mod => rem_f,

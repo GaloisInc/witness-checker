@@ -18,7 +18,7 @@ macro_rules! init_circuit {
         let $expected = &c_e;
 
         let arenas_a = Arenas::new();
-        let cf_a = IntFieldArith(FilterNil, Some(Field::F128p));
+        let cf_a = IntFieldArith::<_, F128p>::new(FilterNil, true);
         let c_a = Circuit::new::<()>(&arenas_a, true, cf_a);
         let $actual = &c_a;
     }
