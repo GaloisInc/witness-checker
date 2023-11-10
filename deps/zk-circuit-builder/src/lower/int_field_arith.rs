@@ -8,6 +8,7 @@ use crate::ir::migrate::{self, Migrate};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::collections::HashMap;
+use std::convert::TryInto;
 
 trait AsField {
     const AS_FIELD: Field;
@@ -57,26 +58,18 @@ where
         GateKind::Binary(op @ Div, a, b) | GateKind::Binary(op @ Mod, a, b) if ty.is_uint() => {
             let width = ty.integer_size();
             let quot_f = c.secret_derived(field_ty, c.wire_list(&[a, b]), move |c, vs| {
-                match vs {
-                    [a_bits, b_bits] => {
-                        let a = a_bits.to_biguint();
-                        let b = b_bits.to_biguint();
-                        let quot = if b.is_zero() { BigUint::zero() } else { a / b };
-                        bigint_to_prime_field_bits(c, quot.to_bigint().unwrap(), width, F::AS_FIELD)
-                    }
-                    _ => unreachable!(),
-                }
+                let [a_bits, b_bits]: [Bits; 2] = vs.try_into().unwrap();
+                let a = a_bits.to_biguint();
+                let b = b_bits.to_biguint();
+                let quot = if b.is_zero() { BigUint::zero() } else { a / b };
+                bigint_to_prime_field_bits(c, quot.to_bigint().unwrap(), width, F::AS_FIELD)
             });
             let rem_f = c.secret_derived(field_ty, c.wire_list(&[a, b]), move |c, vs| {
-                match vs {
-                    [a_bits, b_bits] => {
-                        let a = a_bits.to_biguint();
-                        let b = b_bits.to_biguint();
-                        let rem = if b.is_zero() { a } else { a % b };
-                        bigint_to_prime_field_bits(c, rem.to_bigint().unwrap(), width, F::AS_FIELD)
-                    }
-                    _ => unreachable!(),
-                }
+                let [a_bits, b_bits]: [Bits; 2] = vs.try_into().unwrap();
+                let a = a_bits.to_biguint();
+                let b = b_bits.to_biguint();
+                let rem = if b.is_zero() { a } else { a % b };
+                bigint_to_prime_field_bits(c, rem.to_bigint().unwrap(), width, F::AS_FIELD)
             });
             let a_f = c.cast(a, field_ty);            
             let b_f = c.cast(b, field_ty);
