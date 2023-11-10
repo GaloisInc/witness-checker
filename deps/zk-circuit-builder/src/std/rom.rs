@@ -162,6 +162,7 @@ where
     }
 }
 
+/// A struct representing a read-only memory whose access is verified in the circuit.
 pub struct ROM<'a, T>
 where
     T: Repr<'a>,
@@ -187,6 +188,7 @@ where
     <T as Repr<'a>>::Repr: Copy,
     T: for<'b> SecretDep<'b, Decoded = T>,
 {
+    /// Reads a wire value from ROM at the given `index`. Make sure to call `finalize` after all `load` calls. `index` must be in bounds, otherwise `finalize` will fail. 
     pub fn load(&mut self, b: &impl Builder<'a>, index: TWire<'a, u64>) -> TWire<'a, T> {
         let ports: TWire<'a, Vec<ROMPort<T>>> = TWire::new(self.ports.clone());
         let inp: TWire<(u64, Vec<ROMPort<T>>)> = TWire::new((index, ports));
@@ -212,6 +214,7 @@ where
     T: ToWireList<'a>,
     T: FromWireList<'a>,
 {
+    /// Create a `ROM` (read only memory) to obliviously read values from the provided `values` list.
     pub fn new(b: &impl Builder<'a>, values: Vec<TWire<'a, T>>) -> ROM<'a, T> {
         let length = values.len() as u64;
         let mut sizes = Vec::new();
@@ -233,6 +236,7 @@ where
         ROM { ports, length, sizes }
     }
 
+    /// Performs all necessary checks in the circuit to validate that all ROM reads are correctly executed via `load`. The caller is responsible for asserting that the returned boolean wire is `true`.
     pub fn finalize(self, b: &'a impl Builder<'a>) -> TWire<bool> {
         // Create secrets for sorted ROMPorts
         // If prover, sort ROMPorts and set corresponding secrets
