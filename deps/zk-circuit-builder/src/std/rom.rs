@@ -277,48 +277,35 @@ where
     }
 }
 
-pub struct Context<'a, 's> {
-    asserts: Vec<TWire<'a, bool>>,
-    eval: CachingEvaluator<'a, 's, eval::RevealSecrets>,
-}
-
-impl<'a, 's> Context<'a, 's> {
-    pub fn new<C: CircuitTrait<'a> + ?Sized>(_c: &'a C) -> Context<'a, 's> {
-        Context {
-            asserts: Vec::new(),
-            eval: CachingEvaluator::new(),
-        }
-    }
-    pub fn reveal<T: Repr<'a> + FromEval<'a> + Default, C: CircuitTrait<'a> + ?Sized>(
-        &mut self,
-        c: &'a C,
-        secret: TWire<'a, T>,
-        _b: &impl Builder<'a>,
-    ) -> T {
-        let res_plaintext = self.eval.eval_typed(c, secret);
-        match res_plaintext {
-            None => T::default(),
-            Some(b) => b,
-        }
-    }
-    pub fn finish<C: CircuitTrait<'a> + ?Sized>(mut self, c: &'a C, b: &impl Builder<'a>) -> bool {
-        let mut res: TWire<bool> = b.lit(true);
-        for cond in self.asserts.iter() {
-            res = b.and(res, *cond)
-        }
-        let res_plaintext = self.eval.eval_typed(c, res);
-        match res_plaintext {
-            None => false,
-            Some(b) => b,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::circuit::{Arenas, Circuit, FilterNil};
     use crate::ir::typed::BuilderImpl;
+
+    pub struct Context<'a, 's> {
+        eval: CachingEvaluator<'a, 's, eval::RevealSecrets>,
+    }
+    
+    impl<'a, 's> Context<'a, 's> {
+        pub fn new<C: CircuitTrait<'a> + ?Sized>(_c: &'a C) -> Context<'a, 's> {
+            Context {
+                eval: CachingEvaluator::new(),
+            }
+        }
+        pub fn reveal<T: Repr<'a> + FromEval<'a> + Default, C: CircuitTrait<'a> + ?Sized>(
+            &mut self,
+            c: &'a C,
+            secret: TWire<'a, T>,
+            _b: &impl Builder<'a>,
+        ) -> T {
+            let res_plaintext = self.eval.eval_typed(c, secret);
+            match res_plaintext {
+                None => T::default(),
+                Some(b) => b,
+            }
+        }
+    }
 
     #[test]
     fn test_rom() {
