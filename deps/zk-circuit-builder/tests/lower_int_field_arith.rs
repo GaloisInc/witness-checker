@@ -4,8 +4,10 @@ use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, Wire, Ty, FilterNil, GateValue, AsBits, IntSize,
     DefineFunction, TyKind, Field, UnOp, BinOp,
 };
+#[cfg(feature = "gf_scuttlebutt")]
 use zk_circuit_builder::lower::int_field_arith::IntFieldArith;
 use zk_circuit_builder::util::CowBox;
+#[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::F128p;
 use paste::paste;
 use proptest::prelude::*;
@@ -181,51 +183,83 @@ macro_rules! define_tests {
 }
 
 // u8, i8
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(u8, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(i8, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary_ops!(u8, i8);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(u8, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(i8, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_bin_ops!(u8, i8);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(u8);
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(i8);
 
 // u16, i16
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(u16, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(i16, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary_ops!(u16, i16);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(u16, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(i16, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_bin_ops!(u16, i16);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(u16);
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(i16);
 
 // u32, i32
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(u32, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(i32, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary_ops!(u32, i32);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(u32, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(i32, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_bin_ops!(u32, i32);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(u32);
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(i32);
 
 // u64, i64
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(u64, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary!(i64, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_unary_ops!(u64, i64);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(u64, uint);
+#[cfg(feature = "gf_scuttlebutt")]
 define_binary!(i64, int);
+#[cfg(feature = "gf_scuttlebutt")]
 define_bin_ops!(u64, i64);
 
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(u64);
+#[cfg(feature = "gf_scuttlebutt")]
 define_tests!(i64);
 
 

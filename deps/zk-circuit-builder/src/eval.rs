@@ -1105,6 +1105,7 @@ mod test {
     use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
     use super::*;
 
+    #[cfg(feature = "gf_scuttlebutt")]
     #[test]
     fn cast_prime_field() {
         let arenas = Arenas::new();
