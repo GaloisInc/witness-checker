@@ -14,7 +14,7 @@ use zk_circuit_builder::back::{self, UsePlugins, BackendFeature};
 use zk_circuit_builder::eval::{self, EvalWire, CachingEvaluator};
 use zk_circuit_builder::gadget;
 use zk_circuit_builder::ir::circuit::{
-    Circuit, Arenas, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, GadgetKindRef, Field
+    Circuit, Arenas, CircuitTrait, CircuitExt, CircuitFilter, FilterNil, GadgetKindRef,
 };
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, BuilderImpl, TWire};
 use zk_circuit_builder::lower;
@@ -30,9 +30,6 @@ use cheesecloth::micro_ram::types::{
 use cheesecloth::micro_ram::witness::MultiExecWitness;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
-
-#[cfg(feature = "gf_scuttlebutt")]
-use scuttlebutt::field::F128p;
 
 fn parse_args() -> ArgMatches<'static> {
     App::new("witness-checker")
@@ -303,7 +300,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     };
 
     let cf = FilterNil;
-    //let cf = lower::const_fold::ConstFold(c);
     let cf = cf.add_pass(lower::bool_::not_to_xor);
     let cf = cf.add_pass(lower::bool_::compare_to_logic);
     let cf = cf.add_pass(lower::bool_::mux);
@@ -316,8 +312,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = cf.add_pass(lower::bundle::unbundle_mux);
     let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
-    #[cfg(feature = "gf_scuttlebutt")]
-    let cf = lower::int_field_arith::IntFieldArith::<_, F128p>::new(cf, true);
     let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf)
         .set_allow_functions(backend.has_feature(BackendFeature::Function))
         .set_allow_switches(backend.has_feature(BackendFeature::Switch));
