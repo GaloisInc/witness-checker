@@ -819,6 +819,25 @@ pub fn prime_field_bits_to_bigint<'a>(c: &CircuitBase<'a>, a: Bits<'a>, width: I
     }
 }
 
+pub fn eval_cast<'a>(c: &CircuitBase<'a>, a_bits: Bits<'a>, from: Ty<'a>, to: Ty<'a>) -> Bits<'a> {
+    if from.is_integer() && to.is_integer() {
+        let a_int = a_bits.to_bigint(from);
+        trunc(c, to, a_int)
+    } else if from.is_integer() && to.is_galois_field() {
+        let a_int = a_bits.to_bigint(from);        
+        let f = to.get_galois_field().unwrap();
+        // Ensures that the machine integer fits within the field,
+        // which is necessary because conversion will panic if it doesn't.
+        assert!(from.integer_size().bits() < to.integer_size().bits());
+        bigint_to_prime_field_bits(c, a_int, from.integer_size(), f)
+    } else if from.is_galois_field() && to.is_integer() {
+        let f = from.get_galois_field().unwrap();
+        prime_field_bits_to_bigint(c, a_bits, to.integer_size(), f).as_bits(c, to.integer_size())
+    } else {
+        unimplemented!()
+    }
+}
+
 fn eval_gate_inner<'a, 'b>(
     c: &CircuitBase<'a>,
     ecx: &'b impl EvalContext<'a, 'b>,
@@ -905,28 +924,9 @@ fn eval_gate_inner<'a, 'b>(
         },
 
         GateKind::Cast(a, _) => {
-            if a.ty.is_integer() && ty.is_integer() {
-                let (a_val, a_sec) = ecx.get_int_value(a)?;
-                (trunc(c, ty, a_val), a_sec)
-            } else if a.ty.is_integer() && a.ty.integer_size().bits() < 128 {
-                let (a_val, a_sec) = ecx.get_int_value(a)?;
-                if let Some(f) = ty.get_galois_field() {
-                    let a_bits = bigint_to_prime_field_bits(c, a_val, a.ty.integer_size(), f);
-                    (a_bits, a_sec)
-                } else {
-                    panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
-                }
-            } else if let Some(f) = a.ty.get_galois_field() {
-                let (a_val, a_sec) = ecx.get_value(a)?;
-                if ty.is_integer() && ty.integer_size().bits() < 128 {
-                    let a_int = prime_field_bits_to_bigint(c, a_val, ty.integer_size(), f);
-                    (a_int.as_bits(c, ty.integer_size()), a_sec)
-                } else {
-                    panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
-                }
-            } else {
-                panic!("Cannot apply cast on arguments {:?} to {:?}", a, ty)
-            }
+            let (a_val, a_sec) = ecx.get_value(a)?;
+            let result_bits = eval_cast(c, a_val, a.ty, ty);
+            (result_bits, a_sec)
         },
 
         GateKind::Pack(ws) => {

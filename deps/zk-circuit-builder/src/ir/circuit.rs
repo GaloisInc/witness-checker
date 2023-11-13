@@ -1891,6 +1891,10 @@ impl TyKind<'_> {
         }
     }
 
+    pub fn is_galois_field(&self) -> bool {
+        self.get_galois_field().is_some()
+    }
+
     pub fn is_integer(&self) -> bool {
         match *self {
             TyKind::Int(_) => true,
