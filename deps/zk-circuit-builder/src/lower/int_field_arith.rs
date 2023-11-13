@@ -101,22 +101,6 @@ where
     }
 }
 
-// TODO(isweet): Add `HashMap<Wire<'a>, ...>` to implement lazy truncation.
-//   Q: What order are passes executed in? Does this pass need to be last to work
-//      correctly? My concern is that I'll map some wire `a` to a value, and then `a`
-//      will be elaborated in a later pass?
-//
-//      e.g. `Binary(Add, Binary(Add, Lit(1, U64), Lit(2, U64)), Secret)` where `a,b : Uint(64)`
-//           This pass will map: `Lit(3, U64) => 2`, `Lit(5, U64) => 3`
-//           Then, const fold will do nothing.
-//           Then, this pass will map: `Binary(Add, Lit(1, U64), Lit(2, U64)) => max(2, 3) + 1 == 4`
-//           But then, the const fold pass will elaborate that gate and create `Binary(Add, Lit(3, U64), Secret)`
-//           Then, when this pass runs again it will lookup `Lit(3, U64)` in the map and not find it? Or will
-//           this pass run on the newly created `Lit(3, U64)` that was created by the constant folding pass?
-//           ... I'm confused :)
-//
-//   Q: Also, do wires that have been elaborated away (like `Lit(1, U64)` above) get de-allocated? Will my map
-//      grow to the size of the entire circuit?
 struct NumBounds {
     valid_bits: u16,
     real_bits: u16,
