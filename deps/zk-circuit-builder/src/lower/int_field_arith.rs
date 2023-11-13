@@ -131,7 +131,12 @@ pub struct IntFieldArith<'a, F, P> {
 
 impl<'a, F, P> IntFieldArith<'a, F, P> {
     pub fn new(inner: F, active: bool) -> Self {
-        IntFieldArith { inner, _field: PhantomData::<P>, active, bounds: HashMap::new() }
+        IntFieldArith {
+            inner,
+            _field: PhantomData,
+            active,
+            bounds: HashMap::new(),
+        }
     }
 }
     
@@ -168,6 +173,11 @@ where
             bounds.insert(new_wire, old_repr);
         }
         
-        IntFieldArith { inner: v.visit(self.inner), _field: PhantomData::<P>, active: self.active, bounds }
+        IntFieldArith {
+            inner: v.visit(self.inner),
+            _field: PhantomData,
+            active: self.active,
+            bounds,
+        }
     }
 }
