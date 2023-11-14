@@ -69,8 +69,10 @@ use std::ops::{Deref, DerefMut, Range};
 use std::slice;
 use std::str;
 use bumpalo::Bump;
+use crypto_bigint::{Uint, Word};
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
+use num_traits::{Zero};
 use crate::eval::{self, EvalWire, CachingEvaluator};
 use crate::ir::migrate::{self, Migrate, Visitor as _};
 use crate::util::CowBox;
@@ -1840,6 +1842,19 @@ pub enum Field {
     F128p,
 }
 
+pub fn crypto_to_biguint<const LIMBS: usize>(v: Uint<LIMBS>) -> BigUint {
+    let mut acc = BigUint::zero();
+
+    let digits: &[Word; LIMBS] = v.as_words();
+
+    for &d in digits.iter().rev() {
+        acc <<= Word::BITS;
+        acc |= BigUint::from(d);
+    }
+
+    acc
+}
+
 impl Field {
     pub fn bit_size(&self) -> IntSize {
         match *self {
@@ -1855,6 +1870,28 @@ impl Field {
             Field::F64b => IntSize(64),
             #[cfg(feature = "gf_scuttlebutt")]
             Field::F128p => IntSize(128),
+        }
+    }
+
+    pub fn modulus(&self) -> Option<BigUint> {
+        match *self {
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F40b => None,
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F45b => None,
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F56b => None,
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F63b => None,
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F64b => None,
+            #[cfg(feature = "gf_scuttlebutt")]
+            Field::F128p => {
+                use scuttlebutt::field::{PrimeFiniteField, F128p};
+                let crypto_uint = F128p::modulus_int();
+                let result = crypto_to_biguint::<{ F128p::MIN_LIMBS_NEEDED }>(crypto_uint);
+                Some(result)
+            }
         }
     }
 }
@@ -1889,6 +1926,10 @@ impl TyKind<'_> {
             TyKind::Bundle(_) => None,
             TyKind::RawBits => None,
         }
+    }
+
+    pub fn is_galois_field(&self) -> bool {
+        self.get_galois_field().is_some()
     }
 
     pub fn is_integer(&self) -> bool {
@@ -3479,6 +3520,26 @@ impl AsBits for BigInt {
 impl AsBits for &'_ BigInt {
     fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
         (*self).as_bits(c, width)
+    }
+}
+
+impl AsBits for i8 {
+    fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
+        if width == IntSize(8) {
+            (*self as u8).as_bits(c, width)
+        } else {
+            BigInt::from(*self).as_bits(c, width)
+        }
+    }
+}
+
+impl AsBits for i16 {
+    fn as_bits<'a>(&self, c: &CircuitBase<'a>, width: IntSize) -> Bits<'a> {
+        if width == IntSize(16) {
+            (*self as u16).as_bits(c, width)
+        } else {
+            BigInt::from(*self).as_bits(c, width)
+        }
     }
 }
 

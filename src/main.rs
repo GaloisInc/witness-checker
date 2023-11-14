@@ -31,7 +31,6 @@ use cheesecloth::micro_ram::witness::MultiExecWitness;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
-
 fn parse_args() -> ArgMatches<'static> {
     App::new("witness-checker")
         .about("generate a witness checker circuit for a given MicroRAM execution trace")
@@ -301,7 +300,6 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     };
 
     let cf = FilterNil;
-    //let cf = lower::const_fold::ConstFold(c);
     let cf = cf.add_pass(lower::bool_::not_to_xor);
     let cf = cf.add_pass(lower::bool_::compare_to_logic);
     let cf = cf.add_pass(lower::bool_::mux);
