@@ -26,30 +26,45 @@ where
     F::Error: Debug,
 {
     let ty = gk.ty(c);
+    let ty_width = ty.integer_size().bits();
+    let ty_size = BigUint::from(2_u64).pow(ty_width as u32);
+    
     let field_ty = c.ty(TyKind::GF(F::AS_FIELD));
+    let field_width = F::AS_FIELD.bit_size().bits();
+    let field_size = F::AS_FIELD.modulus().unwrap();
     match gk {
         GateKind::Unary(Neg, a) if ty.is_integer() => {
+            assert!(ty_width + 1 < field_width);
             let a_f = c.cast(a, field_ty);
+            // TODO(isweet): A little ugly to compute this above as `ty_size`
+            // and again here, but `F` and `BigUint` are different types and
+            // converting between them is a pain.
             let two_f = F::try_from(2 as u128).unwrap();
             let max_f = c.lit(field_ty, two_f.pow(ty.integer_size().bits() as u128));
             let neg_a_f = c.sub(max_f, a_f);
             c.cast(neg_a_f, ty)
         },
         GateKind::Binary(Add, a, b) if ty.is_integer() => {
+            assert!(ty_width + 1 < field_width);
             let a_f = c.cast(a, field_ty);
             let b_f = c.cast(b, field_ty);
             let sum_f = c.add(a_f, b_f);
             c.cast(sum_f, ty)            
         },
         GateKind::Binary(Sub, a, b) if ty.is_integer() => {
+            assert!(ty_width + 2 < field_width);
             // This is necessary to prevent underflowing the field, which
             // is handled by the negation gate.
             c.add(a, c.neg(b))
         },
         GateKind::Binary(Mul, a, b) if ty.is_integer() => {
-            // TODO(isweet): Should we be checking `_sz` to ensure that the
-            // designated field is large enough to hold the multiplication?
-            // Perhaps callers should be responsible for that?
+            // For (unsigned) integers of width `w`, the maximum result
+            // of multiplication is (2^w - 1)^2. There is a margin between
+            // that value and 2^(2 * w) - 1, which is the largest value
+            // representable in double the number of bits. So, GF(p) can
+            // represent the result of a width `w` multiplication as long
+            // as (2^w - 1)^2 < `p`.
+            assert!((ty_size - BigUint::from(1_u32)).pow(2_u32) < field_size);
             let a_f = c.cast(a, field_ty);
             let b_f = c.cast(b, field_ty);
             let prod_f = c.mul(a_f, b_f);

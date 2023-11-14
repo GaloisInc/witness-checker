@@ -792,18 +792,12 @@ pub fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: Int
     }
 }
 
-pub fn prime_field_bits_to_bigint<'a>(c: &CircuitBase<'a>, a: Bits<'a>, width: IntSize, field: Field) -> BigInt {
+pub fn prime_field_bits_to_bigint(a: Bits, width: IntSize, field: Field) -> BigInt {
     #[cfg(feature = "gf_scuttlebutt")]
     fn prime_field_to_biguint<F: PrimeFiniteField, const LIMBS: usize>(a: F, width: IntSize) -> BigUint {
-        let mut acc = BigUint::zero();
+        use crate::ir::circuit::crypto_to_biguint;
 
-        let digits = a.into_int();
-        let digits: &[crypto_bigint::Word; LIMBS] = digits.as_words();
-
-        for &d in digits.iter().rev() {
-            acc <<= crypto_bigint::Word::BITS;
-            acc |= BigUint::from(d);
-        }
+        let acc = crypto_to_biguint::<LIMBS>(a.into_int());
 
         let one = BigUint::from(1 as crypto_bigint::Word);
         let mask = (&one << width.bits() as usize) - &one;
@@ -828,11 +822,11 @@ pub fn eval_cast<'a>(c: &CircuitBase<'a>, a_bits: Bits<'a>, from: Ty<'a>, to: Ty
         let f = to.get_galois_field().unwrap();
         // Ensures that the machine integer fits within the field,
         // which is necessary because conversion will panic if it doesn't.
-        assert!(from.integer_size().bits() < to.integer_size().bits());
+        assert!(BigUint::from(2_u8).pow(from.integer_size().bits() as u32) < f.modulus().unwrap());
         bigint_to_prime_field_bits(c, a_int, from.integer_size(), f)
     } else if from.is_galois_field() && to.is_integer() {
         let f = from.get_galois_field().unwrap();
-        prime_field_bits_to_bigint(c, a_bits, to.integer_size(), f).as_bits(c, to.integer_size())
+        prime_field_bits_to_bigint(a_bits, to.integer_size(), f).as_bits(c, to.integer_size())
     } else {
         unimplemented!()
     }
