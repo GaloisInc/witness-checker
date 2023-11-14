@@ -1827,18 +1827,12 @@ pub struct BundleTypes<'a> {
 /// Finite fields.
 pub enum Field {
     // Small binary fields.
-    #[cfg(feature = "gf_scuttlebutt")]
     F40b,
-    #[cfg(feature = "gf_scuttlebutt")]
     F45b,
-    #[cfg(feature = "gf_scuttlebutt")]
     F56b,
-    #[cfg(feature = "gf_scuttlebutt")]
     F63b,
-    #[cfg(feature = "gf_scuttlebutt")]
     F64b,
     // Large prime fields.
-    #[cfg(feature = "gf_scuttlebutt")]
     F128p,
 }
 
@@ -1858,34 +1852,22 @@ pub fn crypto_to_biguint<const LIMBS: usize>(v: Uint<LIMBS>) -> BigUint {
 impl Field {
     pub fn bit_size(&self) -> IntSize {
         match *self {
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F40b => IntSize(64), // Small binary fields are u64s in scuttlebutt.
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F45b => IntSize(64),
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F56b => IntSize(64),
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F63b => IntSize(64),
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F64b => IntSize(64),
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F128p => IntSize(128),
         }
     }
 
     pub fn modulus(&self) -> Option<BigUint> {
         match *self {
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F40b => None,
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F45b => None,
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F56b => None,
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F63b => None,
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F64b => None,
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F128p => {
                 use scuttlebutt::field::{PrimeFiniteField, F128p};
                 let crypto_uint = F128p::modulus_int();

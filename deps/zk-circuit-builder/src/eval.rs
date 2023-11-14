@@ -5,7 +5,6 @@ use std::convert::TryFrom;
 use std::iter;
 use num_bigint::{BigInt, Sign, BigUint, ToBigInt};
 use num_traits::{Signed, Zero};
-#[cfg(feature = "gf_scuttlebutt")]
 use scuttlebutt::field::{FiniteField, PrimeFiniteField, F40b, F45b, F56b, F63b, F64b, F128p};
 use crate::ir::migrate::{self, Migrate};
 use crate::ir::circuit::{
@@ -343,7 +342,6 @@ fn safe_div(x: BigInt, y: BigInt) -> BigInt {
     if y.is_zero() { 0.into() } else { x / y }
 }
 
-#[cfg(feature = "gf_scuttlebutt")]
 fn safe_div_galois_field<F: FiniteField>(x: F, y: F) -> F {
     if y.is_zero() { F::ZERO } else { x / y }
 }
@@ -596,7 +594,6 @@ pub fn eval_unop_galois_field<'a>(
     a_bits: Bits<'a>,
     field: Field,
 ) -> Bits<'a> {
-    #[cfg(feature = "gf_scuttlebutt")]
     fn helper<'a, T:FiniteField + FromBits + AsBits>(
         c: &CircuitBase<'a>,
         op: UnOp,
@@ -612,17 +609,11 @@ pub fn eval_unop_galois_field<'a>(
     }
 
     match field {
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F40b => helper::<F40b>(c, op, a_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F45b => helper::<F45b>(c, op, a_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F56b => helper::<F56b>(c, op, a_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F63b => helper::<F63b>(c, op, a_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F64b => helper::<F64b>(c, op, a_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F128p => helper::<F128p>(c, op, a_bits, field),
     }
 }
@@ -656,7 +647,6 @@ pub fn eval_binop_galois_field<'a>(
     b_bits: Bits<'a>,
     field: Field,
 ) -> Bits<'a> {
-    #[cfg(feature = "gf_scuttlebutt")]
     fn helper<'a, T:FiniteField + AsBits + FromBits>(
         c: &CircuitBase<'a>,
         op: BinOp,
@@ -680,17 +670,11 @@ pub fn eval_binop_galois_field<'a>(
     }
 
     match field {
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F40b => helper::<F40b>(c, op, a_bits, b_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F45b => helper::<F45b>(c, op, a_bits, b_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F56b => helper::<F56b>(c, op, a_bits, b_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F63b => helper::<F63b>(c, op, a_bits, b_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F64b => helper::<F64b>(c, op, a_bits, b_bits, field),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F128p => helper::<F128p>(c, op, a_bits, b_bits, field),
     }
 }
@@ -722,7 +706,6 @@ pub fn eval_cmp_galois_field<'a>(
     b_bits: Bits<'a>,
     field: Field,
 ) -> Bits<'a> {
-    #[cfg(feature = "gf_scuttlebutt")]
     fn helper<'a, T:FiniteField + AsBits + FromBits>(
         c: &CircuitBase<'a>,
         op: CmpOp,
@@ -743,17 +726,11 @@ pub fn eval_cmp_galois_field<'a>(
     }
 
     match field {
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F40b => helper::<F40b>(c, op, a_bits, b_bits),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F45b => helper::<F45b>(c, op, a_bits, b_bits),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F56b => helper::<F56b>(c, op, a_bits, b_bits),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F63b => helper::<F63b>(c, op, a_bits, b_bits),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F64b => helper::<F64b>(c, op, a_bits, b_bits),
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F128p => helper::<F128p>(c, op, a_bits, b_bits),
     }
 }
@@ -766,7 +743,6 @@ fn bigint_to_biguint(a: BigInt, width: IntSize) -> BigUint {
 }
 
 pub fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: IntSize, field: Field) -> Bits<'a> {
-    #[cfg(feature = "gf_scuttlebutt")]
     fn biguint_to_prime_field<F: PrimeFiniteField, const LIMBS: usize>(a: BigUint, width: IntSize) -> F {
         let mut acc = crypto_bigint::Uint::<LIMBS>::ZERO;
 
@@ -785,15 +761,12 @@ pub fn bigint_to_prime_field_bits<'a>(c: &CircuitBase<'a>, a: BigInt, width: Int
 
     let a = bigint_to_biguint(a, width);
     match field {
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F128p => biguint_to_prime_field::<F128p, { F128p::MIN_LIMBS_NEEDED }>(a, width).as_bits(c, Field::F128p.bit_size()),
-        #[cfg(feature = "gf_scuttlebutt")]
         _ => unimplemented!(),
     }
 }
 
 pub fn prime_field_bits_to_bigint(a: Bits, width: IntSize, field: Field) -> BigInt {
-    #[cfg(feature = "gf_scuttlebutt")]
     fn prime_field_to_biguint<F: PrimeFiniteField, const LIMBS: usize>(a: F, width: IntSize) -> BigUint {
         use crate::ir::circuit::crypto_to_biguint;
 
@@ -806,9 +779,7 @@ pub fn prime_field_bits_to_bigint(a: Bits, width: IntSize, field: Field) -> BigI
     }
 
     match field {
-        #[cfg(feature = "gf_scuttlebutt")]
         Field::F128p => prime_field_to_biguint::<F128p, { F128p::MIN_LIMBS_NEEDED }>(F128p::from_bits(a), width).to_bigint().unwrap(),
-        #[cfg(feature = "gf_scuttlebutt")]
         _ => unimplemented!(),
     }
 }
@@ -1099,7 +1070,6 @@ mod test {
     use crate::ir::circuit::{Arenas, CircuitBase, CircuitExt};
     use super::*;
 
-    #[cfg(feature = "gf_scuttlebutt")]
     #[test]
     fn cast_prime_field() {
         let arenas = Arenas::new();
