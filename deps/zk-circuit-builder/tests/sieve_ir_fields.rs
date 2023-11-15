@@ -1,5 +1,4 @@
 #![cfg(feature = "sieve_ir")]
-#![cfg(feature = "gf_scuttlebutt")]
 
 use scuttlebutt::field::{FiniteField, SmallBinaryField, F40b, F45b, F56b, F63b, F64b};
 use zk_circuit_builder::eval::{self, CachingEvaluator, EvalWire};

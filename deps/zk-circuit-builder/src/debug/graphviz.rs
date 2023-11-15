@@ -26,17 +26,11 @@ fn write_ty(s: &mut String, ty: Ty) -> Result<(), fmt::Error> {
         TyKind::Uint(sz) => { write!(s, "u{}", sz.bits())?; },
         TyKind::Int(sz) => { write!(s, "i{}", sz.bits())?; },
         TyKind::GF(field) => match field {
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F40b => { write!(s, "gf40b")?; },
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F45b => { write!(s, "gf45b")?; },
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F56b => { write!(s, "gf56b")?; },
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F63b => { write!(s, "gf63b")?; },
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F64b => { write!(s, "gf64b")?; },
-            #[cfg(feature = "gf_scuttlebutt")]
             Field::F128p => { write!(s, "gf128p")?; },
         },
         TyKind::Bundle(btys) => {

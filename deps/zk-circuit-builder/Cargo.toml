@@ -13,9 +13,6 @@ default = ["f128p"]
 f128p = []
 f384p = []
 
-# Whether to support Scuttlebutt types in `TyKind::GF`
-gf_scuttlebutt = ["scuttlebutt"]
-
 bellman = ["zkinterface", "zkinterface_bellman", "ff"]
 sieve_ir = ["ff", "zki_sieve", "zki_sieve_v3", "zki_sieve_v5"]
 
@@ -23,7 +20,7 @@ sieve_ir = ["ff", "zki_sieve", "zki_sieve_v3", "zki_sieve_v5"]
 cheesecloth-derive-migrate = { path = "../../derive-migrate" }
 cheesecloth-derive-ir-typed = { path = "../../derive-ir-typed" }
 
-scuttlebutt = { path = "../swanky/scuttlebutt", optional = true }
+scuttlebutt = { path = "../swanky/scuttlebutt" }
 bristol-fashion = {path = "../swanky/bristol-fashion" }
 
 zkinterface = { optional = true, version = "1.3.3" }
@@ -49,7 +46,7 @@ num-integer = "0.1.43"
 num-traits = "0.2.12"
 crypto-bigint = { version = "0.5.2", features = ["generic-array"] }
 
-generic-array = "*"
+generic-array = "0.14.7"
 
 log = "0.4"
 
