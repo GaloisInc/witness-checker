@@ -525,7 +525,7 @@ fn calc_commitment(
         if !cs.secret || cs.uncommitted {
             continue;
         }
-        eprintln!("hashing secret code segment {:?} (at {:x})", cs.name, cs.start * 8);
+        eprintln!("hashing secret code segment {:?} (at {:x})", cs.name, cs.start);
         assert!((cs.len as usize) >= cs.instrs.len(),
             "too much code: got {} instrs, but segment length is {}",
             cs.instrs.len(), cs.len);
