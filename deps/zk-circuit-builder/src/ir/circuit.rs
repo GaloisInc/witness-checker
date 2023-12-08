@@ -165,7 +165,10 @@ impl<'a> CircuitBase<'a> {
     }
 
     pub fn set_allow_switches(mut self, allow_switches: bool) -> Self {
-        assert!(self.allow_functions, "The circuit must support functions to support switches.");
+        if allow_switches {
+            assert!(self.allow_functions,
+                "The circuit must support functions to support switches.");
+        }
         self.allow_switches = allow_switches;
         self
     }
