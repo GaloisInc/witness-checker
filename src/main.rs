@@ -43,17 +43,22 @@ fn parse_args() -> ArgMatches<'static> {
              .long("zkif-out")
              .takes_value(true)
              .value_name("DIR/")
-             .help("output zkinterface circuit representation in this directory"))
+             .help("output arithmetic zkinterface (R1CS) circuit representation in this directory"))
         .arg(Arg::with_name("sieve-ir-out")
              .long("sieve-ir-out")
              .takes_value(true)
              .value_name("DIR/")
-             .help("output SIEVE IR circuit representation in this directory"))
+             .help("output arithmetic SIEVE IR circuit representation in this directory"))
         .arg(Arg::with_name("sieve-ir-v2-out")
              .long("sieve-ir-v2-out")
              .takes_value(true)
              .value_name("DIR/")
-             .help("output SIEVE IR v2 (IR0+) circuit representation in this directory"))
+             .help("output arithmetic SIEVE IR v2 (IR0+) circuit representation in this directory"))
+        .arg(Arg::with_name("sieve-ir-v3-out")
+             .long("sieve-ir-v3-out")
+             .takes_value(true)
+             .value_name("DIR/")
+             .help("output arithmetic SIEVE IR v3 (Phase 3 Circuit IR) circuit representation in this directory"))
         .arg(Arg::with_name("boolean-sieve-ir-out")
              .long("boolean-sieve-ir-out")
              .takes_value(true)
@@ -249,6 +254,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         } else if let Some(workspace) = args.value_of("sieve-ir-v2-out") {
             let dedup = args.is_present("sieve-ir-dedup");
             back::new_sieve_ir_v2(workspace, modulus, dedup)
+        } else if let Some(workspace) = args.value_of("sieve-ir-v3-out") {
+            let dedup = args.is_present("sieve-ir-dedup");
+            back::new_sieve_ir_v3(workspace, modulus, dedup)
         } else if let Some(workspace) = args.value_of("boolean-sieve-ir-out") {
             assert!(modulus.is_none(),
                 "--field-modulus is not supported with --boolean-sieve-ir-out");
