@@ -52,12 +52,17 @@ pub struct SegmentBuilder<'a, 'b, B> {
 }
 
 impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
+    /// Build a segment with this `SegmentBuilder`.
+    ///
+    /// If `external_advice` is provided, each `Iadvise` instruction in this segment will return
+    /// the next value from the `external_advice` list (or 0 if the list has been exhausted).
     pub fn run(
         &mut self,
         idx: usize,
         s: &types::Segment,
         init_state: TWire<'a, RamState>,
         mut kmem: KnownMem<'a>,
+        external_advice: Option<&[TWire<'a, u64>]>,
         project_witness: impl Fn(&MultiExecWitness) -> &SegmentWitness + Copy + 'static,
     ) -> (Segment<'a>, KnownMem<'a>) {
         let cx = self.cx;
@@ -102,13 +107,16 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
         }
 
         let mut prev_state = init_state.clone();
+        let mut ext_advice_iter = external_advice.map(|xs| xs.iter().copied());
         for i in 0 .. s.len {
             // Get the instruction to execute.
+            let mut public_instr = None;
             let mut instr;
             if let Some(init_pc) = s.init_pc() {
                 let pc = init_pc + i as u64;
                 let instr_val = self.prog[pc];
                 instr = b.lit(instr_val);
+                public_instr = Some(instr_val);
             } else {
                 let fp = fetch_ports.as_ref().unwrap().get(i);
                 {
@@ -136,10 +144,21 @@ impl<'a, 'b, B: Builder<'a>> SegmentBuilder<'a, 'b, B> {
             let instr = instr;
 
             let mem_port = mem_ports.get(b, i);
-            let advice = b.secret_lazy(move |w: &MultiExecWitness| {
-                let w = project_witness(w);
-                w.advice[i]
-            });
+            let advice = if let Some(ref mut ext_advice_iter) = ext_advice_iter {
+                // External advice handling requires knowing which steps execute `Iadvise`.
+                let instr = public_instr
+                    .expect("external advice is not supported in secret segments");
+                if instr.opcode == Opcode::Advise as u8 {
+                    ext_advice_iter.next().unwrap_or_else(|| b.lit(0))
+                } else {
+                    b.lit(0)
+                }
+            } else {
+                b.secret_lazy(move |w: &MultiExecWitness| {
+                    let w = project_witness(w);
+                    w.advice[i]
+                })
+            };
 
             let (calc_state, calc_im) =
                 calc_step(cx, b, ev, self.privilege_levels, self.calc_step_func, self.calc_step_inner_cases,

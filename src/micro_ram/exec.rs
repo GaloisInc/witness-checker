@@ -251,12 +251,26 @@ impl<'a> ExecBuilder<'a> {
         };
 
         let seg_def = &exec.segments[idx];
-        let prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
+        let mut prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
         let prev_kmem = self.seg_graph_builder.take_initial_mem(idx);
-        let (mut seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem, move |w| {
-            let ew = project_witness(w);
-            &ew.segments[idx]
-        });
+
+        let external_advice_storage: [_; 2];
+        let mut external_advice = None;
+
+        if let Some(jump_dest) = seg_def.spontaneous_jump_pc() {
+            let pc = prev_state.pc;
+            let cycle = b.cast(prev_state.cycle);
+            prev_state.pc = b.lit(jump_dest);
+            external_advice_storage = [pc, cycle];
+            external_advice = Some(&external_advice_storage as &[_]);
+        }
+
+        let (mut seg, kmem) = segment_builder.run(
+            idx, seg_def, prev_state, prev_kmem, external_advice,
+            move |w| {
+                let ew = project_witness(w);
+                &ew.segments[idx]
+            });
         self.seg_graph_builder.set_final(idx, seg.final_state().clone());
         self.seg_graph_builder.set_final_mem(idx, kmem);
 
