@@ -440,6 +440,11 @@ impl<'de> Visitor<'de> for SegmentConstraintVisitor {
                 let pc = seq.next_element()?;
                 SegmentConstraint::Pc(pc)
             },
+            "spontaneous_jump" => {
+                seq.expect += 1;
+                let dest = seq.next_element()?;
+                SegmentConstraint::SpontaneousJump(dest)
+            },
             kind => return Err(de::Error::custom(
                 format_args!("unknown segment constraint kind {}", kind),
             )),
