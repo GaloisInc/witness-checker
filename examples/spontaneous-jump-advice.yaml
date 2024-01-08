@@ -1,0 +1,73 @@
+## FLAGS: --validate-only
+# Uses the `advise` instruction to retrieve the original PC and cycle count
+
+- [0,1,0,0]
+- [public-pc, spontaneous-jump]
+-
+  program:
+    # Normal block
+    - [mov, 0, null, true, 1]
+    - [mov, 1, null, true, 2]
+    - [add, 0, 0, false, 1]
+    - [add, 1, 0, false, 1]
+    - [jmp, null, null, true, 2]
+
+    # Spontaneous jump target (pc = 5)
+    - [store8, null, 0, true, 1024]
+    - [store8, null, 1, true, 1032]
+    # First `advise` gets the PC before the spontaneous jump
+    - [advise, 0, null, true, 0xffffffffffffffff]
+    - [store8, null, 0, true, 1040]
+    # Second `advise` gets the cycle count before the spontaneous jump
+    - [advise, 0, null, true, 0xffffffffffffffff]
+    - [store8, null, 0, true, 1048]
+
+  params:
+    num_regs: 2
+
+  init_mem: []
+
+  segments:
+    # Main secret segment for running the normal block
+    - constraints: []
+      len: 10
+      enter_from_network: false
+      exit_to_network: true
+    - constraints: [[pc, 5], [spontaneous_jump, 5]]
+      len: 6
+      enter_from_network: true
+      exit_to_network: false
+
+  trace:
+    - segment: 0
+      states:
+        - [1, [1, 0]]
+        - [2, [1, 2]]
+        - [3, [3, 2]]
+        - [4, [3, 5]]
+        - [2, [3, 5]]
+        - [3, [8, 5]]
+        - [4, [8, 13]]
+        - [4, [8, 13]]
+        - [4, [8, 13]]
+        - [4, [8, 13]]
+    - segment: 1
+      states:
+        - [6, [8, 13]]
+        - [7, [8, 13]]
+        - [8, [4, 13]]
+        - [9, [4, 13]]
+        # Cycle count is 10, not 7, because the three stutters are counted
+        - [10, [10, 13]]
+        - [11, [10, 13]]
+
+  advice:
+    8: [[Stutter]]
+    9: [[Stutter]]
+    10: [[Stutter]]
+    11: [[MemOp, 1024, 8, write, 8]]
+    12: [[MemOp, 1032, 13, write, 8]]
+    13: [[Advise, 4]]
+    14: [[MemOp, 1040, 4, write, 8]]
+    15: [[Advise, 4]]
+    16: [[MemOp, 1048, 10, write, 8]]
