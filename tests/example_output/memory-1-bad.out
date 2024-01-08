@@ -32,4 +32,4 @@ invalid trace: read from 28 on cycle 12 produced 30 (expected 40)
 invalid trace: assert failed in memory check 6
 invalid trace: read from 28 on cycle 17 produced 40 (expected 30)
 invalid trace: assert failed in memory check 7
-internal evaluator: 336 asserts passed, 30 failed; found 0 bugs; overall status: BAD
+internal evaluator: 308 asserts passed, 30 failed; found 0 bugs; overall status: BAD

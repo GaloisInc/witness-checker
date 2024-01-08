@@ -57,9 +57,8 @@
         - [7, [8, 13]]
         - [8, [4, 13]]
         - [9, [4, 13]]
-        # Cycle count is 10, not 7, because the three stutters are counted
-        - [10, [10, 13]]
-        - [11, [10, 13]]
+        - [10, [7, 13]]
+        - [11, [7, 13]]
 
   advice:
     8: [[Stutter]]
@@ -67,7 +66,7 @@
     10: [[Stutter]]
     11: [[MemOp, 1024, 8, write, 8]]
     12: [[MemOp, 1032, 13, write, 8]]
-    13: [[Advise, 4]]
+    # The `advise` on cycle 13 doesn't need advice.
     14: [[MemOp, 1040, 4, write, 8]]
-    15: [[Advise, 4]]
-    16: [[MemOp, 1048, 10, write, 8]]
+    # The `advise` on cycle 15 doesn't need advice.
+    16: [[MemOp, 1048, 7, write, 8]]

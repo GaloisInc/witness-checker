@@ -79,6 +79,7 @@ impl ExecWitness {
         let instrs = InstrLookup::new(&e.program);
 
         let mut pc = 0;
+        let mut trace_pos = 0;
         let mut cycle = 0;
         let mut prev_state = e.provided_init_state.clone().unwrap_or_else(|| e.initial_state());
         let mut prev_seg_idx: Option<usize> = None;
@@ -109,7 +110,7 @@ impl ExecWitness {
 
             debug_assert_eq!(seg.len, tc.states.len());
             for (j, post_state) in tc.states.iter().enumerate() {
-                if let Some(advs) = e.advice.get(&(cycle as u64 + 1)) {
+                if let Some(advs) = e.advice.get(&(trace_pos as u64 + 1)) {
                     for adv in advs {
                         match *adv {
                             Advice::MemOp { addr, value, op, width, tainted } => {
@@ -126,7 +127,10 @@ impl ExecWitness {
                 seg_w.fetches.push((pc, instrs[pc]));
 
                 pc = post_state.pc;
-                cycle += 1;
+                if !seg_w.stutter[j] {
+                    cycle += 1;
+                }
+                trace_pos += 1;
             }
 
             if let Some(prev_seg_idx) = prev_seg_idx {
