@@ -308,18 +308,18 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     };
 
     let cf = FilterNil;
-    let cf = cf.add_pass(lower::bool_::not_to_xor);
-    let cf = cf.add_pass(lower::bool_::compare_to_logic);
-    let cf = cf.add_pass(lower::bool_::mux);
+    let cf = cf.add_pass(|c, gk| lower::bool_::not_to_xor(c, gk));
+    let cf = cf.add_pass(|c, gk| lower::bool_::compare_to_logic(c, gk));
+    let cf = cf.add_pass(|c, gk| lower::bool_::mux(c, gk));
     let cf = cf.add_opt_pass(
         !backend.has_feature(BackendFeature::CompareNonZero),
-        lower::int::compare_to_greater_or_equal_to_zero);
-    let cf = cf.add_pass(lower::int::non_constant_shift);
+        |c, gk| lower::int::compare_to_greater_or_equal_to_zero(c, gk));
+    let cf = cf.add_pass(|c, gk| lower::int::non_constant_shift(c, gk));
     let cf = lower::const_fold::ConstFold(cf);
-    let cf = cf.add_pass(lower::bundle::simplify);
-    let cf = cf.add_pass(lower::bundle::unbundle_mux);
+    let cf = cf.add_pass(|c, gk| lower::bundle::simplify(c, gk));
+    let cf = cf.add_pass(|c, gk| lower::bundle::unbundle_mux(c, gk));
     let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
-    let cf = cf.add_pass(lower::bit_pack::concat_bits_flat);
+    let cf = cf.add_pass(|c, gk| lower::bit_pack::concat_bits_flat(c, gk));
     let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf)
         .set_allow_functions(backend.has_feature(BackendFeature::Function))
         .set_allow_switches(backend.has_feature(BackendFeature::Switch));
