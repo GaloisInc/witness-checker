@@ -406,7 +406,7 @@ impl<'a> CircuitBase<'a> {
                 assert!(self.as_base().allow_switches, "`GateKind::Switch` is not allowed.");
 
                 // There must be at least one branch
-                assert!(!bs.is_empty(), "The number of branches in a `GateKind::Switch` must be non-empty.");
+                assert!(!bs.is_empty(), "There must be at least one branch in a `GateKind::Switch`.");
 
                 let result_ty = bs[0].body.result_wire.ty;
 
