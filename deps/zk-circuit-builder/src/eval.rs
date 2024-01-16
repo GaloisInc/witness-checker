@@ -949,21 +949,20 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::Call(call) => eval_call(c, ecx, call)?,
 
-        GateKind::Switch(cond, branches, inputs) => {
-            if cond.ty.is_integer() {
-                // TODO(isweet): Is secrecy being propagated correctly here?
-                let (w_val, _w_sec) = ecx.get_int_value(cond).unwrap();
-                for b in branches {
-                    let switch_val = b.bits.to_bigint(cond.ty);
-
-                    if w_val == switch_val {
-                        return eval_switch_case(c, ecx, *b, inputs);
-                    }
+        GateKind::Switch(g, bs, args) => {
+            let mut sec = false;
+            let (g_val, g_sec) = ecx.get_value(g)?;
+            let g_val = g_val.to_biguint();
+            sec |= g_sec;
+            for b in bs {
+                if g_val == b.pattern.to_biguint() {
+                    let (ret_val, ret_sec) = eval_switch_case(c, ecx, *b, args)?;
+                    sec |= ret_sec;
+                    return Ok((ret_val, sec));
                 }
-                panic!("The `Switch` gate requires at least one branch to match, but none did.")
-            } else {
-                unimplemented!("The `Switch` gate does not support guards with non-integer type.")
             }
+
+            panic!("The guard of a `GateKind::Switch` must match at least one of the branch patterns.");
         },
 
         // `a` is pre-evaluated, based on the dependencies of `Seq`, so no need to use it
@@ -1007,7 +1006,7 @@ fn eval_switch_case<'a, 'b>(
     switch_case: SwitchCase<'a>,
     args:  &'a [Wire<'a>],
 ) -> Result<(Bits<'a>, bool), Error<'a>> {
-    let func = switch_case.func;
+    let body = switch_case.body;
 
     let arg_bits = args.iter().map(|&w| {
         outer_ecx.get_value(w)
@@ -1018,7 +1017,7 @@ fn eval_switch_case<'a, 'b>(
     
     let mut inner_eval = outer_ecx.enter_function(
         c, arg_bits, switch_case.project_witness, &dep_bits);
-    EvalWire::eval_wire_bits(&mut inner_eval, c, func.result_wire)
+    EvalWire::eval_wire_bits(&mut inner_eval, c, body.result_wire)
 }
 
 
