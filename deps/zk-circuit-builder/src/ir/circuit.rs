@@ -281,14 +281,14 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
-    fn intern_switch_case_list(&self, cases_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
+    fn intern_switch_case_list(&self, switch_case_list: &[SwitchCase<'a>]) -> &'a [SwitchCase<'a>] {
         let mut intern = self.intern_switch_case_list.borrow_mut();
-        match intern.get(cases_list) {
+        match intern.get(switch_case_list) {
             Some(&x) => x,
             None => {
-                let cases_list = self.arena().alloc_slice_copy(cases_list);
-                intern.insert(cases_list);
-                cases_list
+                let switch_case_list = self.arena().alloc_slice_copy(switch_case_list);
+                intern.insert(switch_case_list);
+                switch_case_list
             },
         }
     }
@@ -339,8 +339,8 @@ impl<'a> CircuitBase<'a> {
         Call(self.arena().alloc(call))
     }
 
-    fn alloc_switch_case(&self, switchdata: SwitchCaseData<'a>) -> SwitchCase<'a> {
-        SwitchCase(self.arena().alloc(switchdata))
+    fn alloc_switch_case(&self, switch_case: SwitchCaseData<'a>) -> SwitchCase<'a> {
+        SwitchCase(self.arena().alloc(switch_case))
     }
 
 
@@ -402,20 +402,30 @@ impl<'a> CircuitBase<'a> {
                 }
             }
 
-            // Type check for Switch
-            GateKind::Switch(_,bs , input) => {
+            GateKind::Switch(_cond, branches, args) => {
+                assert!(self.as_base().allow_switches, "`GateKind::Switch` is not allowed.");
 
+                // There must be at least one branch
+                assert!(!branches.is_empty(), "There must be at least one branch in a `GateKind::Switch`.");
 
-                assert!(self.as_base().allow_functions, "function calls are not allowd in this Circuit");
+                let result_ty = branches[0].body.result_wire.ty;
 
-                for b in bs{
-                    // checking for len of arguments
-                    assert_eq!(b.func.arg_tys.len(), input.len(), "Number of arguments are not equal");
-                    
-                    // checking for types
-                    for (&ty, &arg) in b.func.arg_tys.iter().zip(input.iter()) {
-                        assert_eq!(ty, arg.ty);
+                for branch in branches {
+                    let branch_param_count = branch.body.arg_tys.len();
+                    // The number of formal parameters accepted by the branch must be equal to the number of arguments provided
+                    assert_eq!(branch_param_count, args.len(), "The number of formal parameters in a `GateKind::Switch` branch ({}) \
+                                                                 must be equal to the number of supplied arguments ({}).", branch_param_count, args.len());
+
+                    // The types of the formal parameters accepted by the branch must be the same as the types of the arguments provided
+                    for (branch_param_ty, arg_ty) in branch.body.arg_tys.iter().zip(args.iter().map(|arg| arg.ty)) {
+                        assert_eq!(*branch_param_ty, arg_ty, "The type of a formal parameter in a `GateKind::Switch` branch ({:?}) \
+                                                              must be equal to the type of the corresponding supplied argument ({:?}).", *branch_param_ty, arg_ty);
                     }
+
+                    // The result type of the branch must be the same for all branches
+                    let branch_result_ty = branch.body.result_wire.ty;
+                    assert_eq!(branch_result_ty, result_ty, "The type of the result from a `GateKind::Switch` branch ({:?}) \
+                                                             must be the same for all branches ({:?}).", branch_result_ty, result_ty);
                 }
             }
             _ => {},
@@ -1147,8 +1157,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
 
     fn switch_case<W, W2, F>(
         &self,
-        bits: Bits<'a>,
-        func: Function<'a>,
+        pattern: Bits<'a>,
+        body: Function<'a>,
         project_deps: &'a [Wire<'a>],
         project_witness: F,
     ) -> SwitchCase<'a>
@@ -1160,25 +1170,25 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
     {
         debug_assert!(TypeId::of::<W>() == self.as_base().witness_type.get() ||
             TypeId::of::<W>() == TypeId::of::<()>());
-        debug_assert_eq!(TypeId::of::<W2>(), func.witness_type);
+        debug_assert_eq!(TypeId::of::<W2>(), body.witness_type);
         let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
-        let switchcase = self.as_base().alloc_switch_case(SwitchCaseData {
-            bits,
-            func,
+        let switch_case = self.as_base().alloc_switch_case(SwitchCaseData {
+            pattern,
+            body,
             project_witness,
             project_deps,
         });
-        switchcase
+        switch_case
     }
 
     fn switch(
         &self,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
-        input_args: &'a [Wire<'a>]
+        args: &'a [Wire<'a>]
     ) -> Wire<'a>
     {
-        self.gate(GateKind::Switch(cond, branches, input_args))
+        self.gate(GateKind::Switch(cond, branches, args))
     }
 
     fn seq(&self, a: Wire<'a>, b: Wire<'a>) -> Wire<'a> {
@@ -1585,19 +1595,10 @@ impl<'a> WireDeps<'a> {
         }
     }
 
-    fn one_many(ws1: Wire<'a>,  ws2: &'a [Wire<'a>]) -> WireDeps<'a> 
-    {
-        
-        let one = iter::once(ws1);
-       
-        let many = ws2.iter().cloned();
-
-        let combine = one.chain(many);
-
+    fn one_many(a: Wire<'a>,  ws: &'a [Wire<'a>]) -> WireDeps<'a> {
         WireDeps {
-            inner: WireDepsInner::OneMany(combine)
+            inner: WireDepsInner::OneMany(iter::once(a).chain(ws.iter().cloned())),
         }
-
     }
 }
 
@@ -1612,12 +1613,7 @@ impl<'a> Iterator for WireDepsInner<'a> {
             },
             WireDepsInner::Large(ref mut it) => it.next().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next().cloned(),
-            
-            WireDepsInner::OneMany(ref mut it) =>
-            {
-                it.next()
-            }
-        
+            WireDepsInner::OneMany(ref mut it) => it.next(),
         }
     }
 }
@@ -1631,11 +1627,7 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
             },
             WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next_back().cloned(),
-            
-            WireDepsInner::OneMany(ref mut it) =>
-            {
-                it.next_back()
-            }
+            WireDepsInner::OneMany(ref mut it) => it.next_back(),
         }
     }
 }
@@ -1673,9 +1665,7 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
         GateKind::Pack(ws) |
         GateKind::Gadget(_, ws) => WireDeps::many(ws),
         GateKind::Call(c) => WireDeps::many(c.args),
-        GateKind::Switch(c, _, args) => {
-            WireDeps::one_many(c, args)
-        },
+        GateKind::Switch(cond, _, args) => WireDeps::one_many(cond, args),
         GateKind::Seq(a, b) => WireDeps::two(a, b),
         GateKind::AssertZero(a) => WireDeps::one(a),
     }
@@ -2283,7 +2273,7 @@ pub enum GateKind<'a> {
     Gadget(GadgetKindRef<'a>, &'a [Wire<'a>]),
     /// A function call.  See `CallData` for details.
     Call(Call<'a>),
-    /// Switch(cond, branches[const, Function], input): depending on `cond`, select a branch and run its function on `input`
+    /// Switch(cond, branches, args): pattern match `cond` against each branch's pattern and execute the first matching branch using `args`
     Switch(Wire<'a>, &'a [SwitchCase<'a>], &'a [Wire<'a>]),
     /// `Seq(a, b)`: evaluate `a`, ignore the result, and then evaluate `b`
     Seq(Wire<'a>, Wire<'a>),
@@ -2320,11 +2310,10 @@ impl<'a> GateKind<'a> {
                 k.typecheck(c.as_base(), &tys)
             },
             GateKind::Call(c) => c.func.result_wire.ty,
-            GateKind::Switch(_, branches, _) =>  {
-                // Assume that branches non-empty
-                let b = branches.iter().next().unwrap(); // grab the first branch
-                // Assume that all branches have same type: F^input -> F^ouput
-                b.func.result_wire.ty
+            GateKind::Switch(_, branches, _) => {
+                // `GateKind::Switch` checks on construction that there is at least one
+                // branch, and that all branches have the same result type.
+                branches[0].body.result_wire.ty
             },
             GateKind::Seq(_, b) => b.ty,
             GateKind::AssertZero(_) => Ty::unit(),
@@ -2460,15 +2449,14 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
             },
             Call(c) => Call(v.visit(c)),
 
-            Switch(c, bs, args) => {
-                
+            Switch(cond, branches, args) => {
                 let args = args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
                 let args = v.new_circuit().intern_wire_list(&args);
 
-                let bs = bs.iter().map(|&b| v.visit(b)).collect::<Vec<_>>();
-                let bs = v.new_circuit().intern_switch_case_list(&bs);
+                let branches = branches.iter().map(|&branch| v.visit(branch)).collect::<Vec<_>>();
+                let branches = v.new_circuit().intern_switch_case_list(&branches);
      
-                Switch(v.visit(c), bs , args)
+                Switch(v.visit(cond), branches, args)
             },
             Seq(a, b) => Seq(v.visit(a), v.visit(b)),
             AssertZero(a) => AssertZero(v.visit(a)),
@@ -3035,16 +3023,15 @@ impl<'a, 'b> Migrate<'a, 'b> for Call<'a> {
 }
 
 declare_interned_pointer! {
-    /// A pointer to a switch case containing condition value and the respective function
+    /// A case in a circuit switch statement.
     #[derive(Debug)]
     pub struct SwitchCase<'a> => SwitchCaseData<'a>;
 }
 
 #[derive(Clone, Debug)]
 pub struct SwitchCaseData<'a> {
-    /// `bits` value is mathced with switch variable to decide whether to evaluate the related function or not 
-    pub bits: Bits<'a>,
-    pub func: Function<'a>,
+    pub pattern: Bits<'a>,
+    pub body: Function<'a>,
     pub project_witness: SecretProjectFn<'a>,
     pub project_deps: &'a [Wire<'a>],
 }
@@ -3055,8 +3042,8 @@ impl<'a, 'b> Migrate<'a, 'b> for SwitchCaseData<'a> {
         let project_deps = self.project_deps.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
         let project_deps = v.new_circuit().arena().alloc_slice_copy(&project_deps);
         SwitchCaseData {
-            bits: v.visit(self.bits),
-            func: v.visit(self.func),
+            pattern: v.visit(self.pattern),
+            body: v.visit(self.body),
             project_witness: v.visit(self.project_witness),
             project_deps,
         }
