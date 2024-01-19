@@ -94,7 +94,7 @@ macro_rules! declare_use_plugins {
         }
     };
 }
-declare_use_plugins!(mux_v0, permutation_check_v1);
+declare_use_plugins!(mux_v0, permutation_check_v1, disjunction_v0);
 
 
 #[cfg(feature = "bellman")]
@@ -665,6 +665,7 @@ pub fn new_boolean_sieve_ir_v3<'a>(
                     | BackendFeature::ConcatExtractBits
                     | BackendFeature::WideMul
                     | BackendFeature::Permute
+                    | BackendFeature::Switch
                 )
             }
         }

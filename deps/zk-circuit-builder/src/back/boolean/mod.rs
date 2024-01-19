@@ -12,7 +12,7 @@ use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
-    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call,
+    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call, SwitchCase, CallData,
 };
 use crate::ir::migrate::{self, Migrate};
 use crate::routing::gadget::Permute;
@@ -154,6 +154,9 @@ pub trait Sink: Sized {
     /// first 8 of those 72 bits would hold the value `0_u8`, the next 16 would be `1_u16`, the next 8
     /// would be `10_u8`, and so on.
     fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]);
+    
+//    const HAS_SWITCH: bool;
+//    fn switch(&mut self, expire: Time, cond: WireId, branches: Vec<(&Self::FunctionId, BigUint)>, args: &[WireId]) -> WireId;
 
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -296,6 +299,17 @@ trait PrivateOps<'a> {
         permuted_wires: Vec<Wire<'a>>,
         wire_widths: Vec<u64>
     );
+    fn emit_switch(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+        max_private_input_count: u64,
+    );
 }
 
 struct PrivateDirect<E> {
@@ -360,6 +374,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
                 PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
                 PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
                 PrivateOp::Permute(n, perm, permuted_wires, wire_widths) => sub_ops.emit_permute(c, sink, n, perm, permuted_wires, wire_widths),
+                PrivateOp::Switch(cond, branches, private_input_counts, args, max_private_input_count) => sub_ops.emit_switch(c, sink, get_log, cond, branches, private_input_counts, args, max_private_input_count),
             }
         }
     }
@@ -377,15 +392,71 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         let input_values = input_wires.iter().map(|&x| self.ev.eval_wire_bits(c, x).unwrap().0).collect();
         sink.permute_private_values(num_items, bits, input_values, &wire_widths);
     }
+
+    fn emit_switch(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+        max_private_input_count: u64,
+    ) {
+        let (cond_val, _cond_sec) = self.ev.eval_wire_bits(c, cond).unwrap();
+        let cond_val = cond_val.to_biguint(); // TODO(isweet): Compare `cond_val` and `pattern` below at type `cond.ty` rather than as BigUint
+        let (branch_idx, branch)  = branches.iter().enumerate().find(|(idx, branch)| {
+            let pattern = branch.pattern.to_biguint();
+            cond_val == pattern
+        }).unwrap();
+        let private_input_count = private_input_counts[branch_idx];
+
+        // TODO(isweet): Use `c.call` and make `alloc_call` private again
+        let call = c.as_base().alloc_call(CallData {
+            func: branch.body,
+            args,
+            project_witness: branch.project_witness,
+            project_deps: branch.project_deps,
+        });
+        self.emit_call(c, sink, get_log, call);
+
+        let padding_amt = max_private_input_count - private_input_count;
+        
+        sink.private_value(padding_amt, Bits::zero());
+    }
 }
 
-#[derive(Clone, Debug, Migrate)]
+#[derive(Clone, Debug)]
 enum PrivateOp<'a> {
     Emit(Wire<'a>),
     QuotRem(Wire<'a>, Wire<'a>),
     Call(Call<'a>),
     Permute(u64, Wire<'a>, Vec<Wire<'a>>, Vec<u64>),
+    Switch(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>], u64),
 }
+
+impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
+    type Output = PrivateOp<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PrivateOp<'b> {
+        match self {
+            PrivateOp::Emit(a) => PrivateOp::Emit(v.visit(a)),
+            PrivateOp::QuotRem(a, b) => PrivateOp::QuotRem(v.visit(a), v.visit(b)),
+            PrivateOp::Call(call) => PrivateOp::Call(v.visit(call)),
+            PrivateOp::Permute(n, perm, perm_wires, wire_widths) => PrivateOp::Permute(n, v.visit(perm), v.visit(perm_wires), wire_widths),
+            PrivateOp::Switch(cond, branches, private_input_counts, args, max_private_input_count) => {
+                let branches = branches.iter().map(|&branch| v.visit(branch)).collect::<Vec<_>>();
+                let branches = v.new_circuit().switch_case_list(&branches);
+
+                let args = args.iter().map(|&arg| v.visit(arg)).collect::<Vec<_>>();
+                let args = v.new_circuit().wire_list(&args);
+                PrivateOp::Switch(v.visit(cond), branches, private_input_counts, args, max_private_input_count)
+            }
+        }
+    }
+}
+
 
 struct PrivateLog<'a> {
     log: Vec<PrivateOp<'a>>,
@@ -442,6 +513,20 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
     ) {
         self.log.push(PrivateOp::Permute(num_items, perm, permuted_wires, wire_widths));
     }
+    
+    fn emit_switch(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+        max_private_input_count: u64,
+    ) {
+        self.log.push(PrivateOp::Switch(cond, branches, private_input_counts, args, max_private_input_count));
+    }
 }
 
 
@@ -451,6 +536,7 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
 struct FunctionInfo<'w, T> {
     id: T,
     private_log: Vec<PrivateOp<'w>>,
+    private_input_count: u64,
 }
 
 pub struct Backend<'w, S: Sink> {
@@ -504,6 +590,14 @@ impl<'w, S: Sink> Backend<'w, S> {
             if let GateKind::Call(call) = w.kind {
                 if !self.function_map.contains_key(&call.func) {
                     self.define_function(c.as_base(), call.func);
+                }
+            }
+
+            if let GateKind::Switch(_, branches, _) = w.kind {
+                for branch in branches {
+                    if !self.function_map.contains_key(&branch.body) {
+                        self.define_function(c.as_base(), branch.body)
+                    }
                 }
             }
         }
@@ -583,6 +677,21 @@ impl<'w, S: Sink> Backend<'w, S> {
                 private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
                 return out;
             },
+            GateKind::Switch(cond, branches, args) => {
+                let cond_w = self.wire_map[&cond];
+                let function_map = &self.function_map;
+                let branches_w = branches.iter().map(|branch| (&function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
+                let args_w = args.iter().map(|arg| self.wire_map[arg]).collect::<Vec<_>>();
+
+                let private_input_counts: Vec<u64> = branches.iter().map(|branch| function_map[&branch.body].private_input_count).collect::<Vec<_>>(); 
+                let max_private_input_count = *private_input_counts.iter().max().unwrap();
+
+                // let out = self.sink.switch(expire, cond_w, branches_w, &args_w);
+                let out = todo!();
+                let mut get_log = |func| function_map[&func].private_log.clone();
+                private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args, max_private_input_count);
+                out
+            }
             GateKind::Gadget(gk, ws) => {
                 if let Some(g) = gk.cast::<Permute>() {
                     assert!(S::HAS_PERMUTE, "Permute gadget is unsupported with this Sink");
@@ -964,9 +1073,11 @@ impl<'w, S: Sink> Backend<'w, S> {
                 (backend.sink, out_wire)
             },
         );
+        let private_input_count = todo!(); // TODO(isweet): Compute from private_log
         self.function_map.insert(f, FunctionInfo {
             id: func_id,
             private_log: private_log.into_inner(),
+            private_input_count,
         });
     }
 

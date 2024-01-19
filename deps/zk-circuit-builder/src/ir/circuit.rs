@@ -338,7 +338,7 @@ impl<'a> CircuitBase<'a> {
         }
     }
 
-    fn alloc_call(&self, call: CallData<'a>) -> Call<'a> {
+    pub fn alloc_call(&self, call: CallData<'a>) -> Call<'a> {
         Call(self.arena().alloc(call))
     }
 
