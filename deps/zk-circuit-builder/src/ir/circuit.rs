@@ -402,30 +402,30 @@ impl<'a> CircuitBase<'a> {
                 }
             }
 
-            GateKind::Switch(_g, bs, args) => {
+            GateKind::Switch(_cond, branches, args) => {
                 assert!(self.as_base().allow_switches, "`GateKind::Switch` is not allowed.");
 
                 // There must be at least one branch
-                assert!(!bs.is_empty(), "There must be at least one branch in a `GateKind::Switch`.");
+                assert!(!branches.is_empty(), "There must be at least one branch in a `GateKind::Switch`.");
 
-                let result_ty = bs[0].body.result_wire.ty;
+                let result_ty = branches[0].body.result_wire.ty;
 
-                for b in bs {
-                    let b_param_count = b.body.arg_tys.len();
+                for branch in branches {
+                    let branch_param_count = branch.body.arg_tys.len();
                     // The number of formal parameters accepted by the branch must be equal to the number of arguments provided
-                    assert_eq!(b_param_count, args.len(), "The number of formal parameters in a `GateKind::Switch` branch ({}) \
-                                                           must be equal to the number of supplied arguments ({}).", b_param_count, args.len());
+                    assert_eq!(branch_param_count, args.len(), "The number of formal parameters in a `GateKind::Switch` branch ({}) \
+                                                                 must be equal to the number of supplied arguments ({}).", branch_param_count, args.len());
 
                     // The types of the formal parameters accepted by the branch must be the same as the types of the arguments provided
-                    for (b_param_ty, arg_ty) in b.body.arg_tys.iter().zip(args.iter().map(|arg| arg.ty)) {
-                        assert_eq!(*b_param_ty, arg_ty, "The type of a formal parameter in a `GateKind::Switch` branch ({:?}) \
-                                                         must be equal to the type of the corresponding supplied argument ({:?}).", *b_param_ty, arg_ty);
+                    for (branch_param_ty, arg_ty) in branch.body.arg_tys.iter().zip(args.iter().map(|arg| arg.ty)) {
+                        assert_eq!(*branch_param_ty, arg_ty, "The type of a formal parameter in a `GateKind::Switch` branch ({:?}) \
+                                                              must be equal to the type of the corresponding supplied argument ({:?}).", *branch_param_ty, arg_ty);
                     }
 
                     // The result type of the branch must be the same for all branches
-                    let b_result_ty = b.body.result_wire.ty;
-                    assert_eq!(b_result_ty, result_ty, "The type of the result from a `GateKind::Switch` branch ({:?}) \
-                                                        must be the same for all branches ({:?}).", b_result_ty, result_ty);
+                    let branch_result_ty = branch.body.result_wire.ty;
+                    assert_eq!(branch_result_ty, result_ty, "The type of the result from a `GateKind::Switch` branch ({:?}) \
+                                                             must be the same for all branches ({:?}).", branch_result_ty, result_ty);
                 }
             }
             _ => {},
@@ -622,7 +622,6 @@ impl<'a, F> Circuit<'a, F> {
     }
 
     pub fn set_allow_switches(mut self, allow_switches: bool) -> Self {
-        assert!(self.base.allow_functions, "Allowing functions is a prerequisite for allowing switches.");
         self.base = self.base.set_allow_switches(allow_switches);
         self
     }
@@ -1666,7 +1665,7 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
         GateKind::Pack(ws) |
         GateKind::Gadget(_, ws) => WireDeps::many(ws),
         GateKind::Call(c) => WireDeps::many(c.args),
-        GateKind::Switch(g, _, args) => WireDeps::one_many(g, args),
+        GateKind::Switch(cond, _, args) => WireDeps::one_many(cond, args),
         GateKind::Seq(a, b) => WireDeps::two(a, b),
         GateKind::AssertZero(a) => WireDeps::one(a),
     }
@@ -2311,10 +2310,10 @@ impl<'a> GateKind<'a> {
                 k.typecheck(c.as_base(), &tys)
             },
             GateKind::Call(c) => c.func.result_wire.ty,
-            GateKind::Switch(_, bs, _) => {
+            GateKind::Switch(_, branches, _) => {
                 // `GateKind::Switch` checks on construction that there is at least one
                 // branch, and that all branches have the same result type.
-                bs[0].body.result_wire.ty
+                branches[0].body.result_wire.ty
             },
             GateKind::Seq(_, b) => b.ty,
             GateKind::AssertZero(_) => Ty::unit(),
@@ -2450,14 +2449,14 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
             },
             Call(c) => Call(v.visit(c)),
 
-            Switch(g, bs, args) => {
+            Switch(cond, branches, args) => {
                 let args = args.iter().map(|&w| v.visit(w)).collect::<Vec<_>>();
                 let args = v.new_circuit().intern_wire_list(&args);
 
-                let bs = bs.iter().map(|&b| v.visit(b)).collect::<Vec<_>>();
-                let bs = v.new_circuit().intern_switch_case_list(&bs);
+                let branches = branches.iter().map(|&branch| v.visit(branch)).collect::<Vec<_>>();
+                let branches = v.new_circuit().intern_switch_case_list(&branches);
      
-                Switch(v.visit(g), bs, args)
+                Switch(v.visit(cond), branches, args)
             },
             Seq(a, b) => Seq(v.visit(a), v.visit(b)),
             AssertZero(a) => AssertZero(v.visit(a)),

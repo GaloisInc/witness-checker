@@ -949,14 +949,14 @@ fn eval_gate_inner<'a, 'b>(
 
         GateKind::Call(call) => eval_call(c, ecx, call)?,
 
-        GateKind::Switch(g, bs, args) => {
+        GateKind::Switch(cond, branches, args) => {
             let mut sec = false;
-            let (g_val, g_sec) = ecx.get_value(g)?;
-            let g_val = g_val.to_biguint();
-            sec |= g_sec;
-            for b in bs {
-                if g_val == b.pattern.to_biguint() {
-                    let (ret_val, ret_sec) = eval_switch_case(c, ecx, *b, args)?;
+            let (cond_val, cond_sec) = ecx.get_value(cond)?;
+            let cond_val = cond_val.to_biguint();
+            sec |= cond_sec;
+            for branch in branches {
+                if cond_val == branch.pattern.to_biguint() {
+                    let (ret_val, ret_sec) = eval_switch_case(c, ecx, *branch, args)?;
                     sec |= ret_sec;
                     return Ok((ret_val, sec));
                 }
