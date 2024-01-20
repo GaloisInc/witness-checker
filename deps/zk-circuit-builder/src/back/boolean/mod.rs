@@ -527,7 +527,7 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         &mut self,
         _c: &CircuitBase<'a>,
         _sink: &mut impl Sink,
-        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
+        _get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
@@ -1604,7 +1604,7 @@ mod test {
             args: &[WireId],
             max_private_input_count: u64,
         ) -> WireId {
-            self.inner.switch(expire, cond, branches, args, max_private_value)
+            self.inner.switch(expire, cond, branches, args, max_private_input_count)
         }
     }
 
