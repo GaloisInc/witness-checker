@@ -1,0 +1,56 @@
+## FLAGS: --validate-only
+# Evaluate the sequence used in the Collatz conjecture.  This is used as a
+# basis for some other examples.
+
+- [0,1,0,0]
+- []
+-
+  program:
+    - [mov, 0, null, true, 5]
+
+    # Top of loop (pc = 1)
+    # Check the low bit of r0
+    - [and, 1, 0, true, 1]
+    - [cjmp, null, 1, true, 5]
+
+    # Low bit is 0 (pc = 3)
+    - [shr, 0, 0, true, 1]
+    - [jmp, null, null, true, 1]
+
+    # Low bit is 1 (pc = 5)
+    - [mull, 0, 0, true, 3]
+    - [add, 0, 0, true, 1]
+    - [jmp, null, null, true, 1]
+
+  params:
+    num_regs: 2
+    trace_len: 22
+
+  trace:
+    - [0, [0, 0]]
+
+    - [1, [5, 0]]
+    - [2, [5, 1]]
+    - [5, [5, 1]]
+    - [6, [15, 1]]
+    - [7, [16, 1]]
+
+    - [1, [16, 1]]
+    - [2, [16, 0]]
+    - [3, [16, 0]]
+    - [4, [8, 0]]
+
+    - [1, [8, 0]]
+    - [2, [8, 0]]
+    - [3, [8, 0]]
+    - [4, [4, 0]]
+
+    - [1, [4, 0]]
+    - [2, [4, 0]]
+    - [3, [4, 0]]
+    - [4, [2, 0]]
+
+    - [1, [2, 0]]
+    - [2, [2, 0]]
+    - [3, [2, 0]]
+    - [4, [1, 0]]
