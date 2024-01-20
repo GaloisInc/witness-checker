@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use num_traits::Zero;
 use std::iter;
 use zki_sieve_v5;
 use zki_sieve_v5::structs::count::Count;
@@ -96,20 +97,32 @@ impl SieveIrFormat for SieveIrV3 {
 
     const HAS_PLUGINS: bool = true;
 
-    fn new_plugin_function(
+    fn new_plugin_function_with_inputs(
         name: String,
         outs: impl IntoIterator<Item = u64>,
         ins: impl IntoIterator<Item = u64>,
         plugin_name: String,
         op_name: String,
         args: Vec<String>,
+        public_input_count: u64,
+        private_input_count: u64,
     ) -> Function {
+        let mut public_count = BTreeMap::new();
+        if !public_input_count.is_zero() {
+            public_count.insert(0, public_input_count);
+        }
+
+        let mut private_count = BTreeMap::new();
+        if !private_input_count.is_zero() {
+            private_count.insert(0, private_input_count);
+        }
+        
         let body = PluginBody {
             name: plugin_name,
             operation: op_name,
             params: args,
-            public_count: BTreeMap::new(),
-            private_count: BTreeMap::new(),
+            public_count,
+            private_count,
         };
         Function::new(
             name,

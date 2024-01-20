@@ -155,8 +155,15 @@ pub trait Sink: Sized {
     /// would be `10_u8`, and so on.
     fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]);
     
-//    const HAS_SWITCH: bool;
-//    fn switch(&mut self, expire: Time, cond: WireId, branches: Vec<(&Self::FunctionId, BigUint)>, args: &[WireId]) -> WireId;
+    const HAS_SWITCH: bool;
+    fn switch(
+        &mut self,
+        expire: Time,
+        cond: WireId,
+        branches: Vec<(&Self::FunctionId, BigUint)>,
+        args: &[WireId],
+        max_private_input_count: u64
+    ) -> WireId;
 
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -287,7 +294,7 @@ trait PrivateOps<'a> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
         call: Call<'a>,
     );
     fn emit_permute(
@@ -303,7 +310,7 @@ trait PrivateOps<'a> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
@@ -362,7 +369,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
         call: Call<'a>,
     ) {
         let sub_ev = self.ev.enter_call(c, call);
@@ -397,7 +404,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
@@ -458,6 +465,8 @@ impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
 }
 
 
+
+
 struct PrivateLog<'a> {
     log: Vec<PrivateOp<'a>>,
 }
@@ -496,7 +505,7 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         &mut self,
         _c: &CircuitBase<'a>,
         _sink: &mut impl Sink,
-        _get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        _get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
         call: Call<'a>,
     ) {
         self.log.push(PrivateOp::Call(call));
@@ -518,7 +527,7 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         &mut self,
         _c: &CircuitBase<'a>,
         _sink: &mut impl Sink,
-        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
@@ -563,6 +572,22 @@ impl<'w, S: Sink> Backend<'w, S> {
             bundle_ty_offsets: HashMap::new(),
         }
     }
+
+    fn private_input_count_of_log(&self, log: &[PrivateOp<'w>]) -> u64 {
+        let mut sum = 0;
+        for op in log {
+            // TODO(isweet): These counts are tightly coupled to the SieveIrFunctionSink. Consider instead
+            // adding functions to Sink that compute the number of private inputs being produced.
+            sum += match op {
+                PrivateOp::Emit(w) => type_bits(w.ty),
+                PrivateOp::QuotRem(numer, _denom) => 2 * type_bits(numer.ty),
+                PrivateOp::Call(call) => self.function_map[&call.func].private_input_count,
+                PrivateOp::Permute(_n, _perm, _permuted_wires, _wire_widths) => todo!(), // TODO(isweet): Ask Stuart about this
+                PrivateOp::Switch(_cond, _branches, _private_input_counts, _args, max_private_input_count) => *max_private_input_count,
+            }
+        }
+        sum
+    }    
 
     /// Populate `wire_map` with entries for all the wires in `wires`.  Temporary intermediate
     /// values will not be kept in `wire_map`.  The caller is responsible for removing the entries
@@ -674,23 +699,20 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let args = call.args.iter().map(|&w| self.wire_map[&w]).collect::<Vec<_>>();
                 let out = self.sink.call(expire, func_id, &args);
                 let mut get_log = |func| function_map[&func].private_log.clone();
-                private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
+                private.emit_call(c.as_base(), &mut self.sink, &get_log, call);
                 return out;
             },
             GateKind::Switch(cond, branches, args) => {
                 let cond_w = self.wire_map[&cond];
                 let function_map = &self.function_map;
                 let branches_w = branches.iter().map(|branch| (&function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
+                let private_input_counts: Vec<u64> = branches.iter().map(|branch| function_map[&branch.body].private_input_count).collect::<Vec<_>>();
+                let max_private_input_count = *private_input_counts.iter().max().unwrap();                
                 let args_w = args.iter().map(|arg| self.wire_map[arg]).collect::<Vec<_>>();
-
-                let private_input_counts: Vec<u64> = branches.iter().map(|branch| function_map[&branch.body].private_input_count).collect::<Vec<_>>(); 
-                let max_private_input_count = *private_input_counts.iter().max().unwrap();
-
-                // let out = self.sink.switch(expire, cond_w, branches_w, &args_w);
-                let out = todo!();
+                let out = self.sink.switch(expire, cond_w, branches_w, &args_w, max_private_input_count);
                 let mut get_log = |func| function_map[&func].private_log.clone();
-                private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args, max_private_input_count);
-                out
+                private.emit_switch(c.as_base(), &mut self.sink, &get_log, cond, branches, private_input_counts, args, max_private_input_count);
+                return out;
             }
             GateKind::Gadget(gk, ws) => {
                 if let Some(g) = gk.cast::<Permute>() {
@@ -1073,7 +1095,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 (backend.sink, out_wire)
             },
         );
-        let private_input_count = todo!(); // TODO(isweet): Compute from private_log
+        let private_input_count = self.private_input_count_of_log(&private_log.log);
         self.function_map.insert(f, FunctionInfo {
             id: func_id,
             private_log: private_log.into_inner(),
@@ -1444,6 +1466,18 @@ mod test {
         fn permute_private_values(&mut self, _num_items: u64, _perm: Bits, _input_values: Vec<Bits>, _wire_widths: &[u64]) {
             unimplemented!()
         }
+
+        const HAS_SWITCH: bool = false;
+        fn switch(
+            &mut self,
+            _expire: Time,
+            _cond: WireId,
+            _branches: Vec<(&Self::FunctionId, BigUint)>,
+            _args: &[WireId],
+            _max_private_input_count: u64,
+        ) -> WireId {
+            unimplemented!()
+        }
     }
 
 
@@ -1559,6 +1593,18 @@ mod test {
         }
         fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
+        }
+
+        const HAS_SWITCH: bool = <TestSink as Sink>::HAS_SWITCH;
+        fn switch(
+            &mut self,
+            expire: Time,
+            cond: WireId,
+            branches: Vec<(&Self::FunctionId, BigUint)>,
+            args: &[WireId],
+            max_private_input_count: u64,
+        ) -> WireId {
+            self.inner.switch(expire, cond, branches, args, max_private_value)
         }
     }
 

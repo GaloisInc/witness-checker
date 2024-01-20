@@ -844,6 +844,18 @@ mod test {
         fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
         }
+
+        const HAS_SWITCH: bool = <TestSink as Sink>::HAS_SWITCH;
+        fn switch(
+            &mut self,
+            expire: Time,
+            cond: WireId,
+            branches: Vec<(&Self::FunctionId, BigUint)>,
+            args: &[WireId],
+            max_private_input_count: u64
+        ) -> WireId {
+            self.inner.switch(expire, cond, branches, args, max_private_input_count)
+        }
     }
 
     // TODO(isweet):

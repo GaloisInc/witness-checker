@@ -4,6 +4,7 @@ use std::iter;
 use std::marker::PhantomData;
 use std::mem;
 use log::*;
+use num_bigint::BigUint;
 use zki_sieve;
 use zki_sieve_v3;
 use crate::back::UsePlugins;
@@ -70,6 +71,16 @@ pub trait SieveIrFormat {
     ) -> Self::Function;
 
     const HAS_PLUGINS: bool;
+    fn new_plugin_function_with_inputs(
+        name: String,
+        outs: impl IntoIterator<Item = u64>,
+        ins: impl IntoIterator<Item = u64>,
+        plugin_name: String,
+        op_name: String,
+        args: Vec<String>,
+        public_input_count: u64,
+        private_input_count: u64,
+    ) -> Self::Function;
     fn new_plugin_function(
         name: String,
         outs: impl IntoIterator<Item = u64>,
@@ -77,7 +88,9 @@ pub trait SieveIrFormat {
         plugin_name: String,
         op_name: String,
         args: Vec<String>,
-    ) -> Self::Function;
+    ) -> Self::Function {
+        Self::new_plugin_function_with_inputs(name, outs, ins, plugin_name, op_name, args, 0, 0)
+    }
 
     fn relation_gate_count_approx(r: &Self::Relation) -> usize;
     fn visit_relation(
@@ -105,6 +118,7 @@ pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     // Plugins
     use_plugin_mux_v0: bool,
     use_plugin_permutation_check_v1: bool,
+    use_plugin_disjunction_v0: bool,
 
     _marker: PhantomData<IR>,
 }
@@ -113,7 +127,7 @@ pub type SieveIrV1Sink<S> = SieveIrFunctionSink<S, SieveIrV1>;
 pub type SieveIrV2Sink<S> = SieveIrFunctionSink<S, SieveIrV2>;
 pub type SieveIrV3Sink<S> = SieveIrFunctionSink<S, SieveIrV3>;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 enum FunctionDesc {
     LitZero(u64),
     Private(u64),
@@ -157,6 +171,8 @@ enum FunctionDesc {
     ///
     /// This is only defined for `k >= 2`.
     PermuteShuffle(u64, u8, bool),
+
+    Switch(Vec<(usize, BigUint)>, u64),
 }
 
 impl FunctionDesc {
@@ -190,6 +206,10 @@ impl FunctionDesc {
                 format!("permute_switch_public_{}_{}", n, swap as u8),
             FunctionDesc::PermuteShuffle(n, k, flip) =>
                 format!("permute_shuffle_{}_{}_{}", n, k, flip as u8),
+            FunctionDesc::Switch(branches, _max_private_input_count) => {
+                let suffix = branches.into_iter().map(|(idx, n)| format!("{}_{}", idx, n)).collect::<Vec<_>>().join("_");
+                format!("switch_{}", suffix)
+            },
         }
     }
 }
@@ -246,6 +266,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             emitted_relation: false,
             use_plugin_mux_v0: use_plugins.mux_v0,
             use_plugin_permutation_check_v1: use_plugins.permutation_check_v1,
+            use_plugin_disjunction_v0: use_plugins.disjunction_v0,
             _marker: PhantomData,
         }
     }
@@ -374,6 +395,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             emitted_relation: false,
             use_plugin_mux_v0: self.use_plugin_mux_v0,
             use_plugin_permutation_check_v1: self.use_plugin_permutation_check_v1,
+            use_plugin_disjunction_v0: self.use_plugin_disjunction_v0,
             _marker: PhantomData,
         }
     }
@@ -413,8 +435,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         input_count: &[u64],
     ) -> (usize, String) {
         let idx = self.func_info.len();
-        self.func_map.insert(desc, idx);
-        let name = format!("f{}_{}", idx, desc.name());
+        self.func_map.insert(desc.clone(), idx);
+        let name = format!("f{}_{}", idx, desc.clone().name());
         self.func_info.push(FunctionInfo {
             name: name.clone(),
             counts: output_count.iter().cloned().chain(input_count.iter().cloned()).collect(),
@@ -450,7 +472,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
 
         if IR::HAS_PLUGINS {
-            match desc {
+            match desc.clone() {
                 FunctionDesc::Mux(n) if self.use_plugin_mux_v0 => {
                     let (idx, name) = self.add_func_info(desc, &[n], &[1, n, n]);
                     if n == 0 {
@@ -494,6 +516,29 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     if self.use_plugin_permutation_check_v1 {
                         unreachable!("{:?}", desc);
                     }
+                }
+
+                FunctionDesc::Switch(branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
+                    let output_count= self.func_info[branches[0].0].outputs().to_owned();
+                    let mut input_count = branches.iter().flat_map(|(idx, _)| self.func_info[*idx].inputs().to_owned()).collect::<Vec<_>>();
+                    input_count.insert(0, 1);
+                    let mut params = branches.iter().flat_map(|(idx, n)| vec![n.to_string(), self.func_info[*idx].name.clone()]).collect::<Vec<_>>();
+                    // TODO(isweet): Support `permissive` mode at some point?
+                    params.insert(0, "strict".into());
+                    let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
+
+                    self.functions.push(IR::new_plugin_function_with_inputs(
+                        name,
+                        output_count,
+                        input_count,
+                        SWITCH_PLUGIN_NAME.into(),
+                        "switch".into(),
+                        params,
+                        0,
+                        max_private_input_count,
+                    ));
+
+                    return idx;
                 }
 
                 _ => {}
@@ -682,6 +727,21 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
                 (vec![n * (1 << k)], vec![n * (1 << k)])
             },
+            FunctionDesc::Switch(_branches, _max_private_input_count) => {
+                // TODO(isweet): A non-plugin version of `GateKind::Switch` is difficult to support in the current design.
+                //
+                // The non-plugin version would need to emit private inputs for _every_ branch and doesn't need to pad.
+                // In contrast, the plugin version only emits private inputs for the branch being executed, and must pad.
+                // This means we would need a new method in `Sink` similar to `permute_private_values` that behaves differently
+                // depending on whether `self.use_plugin_disjunction_v0`. Let's call this imaginary new method `switch_private_values`.
+                // To implement the plugin case of `switch_private_values`, I'd need to either duplicate `PrivateOps::emit_call` at the
+                // Sink layer or use `PrivateOps` directly. I haven't looked into this further, but that feels like it violates
+                // an abstraction boundary. E.g. none of the other code in this source file uses `PrivateOps`.
+                //
+                // This may be as easy as just passing `PrivateOps` to the `Sink` trait, but I'm not sure so I'm leaving this
+                // unimplemented for now.
+                unimplemented!()
+            }
         };
 
         let zki_sink = self.finish_sub_sink(sub_sink);
@@ -989,6 +1049,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     }
 }
 
+const SWITCH_PLUGIN_NAME: &str = "disjunction_v0";
+
 impl<S, IR: SieveIrFormat> Sink for SieveIrFunctionSink<S, IR>
 where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn lit(&mut self, expire: Time, n: u64, bits: Bits) -> WireId {
@@ -1155,6 +1217,21 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             self.permute_private_values_no_plugin(num_items, perm);
         }
     }
+
+    const HAS_SWITCH: bool = true;
+    fn switch(
+        &mut self,
+        expire: Time,
+        cond: WireId,
+        branches: Vec<(&Self::FunctionId, BigUint)>,
+        args: &[WireId],
+        max_private_input_count: u64,
+    ) -> WireId {
+        let branches = branches.into_iter().map(|(idx, n)| (*idx, n)).collect::<Vec<_>>();
+        let mut args = args.to_vec();
+        args.insert(0, cond);
+        self.emit_call(expire, FunctionDesc::Switch(branches, max_private_input_count), &args)
+    }
 }
 
 
@@ -1268,6 +1345,9 @@ impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
             }
             if self.use_plugin_permutation_check_v1 {
                 r.plugins.push("permutation_check_v1".into());
+            }
+            if self.use_plugin_disjunction_v0 {
+                r.plugins.push(SWITCH_PLUGIN_NAME.into());
             }
             r.types = vec![Type::Field(vec![2])];
 
@@ -1403,6 +1483,9 @@ impl<S: zki_sieve_v5::Sink> SieveIrFunctionSink<S, SieveIrV3> {
             }
             if self.use_plugin_permutation_check_v1 {
                 r.plugins.push("permutation_check_v1".into());
+            }
+            if self.use_plugin_disjunction_v0 {
+                r.plugins.push(SWITCH_PLUGIN_NAME.into());
             }
             r.types = vec![Type::Field(vec![2])];
 

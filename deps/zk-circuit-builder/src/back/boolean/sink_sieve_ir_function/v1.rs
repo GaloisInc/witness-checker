@@ -94,13 +94,15 @@ impl SieveIrFormat for SieveIrV1 {
 
     const HAS_PLUGINS: bool = false;
 
-    fn new_plugin_function(
+    fn new_plugin_function_with_inputs(
         _name: String,
         _outs: impl IntoIterator<Item = u64>,
         _ins: impl IntoIterator<Item = u64>,
         _plugin_name: String,
         _op_name: String,
         _args: Vec<String>,
+        _public_input_count: u64,
+        _private_input_count: u64,
     ) -> Function {
         panic!("plugins are not supported by this format")
     }
