@@ -1223,14 +1223,15 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         &mut self,
         expire: Time,
         cond: WireId,
+        n: u64,
         branches: Vec<(&Self::FunctionId, BigUint)>,
         args: &[WireId],
         max_private_input_count: u64,
     ) -> WireId {
-        let branches = branches.into_iter().map(|(idx, n)| (*idx, n)).collect::<Vec<_>>();
-        let mut args = args.to_vec();
-        args.insert(0, cond);
-        self.emit_call(expire, FunctionDesc::Switch(branches, max_private_input_count), &args)
+        let branches = branches.into_iter().map(|(idx, pat)| (*idx, pat)).collect::<Vec<_>>();
+        let mut cond_with_args = (0..n).map(|i| cond + i).collect::<Vec<_>>();
+        cond_with_args.extend_from_slice(args);
+        self.emit_call(expire, FunctionDesc::Switch(branches, max_private_input_count), &cond_with_args)
     }
 }
 

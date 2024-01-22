@@ -850,11 +850,12 @@ mod test {
             &mut self,
             expire: Time,
             cond: WireId,
+            n: u64,
             branches: Vec<(&Self::FunctionId, BigUint)>,
             args: &[WireId],
             max_private_input_count: u64
         ) -> WireId {
-            self.inner.switch(expire, cond, branches, args, max_private_input_count)
+            self.inner.switch(expire, cond, n, branches, args, max_private_input_count)
         }
     }
 

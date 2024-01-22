@@ -160,6 +160,7 @@ pub trait Sink: Sized {
         &mut self,
         expire: Time,
         cond: WireId,
+        n: u64,
         branches: Vec<(&Self::FunctionId, BigUint)>,
         args: &[WireId],
         max_private_input_count: u64
@@ -706,10 +707,11 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let cond_w = self.wire_map[&cond];
                 let function_map = &self.function_map;
                 let branches_w = branches.iter().map(|branch| (&function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
-                let private_input_counts: Vec<u64> = branches.iter().map(|branch| function_map[&branch.body].private_input_count).collect::<Vec<_>>();
+                let private_input_counts = branches.iter().map(|branch| function_map[&branch.body].private_input_count).collect::<Vec<_>>();
                 let max_private_input_count = *private_input_counts.iter().max().unwrap();                
                 let args_w = args.iter().map(|arg| self.wire_map[arg]).collect::<Vec<_>>();
-                let out = self.sink.switch(expire, cond_w, branches_w, &args_w, max_private_input_count);
+                let n = type_bits(cond.ty);
+                let out = self.sink.switch(expire, cond_w, n, branches_w, &args_w, max_private_input_count);
                 let mut get_log = |func| function_map[&func].private_log.clone();
                 private.emit_switch(c.as_base(), &mut self.sink, &get_log, cond, branches, private_input_counts, args, max_private_input_count);
                 return out;
@@ -1472,6 +1474,7 @@ mod test {
             &mut self,
             _expire: Time,
             _cond: WireId,
+            _n: u64,
             _branches: Vec<(&Self::FunctionId, BigUint)>,
             _args: &[WireId],
             _max_private_input_count: u64,
@@ -1600,11 +1603,12 @@ mod test {
             &mut self,
             expire: Time,
             cond: WireId,
+            n: u64,
             branches: Vec<(&Self::FunctionId, BigUint)>,
             args: &[WireId],
             max_private_input_count: u64,
         ) -> WireId {
-            self.inner.switch(expire, cond, branches, args, max_private_input_count)
+            self.inner.switch(expire, cond, n, branches, args, max_private_input_count)
         }
     }
 
