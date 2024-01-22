@@ -472,7 +472,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
 
         if IR::HAS_PLUGINS {
-            match desc.clone() {
+            match desc {
                 FunctionDesc::Mux(n) if self.use_plugin_mux_v0 => {
                     let (idx, name) = self.add_func_info(desc, &[n], &[1, n, n]);
                     if n == 0 {
@@ -480,7 +480,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     }
 
                     self.functions.push(IR::new_plugin_function(
-                        name.clone(),
+                        name,
                         [n],
                         [1, n, n],
                         "mux_v0".into(),
@@ -495,7 +495,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     let (idx, name) = self.add_func_info(desc, &[], &[argc, argc]);
 
                     self.functions.push(IR::new_plugin_function(
-                        name.clone(),
+                        name,
                         [],
                         [argc, argc],
                         "permutation_check_v1".into(),
@@ -518,8 +518,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     }
                 }
 
-                FunctionDesc::Switch(branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
-                    let output_count= self.func_info[branches[0].0].outputs().to_owned();
+                FunctionDesc::Switch(ref branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
+                    let output_count = self.func_info[branches[0].0].outputs().to_owned();
                     let mut input_count = branches.iter().flat_map(|(idx, _)| self.func_info[*idx].inputs().to_owned()).collect::<Vec<_>>();
                     input_count.insert(0, 1);
                     let mut params = branches.iter().flat_map(|(idx, n)| vec![n.to_string(), self.func_info[*idx].name.clone()]).collect::<Vec<_>>();
