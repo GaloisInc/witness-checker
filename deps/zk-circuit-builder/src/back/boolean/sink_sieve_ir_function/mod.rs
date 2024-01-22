@@ -176,38 +176,38 @@ enum FunctionDesc {
 }
 
 impl FunctionDesc {
-    pub fn name(self) -> String {
+    pub fn name(&self) -> String {
         match self {
-            FunctionDesc::LitZero(n) => format!("lit_zero_{}", n),
-            FunctionDesc::Private(n) => format!("private_{}", n),
-            FunctionDesc::Copy(n) => format!("copy_{}", n),
-            FunctionDesc::And(n) => format!("and_{}", n),
-            FunctionDesc::Or(n) => format!("or_{}", n),
-            FunctionDesc::Xor(n) => format!("xor_{}", n),
-            FunctionDesc::Not(n) => format!("not_{}", n),
-            FunctionDesc::Add(n) => format!("add_{}", n),
-            FunctionDesc::AddNoWrap(n) => format!("add_no_wrap_{}", n),
-            FunctionDesc::Sub(n) => format!("sub_{}", n),
-            FunctionDesc::Mul(n) => format!("mul_{}", n),
-            FunctionDesc::MulNoWrap(n) => format!("mul_no_wrap_{}", n),
-            FunctionDesc::WideMul(n) => format!("wide_mul_{}", n),
-            FunctionDesc::Neg(n) => format!("neg_{}", n),
-            FunctionDesc::Mux(n) => format!("mux_{}", n),
-            FunctionDesc::Permute(n, m) => format!("permute_{}_{}", n, m),
-            FunctionDesc::AssertPermute(n, m) => format!("assert_permute_{}_{}", n, m),
+            FunctionDesc::LitZero(n) => format!("lit_zero_{}", *n),
+            FunctionDesc::Private(n) => format!("private_{}", *n),
+            FunctionDesc::Copy(n) => format!("copy_{}", *n),
+            FunctionDesc::And(n) => format!("and_{}", *n),
+            FunctionDesc::Or(n) => format!("or_{}", *n),
+            FunctionDesc::Xor(n) => format!("xor_{}", *n),
+            FunctionDesc::Not(n) => format!("not_{}", *n),
+            FunctionDesc::Add(n) => format!("add_{}", *n),
+            FunctionDesc::AddNoWrap(n) => format!("add_no_wrap_{}", *n),
+            FunctionDesc::Sub(n) => format!("sub_{}", *n),
+            FunctionDesc::Mul(n) => format!("mul_{}", *n),
+            FunctionDesc::MulNoWrap(n) => format!("mul_no_wrap_{}", *n),
+            FunctionDesc::WideMul(n) => format!("wide_mul_{}", *n),
+            FunctionDesc::Neg(n) => format!("neg_{}", *n),
+            FunctionDesc::Mux(n) => format!("mux_{}", *n),
+            FunctionDesc::Permute(n, m) => format!("permute_{}_{}", *n, *m),
+            FunctionDesc::AssertPermute(n, m) => format!("assert_permute_{}_{}", *n, *m),
             FunctionDesc::PermuteLayerShuffle(n, m, l) =>
-                format!("permute_layer_shuffle_{}_{}_{}", n, m, l),
+                format!("permute_layer_shuffle_{}_{}_{}", *n, *m, *l),
             FunctionDesc::PermuteLayerSwitches(n, m, l) =>
-                format!("permute_layer_switches_{}_{}_{}", n, m, l),
-            FunctionDesc::PermuteSwitch(n) => format!("permute_switch_{}", n),
+                format!("permute_layer_switches_{}_{}_{}", *n, *m, *l),
+            FunctionDesc::PermuteSwitch(n) => format!("permute_switch_{}", *n),
             FunctionDesc::PermuteSwitches(n, m) =>
-                format!("permute_switches_{}_{}", n, m),
+                format!("permute_switches_{}_{}", *n, *m),
             FunctionDesc::PermuteSwitchPublic(n, swap) =>
-                format!("permute_switch_public_{}_{}", n, swap as u8),
+                format!("permute_switch_public_{}_{}", *n, *swap as u8),
             FunctionDesc::PermuteShuffle(n, k, flip) =>
-                format!("permute_shuffle_{}_{}_{}", n, k, flip as u8),
+                format!("permute_shuffle_{}_{}_{}", *n, *k, *flip as u8),
             FunctionDesc::Switch(branches, _max_private_input_count) => {
-                let suffix = branches.into_iter().map(|(idx, n)| format!("{}_{}", idx, n)).collect::<Vec<_>>().join("_");
+                let suffix = branches.iter().map(|(idx, pat)| format!("{}_{}", idx, pat)).collect::<Vec<_>>().join("_");
                 format!("switch_{}", suffix)
             },
         }
@@ -436,7 +436,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     ) -> (usize, String) {
         let idx = self.func_info.len();
         self.func_map.insert(desc.clone(), idx);
-        let name = format!("f{}_{}", idx, desc.clone().name());
+        let name = format!("f{}_{}", idx, desc.name());
         self.func_info.push(FunctionInfo {
             name: name.clone(),
             counts: output_count.iter().cloned().chain(input_count.iter().cloned()).collect(),
