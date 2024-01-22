@@ -519,8 +519,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
 
                 FunctionDesc::Switch(ref branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
-                    let output_count = self.func_info[branches[0].0].outputs().to_owned();
-                    let mut input_count = branches.iter().flat_map(|(idx, _)| self.func_info[*idx].inputs().to_owned()).collect::<Vec<_>>();
+                    // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
+                    let f = &self.func_info[branches[0].0];
+                    let output_count = f.outputs().to_owned();
+                    let mut input_count = f.inputs().to_owned();
                     input_count.insert(0, 1);
                     let mut params = branches.iter().flat_map(|(idx, n)| vec![n.to_string(), self.func_info[*idx].name.clone()]).collect::<Vec<_>>();
                     // TODO(isweet): Support `permissive` mode at some point?
