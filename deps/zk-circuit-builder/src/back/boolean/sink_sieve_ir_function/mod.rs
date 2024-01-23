@@ -740,16 +740,28 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             FunctionDesc::Switch(_branches, _max_private_input_count) => {
                 // TODO(isweet): A non-plugin version of `GateKind::Switch` is difficult to support in the current design.
                 //
-                // The non-plugin version would need to emit private inputs for _every_ branch and doesn't need to pad.
-                // In contrast, the plugin version only emits private inputs for the branch being executed, and must pad.
-                // This means we would need a new method in `Sink` similar to `permute_private_values` that behaves differently
-                // depending on whether `self.use_plugin_disjunction_v0`. Let's call this imaginary new method `switch_private_values`.
-                // To implement the plugin case of `switch_private_values`, I'd need to either duplicate `PrivateOps::emit_call` at the
-                // Sink layer or use `PrivateOps` directly. I haven't looked into this further, but that feels like it violates
-                // an abstraction boundary. E.g. none of the other code in this source file uses `PrivateOps`.
+                // The semantics of `Switch` dictate that branches which are not taken (as indicated by the guard condition)
+                // are not executed. This means that the intuitive encoding of a `Switch` using a nested multiplexor is not
+                // correct, because it would execute every branch. Why is that an issue?
+                // 
+                // First, a nested multiplexor would consume `n * k` private inputs where `n` is the number of inputs
+                // consumed by a single branch and `k` is the number of branches. In contrast, the `Switch` semantics dictate
+                // that it should only consume `n` inputs. Second, the multiplexor would execute the `AssertZero` gates in
+                // the body of every branch. In short, the observable side effects (private input consumption and assertion failure)
+                // are different.
                 //
-                // This may be as easy as just passing `PrivateOps` to the `Sink` trait, but I'm not sure so I'm leaving this
-                // unimplemented for now.
+                // Accounting for the difference in private inputs isn't too hard. The logic for emitting private inputs could be
+                // adjusted so that the appropriate amount of private inputs are padded into the private input stream. When producing
+                // a nested multiplexor, each non-taken branch would pad the private input stream with `n` values, and the taken branch
+                // would emit the real private inputs. However, ignoring the `AssertZero` gates in non-taken branches would be more
+                // challenging. This would likely require rewriting each of the branches (recursively through the callgraph) so that
+                // the `AssertZero` gates can be toggled on / off according to whether the branch was taken.
+                //
+                // For example, each branch in the nested multiplexor could be extended with an additional argument indicating whether
+                // that branch was taken (call this `in_taken_branch`). Then, each `AssertZero(x)` would be rewritten to
+                // `AssertZero(And(x, in_taken_branch))` so that `AssertZero` gates in non-taken branches are ignored (i.e. always hold).
+                //
+                // That being said, support for a non-plugin implementation of `GateKind::Switch` is possible but left to future work.
                 unimplemented!()
             }
         };
