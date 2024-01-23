@@ -521,14 +521,22 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 FunctionDesc::Switch(ref branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
                     // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
                     let f = &self.func_info[branches[0].0];
+                    
                     let output_count = f.outputs().to_owned();
-                    let mut input_count = f.inputs().to_owned();
-                    input_count.insert(0, 1);
-                    let mut params = branches.iter().flat_map(|(idx, n)| vec![n.to_string(), self.func_info[*idx].name.clone()]).collect::<Vec<_>>();
-                    // TODO(isweet): Support `permissive` mode at some point?
-                    params.insert(0, "strict".into());
-                    let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
-
+                    let mut input_count = Vec::with_capacity(1 + f.inputs().len());
+                    input_count.push(1);
+                    input_count.extend_from_slice(f.inputs());
+                    
+                    let mut params = Vec::with_capacity(1 + 2 * branches.len());
+                    // TODO(isweet): Support `permissive` mode at some point?                    
+                    params.push("strict".into());
+                    params.extend(branches.iter().flat_map(|(idx, pat)| {
+                        let pat_str = pat.to_string();
+                        let name_str = self.func_info[*idx].name.clone();
+                        iter::once(pat_str).chain(iter::once(name_str))
+                    }));
+                    
+                    let (idx, name) = self.add_func_info(desc, &output_count, &input_count);                                                            
                     self.functions.push(IR::new_plugin_function_with_inputs(
                         name,
                         output_count,
