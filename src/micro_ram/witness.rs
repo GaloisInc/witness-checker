@@ -4,7 +4,7 @@ use std::ops::Index;
 use crate::micro_ram::fetch::PADDING_INSTR;
 use crate::micro_ram::trace::InstrLookup;
 use crate::micro_ram::types::{
-    MultiExec, ExecBody, Segment, Advice, RamInstr, RamState, MemPort, CodeSegment,
+    MultiExec, ExecBody, Trace, Segment, Advice, RamInstr, RamState, MemPort, CodeSegment,
     MEM_PORT_UNUSED_CYCLE,
 };
 
@@ -30,8 +30,18 @@ pub struct SegmentWitness {
 }
 
 #[derive(Clone, Debug)]
-pub struct ExecWitness {
+pub enum TraceWitness {
+    Instr(InstrTraceWitness),
+}
+
+#[derive(Clone, Debug)]
+pub struct InstrTraceWitness {
     pub segments: Vec<SegmentWitness>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecWitness {
+    pub trace: TraceWitness,
     /// Data values for initial memory segments.
     pub init_mem_values: Vec<Vec<u64>>,
     pub init_fetch_instrs: Vec<Vec<RamInstr>>,
@@ -59,9 +69,7 @@ impl ExecWitness {
     pub fn from_raw(e: &ExecBody) -> ExecWitness {
         let default_init_state = RamState::default_with_regs(e.params.num_regs);
         let mut w = ExecWitness {
-            segments: e.segments.iter().map(|s| {
-                SegmentWitness::from_raw(s, default_init_state.clone())
-            }).collect(),
+            trace: TraceWitness::from_raw(&e.trace, default_init_state),
             init_mem_values: e.init_mem.iter().map(|ms| {
                 let mut data = ms.data.clone();
                 assert!(data.len() <= ms.len as usize);
@@ -83,10 +91,12 @@ impl ExecWitness {
         let mut cycle = 0;
         let mut prev_state = e.provided_init_state.clone().unwrap_or_else(|| e.initial_state());
         let mut prev_seg_idx: Option<usize> = None;
-        for tc in &e.trace {
+        let it = e.trace.as_instr();
+        let it_w = w.trace.as_instr_mut();
+        for tc in &it.chunks {
             let seg_idx = tc.segment;
-            let seg = &e.segments[seg_idx];
-            let seg_w = &mut w.segments[seg_idx];
+            let seg = &it.segments[seg_idx];
+            let seg_w = &mut it_w.segments[seg_idx];
 
             if let Some(ref debug) = tc.debug {
                 if let Some(debug_cycle) = debug.cycle {
@@ -134,12 +144,12 @@ impl ExecWitness {
             }
 
             if let Some(prev_seg_idx) = prev_seg_idx {
-                let prev_seg = &e.segments[prev_seg_idx];
+                let prev_seg = &it.segments[prev_seg_idx];
                 let direct_connect = prev_seg.successors.contains(&seg_idx);
                 seg_w.pred = Some(prev_seg_idx);
                 seg_w.from_net = !direct_connect;
 
-                let prev_seg_w = &mut w.segments[prev_seg_idx];
+                let prev_seg_w = &mut it_w.segments[prev_seg_idx];
                 prev_seg_w.succ = Some(seg_idx);
                 prev_seg_w.to_net = !direct_connect;
             }
@@ -149,6 +159,30 @@ impl ExecWitness {
         }
 
         w
+    }
+}
+
+impl TraceWitness {
+    pub fn from_raw(t: &Trace, init_state: RamState) -> TraceWitness {
+        match *t {
+            Trace::Instr(ref it) => TraceWitness::Instr(InstrTraceWitness {
+                segments: it.segments.iter().map(|s| {
+                    SegmentWitness::from_raw(s, init_state.clone())
+                }).collect(),
+            }),
+        }
+    }
+
+    pub fn as_instr(&self) -> &InstrTraceWitness {
+        match *self {
+            TraceWitness::Instr(ref x) => x,
+        }
+    }
+
+    pub fn as_instr_mut(&mut self) -> &mut InstrTraceWitness {
+        match *self {
+            TraceWitness::Instr(ref mut x) => x,
+        }
     }
 }
 

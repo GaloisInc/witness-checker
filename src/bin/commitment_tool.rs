@@ -465,7 +465,7 @@ fn count_randomness_words(exec: &ExecBody) -> usize {
 /// Count the total number of steps in all secret and public PC segments.
 fn count_steps(exec: &ExecBody) -> usize {
     let mut sum = 0;
-    for seg in &exec.segments {
+    for seg in &exec.trace.as_instr().segments {
         sum += seg.len;
     }
     sum

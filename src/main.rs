@@ -174,24 +174,25 @@ fn expand_trace(multi_exec: &mut MultiExec, factor: usize) {
     }
 
     for exec in multi_exec.execs.values_mut() {
-        let orig_len = exec.segments.len();
-        exec.segments.reserve((factor - 1) * orig_len);
-        for mut seg in exec.segments.clone() {
+        let it = exec.trace.as_instr_mut();
+        let orig_len = it.segments.len();
+        it.segments.reserve((factor - 1) * orig_len);
+        for mut seg in it.segments.clone() {
             for _ in 1 .. factor {
                 for succ in &mut seg.successors {
                     *succ += orig_len;
                 }
-                exec.segments.push(seg.clone());
+                it.segments.push(seg.clone());
             }
         }
 
         // Add a dummy edge from segment 0 to each copy of segment 0 so that they aren't dropped
         // for being unreachable in the segment graph.
         for i in 1 .. factor {
-            exec.segments[0].successors.push(i * orig_len);
+            it.segments[0].successors.push(i * orig_len);
         }
 
-        assert_eq!(exec.segments.len(), orig_len * factor);
+        assert_eq!(it.segments.len(), orig_len * factor);
         eprintln!("expanded execution: {} -> {}", orig_len, orig_len * factor);
     }
 }

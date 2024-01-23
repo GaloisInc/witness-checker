@@ -86,6 +86,7 @@ impl<'a> ExecBuilder<'a> {
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) -> ExecBuilder<'a> {
         let calc_step_inner_cases = trace::define_calc_step_inner_cases(b, exec.params.privilege_levels);
+        let it = exec.trace.as_instr();
         ExecBuilder {
             init_state: init_state.clone(),
             check_steps,
@@ -106,7 +107,7 @@ impl<'a> ExecBuilder<'a> {
             mem: Memory::new(),
             fetch: Fetch::new(b, &exec.program, project_witness),
             seg_graph_builder: SegGraphBuilder::new(
-                b, &exec.segments, &exec.params, init_state, &exec.trace, project_witness),
+                b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
             seg_user_map: HashMap::new(),
 
             cx,
@@ -138,7 +139,7 @@ impl<'a> ExecBuilder<'a> {
 
         // Populate `seg_user_map`.
         let mut cycle = 0;
-        for (i, chunk) in exec.trace.iter().enumerate() {
+        for (i, chunk) in exec.trace.as_instr().chunks.iter().enumerate() {
             if let Some(c) = chunk.debug.as_ref().and_then(|d| d.cycle) {
                 cycle = c;
             }
@@ -250,7 +251,7 @@ impl<'a> ExecBuilder<'a> {
             check_steps: self.check_steps,
         };
 
-        let seg_def = &exec.segments[idx];
+        let seg_def = &exec.trace.as_instr().segments[idx];
         let mut prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
         let prev_kmem = self.seg_graph_builder.take_initial_mem(idx);
 
@@ -269,7 +270,7 @@ impl<'a> ExecBuilder<'a> {
             idx, seg_def, prev_state, prev_kmem, external_advice,
             move |w| {
                 let ew = project_witness(w);
-                &ew.segments[idx]
+                &ew.trace.as_instr().segments[idx]
             });
         self.seg_graph_builder.set_final(idx, seg.final_state().clone());
         self.seg_graph_builder.set_final_mem(idx, kmem);
@@ -277,7 +278,7 @@ impl<'a> ExecBuilder<'a> {
         // If this segment is actually used in the trace, find the relevant trace chunk and use its
         // data to initialize the segment's secrets.
         if let Some(&(chunk_idx, cycle)) = self.seg_user_map.get(&idx) {
-            let chunk = &exec.trace[chunk_idx];
+            let chunk = &exec.trace.as_instr().chunks[chunk_idx];
 
             if self.check_steps > 0 {
                 seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
@@ -286,7 +287,7 @@ impl<'a> ExecBuilder<'a> {
             // FIXME: this leaks information, namely, the identity of the last used segment.  We
             // should either forbid mixing `--expect-zero` with public PC, or otherwise ensure that
             // this is only used for testing.
-            if chunk_idx == exec.trace.len() - 1 {
+            if chunk_idx == exec.trace.as_instr().chunks.len() - 1 {
                 check_last(&self.cx, b, seg.final_state(), self.expect_zero);
             }
         }

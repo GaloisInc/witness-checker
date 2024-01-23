@@ -6,7 +6,7 @@ use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
     VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr,
-    Advice, TraceChunk, Segment, SegmentConstraint, Commitment, CodeSegment,
+    Advice, Trace, InstrTrace, TraceChunk, Segment, SegmentConstraint, Commitment, CodeSegment,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -118,9 +118,10 @@ impl<'de> Deserialize<'de> for ExecBody {
         if !has_feature(Feature::PublicPc) {
             // Adjust non-public-pc traces to fit the public-pc format.  In non-public-PC mode, the
             // prover can provide an initial state, with some restrictions.
-            assert!(exec.segments.len() == 0);
-            assert!(exec.trace.len() == 1);
-            let chunk = &exec.trace[0];
+            let it = exec.trace.as_instr_mut();
+            assert!(it.segments.len() == 0);
+            assert!(it.chunks.len() == 1);
+            let chunk = &it.chunks[0];
 
             let new_segment = Segment {
                 constraints: vec![],
@@ -137,8 +138,8 @@ impl<'de> Deserialize<'de> for ExecBody {
                 debug: None,
             };
 
-            exec.segments = vec![new_segment];
-            exec.trace = vec![new_chunk];
+            it.segments = vec![new_segment];
+            it.chunks = vec![new_chunk];
             exec.provided_init_state = provided_init_state;
         }
 
@@ -159,12 +160,15 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
             program: Vec::new(),
             init_mem: Vec::new(),
             params: Params::default(),
-            segments: Vec::new(),
-            trace: Vec::new(),
+            trace: Trace::Instr(InstrTrace {
+                segments: Vec::new(),
+                chunks: Vec::new(),
+            }),
             advice: HashMap::new(),
             labels: HashMap::new(),
             provided_init_state: None,
         };
+        let it = ex.trace.as_instr_mut();
 
         let mut seen = HashSet::new();
         while let Some(k) = map.next_key::<String>()? {
@@ -193,13 +197,13 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                 "init_mem" => { ex.init_mem = map.next_value()?; },
                 "params" => { ex.params = map.next_value()?; },
                 "segments" if has_feature(Feature::PublicPc) => {
-                    ex.segments = map.next_value()?;
+                    it.segments = map.next_value()?;
                 },
                 "trace" => {
                     if has_feature(Feature::PublicPc) {
-                        ex.trace = map.next_value()?;
+                        it.chunks = map.next_value()?;
                     } else {
-                        ex.trace = vec![TraceChunk {
+                        it.chunks = vec![TraceChunk {
                             segment: 0,
                             states: map.next_value()?,
                             debug: None,
