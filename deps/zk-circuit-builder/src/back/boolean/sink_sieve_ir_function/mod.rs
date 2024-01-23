@@ -1240,7 +1240,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
-    const HAS_SWITCH: bool = true;
+    fn has_switch(&self) -> bool {
+        // The `Switch` gate is only supported through a SIEVE IR plugin.
+        // So, the underlying SIEVE IR version must support plugins (`IR::HAS_PLUGINS`)
+        // and the caller must have indicated that they want to use the appropriate plugin
+        // (`self.use_plugin_disjunction_v0`).
+        IR::HAS_PLUGINS && self.use_plugin_disjunction_v0
+    }
     fn switch(
         &mut self,
         expire: Time,

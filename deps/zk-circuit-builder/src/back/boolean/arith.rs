@@ -845,7 +845,9 @@ mod test {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
         }
 
-        const HAS_SWITCH: bool = <TestSink as Sink>::HAS_SWITCH;
+        fn has_switch(&self) -> bool {
+            self.inner.has_switch()
+        }
         fn switch(
             &mut self,
             expire: Time,

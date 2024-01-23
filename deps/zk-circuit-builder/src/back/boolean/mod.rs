@@ -155,7 +155,7 @@ pub trait Sink: Sized {
     /// would be `10_u8`, and so on.
     fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]);
     
-    const HAS_SWITCH: bool;
+    fn has_switch(&self) -> bool;
     fn switch(
         &mut self,
         expire: Time,
@@ -704,8 +704,10 @@ impl<'w, S: Sink> Backend<'w, S> {
                 return out;
             },
             GateKind::Switch(cond, branches, args) => {
+                assert!(self.sink.has_switch(), "Switch gate is unsupported with this Sink");
                 let cond_w = self.wire_map[&cond];
                 let function_map = &self.function_map;
+                // TODO(isweet): Fuse the construction of `branches_w` and `private_input_counts`
                 let branches_w = branches.iter().map(|branch| (&function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
                 let private_input_counts = branches.iter().map(|branch| function_map[&branch.body].private_input_count).collect::<Vec<_>>();
                 let max_private_input_count = *private_input_counts.iter().max().unwrap();                
@@ -1469,7 +1471,9 @@ mod test {
             unimplemented!()
         }
 
-        const HAS_SWITCH: bool = false;
+        fn has_switch(&self) -> bool {
+            false
+        }
         fn switch(
             &mut self,
             _expire: Time,
@@ -1598,7 +1602,9 @@ mod test {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
         }
 
-        const HAS_SWITCH: bool = <TestSink as Sink>::HAS_SWITCH;
+        fn has_switch(&self) -> bool {
+            self.inner.has_switch()
+        }
         fn switch(
             &mut self,
             expire: Time,
