@@ -1700,30 +1700,49 @@ impl ExecBody {
 #[derive(Clone, Debug)]
 pub enum Trace {
     Instr(InstrTrace),
+    Bbmd(BbmdTrace),
 }
 
 impl Trace {
     pub fn validate(&self, params: &Params) -> Result<(), String> {
         match *self {
             Trace::Instr(ref it) => it.validate(params),
+            Trace::Bbmd(ref bt) => bt.validate(params),
         }
     }
 
     pub fn total_steps(&self) -> usize {
         match *self {
-            Trace::Instr(ref it) => it.len(),
+            Trace::Instr(ref it) => it.total_steps(),
+            Trace::Bbmd(ref it) => it.total_steps(),
         }
     }
 
     pub fn as_instr(&self) -> &InstrTrace {
         match *self {
             Trace::Instr(ref x) => x,
+            _ => panic!("expected Trace::Instr"),
         }
     }
 
     pub fn as_instr_mut(&mut self) -> &mut InstrTrace {
         match *self {
             Trace::Instr(ref mut x) => x,
+            _ => panic!("expected Trace::Instr"),
+        }
+    }
+
+    pub fn as_bbmd(&self) -> &BbmdTrace {
+        match *self {
+            Trace::Bbmd(ref x) => x,
+            _ => panic!("expected Trace::Bbmd"),
+        }
+    }
+
+    pub fn as_bbmd_mut(&mut self) -> &mut BbmdTrace {
+        match *self {
+            Trace::Bbmd(ref mut x) => x,
+            _ => panic!("expected Trace::Bbmd"),
         }
     }
 }
@@ -1776,10 +1795,88 @@ impl InstrTrace {
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
+    pub fn total_steps(&self) -> usize {
         self.chunks.iter().map(|c| c.states.len()).sum()
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct BbmdTrace {
+    pub blocks: Vec<BbmdBlock>,
+    pub chunks: Vec<BbmdTraceChunk>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BbmdBlock {
+    pub pcs: Vec<(u64, u64)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BbmdTraceChunk {
+    pub block_idx: usize,
+    pub states: Vec<RamState>,
+}
+
+impl BbmdTrace {
+    pub fn validate(&self, params: &Params) -> Result<(), String> {
+        for (i, seg) in self.blocks.iter().enumerate() {
+            if seg.pcs.len() == 0 {
+                return Err(format!(
+                    "`bbmd_blocks[{}]` has empty `pcs` list", i
+                ));
+            }
+
+            for (j, &(lo, hi)) in seg.pcs.iter().enumerate() {
+                if lo >= hi {
+                    return Err(format!(
+                        "`bbmd_blocks[{}]` has malformed `pcs` entry {:?}",
+                        i, (lo, hi),
+                    ));
+                }
+            }
+        }
+
+        for (i, chunk) in self.chunks.iter().enumerate() {
+            if chunk.block_idx >= self.blocks.len() {
+                return Err(format!(
+                    "`chunks[{}]` references undefined block {} (len = {})",
+                    i, chunk.block_idx, self.blocks.len(),
+                ));
+            }
+
+            let expect_len = self.blocks[chunk.block_idx].total_steps();
+            if chunk.states.len() != expect_len {
+                return Err(format!(
+                    "`chunks[{}]` for block {} should have {} states, but has {}",
+                    i, chunk.block_idx, expect_len, chunk.states.len(),
+                ));
+            }
+
+            for (j, state) in chunk.states.iter().enumerate() {
+                if state.regs.len() != params.num_regs {
+                    return Err(format!(
+                        "`chunks[{}][{}]` should have {} register values (`num_regs`), not {}",
+                        i, j, params.num_regs, state.regs.len(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn total_steps(&self) -> usize {
+        self.chunks.iter().map(|c| c.states.len()).sum()
+    }
+}
+
+impl BbmdBlock {
+    pub fn total_steps(&self) -> usize {
+        let n = self.pcs.iter().map(|&(lo, hi)| hi - lo).sum::<u64>();
+        usize::try_from(n).unwrap()
+    }
+}
+
 
 pub type MemoryEquivalence = Vec<(String, String)>;
 

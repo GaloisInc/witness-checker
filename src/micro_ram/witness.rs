@@ -32,11 +32,17 @@ pub struct SegmentWitness {
 #[derive(Clone, Debug)]
 pub enum TraceWitness {
     Instr(InstrTraceWitness),
+    Bbmd(BbmdTraceWitness),
 }
 
 #[derive(Clone, Debug)]
 pub struct InstrTraceWitness {
     pub segments: Vec<SegmentWitness>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BbmdTraceWitness {
+    // TODO
 }
 
 #[derive(Clone, Debug)]
@@ -170,18 +176,37 @@ impl TraceWitness {
                     SegmentWitness::from_raw(s, init_state.clone())
                 }).collect(),
             }),
+            Trace::Bbmd(ref _bt) => TraceWitness::Bbmd(BbmdTraceWitness {
+                // TODO
+            }),
         }
     }
 
     pub fn as_instr(&self) -> &InstrTraceWitness {
         match *self {
             TraceWitness::Instr(ref x) => x,
+            _ => panic!("expected Trace::Instr"),
         }
     }
 
     pub fn as_instr_mut(&mut self) -> &mut InstrTraceWitness {
         match *self {
             TraceWitness::Instr(ref mut x) => x,
+            _ => panic!("expected Trace::Instr"),
+        }
+    }
+
+    pub fn as_bbmd(&self) -> &BbmdTraceWitness {
+        match *self {
+            TraceWitness::Bbmd(ref x) => x,
+            _ => panic!("expected Trace::Bbmd"),
+        }
+    }
+
+    pub fn as_bbmd_mut(&mut self) -> &mut BbmdTraceWitness {
+        match *self {
+            TraceWitness::Bbmd(ref mut x) => x,
+            _ => panic!("expected Trace::Bbmd"),
         }
     }
 }
