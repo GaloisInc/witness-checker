@@ -6,7 +6,8 @@ use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
     VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr,
-    Advice, Trace, InstrTrace, TraceChunk, Segment, SegmentConstraint, Commitment, CodeSegment,
+    RamState, Advice, Trace, InstrTrace, BbmdTrace, TraceChunk, Segment, SegmentConstraint,
+    Commitment, CodeSegment,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -115,32 +116,7 @@ impl<'de> Deserialize<'de> for ExecBody {
             ExecBodyVisitor,
         )?;
 
-        if !has_feature(Feature::PublicPc) {
-            // Adjust non-public-pc traces to fit the public-pc format.  In non-public-PC mode, the
-            // prover can provide an initial state, with some restrictions.
-            let it = exec.trace.as_instr_mut();
-            assert!(it.segments.len() == 0);
-            assert!(it.chunks.len() == 1);
-            let chunk = &it.chunks[0];
-
-            let new_segment = Segment {
-                constraints: vec![],
-                len: exec.params.trace_len.unwrap() - 1,
-                successors: vec![],
-                enter_from_network: false,
-                exit_to_network: false,
-            };
-
-            let provided_init_state = Some(chunk.states[0].clone());
-            let new_chunk = TraceChunk {
-                segment: 0,
-                states: chunk.states[1..].to_owned(),
-                debug: None,
-            };
-
-            it.segments = vec![new_segment];
-            it.chunks = vec![new_chunk];
-            exec.provided_init_state = provided_init_state;
+        if !has_feature(Feature::PublicPc) && !has_feature(Feature::Bbmd) {
         }
 
         Ok(exec)
@@ -156,19 +132,36 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ExecBody, A::Error> {
+        let mut ft = Vec::<RamState>::new();
+        let mut it = InstrTrace {
+            segments: Vec::new(),
+            chunks: Vec::new(),
+        };
+        let mut bt = BbmdTrace {
+            blocks: Vec::new(),
+            chunks: Vec::new(),
+        };
         let mut ex = ExecBody {
             program: Vec::new(),
             init_mem: Vec::new(),
             params: Params::default(),
-            trace: Trace::Instr(InstrTrace {
-                segments: Vec::new(),
-                chunks: Vec::new(),
-            }),
+            // Dummy trace, to be replaced after `it`/`bt` is populated.
+            trace: Trace::Instr(it.clone()),
             advice: HashMap::new(),
             labels: HashMap::new(),
             provided_init_state: None,
         };
-        let it = ex.trace.as_instr_mut();
+
+        #[derive(Debug)]
+        enum TraceMode {
+            Flat,
+            PublicPc,
+            Bbmd,
+        }
+        let trace_mode =
+            if has_feature(Feature::Bbmd) { TraceMode::Bbmd }
+            else if has_feature(Feature::PublicPc) { TraceMode::PublicPc }
+            else { TraceMode::Flat };
 
         let mut seen = HashSet::new();
         while let Some(k) = map.next_key::<String>()? {
@@ -196,20 +189,26 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                 },
                 "init_mem" => { ex.init_mem = map.next_value()?; },
                 "params" => { ex.params = map.next_value()?; },
-                "segments" if has_feature(Feature::PublicPc) => {
+
+                "segments" if matches!(trace_mode, TraceMode::PublicPc) => {
                     it.segments = map.next_value()?;
                 },
-                "trace" => {
-                    if has_feature(Feature::PublicPc) {
-                        it.chunks = map.next_value()?;
-                    } else {
-                        it.chunks = vec![TraceChunk {
-                            segment: 0,
-                            states: map.next_value()?,
-                            debug: None,
-                        }];
-                    }
+                "bbmd_blocks" if matches!(trace_mode, TraceMode::Bbmd) => {
+                    bt.blocks = map.next_value()?;
                 },
+
+                "trace" => match trace_mode {
+                    TraceMode::Flat => {
+                        ft = map.next_value()?;
+                    },
+                    TraceMode::PublicPc => {
+                        it.chunks = map.next_value()?;
+                    },
+                    TraceMode::Bbmd => {
+                        bt.chunks = map.next_value()?;
+                    },
+                },
+
                 "advice" => {
                     ex.advice = map.next_value()?;
                     if has_feature(Feature::PreAdvice) {
@@ -227,6 +226,35 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                 ))),
             }
         }
+
+        ex.trace = match trace_mode {
+            TraceMode::Flat => {
+                // Adjust flat traces to fit the public-pc format.  In flat mode, the prover can
+                // provide an initial state, with some restrictions.
+
+                let new_segment = Segment {
+                    constraints: vec![],
+                    len: ex.params.trace_len.unwrap() - 1,
+                    successors: vec![],
+                    enter_from_network: false,
+                    exit_to_network: false,
+                };
+
+                let provided_init_state = Some(ft[0].clone());
+                let new_chunk = TraceChunk {
+                    segment: 0,
+                    states: ft[1..].to_owned(),
+                    debug: None,
+                };
+
+                it.segments = vec![new_segment];
+                it.chunks = vec![new_chunk];
+                ex.provided_init_state = provided_init_state;
+                Trace::Instr(it)
+            },
+            TraceMode::PublicPc => Trace::Instr(it),
+            TraceMode::Bbmd => Trace::Bbmd(bt),
+        };
 
         Ok(ex)
     }

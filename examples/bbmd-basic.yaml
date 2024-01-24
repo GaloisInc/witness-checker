@@ -3,7 +3,7 @@
 # Basic example using Basic Block Machine for DORA (BBMD).
 
 - [0,1,0,0]
-- []
+- [bbmd]
 -
   program:
     - [mov, 0, null, true, 5]

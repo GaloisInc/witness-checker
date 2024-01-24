@@ -1806,13 +1806,14 @@ pub struct BbmdTrace {
     pub chunks: Vec<BbmdTraceChunk>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct BbmdBlock {
     pub pcs: Vec<(u64, u64)>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct BbmdTraceChunk {
+    #[serde(alias = "block")]
     pub block_idx: usize,
     pub states: Vec<RamState>,
 }

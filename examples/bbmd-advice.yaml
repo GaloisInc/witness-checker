@@ -4,7 +4,7 @@
 # inputs to the common basic block functions.
 
 - [0,1,0,0]
-- []
+- [bbmd]
 -
   program:
     - [mov, 0, null, true, 5]

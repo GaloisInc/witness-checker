@@ -3,7 +3,7 @@
 # BBMD example with multiple PC ranges in some blocks.
 
 - [0,1,0,0]
-- []
+- [bbmd]
 -
   program:
     - [mov, 0, null, true, 5]
