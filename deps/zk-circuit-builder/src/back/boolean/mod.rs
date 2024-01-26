@@ -700,6 +700,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let args = call.args.iter().map(|&w| self.wire_map[&w]).collect::<Vec<_>>();
                 let out = self.sink.call(expire, func_id, &args);
                 let mut get_log = |func| function_map[&func].private_log.clone();
+                // TODO(isweet): Why doesn't this need to be guarded by `c.is_prover()`?
                 private.emit_call(c.as_base(), &mut self.sink, &get_log, call);
                 return out;
             },
@@ -1199,7 +1200,7 @@ mod test {
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
-        IntSize,
+        IntSize, DefineFunction,
     };
     use super::*;
 
@@ -2032,4 +2033,180 @@ mod test {
     fn seq_assert_1() {
         test_gate([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
     }
+
+    #[test]
+    fn switch_u64_no_private_inputs() {
+        use std::convert::TryInto;
+
+        macro_rules! test_ty {
+            () => { Ty::uint(8) };
+        }        
+        
+        struct SwitchConst;
+        impl<'b> DefineFunction<'b> for SwitchConst {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, _args: &[Wire<'b>]) -> Wire<'b> {
+                c.lit(test_ty!(), 0)
+            }
+        }
+        
+        struct SwitchAdd;
+        impl<'b> DefineFunction<'b> for SwitchAdd {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.add(a, b)
+            }
+        }
+
+        struct SwitchMul;
+        impl<'b> DefineFunction<'b> for SwitchMul {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.mul(a, b)
+            }
+        }
+
+        let arenas = Arenas::new();  
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+
+        let ty = test_ty!();
+        let const_pat = c.bits(ty, 0);
+        let add_pat   = c.bits(ty, 1);
+        let mul_pat   = c.bits(ty, 2);
+
+        let switch_const = c.define_function::<(), _>("switch_const", &[ty, ty], SwitchConst);
+        let switch_add   = c.define_function::<(), _>("switch_add",   &[ty, ty], SwitchAdd);
+        let switch_mul   = c.define_function::<(), _>("switch_mul",   &[ty, ty], SwitchMul);
+
+        let cases = c.switch_case_list(&[
+            c.switch_case(const_pat, switch_const, &[], |_, &(), _| (&()).into()),
+            c.switch_case(add_pat,   switch_add,   &[], |_, &(), _| (&()).into()),
+            c.switch_case(mul_pat,   switch_mul,   &[], |_, &(), _| (&()).into()),
+        ]);
+
+        let guard = c.lit(ty, 2);
+        let args = c.wire_list(&[
+            c.secret_immediate(ty, 2),
+            c.secret_immediate(ty, 3),
+        ]);        
+
+        let actual   = c.switch(guard, cases, args);
+        let expected = c.lit(ty, 6);
+        let ok = c.eq(actual, expected);
+
+        let path = ".";
+        use zki_sieve_v5::producers::sink::FilesSink;        
+        let sink = FilesSink::new_clean(&path).unwrap();
+        
+        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
+        let mut backend = Backend::new(sink);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();        
+        backend.enforce_true(&c, &mut ev, ok);
+
+        use zki_sieve_v5::Source;
+        use zki_sieve_v5::consumers::validator::Validator;
+        let sink = backend.finish().finish();
+        let source: Source = sink.into();
+        let mut validator = Validator::new_as_prover();
+        for msg in source.iter_messages() {
+            let msg = msg.unwrap();
+            eprintln!("{:?}", msg);
+            validator.ingest_message(&msg);
+        }
+        let violations = validator.get_violations();
+        if !violations.is_empty() {
+            eprintln!("{}", violations.join("\n"));
+            panic!("Encountered a SIEVE IR V3 validation error.")
+        }
+    }
+
+    #[test]
+    fn switch_u64_private_inputs() {
+        use std::convert::TryInto;
+
+        macro_rules! test_ty {
+            () => { Ty::uint(8) };
+        }
+        
+        struct SwitchConst;
+        impl<'b> DefineFunction<'b> for SwitchConst {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, _args: &[Wire<'b>]) -> Wire<'b> {
+                c.lit(test_ty!(), 0)
+            }
+        }
+        
+        struct SwitchAdd;
+        impl<'b> DefineFunction<'b> for SwitchAdd {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                let sum = c.secret_derived(test_ty!(), c.wire_list(args), move |c, vs| {
+                    let [a_bits, b_bits]: [Bits; 2] = vs.try_into().unwrap();
+                    let a = a_bits.to_biguint();
+                    let b = b_bits.to_biguint();
+                    c.bits(test_ty!(), a + b)
+                });
+                c.seq(c.assert_zero(c.sub(sum, c.add(a, b))), sum)
+            }
+        }
+
+        struct SwitchMul;
+        impl<'b> DefineFunction<'b> for SwitchMul {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.mul(a, b)
+            }
+        }
+
+        let arenas = Arenas::new();  
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+
+        let ty = test_ty!();
+        let const_pat = c.bits(ty, 0);
+        let add_pat   = c.bits(ty, 1);
+        let mul_pat   = c.bits(ty, 2);
+
+        let switch_const = c.define_function::<(), _>("switch_const", &[ty, ty], SwitchConst);
+        let switch_add   = c.define_function::<(), _>("switch_add",   &[ty, ty], SwitchAdd);
+        let switch_mul   = c.define_function::<(), _>("switch_mul",   &[ty, ty], SwitchMul);
+
+        let cases = c.switch_case_list(&[
+            c.switch_case(const_pat, switch_const, &[], |_, &(), _| (&()).into()),
+            c.switch_case(add_pat,   switch_add,   &[], |_, &(), _| (&()).into()),
+            c.switch_case(mul_pat,   switch_mul,   &[], |_, &(), _| (&()).into()),
+        ]);
+
+        let guard = c.lit(ty, 2);
+        let args = c.wire_list(&[
+            c.secret_immediate(ty, 2),
+            c.secret_immediate(ty, 3),
+        ]);        
+
+        let actual   = c.switch(guard, cases, args);
+        let expected = c.lit(ty, 6);
+        let ok = c.eq(actual, expected);
+
+        let path = ".";
+        use zki_sieve_v5::producers::sink::FilesSink;        
+        let sink = FilesSink::new_clean(&path).unwrap();
+        
+        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
+        let mut backend = Backend::new(sink);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();        
+        backend.enforce_true(&c, &mut ev, ok);
+
+        use zki_sieve_v5::Source;
+        use zki_sieve_v5::consumers::validator::Validator;
+        let sink = backend.finish().finish();
+        let source: Source = sink.into();
+        let mut validator = Validator::new_as_prover();
+        for msg in source.iter_messages() {
+            let msg = msg.unwrap();
+            eprintln!("{:?}", msg);
+            validator.ingest_message(&msg);
+        }
+        let violations = validator.get_violations();
+        if !violations.is_empty() {
+            eprintln!("{}", violations.join("\n"));
+            panic!("Encountered a SIEVE IR V3 validation error.")
+        }
+    }    
 }

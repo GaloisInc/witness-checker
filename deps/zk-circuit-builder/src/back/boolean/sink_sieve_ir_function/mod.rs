@@ -172,7 +172,7 @@ enum FunctionDesc {
     /// This is only defined for `k >= 2`.
     PermuteShuffle(u64, u8, bool),
 
-    Switch(Vec<(usize, BigUint)>, u64),
+    Switch(u64, Vec<(usize, BigUint)>, u64),
 }
 
 impl FunctionDesc {
@@ -206,9 +206,9 @@ impl FunctionDesc {
                 format!("permute_switch_public_{}_{}", *n, *swap as u8),
             FunctionDesc::PermuteShuffle(n, k, flip) =>
                 format!("permute_shuffle_{}_{}_{}", *n, *k, *flip as u8),
-            FunctionDesc::Switch(branches, _max_private_input_count) => {
+            FunctionDesc::Switch(cond_width, branches, _max_private_input_count) => {
                 let suffix = branches.iter().map(|(idx, pat)| format!("{}_{}", idx, pat)).collect::<Vec<_>>().join("_");
-                format!("switch_{}", suffix)
+                format!("switch_{}_{}", cond_width, suffix)
             },
         }
     }
@@ -518,13 +518,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     }
                 }
 
-                FunctionDesc::Switch(ref branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
+                FunctionDesc::Switch(cond_width, ref branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
                     // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
                     let f = &self.func_info[branches[0].0];
                     
                     let output_count = f.outputs().to_owned();
                     let mut input_count = Vec::with_capacity(1 + f.inputs().len());
-                    input_count.push(1);
+                    input_count.push(cond_width);
                     input_count.extend_from_slice(f.inputs());
                     
                     let mut params = Vec::with_capacity(1 + 2 * branches.len());
@@ -737,7 +737,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
                 (vec![n * (1 << k)], vec![n * (1 << k)])
             },
-            FunctionDesc::Switch(_branches, _max_private_input_count) => {
+            FunctionDesc::Switch(_cond_width, _branches, _max_private_input_count) => {
                 // TODO(isweet): A non-plugin version of `GateKind::Switch` is difficult to support in the current design.
                 //
                 // The semantics of `Switch` dictate that branches which are not taken (as indicated by the guard condition)
@@ -1256,10 +1256,11 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         args: &[WireId],
         max_private_input_count: u64,
     ) -> WireId {
+        let mut call_args = Vec::with_capacity(args.len());
+        call_args.push(cond);
+        call_args.extend_from_slice(args);
         let branches = branches.into_iter().map(|(idx, pat)| (*idx, pat)).collect::<Vec<_>>();
-        let mut cond_with_args = (0..n).map(|i| cond + i).collect::<Vec<_>>();
-        cond_with_args.extend_from_slice(args);
-        self.emit_call(expire, FunctionDesc::Switch(branches, max_private_input_count), &cond_with_args)
+        self.emit_call(expire, FunctionDesc::Switch(n, branches, max_private_input_count), &call_args)
     }
 }
 
