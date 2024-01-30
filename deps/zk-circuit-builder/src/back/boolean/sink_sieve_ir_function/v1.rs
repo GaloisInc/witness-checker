@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use zki_sieve;
 use zki_sieve::structs::function::Function;
 use zki_sieve::structs::gates::Gate;
@@ -110,6 +111,17 @@ impl SieveIrFormat for SieveIrV1 {
     fn relation_gate_count_approx(r: &Relation) -> usize {
         r.gates.len()
     }
+    fn gate_private_inputs_count(gate: &Self::Gate, func_private_inputs_counts: &HashMap<String, u64>) -> u64 {
+        match gate {
+            Gate::Witness(_) => 1,
+            Gate::Call(name, _, _) => func_private_inputs_counts[name],
+            // The following three gates are not used by SieveIrV1, but may consume private inputs.
+            Gate::AnonCall(..) => unreachable!(),
+            Gate::Switch(..) => unreachable!(),
+            Gate::For(..) => unreachable!(),
+            _ => 0,
+        }
+    }    
     fn visit_relation(
         r: Relation,
         mut visit_gate: impl FnMut(Gate),

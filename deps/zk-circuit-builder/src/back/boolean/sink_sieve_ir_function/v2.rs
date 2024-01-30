@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::BTreeMap;
 use num_traits::Zero;
 use zki_sieve_v3;
@@ -119,6 +120,13 @@ impl SieveIrFormat for SieveIrV2 {
     fn relation_gate_count_approx(r: &Relation) -> usize {
         r.directives.len()
     }
+    fn gate_private_inputs_count(gate: &Self::Gate, func_private_inputs_counts: &HashMap<String, u64>) -> u64 {
+        match gate {
+            Gate::Private(_, _) => 1,
+            Gate::Call(name, _, _) => func_private_inputs_counts[name],
+            _ => 0,
+        }
+    }    
     fn visit_relation(
         r: Relation,
         mut visit_gate: impl FnMut(Gate),

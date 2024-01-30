@@ -93,6 +93,7 @@ pub trait SieveIrFormat {
     }
 
     fn relation_gate_count_approx(r: &Self::Relation) -> usize;
+    fn gate_private_inputs_count(gate: &Self::Gate, func_private_inputs_counts: &HashMap<String, u64>) -> u64;
     fn visit_relation(
         r: Self::Relation,
         visit_gate: impl FnMut(Self::Gate),
@@ -110,6 +111,7 @@ pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     /// Info about function names and signatures.  This vector persists across `flush()`; it always
     /// contains all functions that have been declared so far.
     func_info: Vec<FunctionInfo>,
+    func_private_inputs_count: HashMap<String, u64>,
     func_map: HashMap<FunctionDesc, usize>,
     /// Whether we've emitted a relation message yet.  The first relation message must contain some
     /// additional data.
@@ -172,7 +174,7 @@ enum FunctionDesc {
     /// This is only defined for `k >= 2`.
     PermuteShuffle(u64, u8, bool),
 
-    Switch(u64, Vec<(usize, BigUint)>, u64),
+    Switch(u64, Vec<(usize, BigUint)>),
 }
 
 impl FunctionDesc {
@@ -206,7 +208,7 @@ impl FunctionDesc {
                 format!("permute_switch_public_{}_{}", *n, *swap as u8),
             FunctionDesc::PermuteShuffle(n, k, flip) =>
                 format!("permute_shuffle_{}_{}_{}", *n, *k, *flip as u8),
-            FunctionDesc::Switch(cond_width, branches, _max_private_input_count) => {
+            FunctionDesc::Switch(cond_width, branches) => {
                 let suffix = branches.iter().map(|(idx, pat)| format!("{}_{}", idx, pat)).collect::<Vec<_>>().join("_");
                 format!("switch_{}_{}", cond_width, suffix)
             },
@@ -262,6 +264,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             private_bits: Vec::new(),
             functions: Vec::new(),
             func_info: Vec::new(),
+            func_private_inputs_count: HashMap::new(),
             func_map: HashMap::new(),
             emitted_relation: false,
             use_plugin_mux_v0: use_plugins.mux_v0,
@@ -391,6 +394,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             // Move `func_info` and `func_map` into `sub_sink`, so it can access functions defined
             // previously.
             func_info: mem::take(&mut self.func_info),
+            func_private_inputs_count: mem::take(&mut self.func_private_inputs_count),
             func_map: mem::take(&mut self.func_map),
             emitted_relation: false,
             use_plugin_mux_v0: self.use_plugin_mux_v0,
@@ -407,6 +411,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         // Move `func_map` and `func_info` from `sub_sink` back into `self`, so in the future we
         // can use any extra functions that happened to be defined by this `sub_sink`.
         self.func_map = mem::take(&mut sub_sink.func_map);
+        self.func_private_inputs_count = mem::take(&mut sub_sink.func_private_inputs_count);
         self.func_info = mem::take(&mut sub_sink.func_info);
 
         sub_sink.finish()
@@ -518,7 +523,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     }
                 }
 
-                FunctionDesc::Switch(cond_width, ref branches, max_private_input_count) => if self.use_plugin_disjunction_v0 {
+                FunctionDesc::Switch(cond_width, ref branches) => if self.use_plugin_disjunction_v0 {
+                    let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
                     // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
                     let f = &self.func_info[branches[0].0];
                     
@@ -536,7 +542,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                         iter::once(pat_str).chain(iter::once(name_str))
                     }));
                     
-                    let (idx, name) = self.add_func_info(desc, &output_count, &input_count);                                                            
+                    let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
                     self.functions.push(IR::new_plugin_function_with_inputs(
                         name,
                         output_count,
@@ -557,7 +563,6 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         let mut sub_sink = self.sub_sink();
 
-        let mut private_count = 0;
         let (output_count, input_count) = match desc {
             FunctionDesc::LitZero(n) => {
                 let [out] = sub_sink.alloc.preallocate([n]);
@@ -568,7 +573,6 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             FunctionDesc::Private(n) => {
                 let [out] = sub_sink.alloc.preallocate([n]);
                 sub_sink.private_gate_into(out, n);
-                private_count = n;
                 (vec![n], vec![])
             },
 
@@ -737,7 +741,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
                 (vec![n * (1 << k)], vec![n * (1 << k)])
             },
-            FunctionDesc::Switch(_cond_width, _branches, _max_private_input_count) => {
+            FunctionDesc::Switch(_cond_width, _branches) => {
                 // TODO(isweet): A non-plugin version of `GateKind::Switch` is difficult to support in the current design.
                 //
                 // The semantics of `Switch` dictate that branches which are not taken (as indicated by the guard condition)
@@ -786,15 +790,30 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             }
         }
 
+        let private_inputs_count = gates.iter().map(|g| IR::gate_private_inputs_count(g, &self.func_private_inputs_count)).sum();
+        let is_new_function = self.func_private_inputs_count.insert(name.clone(), private_inputs_count).is_none();
+        debug_assert!(is_new_function);
         self.functions.push(IR::new_function(
-            name.clone(),
+            name,
             output_count,
             input_count,
-            private_count,
+            private_inputs_count,
             gates,
         ));
 
         idx
+    }
+
+    fn get_private_input_count(&self, func_name: &String) -> u64 {
+        self.func_private_inputs_count[func_name]
+    }
+    
+    fn get_private_input_count_id(&self, func_id: usize) -> u64 {
+        self.get_private_input_count(&self.func_info[func_id].name)
+    }
+
+    fn get_max_private_input_count_ids(&self, func_ids: impl Iterator<Item = usize>) -> u64 {
+        func_ids.map(|func_id| self.get_private_input_count_id(func_id)).max().unwrap()
     }
 
     fn permute_body(&mut self, n: u64, m: u32) -> (Vec<u64>, Vec<u64>) {
@@ -1202,13 +1221,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         let (idx, name) = self.add_user_func_info(&name, &[return_n], arg_ns);
         let gates = self.collect_sub_gates(zki_sink);
-
+        let private_inputs_count = gates.iter().map(|g| IR::gate_private_inputs_count(g, &self.func_private_inputs_count)).sum();        
+        let is_new_function = self.func_private_inputs_count.insert(name.clone(), private_inputs_count).is_none();
+        debug_assert!(is_new_function);
         self.functions.push(IR::new_function(
-            name.clone(),
+            name,
             iter::once(return_n),
             arg_ns.iter().cloned(),
-            // TODO: properly compute private count (needed for SIEVE IR V1)
-            0,
+            private_inputs_count,
             gates,
         ));
 
@@ -1254,13 +1274,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         n: u64,
         branches: Vec<(&Self::FunctionId, BigUint)>,
         args: &[WireId],
-        max_private_input_count: u64,
-    ) -> WireId {
+    ) -> (WireId, Vec<u64>) {
         let mut call_args = Vec::with_capacity(args.len());
         call_args.push(cond);
         call_args.extend_from_slice(args);
+        let private_input_counts = branches.iter().map(|branch| self.get_private_input_count_id(*branch.0)).collect::<Vec<_>>();
         let branches = branches.into_iter().map(|(idx, pat)| (*idx, pat)).collect::<Vec<_>>();
-        self.emit_call(expire, FunctionDesc::Switch(n, branches, max_private_input_count), &call_args)
+        let out = self.emit_call(expire, FunctionDesc::Switch(n, branches), &call_args);
+        (out, private_input_counts)
     }
 }
 

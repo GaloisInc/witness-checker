@@ -163,8 +163,7 @@ pub trait Sink: Sized {
         n: u64,
         branches: Vec<(&Self::FunctionId, BigUint)>,
         args: &[WireId],
-        max_private_input_count: u64
-    ) -> WireId;
+    ) -> (WireId, Vec<u64>);
 
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -316,7 +315,6 @@ trait PrivateOps<'a> {
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
         args: &'a [Wire<'a>],
-        max_private_input_count: u64,
     );
 }
 
@@ -382,7 +380,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
                 PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
                 PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
                 PrivateOp::Permute(n, perm, permuted_wires, wire_widths) => sub_ops.emit_permute(c, sink, n, perm, permuted_wires, wire_widths),
-                PrivateOp::Switch(cond, branches, private_input_counts, args, max_private_input_count) => sub_ops.emit_switch(c, sink, get_log, cond, branches, private_input_counts, args, max_private_input_count),
+                PrivateOp::Switch(cond, branches, private_input_counts, args) => sub_ops.emit_switch(c, sink, get_log, cond, branches, private_input_counts, args),
             }
         }
     }
@@ -410,8 +408,8 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
         args: &'a [Wire<'a>],
-        max_private_input_count: u64,
     ) {
+        let max_private_input_count = *private_input_counts.iter().max().unwrap();
         let (cond_val, _cond_sec) = self.ev.eval_wire_bits(c, cond).unwrap();
         let cond_val = cond_val.to_biguint(); // TODO(isweet): Compare `cond_val` and `pattern` below at type `cond.ty` rather than as BigUint
         let (branch_idx, branch)  = branches.iter().enumerate().find(|(idx, branch)| {
@@ -429,6 +427,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         });
         self.emit_call(c, sink, get_log, call);
 
+        eprintln!("max = {}, branch = {}", max_private_input_count, private_input_count);
         let padding_amt = max_private_input_count - private_input_count;
         
         sink.private_value(padding_amt, Bits::zero());
@@ -441,7 +440,7 @@ enum PrivateOp<'a> {
     QuotRem(Wire<'a>, Wire<'a>),
     Call(Call<'a>),
     Permute(u64, Wire<'a>, Vec<Wire<'a>>, Vec<u64>),
-    Switch(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>], u64),
+    Switch(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>]),
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
@@ -453,13 +452,13 @@ impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
             PrivateOp::QuotRem(a, b) => PrivateOp::QuotRem(v.visit(a), v.visit(b)),
             PrivateOp::Call(call) => PrivateOp::Call(v.visit(call)),
             PrivateOp::Permute(n, perm, perm_wires, wire_widths) => PrivateOp::Permute(n, v.visit(perm), v.visit(perm_wires), wire_widths),
-            PrivateOp::Switch(cond, branches, private_input_counts, args, max_private_input_count) => {
+            PrivateOp::Switch(cond, branches, private_input_counts, args) => {
                 let branches = branches.iter().map(|&branch| v.visit(branch)).collect::<Vec<_>>();
                 let branches = v.new_circuit().switch_case_list(&branches);
 
                 let args = args.iter().map(|&arg| v.visit(arg)).collect::<Vec<_>>();
                 let args = v.new_circuit().wire_list(&args);
-                PrivateOp::Switch(v.visit(cond), branches, private_input_counts, args, max_private_input_count)
+                PrivateOp::Switch(v.visit(cond), branches, private_input_counts, args)
             }
         }
     }
@@ -533,9 +532,8 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
         args: &'a [Wire<'a>],
-        max_private_input_count: u64,
     ) {
-        self.log.push(PrivateOp::Switch(cond, branches, private_input_counts, args, max_private_input_count));
+        self.log.push(PrivateOp::Switch(cond, branches, private_input_counts, args));
     }
 }
 
@@ -546,7 +544,6 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
 struct FunctionInfo<'w, T> {
     id: T,
     private_log: Vec<PrivateOp<'w>>,
-    private_input_count: u64,
 }
 
 pub struct Backend<'w, S: Sink> {
@@ -573,22 +570,6 @@ impl<'w, S: Sink> Backend<'w, S> {
             bundle_ty_offsets: HashMap::new(),
         }
     }
-
-    fn private_input_count_of_log(&self, log: &[PrivateOp<'w>]) -> u64 {
-        let mut sum = 0;
-        for op in log {
-            // TODO(isweet): These counts are tightly coupled to the SieveIrFunctionSink. Consider instead
-            // adding functions to Sink that compute the number of private inputs being produced.
-            sum += match op {
-                PrivateOp::Emit(w) => type_bits(w.ty),
-                PrivateOp::QuotRem(numer, _denom) => 2 * type_bits(numer.ty),
-                PrivateOp::Call(call) => self.function_map[&call.func].private_input_count,
-                PrivateOp::Permute(_n, _perm, _permuted_wires, _wire_widths) => todo!(), // TODO(isweet): Ask Stuart about this
-                PrivateOp::Switch(_cond, _branches, _private_input_counts, _args, max_private_input_count) => *max_private_input_count,
-            }
-        }
-        sum
-    }    
 
     /// Populate `wire_map` with entries for all the wires in `wires`.  Temporary intermediate
     /// values will not be kept in `wire_map`.  The caller is responsible for removing the entries
@@ -708,15 +689,12 @@ impl<'w, S: Sink> Backend<'w, S> {
                 assert!(self.sink.has_switch(), "Switch gate is unsupported with this Sink");
                 let cond_w = self.wire_map[&cond];
                 let function_map = &self.function_map;
-                // TODO(isweet): Fuse the construction of `branches_w` and `private_input_counts`
                 let branches_w = branches.iter().map(|branch| (&function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
-                let private_input_counts = branches.iter().map(|branch| function_map[&branch.body].private_input_count).collect::<Vec<_>>();
-                let max_private_input_count = *private_input_counts.iter().max().unwrap();                
                 let args_w = args.iter().map(|arg| self.wire_map[arg]).collect::<Vec<_>>();
                 let n = type_bits(cond.ty);
-                let out = self.sink.switch(expire, cond_w, n, branches_w, &args_w, max_private_input_count);
+                let (out, private_input_counts) = self.sink.switch(expire, cond_w, n, branches_w, &args_w);
                 let mut get_log = |func| function_map[&func].private_log.clone();
-                private.emit_switch(c.as_base(), &mut self.sink, &get_log, cond, branches, private_input_counts, args, max_private_input_count);
+                private.emit_switch(c.as_base(), &mut self.sink, &get_log, cond, branches, private_input_counts, args);
                 return out;
             }
             GateKind::Gadget(gk, ws) => {
@@ -1100,11 +1078,9 @@ impl<'w, S: Sink> Backend<'w, S> {
                 (backend.sink, out_wire)
             },
         );
-        let private_input_count = self.private_input_count_of_log(&private_log.log);
         self.function_map.insert(f, FunctionInfo {
             id: func_id,
             private_log: private_log.into_inner(),
-            private_input_count,
         });
     }
 
@@ -1482,8 +1458,7 @@ mod test {
             _n: u64,
             _branches: Vec<(&Self::FunctionId, BigUint)>,
             _args: &[WireId],
-            _max_private_input_count: u64,
-        ) -> WireId {
+        ) -> (WireId, Vec<u64>) {
             unimplemented!()
         }
     }
@@ -1613,9 +1588,8 @@ mod test {
             n: u64,
             branches: Vec<(&Self::FunctionId, BigUint)>,
             args: &[WireId],
-            max_private_input_count: u64,
-        ) -> WireId {
-            self.inner.switch(expire, cond, n, branches, args, max_private_input_count)
+        ) -> (WireId, Vec<u64>) {
+            self.inner.switch(expire, cond, n, branches, args)
         }
     }
 

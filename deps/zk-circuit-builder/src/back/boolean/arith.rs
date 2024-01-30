@@ -855,9 +855,8 @@ mod test {
             n: u64,
             branches: Vec<(&Self::FunctionId, BigUint)>,
             args: &[WireId],
-            max_private_input_count: u64
-        ) -> WireId {
-            self.inner.switch(expire, cond, n, branches, args, max_private_input_count)
+        ) -> (WireId, Vec<u64>) {
+            self.inner.switch(expire, cond, n, branches, args)
         }
     }
 
