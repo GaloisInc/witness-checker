@@ -467,17 +467,25 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         trace!("add_user_func_info({:?}) = ({:?}, {:?})", user_name, idx, name);
         (idx, name)
     }
-    
-    fn define_plugin_switch(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> usize {
-        let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
-        // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
+
+
+    fn plugin_switch_signature(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> (Vec<u64>, Vec<u64>) {
+        // Earlier passes in the compiler ensure that a `GateKind::Switch` has at least one branch, and that each branch
+        // has the same siganture. So, it is safe to use the first branch arbitrarily.
         let f = &self.func_info[branches[0].0];
         
         let output_count = f.outputs().to_owned();
         let mut input_count = Vec::with_capacity(1 + f.inputs().len());
         input_count.push(cond_width);
         input_count.extend_from_slice(f.inputs());
+
+        (output_count, input_count)
+    }
+    
+    fn define_plugin_switch(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> usize {
+        let (output_count, input_count) = self.plugin_switch_signature(cond_width, branches);
         
+        let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));        
         let mut params = Vec::with_capacity(1 + 2 * branches.len());
         // TODO(isweet): Support `permissive` mode at some point?                    
         params.push("strict".into());
@@ -560,19 +568,16 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
             FunctionDesc::Switch(cond_width, ref branches) if self.use_plugin_disjunction_v0 => Some(self.define_plugin_switch(*cond_width, branches)),
 
-
             _ => None,
         }
     }
 
-    fn get_function(
+
+
+    fn define_function(
         &mut self,
         desc: FunctionDesc,
     ) -> usize {
-        if let Some(s) = self.func_map.get(&desc) {
-            return s.to_owned();
-        }
-
         if let Some(idx) = self.define_plugin_function(&desc) {
             return idx;
         }
@@ -819,6 +824,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         idx
     }
+
+    fn get_function(&mut self, desc: FunctionDesc) -> usize {
+        if let Some(s) = self.func_map.get(&desc) {
+            return *s;
+        }
+
+        self.define_function(desc)
+    }    
 
     fn get_private_input_count(&self, func_name: &String) -> u64 {
         self.func_private_inputs_count[func_name]
