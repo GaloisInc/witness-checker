@@ -467,6 +467,40 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         trace!("add_user_func_info({:?}) = ({:?}, {:?})", user_name, idx, name);
         (idx, name)
     }
+    
+    fn define_plugin_switch(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> usize {
+        let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
+        // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
+        let f = &self.func_info[branches[0].0];
+        
+        let output_count = f.outputs().to_owned();
+        let mut input_count = Vec::with_capacity(1 + f.inputs().len());
+        input_count.push(cond_width);
+        input_count.extend_from_slice(f.inputs());
+        
+        let mut params = Vec::with_capacity(1 + 2 * branches.len());
+        // TODO(isweet): Support `permissive` mode at some point?                    
+        params.push("strict".into());
+        params.extend(branches.iter().flat_map(|(idx, pat)| {
+            let pat_str = pat.to_string();
+            let name_str = self.func_info[*idx].name.clone();
+            iter::once(pat_str).chain(iter::once(name_str))
+        }));
+        
+        let (idx, name) = self.add_func_info(&FunctionDesc::Switch(cond_width, branches.to_vec()), &output_count, &input_count);
+        self.functions.push(IR::new_plugin_function_with_inputs(
+            name,
+            output_count,
+            input_count,
+            SWITCH_PLUGIN_NAME.into(),
+            "switch".into(),
+            params,
+            0,
+            max_private_input_count,
+        ));
+
+        idx
+    }
 
     fn define_plugin_function(&mut self, desc: &FunctionDesc) -> Option<usize> {
         if !IR::HAS_PLUGINS {
@@ -524,40 +558,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
             }
 
-            FunctionDesc::Switch(cond_width, ref branches) if self.use_plugin_disjunction_v0 => {
-                let cond_width = *cond_width;
-                let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
-                // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
-                let f = &self.func_info[branches[0].0];
-                
-                let output_count = f.outputs().to_owned();
-                let mut input_count = Vec::with_capacity(1 + f.inputs().len());
-                input_count.push(cond_width);
-                input_count.extend_from_slice(f.inputs());
-                
-                let mut params = Vec::with_capacity(1 + 2 * branches.len());
-                // TODO(isweet): Support `permissive` mode at some point?                    
-                params.push("strict".into());
-                params.extend(branches.iter().flat_map(|(idx, pat)| {
-                    let pat_str = pat.to_string();
-                    let name_str = self.func_info[*idx].name.clone();
-                    iter::once(pat_str).chain(iter::once(name_str))
-                }));
-                
-                let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
-                self.functions.push(IR::new_plugin_function_with_inputs(
-                    name,
-                    output_count,
-                    input_count,
-                    SWITCH_PLUGIN_NAME.into(),
-                    "switch".into(),
-                    params,
-                    0,
-                    max_private_input_count,
-                ));
+            FunctionDesc::Switch(cond_width, ref branches) if self.use_plugin_disjunction_v0 => Some(self.define_plugin_switch(*cond_width, branches)),
 
-                Some(idx)
-            }
 
             _ => None,
         }
