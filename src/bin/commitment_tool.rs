@@ -525,7 +525,10 @@ fn calc_commitment(
         if !cs.secret || cs.uncommitted {
             continue;
         }
-        eprintln!("hashing secret code segment {:?} (at {:x})", cs.name, cs.start * 8);
+        eprintln!("hashing secret code segment {:?} (at {:x})", cs.name, cs.start);
+        assert!((cs.len as usize) >= cs.instrs.len(),
+            "too much code: got {} instrs, but segment length is {}",
+            cs.instrs.len(), cs.len);
         let instrs = cs.instrs.iter().cloned()
             .chain(iter::repeat(fetch::PADDING_INSTR).take(cs.len as usize - cs.instrs.len()));
         for instr in instrs {
@@ -546,6 +549,9 @@ fn calc_commitment(
             continue;
         }
         eprintln!("hashing secret memory segment {:?} (at {:x})", ms.name, ms.start * 8);
+        assert!((ms.len as usize) >= ms.data.len(),
+            "too much data: got {} words, but segment length is {}",
+            ms.data.len(), ms.len);
 
         let mut words = ms.data.iter().cloned()
             .chain(iter::repeat(0).take(ms.len as usize - ms.data.len()))
