@@ -435,7 +435,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
     fn add_func_info(
         &mut self,
-        desc: FunctionDesc,
+        desc: &FunctionDesc,
         output_count: &[u64],
         input_count: &[u64],
     ) -> (usize, String) {
@@ -468,6 +468,101 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         (idx, name)
     }
 
+    fn define_plugin_function(&mut self, desc: &FunctionDesc) -> Option<usize> {
+        if !IR::HAS_PLUGINS {
+            return None;
+        }
+
+        match desc {
+            FunctionDesc::Mux(n) if self.use_plugin_mux_v0 => {
+                let n = *n;
+                let (idx, name) = self.add_func_info(&desc, &[n], &[1, n, n]);
+                if n == 0 {
+                    return Some(idx);
+                }
+
+                self.functions.push(IR::new_plugin_function(
+                    name,
+                    [n],
+                    [1, n, n],
+                    "mux_v0".into(),
+                    "strict".into(),
+                    vec![],
+                ));
+                Some(idx)
+            }
+
+            FunctionDesc::AssertPermute(n, m) if self.use_plugin_permutation_check_v1 => {
+                let n = *n;
+                let m = *m;
+                let argc = n * m as u64;
+                let (idx, name) = self.add_func_info(desc, &[], &[argc, argc]);
+
+                self.functions.push(IR::new_plugin_function(
+                    name,
+                    [],
+                    [argc, argc],
+                    "permutation_check_v1".into(),
+                    "assert_perm".into(),
+                    vec![n.to_string()],
+                ));
+                Some(idx)
+            }
+
+            // The rest of the permutation gadgets should be unreachable when using the permutation plugin.
+            FunctionDesc::PermuteLayerShuffle(..)
+                | FunctionDesc::PermuteLayerSwitches(..)
+                | FunctionDesc::PermuteSwitch(..)
+                | FunctionDesc::PermuteSwitches(..)
+                | FunctionDesc::PermuteSwitchPublic(..)
+                | FunctionDesc::PermuteShuffle(..) =>
+            {
+                if self.use_plugin_permutation_check_v1 {
+                    unreachable!("{:?}", desc);
+                } else {
+                    None
+                }
+            }
+
+            FunctionDesc::Switch(cond_width, ref branches) if self.use_plugin_disjunction_v0 => {
+                let cond_width = *cond_width;
+                let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
+                // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
+                let f = &self.func_info[branches[0].0];
+                
+                let output_count = f.outputs().to_owned();
+                let mut input_count = Vec::with_capacity(1 + f.inputs().len());
+                input_count.push(cond_width);
+                input_count.extend_from_slice(f.inputs());
+                
+                let mut params = Vec::with_capacity(1 + 2 * branches.len());
+                // TODO(isweet): Support `permissive` mode at some point?                    
+                params.push("strict".into());
+                params.extend(branches.iter().flat_map(|(idx, pat)| {
+                    let pat_str = pat.to_string();
+                    let name_str = self.func_info[*idx].name.clone();
+                    iter::once(pat_str).chain(iter::once(name_str))
+                }));
+                
+                let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
+                self.functions.push(IR::new_plugin_function_with_inputs(
+                    name,
+                    output_count,
+                    input_count,
+                    SWITCH_PLUGIN_NAME.into(),
+                    "switch".into(),
+                    params,
+                    0,
+                    max_private_input_count,
+                ));
+
+                Some(idx)
+            }
+
+            _ => None,
+        }
+    }
+
     fn get_function(
         &mut self,
         desc: FunctionDesc,
@@ -476,89 +571,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             return s.to_owned();
         }
 
-        if IR::HAS_PLUGINS {
-            match desc {
-                FunctionDesc::Mux(n) if self.use_plugin_mux_v0 => {
-                    let (idx, name) = self.add_func_info(desc, &[n], &[1, n, n]);
-                    if n == 0 {
-                        return idx;
-                    }
-
-                    self.functions.push(IR::new_plugin_function(
-                        name,
-                        [n],
-                        [1, n, n],
-                        "mux_v0".into(),
-                        "strict".into(),
-                        vec![],
-                    ));
-                    return idx;
-                }
-
-                FunctionDesc::AssertPermute(n, m) if self.use_plugin_permutation_check_v1 => {
-                    let argc = n * m as u64;
-                    let (idx, name) = self.add_func_info(desc, &[], &[argc, argc]);
-
-                    self.functions.push(IR::new_plugin_function(
-                        name,
-                        [],
-                        [argc, argc],
-                        "permutation_check_v1".into(),
-                        "assert_perm".into(),
-                        vec![n.to_string()],
-                    ));
-                    return idx;
-                }
-
-                // The rest of the permutation gadgets should be unreachable when using the permutation plugin.
-                FunctionDesc::PermuteLayerShuffle(..)
-                | FunctionDesc::PermuteLayerSwitches(..)
-                | FunctionDesc::PermuteSwitch(..)
-                | FunctionDesc::PermuteSwitches(..)
-                | FunctionDesc::PermuteSwitchPublic(..)
-                | FunctionDesc::PermuteShuffle(..) =>
-                {
-                    if self.use_plugin_permutation_check_v1 {
-                        unreachable!("{:?}", desc);
-                    }
-                }
-
-                FunctionDesc::Switch(cond_width, ref branches) => if self.use_plugin_disjunction_v0 {
-                    let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
-                    // Each branch of a Switch (i.e. disjunction) must have the same signature, so it is safe to choose the first one arbitrarily.
-                    let f = &self.func_info[branches[0].0];
-                    
-                    let output_count = f.outputs().to_owned();
-                    let mut input_count = Vec::with_capacity(1 + f.inputs().len());
-                    input_count.push(cond_width);
-                    input_count.extend_from_slice(f.inputs());
-                    
-                    let mut params = Vec::with_capacity(1 + 2 * branches.len());
-                    // TODO(isweet): Support `permissive` mode at some point?                    
-                    params.push("strict".into());
-                    params.extend(branches.iter().flat_map(|(idx, pat)| {
-                        let pat_str = pat.to_string();
-                        let name_str = self.func_info[*idx].name.clone();
-                        iter::once(pat_str).chain(iter::once(name_str))
-                    }));
-                    
-                    let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
-                    self.functions.push(IR::new_plugin_function_with_inputs(
-                        name,
-                        output_count,
-                        input_count,
-                        SWITCH_PLUGIN_NAME.into(),
-                        "switch".into(),
-                        params,
-                        0,
-                        max_private_input_count,
-                    ));
-
-                    return idx;
-                }
-
-                _ => {}
-            }
+        if let Some(idx) = self.define_plugin_function(&desc) {
+            return idx;
         }
 
         let mut sub_sink = self.sub_sink();
@@ -771,7 +785,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         };
 
         let zki_sink = self.finish_sub_sink(sub_sink);
-        let (idx, name) = self.add_func_info(desc, &output_count, &input_count);
+        let (idx, name) = self.add_func_info(&desc, &output_count, &input_count);
 
         // For functions with no outputs (e.g. `And(0)`), we record an entry in `self.func_info`
         // but don't emit an actual `zki_sieve_v3` function.
