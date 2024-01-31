@@ -468,6 +468,18 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         (idx, name)
     }
 
+    fn add_func(&mut self, name: String, output_count: impl IntoIterator<Item = u64>, input_count: impl IntoIterator<Item = u64>, gates: Vec<IR::Gate>) {
+        let private_inputs_count = gates.iter().map(|g| IR::gate_private_inputs_count(g, &self.func_private_inputs_count)).sum();
+        let is_new_function = self.func_private_inputs_count.insert(name.clone(), private_inputs_count).is_none();
+        debug_assert!(is_new_function);
+        self.functions.push(IR::new_function(
+            name,
+            output_count,
+            input_count,
+            private_inputs_count,
+            gates,
+        ));        
+    }    
 
     fn plugin_switch_signature(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> (Vec<u64>, Vec<u64>) {
         // Earlier passes in the compiler ensure that a `GateKind::Switch` has at least one branch, and that each branch
@@ -811,19 +823,12 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             }
         }
 
-        let private_inputs_count = gates.iter().map(|g| IR::gate_private_inputs_count(g, &self.func_private_inputs_count)).sum();
-        let is_new_function = self.func_private_inputs_count.insert(name.clone(), private_inputs_count).is_none();
-        debug_assert!(is_new_function);
-        self.functions.push(IR::new_function(
-            name,
-            output_count,
-            input_count,
-            private_inputs_count,
-            gates,
-        ));
+        self.add_func(name, output_count, input_count, gates);
 
         idx
     }
+
+
 
     fn get_function(&mut self, desc: FunctionDesc) -> usize {
         if let Some(s) = self.func_map.get(&desc) {
@@ -1250,16 +1255,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         let (idx, name) = self.add_user_func_info(&name, &[return_n], arg_ns);
         let gates = self.collect_sub_gates(zki_sink);
-        let private_inputs_count = gates.iter().map(|g| IR::gate_private_inputs_count(g, &self.func_private_inputs_count)).sum();        
-        let is_new_function = self.func_private_inputs_count.insert(name.clone(), private_inputs_count).is_none();
-        debug_assert!(is_new_function);
-        self.functions.push(IR::new_function(
-            name,
-            iter::once(return_n),
-            arg_ns.iter().cloned(),
-            private_inputs_count,
-            gates,
-        ));
+
+        self.add_func(name, iter::once(return_n), arg_ns.iter().cloned(), gates);
 
         idx
     }
