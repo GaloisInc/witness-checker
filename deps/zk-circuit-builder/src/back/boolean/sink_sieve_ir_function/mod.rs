@@ -584,8 +584,6 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
-
-
     fn define_function(
         &mut self,
         desc: FunctionDesc,
@@ -1304,8 +1302,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let mut call_args = Vec::with_capacity(args.len());
         call_args.push(cond);
         call_args.extend_from_slice(args);
-        let private_input_counts = branches.iter().map(|branch| self.get_private_input_count_id(*branch.0)).collect::<Vec<_>>();
-        let branches = branches.into_iter().map(|(idx, pat)| (*idx, pat)).collect::<Vec<_>>();
+        let (private_input_counts, branches) = branches.into_iter().map(|branch| {
+            let idx = *branch.0;
+            let pat = branch.1;
+            let private_input_count = self.get_private_input_count_id(idx);
+            let branch = (idx, pat);
+            (private_input_count, branch)
+        }).unzip();
         let out = self.emit_call(expire, FunctionDesc::Switch(n, branches), &call_args);
         (out, private_input_counts)
     }
