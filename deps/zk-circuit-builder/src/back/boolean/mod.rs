@@ -12,7 +12,7 @@ use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
-    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call, SwitchCase, CallData,
+    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call, SwitchCase,
 };
 use crate::ir::migrate::{self, Migrate};
 use crate::routing::gadget::Permute;
@@ -418,16 +418,9 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         }).unwrap();
         let private_input_count = private_input_counts[branch_idx];
 
-        // TODO(isweet): Use `c.call` and make `alloc_call` private again
-        let call = c.as_base().alloc_call(CallData {
-            func: branch.body,
-            args,
-            project_witness: branch.project_witness,
-            project_deps: branch.project_deps,
-        });
+        let call = c.call_with_secret_project(branch.body, args, branch.project_deps, branch.project_witness);
         self.emit_call(c, sink, get_log, call);
 
-        eprintln!("max = {}, branch = {}", max_private_input_count, private_input_count);
         let padding_amt = max_private_input_count - private_input_count;
         
         sink.private_value(padding_amt, Bits::zero());

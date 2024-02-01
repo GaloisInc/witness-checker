@@ -117,8 +117,10 @@ pub fn make_graph<'a>(
             GateKind::Gadget(_, ws) => write_edges(ws)?,
             GateKind::Call(call) => write_edges(call.args)?,
             GateKind::Switch(cond, _branches, args) => {
-                let mut args = args.to_vec();
-                args.insert(0, cond);
+                let mut args_tmp = Vec::with_capacity(1 + args.len());
+                args_tmp.push(cond);
+                args_tmp.extend_from_slice(args);
+                let args = args_tmp;
                 write_edges(&args)?
             },
         }
