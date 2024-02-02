@@ -1299,12 +1299,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let mut call_args = Vec::with_capacity(args.len());
         call_args.push(cond);
         call_args.extend_from_slice(args);
-        let (private_input_counts, branches) = branches.into_iter().map(|branch| {
-            let idx = *branch.0;
-            let pat = branch.1;
+        let (private_input_counts, branches) = branches.into_iter().map(|(idx, pat)| {
+            let idx = *idx;
             let private_input_count = self.get_private_input_count_id(idx);
-            let branch = (idx, pat);
-            (private_input_count, branch)
+            (private_input_count, (idx, pat))
         }).unzip();
         let out = self.emit_call(expire, FunctionDesc::Switch(n, branches), &call_args);
         (out, private_input_counts)

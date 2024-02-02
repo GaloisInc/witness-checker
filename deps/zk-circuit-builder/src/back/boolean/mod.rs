@@ -130,6 +130,9 @@ pub trait Sink: Sized {
         return_n: u64,
         build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
     ) -> Self::FunctionId;
+    // TODO(isweet): At the time of this writing, `Self::FunctionId` is `usize` for every implementation
+    // of `Sink`. If this will always the case, it would be cheaper to pass `func` by value instead.
+    // The same goes for `Sink::switch` below.
     fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId;
 
     const HAS_PERMUTE: bool;
