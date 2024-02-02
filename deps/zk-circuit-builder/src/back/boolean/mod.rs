@@ -297,7 +297,7 @@ trait PrivateOps<'a> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
         call: Call<'a>,
     );
     fn emit_permute(
@@ -313,7 +313,7 @@ trait PrivateOps<'a> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
@@ -371,7 +371,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
         call: Call<'a>,
     ) {
         let sub_ev = self.ev.enter_call(c, call);
@@ -406,7 +406,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         &mut self,
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
-        get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
@@ -501,7 +501,7 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         &mut self,
         _c: &CircuitBase<'a>,
         _sink: &mut impl Sink,
-        _get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
+        _get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
         call: Call<'a>,
     ) {
         self.log.push(PrivateOp::Call(call));
@@ -523,7 +523,7 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         &mut self,
         _c: &CircuitBase<'a>,
         _sink: &mut impl Sink,
-        _get_log: & impl Fn(Function<'a>) -> Vec<PrivateOp<'a>>,
+        _get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
         cond: Wire<'a>,
         branches: &'a [SwitchCase<'a>],
         private_input_counts: Vec<u64>,
@@ -678,7 +678,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let out = self.sink.call(expire, func_id, &args);
                 let mut get_log = |func| function_map[&func].private_log.clone();
                 // TODO(isweet): Why doesn't this need to be guarded by `c.is_prover()`?
-                private.emit_call(c.as_base(), &mut self.sink, &get_log, call);
+                private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
                 return out;
             },
             GateKind::Switch(cond, branches, args) => {
@@ -690,7 +690,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let n = type_bits(cond.ty);
                 let (out, private_input_counts) = self.sink.switch(expire, cond_w, n, branches_w, &args_w);
                 let mut get_log = |func| function_map[&func].private_log.clone();
-                private.emit_switch(c.as_base(), &mut self.sink, &get_log, cond, branches, private_input_counts, args);
+                private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args);
                 return out;
             }
             GateKind::Gadget(gk, ws) => {
