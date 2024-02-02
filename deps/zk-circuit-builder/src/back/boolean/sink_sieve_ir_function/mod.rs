@@ -527,9 +527,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             return None;
         }
 
-        match desc {
+        match *desc {
             FunctionDesc::Mux(n) if self.use_plugin_mux_v0 => {
-                let n = *n;
                 let (idx, name) = self.add_func_info(&desc, &[n], &[1, n, n]);
                 if n == 0 {
                     return Some(idx);
@@ -547,8 +546,6 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             }
 
             FunctionDesc::AssertPermute(n, m) if self.use_plugin_permutation_check_v1 => {
-                let n = *n;
-                let m = *m;
                 let argc = n * m as u64;
                 let (idx, name) = self.add_func_info(desc, &[], &[argc, argc]);
 
@@ -578,7 +575,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
             }
 
-            FunctionDesc::Switch(cond_width, ref branches) if self.use_plugin_disjunction_v0 => Some(self.define_plugin_switch(*cond_width, branches)),
+            FunctionDesc::Switch(cond_width, ref branches) if self.use_plugin_disjunction_v0 => Some(self.define_plugin_switch(cond_width, branches)),
 
             _ => None,
         }
