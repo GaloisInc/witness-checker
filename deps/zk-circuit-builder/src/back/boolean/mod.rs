@@ -414,9 +414,10 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
     ) {
         let max_private_input_count = *private_input_counts.iter().max().unwrap();
         let (cond_val, _cond_sec) = self.ev.eval_wire_bits(c, cond).unwrap();
-        let cond_val = cond_val.to_biguint(); // TODO(isweet): Compare `cond_val` and `pattern` below at type `cond.ty` rather than as BigUint
+        let cond_val = cond_val.to_biguint(); 
         let (branch_idx, branch)  = branches.iter().enumerate().find(|(idx, branch)| {
             let pattern = branch.pattern.to_biguint();
+            // TODO(isweet): Compare as `Bits` once #59 is fixed.
             cond_val == pattern
         }).unwrap();
         let private_input_count = private_input_counts[branch_idx];
