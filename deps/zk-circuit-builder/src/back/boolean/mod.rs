@@ -678,8 +678,9 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let args = call.args.iter().map(|&w| self.wire_map[&w]).collect::<Vec<_>>();
                 let out = self.sink.call(expire, func_id, &args);
                 let mut get_log = |func| function_map[&func].private_log.clone();
-                // TODO(isweet): Why doesn't this need to be guarded by `c.is_prover()`?
-                private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
+                if c.is_prover() {
+                    private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
+                }
                 return out;
             },
             GateKind::Switch(cond, branches, args) => {
@@ -691,7 +692,9 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let n = type_bits(cond.ty);
                 let (out, private_input_counts) = self.sink.switch(expire, cond_w, n, branches_w, &args_w);
                 let mut get_log = |func| function_map[&func].private_log.clone();
-                private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args);
+                if c.is_prover() {
+                    private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args);
+                }
                 return out;
             }
             GateKind::Gadget(gk, ws) => {
