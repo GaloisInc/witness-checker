@@ -186,7 +186,7 @@ impl<'a, T> Rooted<'a, T> {
         mh.open(self)
     }
 
-    pub fn take(&mut self) -> T {
+    pub fn take(mut self) -> T {
         unsafe {
             let ptr = mem::replace(&mut self.ptr, ptr::null_mut());
             self.mcx.take(ptr)
