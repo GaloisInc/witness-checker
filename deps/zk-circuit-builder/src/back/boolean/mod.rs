@@ -121,7 +121,7 @@ pub trait Sink: Sized {
     /// Try to free wires that were allocated with `expire <= now`
     fn free_expired(&mut self, now: Time);
 
-    type FunctionId: for<'a, 'b> Migrate<'a, 'b, Output = Self::FunctionId>;
+    type FunctionId: Copy + for<'a, 'b> Migrate<'a, 'b, Output = Self::FunctionId>;
     type FunctionSink: Sink<FunctionId = Self::FunctionId>;
     fn define_function(
         &mut self,
@@ -133,7 +133,7 @@ pub trait Sink: Sized {
     // TODO(isweet): At the time of this writing, `Self::FunctionId` is `usize` for every implementation
     // of `Sink`. If this will always the case, it would be cheaper to pass `func` by value instead.
     // The same goes for `Sink::switch` below.
-    fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId;
+    fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId;
 
     const HAS_PERMUTE: bool;
     /// Emit a permutation circuit that takes as input a list of wires as well as a description
@@ -164,7 +164,7 @@ pub trait Sink: Sized {
         expire: Time,
         cond: WireId,
         n: u64,
-        branches: Vec<(&Self::FunctionId, BigUint)>,
+        branches: Vec<(Self::FunctionId, BigUint)>,
         args: &[WireId],
     ) -> (WireId, Vec<u64>);
 
@@ -673,7 +673,7 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
             GateKind::Call(call) => {
                 let function_map = &self.function_map;
-                let func_id = &function_map[&call.func].id;
+                let func_id = function_map[&call.func].id;
                 let args = call.args.iter().map(|&w| self.wire_map[&w]).collect::<Vec<_>>();
                 let out = self.sink.call(expire, func_id, &args);
                 let mut get_log = |func| function_map[&func].private_log.clone();
@@ -685,7 +685,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 assert!(self.sink.has_switch(), "Switch gate is unsupported with this Sink");
                 let cond_w = self.wire_map[&cond];
                 let function_map = &self.function_map;
-                let branches_w = branches.iter().map(|branch| (&function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
+                let branches_w = branches.iter().map(|branch| (function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
                 let args_w = args.iter().map(|arg| self.wire_map[arg]).collect::<Vec<_>>();
                 let n = type_bits(cond.ty);
                 let (out, private_input_counts) = self.sink.switch(expire, cond_w, n, branches_w, &args_w);
@@ -1426,7 +1426,7 @@ mod test {
         ) -> Self::FunctionId {
             unimplemented!("define_function not supported in TestSink");
         }
-        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+        fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId {
             unimplemented!("call not supported in TestSink");
         }
 
@@ -1452,7 +1452,7 @@ mod test {
             _expire: Time,
             _cond: WireId,
             _n: u64,
-            _branches: Vec<(&Self::FunctionId, BigUint)>,
+            _branches: Vec<(Self::FunctionId, BigUint)>,
             _args: &[WireId],
         ) -> (WireId, Vec<u64>) {
             unimplemented!()
@@ -1556,7 +1556,7 @@ mod test {
         ) -> Self::FunctionId {
             self.inner.define_function(name, arg_ns, return_n, build)
         }
-        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+        fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId {
             self.inner.call(expire, func, args)
         }
 
@@ -1582,7 +1582,7 @@ mod test {
             expire: Time,
             cond: WireId,
             n: u64,
-            branches: Vec<(&Self::FunctionId, BigUint)>,
+            branches: Vec<(Self::FunctionId, BigUint)>,
             args: &[WireId],
         ) -> (WireId, Vec<u64>) {
             self.inner.switch(expire, cond, n, branches, args)

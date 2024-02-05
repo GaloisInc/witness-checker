@@ -827,7 +827,7 @@ mod test {
         ) -> Self::FunctionId {
             self.inner.define_function(name, arg_ns, return_n, build)
         }
-        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+        fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId {
             self.inner.call(expire, func, args)
         }
 
@@ -853,7 +853,7 @@ mod test {
             expire: Time,
             cond: WireId,
             n: u64,
-            branches: Vec<(&Self::FunctionId, BigUint)>,
+            branches: Vec<(Self::FunctionId, BigUint)>,
             args: &[WireId],
         ) -> (WireId, Vec<u64>) {
             self.inner.switch(expire, cond, n, branches, args)

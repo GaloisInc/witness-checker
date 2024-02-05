@@ -15,7 +15,6 @@ use super::arith;
 use super::ops;
 use super::wire_alloc::WireAlloc;
 
-
 mod v1;
 pub use self::v1::SieveIrV1;
 
@@ -1255,8 +1254,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         idx
     }
-    fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
-        self.emit_call_idx(expire, *func, args)
+    fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId {
+        self.emit_call_idx(expire, func, args)
     }
 
     const HAS_PERMUTE: bool = true;
@@ -1293,14 +1292,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         expire: Time,
         cond: WireId,
         n: u64,
-        branches: Vec<(&Self::FunctionId, BigUint)>,
+        branches: Vec<(Self::FunctionId, BigUint)>,
         args: &[WireId],
     ) -> (WireId, Vec<u64>) {
         let mut call_args = Vec::with_capacity(args.len());
         call_args.push(cond);
         call_args.extend_from_slice(args);
         let (private_input_counts, branches) = branches.into_iter().map(|(idx, pat)| {
-            let idx = *idx;
             let private_input_count = self.get_private_input_count_id(idx);
             (private_input_count, (idx, pat))
         }).unzip();
