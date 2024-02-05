@@ -1718,6 +1718,7 @@ impl Trace {
         }
     }
 
+    #[track_caller]
     pub fn as_instr(&self) -> &InstrTrace {
         match *self {
             Trace::Instr(ref x) => x,
@@ -1725,6 +1726,7 @@ impl Trace {
         }
     }
 
+    #[track_caller]
     pub fn as_instr_mut(&mut self) -> &mut InstrTrace {
         match *self {
             Trace::Instr(ref mut x) => x,
@@ -1732,6 +1734,7 @@ impl Trace {
         }
     }
 
+    #[track_caller]
     pub fn as_bbmd(&self) -> &BbmdTrace {
         match *self {
             Trace::Bbmd(ref x) => x,
@@ -1739,6 +1742,7 @@ impl Trace {
         }
     }
 
+    #[track_caller]
     pub fn as_bbmd_mut(&mut self) -> &mut BbmdTrace {
         match *self {
             Trace::Bbmd(ref mut x) => x,
