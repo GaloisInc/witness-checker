@@ -97,71 +97,80 @@ impl ExecWitness {
         let mut cycle = 0;
         let mut prev_state = e.provided_init_state.clone().unwrap_or_else(|| e.initial_state());
         let mut prev_seg_idx: Option<usize> = None;
-        let it = e.trace.as_instr();
-        let it_w = w.trace.as_instr_mut();
-        for tc in &it.chunks {
-            let seg_idx = tc.segment;
-            let seg = &it.segments[seg_idx];
-            let seg_w = &mut it_w.segments[seg_idx];
 
-            if let Some(ref debug) = tc.debug {
-                if let Some(debug_cycle) = debug.cycle {
-                    cycle = debug_cycle;
-                }
-                if let Some(ref debug_state) = debug.prev_state {
-                    pc = debug_state.pc;
-                    prev_state = debug_state.clone();
-                }
-                if debug.clear_prev_segment {
-                    prev_seg_idx = None;
-                }
-                if let Some(debug_prev) = debug.prev_segment {
-                    prev_seg_idx = Some(debug_prev);
-                }
-            }
+        match (&e.trace, &w.trace) {
+            (&Trace::Instr(ref it), &TraceWitness::Instr(ref it_w)) => {
+                let it = e.trace.as_instr();
+                let it_w = w.trace.as_instr_mut();
+                for tc in &it.chunks {
+                    let seg_idx = tc.segment;
+                    let seg = &it.segments[seg_idx];
+                    let seg_w = &mut it_w.segments[seg_idx];
 
-            seg_w.init_state = RamState { cycle, live:true, .. prev_state };
-            seg_w.fetches.reserve(seg.len);
-            seg_w.mem_ports.resize(seg.len, None);
-
-            debug_assert_eq!(seg.len, tc.states.len());
-            for (j, post_state) in tc.states.iter().enumerate() {
-                if let Some(advs) = e.advice.get(&(trace_pos as u64 + 1)) {
-                    for adv in advs {
-                        match *adv {
-                            Advice::MemOp { addr, value, op, width, tainted } => {
-                                seg_w.mem_ports[j] = Some(MemPort {
-                                    cycle, addr, value, op, width, tainted
-                                });
-                            },
-                            Advice::Stutter => { seg_w.stutter[j] = true; },
-                            Advice::Advise { advise } => { seg_w.advice[j] = advise; },
+                    if let Some(ref debug) = tc.debug {
+                        if let Some(debug_cycle) = debug.cycle {
+                            cycle = debug_cycle;
+                        }
+                        if let Some(ref debug_state) = debug.prev_state {
+                            pc = debug_state.pc;
+                            prev_state = debug_state.clone();
+                        }
+                        if debug.clear_prev_segment {
+                            prev_seg_idx = None;
+                        }
+                        if let Some(debug_prev) = debug.prev_segment {
+                            prev_seg_idx = Some(debug_prev);
                         }
                     }
+
+                    seg_w.init_state = RamState { cycle, live:true, .. prev_state };
+                    seg_w.fetches.reserve(seg.len);
+                    seg_w.mem_ports.resize(seg.len, None);
+
+                    debug_assert_eq!(seg.len, tc.states.len());
+                    for (j, post_state) in tc.states.iter().enumerate() {
+                        if let Some(advs) = e.advice.get(&(trace_pos as u64 + 1)) {
+                            for adv in advs {
+                                match *adv {
+                                    Advice::MemOp { addr, value, op, width, tainted } => {
+                                        seg_w.mem_ports[j] = Some(MemPort {
+                                            cycle, addr, value, op, width, tainted
+                                        });
+                                    },
+                                    Advice::Stutter => { seg_w.stutter[j] = true; },
+                                    Advice::Advise { advise } => { seg_w.advice[j] = advise; },
+                                }
+                            }
+                        }
+
+                        seg_w.fetches.push((pc, instrs[pc]));
+
+                        pc = post_state.pc;
+                        if !seg_w.stutter[j] {
+                            cycle += 1;
+                        }
+                        trace_pos += 1;
+                    }
+
+                    if let Some(prev_seg_idx) = prev_seg_idx {
+                        let prev_seg = &it.segments[prev_seg_idx];
+                        let direct_connect = prev_seg.successors.contains(&seg_idx);
+                        seg_w.pred = Some(prev_seg_idx);
+                        seg_w.from_net = !direct_connect;
+
+                        let prev_seg_w = &mut it_w.segments[prev_seg_idx];
+                        prev_seg_w.succ = Some(seg_idx);
+                        prev_seg_w.to_net = !direct_connect;
+                    }
+
+                    prev_seg_idx = Some(seg_idx);
+                    prev_state = tc.states.last().unwrap().clone();
                 }
-
-                seg_w.fetches.push((pc, instrs[pc]));
-
-                pc = post_state.pc;
-                if !seg_w.stutter[j] {
-                    cycle += 1;
-                }
-                trace_pos += 1;
-            }
-
-            if let Some(prev_seg_idx) = prev_seg_idx {
-                let prev_seg = &it.segments[prev_seg_idx];
-                let direct_connect = prev_seg.successors.contains(&seg_idx);
-                seg_w.pred = Some(prev_seg_idx);
-                seg_w.from_net = !direct_connect;
-
-                let prev_seg_w = &mut it_w.segments[prev_seg_idx];
-                prev_seg_w.succ = Some(seg_idx);
-                prev_seg_w.to_net = !direct_connect;
-            }
-
-            prev_seg_idx = Some(seg_idx);
-            prev_state = tc.states.last().unwrap().clone();
+            },
+            (&Trace::Bbmd(ref bt), &TraceWitness::Bbmd(ref bt_w)) => {
+                // TODO
+            },
+            (_, _) => unreachable!("mismatch between exec and witness traces"),
         }
 
         w
