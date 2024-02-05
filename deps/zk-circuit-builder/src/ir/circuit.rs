@@ -1132,6 +1132,21 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gadget(kind, &args)
     }
 
+    fn call_with_secret_project(
+        &self,
+        func: Function<'a>,
+        args: &'a [Wire<'a>],
+        project_deps: &'a [Wire<'a>],
+        project_witness: SecretProjectFn<'a>,
+    ) -> Call<'a> {
+        self.as_base().alloc_call(CallData {
+            func,
+            args,
+            project_witness,
+            project_deps,
+        })
+    }
+
     fn call<W, W2, F>(
         &self,
         func: Function<'a>,
@@ -1149,12 +1164,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
             TypeId::of::<W>() == TypeId::of::<()>());
         debug_assert_eq!(TypeId::of::<W2>(), func.witness_type);
         let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
-        let call = self.as_base().alloc_call(CallData {
-            func,
-            args,
-            project_witness,
-            project_deps,
-        });
+        let call = self.call_with_secret_project(func, args, project_deps, project_witness);
         self.gate(GateKind::Call(call))
     }
 

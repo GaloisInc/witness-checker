@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use zki_sieve;
 use zki_sieve::structs::function::Function;
 use zki_sieve::structs::gates::Gate;
@@ -94,13 +95,15 @@ impl SieveIrFormat for SieveIrV1 {
 
     const HAS_PLUGINS: bool = false;
 
-    fn new_plugin_function(
+    fn new_plugin_function_with_inputs(
         _name: String,
         _outs: impl IntoIterator<Item = u64>,
         _ins: impl IntoIterator<Item = u64>,
         _plugin_name: String,
         _op_name: String,
         _args: Vec<String>,
+        _public_input_count: u64,
+        _private_input_count: u64,
     ) -> Function {
         panic!("plugins are not supported by this format")
     }
@@ -108,6 +111,17 @@ impl SieveIrFormat for SieveIrV1 {
     fn relation_gate_count_approx(r: &Relation) -> usize {
         r.gates.len()
     }
+    fn gate_private_inputs_count(gate: &Self::Gate, func_private_inputs_counts: &HashMap<String, u64>) -> u64 {
+        match gate {
+            Gate::Witness(_) => 1,
+            Gate::Call(name, _, _) => func_private_inputs_counts[name],
+            // The following three gates are not used by SieveIrV1, but may consume private inputs.
+            Gate::AnonCall(..) => unreachable!(),
+            Gate::Switch(..) => unreachable!(),
+            Gate::For(..) => unreachable!(),
+            _ => 0,
+        }
+    }    
     fn visit_relation(
         r: Relation,
         mut visit_gate: impl FnMut(Gate),

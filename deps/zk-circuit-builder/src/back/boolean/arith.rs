@@ -827,7 +827,7 @@ mod test {
         ) -> Self::FunctionId {
             self.inner.define_function(name, arg_ns, return_n, build)
         }
-        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+        fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId {
             self.inner.call(expire, func, args)
         }
 
@@ -843,6 +843,20 @@ mod test {
         }
         fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
+        }
+
+        fn has_switch(&self) -> bool {
+            self.inner.has_switch()
+        }
+        fn switch(
+            &mut self,
+            expire: Time,
+            cond: WireId,
+            n: u64,
+            branches: Vec<(Self::FunctionId, BigUint)>,
+            args: &[WireId],
+        ) -> (WireId, Vec<u64>) {
+            self.inner.switch(expire, cond, n, branches, args)
         }
     }
 

@@ -12,7 +12,7 @@ use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
-    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call,
+    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call, SwitchCase,
 };
 use crate::ir::migrate::{self, Migrate};
 use crate::routing::gadget::Permute;
@@ -121,7 +121,7 @@ pub trait Sink: Sized {
     /// Try to free wires that were allocated with `expire <= now`
     fn free_expired(&mut self, now: Time);
 
-    type FunctionId: for<'a, 'b> Migrate<'a, 'b, Output = Self::FunctionId>;
+    type FunctionId: Copy + for<'a, 'b> Migrate<'a, 'b, Output = Self::FunctionId>;
     type FunctionSink: Sink<FunctionId = Self::FunctionId>;
     fn define_function(
         &mut self,
@@ -130,7 +130,10 @@ pub trait Sink: Sized {
         return_n: u64,
         build: impl FnOnce(Self::FunctionSink, &[WireId]) -> (Self::FunctionSink, WireId),
     ) -> Self::FunctionId;
-    fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId;
+    // TODO(isweet): At the time of this writing, `Self::FunctionId` is `usize` for every implementation
+    // of `Sink`. If this will always the case, it would be cheaper to pass `func` by value instead.
+    // The same goes for `Sink::switch` below.
+    fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId;
 
     const HAS_PERMUTE: bool;
     /// Emit a permutation circuit that takes as input a list of wires as well as a description
@@ -154,6 +157,16 @@ pub trait Sink: Sized {
     /// first 8 of those 72 bits would hold the value `0_u8`, the next 16 would be `1_u16`, the next 8
     /// would be `10_u8`, and so on.
     fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]);
+    
+    fn has_switch(&self) -> bool;
+    fn switch(
+        &mut self,
+        expire: Time,
+        cond: WireId,
+        n: u64,
+        branches: Vec<(Self::FunctionId, BigUint)>,
+        args: &[WireId],
+    ) -> (WireId, Vec<u64>);
 
     /// AND together bits `a .. a + n`, producing a single output bit.
     fn and_all(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -296,6 +309,16 @@ trait PrivateOps<'a> {
         permuted_wires: Vec<Wire<'a>>,
         wire_widths: Vec<u64>
     );
+    fn emit_switch(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+    );
 }
 
 struct PrivateDirect<E> {
@@ -360,6 +383,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
                 PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
                 PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
                 PrivateOp::Permute(n, perm, permuted_wires, wire_widths) => sub_ops.emit_permute(c, sink, n, perm, permuted_wires, wire_widths),
+                PrivateOp::Switch(cond, branches, private_input_counts, args) => sub_ops.emit_switch(c, sink, get_log, cond, branches, private_input_counts, args),
             }
         }
     }
@@ -377,15 +401,68 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         let input_values = input_wires.iter().map(|&x| self.ev.eval_wire_bits(c, x).unwrap().0).collect();
         sink.permute_private_values(num_items, bits, input_values, &wire_widths);
     }
+
+    fn emit_switch(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+    ) {
+        let max_private_input_count = *private_input_counts.iter().max().unwrap();
+        let (cond_val, _cond_sec) = self.ev.eval_wire_bits(c, cond).unwrap();
+        let cond_val = cond_val.to_biguint(); 
+        let (branch_idx, branch)  = branches.iter().enumerate().find(|(idx, branch)| {
+            let pattern = branch.pattern.to_biguint();
+            // TODO(isweet): Compare as `Bits` once #59 is fixed.
+            cond_val == pattern
+        }).unwrap();
+        let private_input_count = private_input_counts[branch_idx];
+
+        let call = c.call_with_secret_project(branch.body, args, branch.project_deps, branch.project_witness);
+        self.emit_call(c, sink, get_log, call);
+
+        let padding_amt = max_private_input_count - private_input_count;
+        
+        sink.private_value(padding_amt, Bits::zero());
+    }
 }
 
-#[derive(Clone, Debug, Migrate)]
+#[derive(Clone, Debug)]
 enum PrivateOp<'a> {
     Emit(Wire<'a>),
     QuotRem(Wire<'a>, Wire<'a>),
     Call(Call<'a>),
     Permute(u64, Wire<'a>, Vec<Wire<'a>>, Vec<u64>),
+    Switch(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>]),
 }
+
+impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
+    type Output = PrivateOp<'b>;
+
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PrivateOp<'b> {
+        match self {
+            PrivateOp::Emit(a) => PrivateOp::Emit(v.visit(a)),
+            PrivateOp::QuotRem(a, b) => PrivateOp::QuotRem(v.visit(a), v.visit(b)),
+            PrivateOp::Call(call) => PrivateOp::Call(v.visit(call)),
+            PrivateOp::Permute(n, perm, perm_wires, wire_widths) => PrivateOp::Permute(n, v.visit(perm), v.visit(perm_wires), wire_widths),
+            PrivateOp::Switch(cond, branches, private_input_counts, args) => {
+                let branches = branches.iter().map(|&branch| v.visit(branch)).collect::<Vec<_>>();
+                let branches = v.new_circuit().switch_case_list(&branches);
+
+                let args = args.iter().map(|&arg| v.visit(arg)).collect::<Vec<_>>();
+                let args = v.new_circuit().wire_list(&args);
+                PrivateOp::Switch(v.visit(cond), branches, private_input_counts, args)
+            }
+        }
+    }
+}
+
+
+
 
 struct PrivateLog<'a> {
     log: Vec<PrivateOp<'a>>,
@@ -441,6 +518,19 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         wire_widths: Vec<u64>
     ) {
         self.log.push(PrivateOp::Permute(num_items, perm, permuted_wires, wire_widths));
+    }
+    
+    fn emit_switch(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        _get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+    ) {
+        self.log.push(PrivateOp::Switch(cond, branches, private_input_counts, args));
     }
 }
 
@@ -504,6 +594,14 @@ impl<'w, S: Sink> Backend<'w, S> {
             if let GateKind::Call(call) = w.kind {
                 if !self.function_map.contains_key(&call.func) {
                     self.define_function(c.as_base(), call.func);
+                }
+            }
+
+            if let GateKind::Switch(_, branches, _) = w.kind {
+                for branch in branches {
+                    if !self.function_map.contains_key(&branch.body) {
+                        self.define_function(c.as_base(), branch.body)
+                    }
                 }
             }
         }
@@ -576,13 +674,29 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
             GateKind::Call(call) => {
                 let function_map = &self.function_map;
-                let func_id = &function_map[&call.func].id;
+                let func_id = function_map[&call.func].id;
                 let args = call.args.iter().map(|&w| self.wire_map[&w]).collect::<Vec<_>>();
                 let out = self.sink.call(expire, func_id, &args);
                 let mut get_log = |func| function_map[&func].private_log.clone();
-                private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
+                if c.is_prover() {
+                    private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
+                }
                 return out;
             },
+            GateKind::Switch(cond, branches, args) => {
+                assert!(self.sink.has_switch(), "Switch gate is unsupported with this Sink");
+                let cond_w = self.wire_map[&cond];
+                let function_map = &self.function_map;
+                let branches_w = branches.iter().map(|branch| (function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
+                let args_w = args.iter().map(|arg| self.wire_map[arg]).collect::<Vec<_>>();
+                let n = type_bits(cond.ty);
+                let (out, private_input_counts) = self.sink.switch(expire, cond_w, n, branches_w, &args_w);
+                let mut get_log = |func| function_map[&func].private_log.clone();
+                if c.is_prover() {
+                    private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args);
+                }
+                return out;
+            }
             GateKind::Gadget(gk, ws) => {
                 if let Some(g) = gk.cast::<Permute>() {
                     assert!(S::HAS_PERMUTE, "Permute gadget is unsupported with this Sink");
@@ -918,9 +1032,9 @@ impl<'w, S: Sink> Backend<'w, S> {
 
             // `Call` should be handled by the case above.
             GateKind::Call(..) => unreachable!(),
-            
-            // Making the backend unimplemented for time being
-            GateKind::Switch(..) => unimplemented!(),
+
+            // `Switch` should be handled by the case above.
+            GateKind::Switch(..) => unreachable!(),
             
             // `a` is pre-evaluated, so it can be ignored
             GateKind::Seq(_aw, bw) => {
@@ -1062,7 +1176,7 @@ mod test {
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
-        IntSize,
+        IntSize, DefineFunction,
     };
     use super::*;
 
@@ -1316,7 +1430,7 @@ mod test {
         ) -> Self::FunctionId {
             unimplemented!("define_function not supported in TestSink");
         }
-        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+        fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId {
             unimplemented!("call not supported in TestSink");
         }
 
@@ -1331,6 +1445,20 @@ mod test {
             unimplemented!()
         }
         fn permute_private_values(&mut self, _num_items: u64, _perm: Bits, _input_values: Vec<Bits>, _wire_widths: &[u64]) {
+            unimplemented!()
+        }
+
+        fn has_switch(&self) -> bool {
+            false
+        }
+        fn switch(
+            &mut self,
+            _expire: Time,
+            _cond: WireId,
+            _n: u64,
+            _branches: Vec<(Self::FunctionId, BigUint)>,
+            _args: &[WireId],
+        ) -> (WireId, Vec<u64>) {
             unimplemented!()
         }
     }
@@ -1432,7 +1560,7 @@ mod test {
         ) -> Self::FunctionId {
             self.inner.define_function(name, arg_ns, return_n, build)
         }
-        fn call(&mut self, expire: Time, func: &Self::FunctionId, args: &[WireId]) -> WireId {
+        fn call(&mut self, expire: Time, func: Self::FunctionId, args: &[WireId]) -> WireId {
             self.inner.call(expire, func, args)
         }
 
@@ -1448,6 +1576,20 @@ mod test {
         }
         fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
+        }
+
+        fn has_switch(&self) -> bool {
+            self.inner.has_switch()
+        }
+        fn switch(
+            &mut self,
+            expire: Time,
+            cond: WireId,
+            n: u64,
+            branches: Vec<(Self::FunctionId, BigUint)>,
+            args: &[WireId],
+        ) -> (WireId, Vec<u64>) {
+            self.inner.switch(expire, cond, n, branches, args)
         }
     }
 
@@ -1865,4 +2007,160 @@ mod test {
     fn seq_assert_1() {
         test_gate([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
     }
+
+    fn emit_and_validate<'a>(c: &impl CircuitTrait<'a>, ok: Wire<'a>) {
+        use zki_sieve_v5::producers::sink::MemorySink;
+        
+        let sink = MemorySink::default();
+        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
+        let mut backend = Backend::new(sink);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();        
+        backend.enforce_true(c, &mut ev, ok);
+
+        use zki_sieve_v5::Source;
+        use zki_sieve_v5::consumers::validator::Validator;
+        let sink = backend.finish().finish();
+        let source: Source = sink.into();
+        let mut validator = Validator::new_as_prover();
+        for msg in source.iter_messages() {
+            let msg = msg.unwrap();
+            eprintln!("{:?}", msg);
+            validator.ingest_message(&msg);
+        }
+        let violations = validator.get_violations();
+        if !violations.is_empty() {
+            eprintln!("{}", violations.join("\n"));
+            panic!("Encountered a SIEVE IR V3 validation error.")
+        }        
+    }
+    
+    #[test]
+    fn switch_u8_no_private_inputs() {
+        use std::convert::TryInto;
+
+        macro_rules! test_ty {
+            () => { Ty::uint(8) };
+        }        
+        
+        struct SwitchConst;
+        impl<'b> DefineFunction<'b> for SwitchConst {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, _args: &[Wire<'b>]) -> Wire<'b> {
+                c.lit(test_ty!(), 0)
+            }
+        }
+        
+        struct SwitchAdd;
+        impl<'b> DefineFunction<'b> for SwitchAdd {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.add(a, b)
+            }
+        }
+
+        struct SwitchMul;
+        impl<'b> DefineFunction<'b> for SwitchMul {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.mul(a, b)
+            }
+        }
+
+        let arenas = Arenas::new();  
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+
+        let ty = test_ty!();
+        let const_pat = c.bits(ty, 0);
+        let add_pat   = c.bits(ty, 1);
+        let mul_pat   = c.bits(ty, 2);
+
+        let switch_const = c.define_function::<(), _>("switch_const", &[ty, ty], SwitchConst);
+        let switch_add   = c.define_function::<(), _>("switch_add",   &[ty, ty], SwitchAdd);
+        let switch_mul   = c.define_function::<(), _>("switch_mul",   &[ty, ty], SwitchMul);
+
+        let cases = c.switch_case_list(&[
+            c.switch_case(const_pat, switch_const, &[], |_, &(), _| (&()).into()),
+            c.switch_case(add_pat,   switch_add,   &[], |_, &(), _| (&()).into()),
+            c.switch_case(mul_pat,   switch_mul,   &[], |_, &(), _| (&()).into()),
+        ]);
+
+        let guard = c.lit(ty, 2);
+        let args = c.wire_list(&[
+            c.secret_immediate(ty, 2),
+            c.secret_immediate(ty, 3),
+        ]);        
+
+        let actual   = c.switch(guard, cases, args);
+        let expected = c.lit(ty, 6);
+        let ok = c.eq(actual, expected);
+
+        emit_and_validate(&c, ok)
+    }
+
+    #[test]
+    fn switch_u8_private_inputs() {
+        use std::convert::TryInto;
+
+        macro_rules! test_ty {
+            () => { Ty::uint(8) };
+        }
+        
+        struct SwitchConst;
+        impl<'b> DefineFunction<'b> for SwitchConst {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, _args: &[Wire<'b>]) -> Wire<'b> {
+                c.lit(test_ty!(), 0)
+            }
+        }
+        
+        struct SwitchAdd;
+        impl<'b> DefineFunction<'b> for SwitchAdd {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                let sum = c.secret_derived(test_ty!(), c.wire_list(args), move |c, vs| {
+                    let [a_bits, b_bits]: [Bits; 2] = vs.try_into().unwrap();
+                    let a = a_bits.to_biguint();
+                    let b = b_bits.to_biguint();
+                    c.bits(test_ty!(), a + b)
+                });
+                c.seq(c.assert_zero(c.sub(sum, c.add(a, b))), sum)
+            }
+        }
+
+        struct SwitchMul;
+        impl<'b> DefineFunction<'b> for SwitchMul {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.mul(a, b)
+            }
+        }
+
+        let arenas = Arenas::new();  
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+
+        let ty = test_ty!();
+        let const_pat = c.bits(ty, 0);
+        let add_pat   = c.bits(ty, 1);
+        let mul_pat   = c.bits(ty, 2);
+
+        let switch_const = c.define_function::<(), _>("switch_const", &[ty, ty], SwitchConst);
+        let switch_add   = c.define_function::<(), _>("switch_add",   &[ty, ty], SwitchAdd);
+        let switch_mul   = c.define_function::<(), _>("switch_mul",   &[ty, ty], SwitchMul);
+
+        let cases = c.switch_case_list(&[
+            c.switch_case(const_pat, switch_const, &[], |_, &(), _| (&()).into()),
+            c.switch_case(add_pat,   switch_add,   &[], |_, &(), _| (&()).into()),
+            c.switch_case(mul_pat,   switch_mul,   &[], |_, &(), _| (&()).into()),
+        ]);
+
+        let guard = c.lit(ty, 2);
+        let args = c.wire_list(&[
+            c.secret_immediate(ty, 2),
+            c.secret_immediate(ty, 3),
+        ]);        
+
+        let actual   = c.switch(guard, cases, args);
+        let expected = c.lit(ty, 6);
+        let ok = c.eq(actual, expected);
+
+        emit_and_validate(&c, ok)
+    }    
 }

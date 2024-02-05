@@ -94,7 +94,7 @@ macro_rules! declare_use_plugins {
         }
     };
 }
-declare_use_plugins!(mux_v0, permutation_check_v1);
+declare_use_plugins!(mux_v0, permutation_check_v1, disjunction_v0);
 
 
 #[cfg(feature = "bellman")]
@@ -535,6 +535,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
         struct BackendWrapper<'w> {
             backend: Backend<'w, SieveIrV2Sink<FilesSink>>,
             workspace: String,
+            use_plugins: UsePlugins,
         }
 
 
@@ -545,6 +546,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
         return Box::new(BackendWrapper {
             backend,
             workspace: workspace.to_owned(),
+            use_plugins,
         });
 
 
@@ -582,12 +584,14 @@ pub fn new_boolean_sieve_ir_v2<'a>(
             }
 
             fn has_feature(&self, feature: BackendFeature) -> bool {
-                matches!(feature,
+                let standard = matches!(feature,
                     | BackendFeature::Function
                     | BackendFeature::ConcatExtractBits
                     | BackendFeature::WideMul
                     | BackendFeature::Permute
-                )
+                );
+                let switch = matches!(feature, BackendFeature::Switch) && self.use_plugins.disjunction_v0;
+                standard || switch                
             }
         }
     }
@@ -613,6 +617,7 @@ pub fn new_boolean_sieve_ir_v3<'a>(
         struct BackendWrapper<'w> {
             backend: Backend<'w, SieveIrV3Sink<FilesSink>>,
             workspace: String,
+            use_plugins: UsePlugins,
         }
 
 
@@ -623,6 +628,7 @@ pub fn new_boolean_sieve_ir_v3<'a>(
         return Box::new(BackendWrapper {
             backend,
             workspace: workspace.to_owned(),
+            use_plugins,
         });
 
 
@@ -660,12 +666,14 @@ pub fn new_boolean_sieve_ir_v3<'a>(
             }
 
             fn has_feature(&self, feature: BackendFeature) -> bool {
-                matches!(feature,
+                let standard = matches!(feature,
                     | BackendFeature::Function
                     | BackendFeature::ConcatExtractBits
                     | BackendFeature::WideMul
                     | BackendFeature::Permute
-                )
+                );
+                let switch = matches!(feature, BackendFeature::Switch) && self.use_plugins.disjunction_v0;
+                standard || switch
             }
         }
     }
