@@ -2008,8 +2008,34 @@ mod test {
         test_gate([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
     }
 
+    fn emit_and_validate<'a>(c: &impl CircuitTrait<'a>, ok: Wire<'a>) {
+        use zki_sieve_v5::producers::sink::MemorySink;
+        
+        let sink = MemorySink::default();
+        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
+        let mut backend = Backend::new(sink);
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();        
+        backend.enforce_true(c, &mut ev, ok);
+
+        use zki_sieve_v5::Source;
+        use zki_sieve_v5::consumers::validator::Validator;
+        let sink = backend.finish().finish();
+        let source: Source = sink.into();
+        let mut validator = Validator::new_as_prover();
+        for msg in source.iter_messages() {
+            let msg = msg.unwrap();
+            eprintln!("{:?}", msg);
+            validator.ingest_message(&msg);
+        }
+        let violations = validator.get_violations();
+        if !violations.is_empty() {
+            eprintln!("{}", violations.join("\n"));
+            panic!("Encountered a SIEVE IR V3 validation error.")
+        }        
+    }
+    
     #[test]
-    fn switch_u64_no_private_inputs() {
+    fn switch_u8_no_private_inputs() {
         use std::convert::TryInto;
 
         macro_rules! test_ty {
@@ -2067,34 +2093,11 @@ mod test {
         let expected = c.lit(ty, 6);
         let ok = c.eq(actual, expected);
 
-        let path = ".";
-        use zki_sieve_v5::producers::sink::FilesSink;        
-        let sink = FilesSink::new_clean(&path).unwrap();
-        
-        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
-        let mut backend = Backend::new(sink);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();        
-        backend.enforce_true(&c, &mut ev, ok);
-
-        use zki_sieve_v5::Source;
-        use zki_sieve_v5::consumers::validator::Validator;
-        let sink = backend.finish().finish();
-        let source: Source = sink.into();
-        let mut validator = Validator::new_as_prover();
-        for msg in source.iter_messages() {
-            let msg = msg.unwrap();
-            eprintln!("{:?}", msg);
-            validator.ingest_message(&msg);
-        }
-        let violations = validator.get_violations();
-        if !violations.is_empty() {
-            eprintln!("{}", violations.join("\n"));
-            panic!("Encountered a SIEVE IR V3 validation error.")
-        }
+        emit_and_validate(&c, ok)
     }
 
     #[test]
-    fn switch_u64_private_inputs() {
+    fn switch_u8_private_inputs() {
         use std::convert::TryInto;
 
         macro_rules! test_ty {
@@ -2158,29 +2161,6 @@ mod test {
         let expected = c.lit(ty, 6);
         let ok = c.eq(actual, expected);
 
-        let path = ".";
-        use zki_sieve_v5::producers::sink::FilesSink;        
-        let sink = FilesSink::new_clean(&path).unwrap();
-        
-        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
-        let mut backend = Backend::new(sink);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();        
-        backend.enforce_true(&c, &mut ev, ok);
-
-        use zki_sieve_v5::Source;
-        use zki_sieve_v5::consumers::validator::Validator;
-        let sink = backend.finish().finish();
-        let source: Source = sink.into();
-        let mut validator = Validator::new_as_prover();
-        for msg in source.iter_messages() {
-            let msg = msg.unwrap();
-            eprintln!("{:?}", msg);
-            validator.ingest_message(&msg);
-        }
-        let violations = validator.get_violations();
-        if !violations.is_empty() {
-            eprintln!("{}", violations.join("\n"));
-            panic!("Encountered a SIEVE IR V3 validation error.")
-        }
+        emit_and_validate(&c, ok)
     }    
 }
