@@ -17,28 +17,21 @@ use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 
 
 #[derive(Migrate)]
-pub struct ExecBuilder<'a> {
+struct Common<'a> {
     init_state: RamState,
     check_steps: usize,
     /// If set, then the trace is valid only if the final value of `r0` is 0.
     expect_zero: bool,
-    privilege_levels: bool,
-    calc_step_func: Function<'a>,
-    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
-    check_step_func: Function<'a>,
     /// If set, then the trace is valid only if the program writes a 1 to this address before
     /// terminating.
     expect_write: Option<u64>,
-    debug_segment_graph_path: Option<String>,
+    /// If set, then the trace is invalid if low-privilege code (bit 31 of the PC is 0) accesses
+    /// high-privilege memory (bit 31 of the address is 1) or jumps to high-privilege code.
+    privilege_levels: bool,
 
     equiv_segments: EquivSegments<'a>,
     mem: Memory<'a>,
     fetch: Fetch<'a>,
-    seg_graph_builder: SegGraphBuilder<'a>,
-    /// Map from segment index to the index of the trace chunk that uses that segment, along with
-    /// the initial cycle of that chunk.  This is used in `add_segment` to initialize the secrets
-    /// for the new segment (if that segment is actually used in the trace).
-    seg_user_map: HashMap<usize, (usize, u32)>,
 
     // These fields come last because they contain caches keyed on `Wire`s.  On migration, only
     // wires that were used during the migration of some previous field will be kept in the cache.
@@ -46,33 +39,56 @@ pub struct ExecBuilder<'a> {
     ev: CachingEvaluator<'a, 'static, eval::Public>,
 }
 
-impl<'a> ExecBuilder<'a> {
-    pub fn build(
-        b: &impl Builder<'a>,
-        mcx: &'a MigrateContext<'a>,
-        cx: Context<'a>,
-        exec: &ExecBody,
-        exec_name: &'static str,
-        equiv_segments: EquivSegments<'a>,
-        init_state: RamState,
-        check_steps: usize,
-        expect_zero: bool,
-        expect_write: Option<u64>,
-        debug_segment_graph_path: Option<String>,
-    ) -> (Context<'a>, EquivSegments<'a>) {
-        let mut mh = MigrateHandle::new(mcx);
-        let mh = &mut mh;
+#[derive(Migrate)]
+struct InstrTraceBuilder<'a> {
+    calc_step_func: Function<'a>,
+    calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
+    check_step_func: Function<'a>,
+    seg_graph_builder: SegGraphBuilder<'a>,
+    /// Map from segment index to the index of the trace chunk that uses that segment, along with
+    /// the initial cycle of that chunk.  This is used in `add_segment` to initialize the secrets
+    /// for the new segment (if that segment is actually used in the trace).
+    seg_user_map: HashMap<usize, (usize, u32)>,
+    debug_segment_graph_path: Option<String>,
+}
 
-        let mut eb = mh.root(ExecBuilder::new(
-            b, cx, exec, equiv_segments, init_state,
-            check_steps, expect_zero, expect_write, debug_segment_graph_path,
-            move |w| &w.execs[exec_name],
-        ));
-        eb.open(mh).init(b, exec, exec_name);
-        ExecBuilder::run(&mut eb, mh, b, exec, move |w| &w.execs[exec_name]);
-        eb.take().finish(mh, b, exec)
-    }
+#[derive(Migrate)]
+struct ExecBuilder<'a, TB> {
+    /// Trace builder
+    t: TB,
 
+    // `Common` must come last to ensure a specific migration order - see comment in `Common` for
+    // details.
+    c: Common<'a>,
+}
+
+pub fn build<'a>(
+    b: &impl Builder<'a>,
+    mcx: &'a MigrateContext<'a>,
+    cx: Context<'a>,
+    exec: &ExecBody,
+    exec_name: &'static str,
+    equiv_segments: EquivSegments<'a>,
+    init_state: RamState,
+    check_steps: usize,
+    expect_zero: bool,
+    expect_write: Option<u64>,
+    debug_segment_graph_path: Option<String>,
+) -> (Context<'a>, EquivSegments<'a>) {
+    let mut mh = MigrateHandle::new(mcx);
+    let mh = &mut mh;
+
+    let mut eb = mh.root(ExecBuilder::new(
+        b, cx, exec, equiv_segments, init_state,
+        check_steps, expect_zero, expect_write, debug_segment_graph_path,
+        move |w| &w.execs[exec_name],
+    ));
+    eb.open(mh).init(b, exec, exec_name);
+    ExecBuilder::run(&mut eb, mh, b, exec, move |w| &w.execs[exec_name]);
+    eb.take().finish(mh, b, exec)
+}
+
+impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
     fn new(
         b: &impl Builder<'a>,
         cx: Context<'a>,
@@ -84,57 +100,60 @@ impl<'a> ExecBuilder<'a> {
         expect_write: Option<u64>,
         debug_segment_graph_path: Option<String>,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
-    ) -> ExecBuilder<'a> {
+    ) -> ExecBuilder<'a, InstrTraceBuilder<'a>> {
         let calc_step_inner_cases = trace::define_calc_step_inner_cases(b, exec.params.privilege_levels);
         let it = exec.trace.as_instr();
         ExecBuilder {
-            init_state: init_state.clone(),
-            check_steps,
-            expect_zero,
-            privilege_levels: exec.params.privilege_levels,
-            calc_step_func: trace::define_calc_step_function(
-                b,
-                &calc_step_inner_cases,
-                exec.params.num_regs,
-                exec.params.privilege_levels,
-            ),
-            calc_step_inner_cases,
-            check_step_func: trace::define_check_step_function(b),
-            expect_write,
-            debug_segment_graph_path,
-
-            equiv_segments,
-            mem: Memory::new(),
-            fetch: Fetch::new(b, &exec.program, project_witness),
-            seg_graph_builder: SegGraphBuilder::new(
-                b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
-            seg_user_map: HashMap::new(),
-
-            cx,
-            ev: CachingEvaluator::new()
+            c: Common {
+                init_state: init_state.clone(),
+                check_steps,
+                expect_zero,
+                expect_write,
+                privilege_levels: exec.params.privilege_levels,
+                equiv_segments,
+                mem: Memory::new(),
+                fetch: Fetch::new(b, &exec.program, project_witness),
+                cx,
+                ev: CachingEvaluator::new()
+            },
+            t: InstrTraceBuilder {
+                calc_step_func: trace::define_calc_step_function(
+                    b,
+                    &calc_step_inner_cases,
+                    exec.params.num_regs,
+                    exec.params.privilege_levels,
+                ),
+                calc_step_inner_cases,
+                check_step_func: trace::define_check_step_function(b),
+                debug_segment_graph_path,
+                seg_graph_builder: SegGraphBuilder::new(
+                    b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
+                seg_user_map: HashMap::new(),
+            },
         }
     }
 
-    fn init(&mut self, b: &impl Builder<'a>, exec: &ExecBody, exec_name: &'static str) {
-        if let Some(ref out_path) = self.debug_segment_graph_path {
-            std::fs::write(out_path, self.seg_graph_builder.dump()).unwrap();
+    fn init(
+        &mut self, b: &impl Builder<'a>, exec: &ExecBody, exec_name: &'static str) {
+        if let Some(ref out_path) = self.t.debug_segment_graph_path {
+            std::fs::write(out_path, self.t.seg_graph_builder.dump()).unwrap();
         }
 
         // Set up initial KnownMem
         let mut kmem = KnownMem::with_default(b.lit(0));
         let mut seg_values = Vec::with_capacity(exec.init_mem.len());
         for (i, seg) in exec.init_mem.iter().enumerate() {
-            let values = self.mem.init_segment(
+            let values = self.c.mem.init_segment(
                 b,
                 i,
                 seg,
-                self.equiv_segments.exec_segments(exec_name),
+                self.c.equiv_segments.exec_segments(exec_name),
                 move |w| &w.execs[exec_name],
             );
             kmem.init_segment(seg, &values);
             seg_values.push(values);
         }
-        self.seg_graph_builder.set_cpu_init_mem(kmem);
+        self.t.seg_graph_builder.set_cpu_init_mem(kmem);
         debug_assert_eq!(seg_values.len(), exec.init_mem.len());
 
         // Populate `seg_user_map`.
@@ -144,20 +163,20 @@ impl<'a> ExecBuilder<'a> {
                 cycle = c;
             }
 
-            let old = self.seg_user_map.insert(chunk.segment, (i, cycle));
+            let old = self.t.seg_user_map.insert(chunk.segment, (i, cycle));
             assert!(old.is_none());
 
             cycle += chunk.states.len() as u32;
         }
 
         // Add extra `MemPort`s to enforce `expect_write`.
-        if let Some(addr) = self.expect_write {
+        if let Some(addr) = self.c.expect_write {
             // We write a 0 before execution begins, and try to read back a 1 after the program
             // terminates.  This succeeds only if the program overwrites the 0 with a 1 during its
             // execution.  We can't simply leave the memory uninitialized because reads from
             // uninitialized memory are allowed (and the value produced is unconstrained).
-            self.mem.add_initial_write(b, addr, 0);
-            self.mem.add_final_read(b, addr, 1);
+            self.c.mem.add_initial_write(b, addr, 0);
+            self.c.mem.add_final_read(b, addr, 1);
         }
 
         // Add hash check for the `commitment`.
@@ -167,7 +186,7 @@ impl<'a> ExecBuilder<'a> {
                 Commitment::Sha256(expect_hash) => {
                     let mut h = Sha256::new(b);
 
-                    for (cs, instrs) in exec.program.iter().zip(self.fetch.all_instrs().iter()) {
+                    for (cs, instrs) in exec.program.iter().zip(self.c.fetch.all_instrs().iter()) {
                         if !cs.secret || cs.uncommitted {
                             continue;
                         }
@@ -192,7 +211,7 @@ impl<'a> ExecBuilder<'a> {
 
                     let actual_hash = h.finish(b);
                     wire_assert!(
-                        cx = &self.cx, b, b.eq(actual_hash, b.lit(expect_hash)),
+                        cx = &self.c.cx, b, b.eq(actual_hash, b.lit(expect_hash)),
                         "bad commitment: actual hash is {:?}, but expected {:?}",
                         cx.eval(actual_hash), expect_hash,
                     );
@@ -209,14 +228,14 @@ impl<'a> ExecBuilder<'a> {
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
         let instr_lookup = InstrLookup::new(&exec.program);
-        for item in this.open(mh).seg_graph_builder.get_order() {
+        for item in this.open(mh).t.seg_graph_builder.get_order() {
             match item {
                 SegGraphItem::Segment(idx) =>
                     this.open(mh).add_segment(b, exec, &instr_lookup, idx, project_witness),
                 SegGraphItem::Network => {
                     unsafe { mh.erase_and_migrate(b.circuit()) };
                     info!("seg_graph_builder.build_network");
-                    let mut seg_graph_builder = this.project(mh, |eb| &mut eb.seg_graph_builder);
+                    let mut seg_graph_builder = this.project(mh, |eb| &mut eb.t.seg_graph_builder);
                     SegGraphBuilder::build_network(&mut seg_graph_builder, mh, b, project_witness);
                     unsafe { mh.erase_and_migrate(b.circuit()) };
                     continue;
@@ -237,23 +256,23 @@ impl<'a> ExecBuilder<'a> {
     ) {
         // Build the circuit for this segment.
         let mut segment_builder = SegmentBuilder {
-            cx: &self.cx,
+            cx: &self.c.cx,
             b: b,
-            ev: &mut self.ev,
-            privilege_levels: self.privilege_levels,
-            calc_step_func: self.calc_step_func,
-            calc_step_inner_cases: &self.calc_step_inner_cases,
-            check_step_func: self.check_step_func,
-            mem: &mut self.mem,
-            fetch: &mut self.fetch,
+            ev: &mut self.c.ev,
+            privilege_levels: self.c.privilege_levels,
+            calc_step_func: self.t.calc_step_func,
+            calc_step_inner_cases: &self.t.calc_step_inner_cases,
+            check_step_func: self.t.check_step_func,
+            mem: &mut self.c.mem,
+            fetch: &mut self.c.fetch,
             params: &exec.params,
             prog: instr_lookup,
-            check_steps: self.check_steps,
+            check_steps: self.c.check_steps,
         };
 
         let seg_def = &exec.trace.as_instr().segments[idx];
-        let mut prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
-        let prev_kmem = self.seg_graph_builder.take_initial_mem(idx);
+        let mut prev_state = self.t.seg_graph_builder.get_initial(b, idx).clone();
+        let prev_kmem = self.t.seg_graph_builder.take_initial_mem(idx);
 
         let external_advice_storage: [_; 2];
         let mut external_advice = None;
@@ -272,23 +291,23 @@ impl<'a> ExecBuilder<'a> {
                 let ew = project_witness(w);
                 &ew.trace.as_instr().segments[idx]
             });
-        self.seg_graph_builder.set_final(idx, seg.final_state().clone());
-        self.seg_graph_builder.set_final_mem(idx, kmem);
+        self.t.seg_graph_builder.set_final(idx, seg.final_state().clone());
+        self.t.seg_graph_builder.set_final_mem(idx, kmem);
 
         // If this segment is actually used in the trace, find the relevant trace chunk and use its
         // data to initialize the segment's secrets.
-        if let Some(&(chunk_idx, cycle)) = self.seg_user_map.get(&idx) {
+        if let Some(&(chunk_idx, cycle)) = self.t.seg_user_map.get(&idx) {
             let chunk = &exec.trace.as_instr().chunks[chunk_idx];
 
-            if self.check_steps > 0 {
-                seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
+            if self.c.check_steps > 0 {
+                seg.check_states(&self.c.cx, b, cycle, self.c.check_steps, &chunk.states);
             }
 
             // FIXME: this leaks information, namely, the identity of the last used segment.  We
             // should either forbid mixing `--expect-zero` with public PC, or otherwise ensure that
             // this is only used for testing.
             if chunk_idx == exec.trace.as_instr().chunks.len() - 1 {
-                check_last(&self.cx, b, seg.final_state(), self.expect_zero);
+                check_last(&self.c.cx, b, seg.final_state(), self.c.expect_zero);
             }
         }
     }
@@ -300,11 +319,11 @@ impl<'a> ExecBuilder<'a> {
         _exec: &ExecBody,
     ) -> (Context<'a>, EquivSegments<'a>) {
         let x = self;
-        let mut cx = mh.root(x.cx);
-        let mut equiv_segments = mh.root(x.equiv_segments);
-        let mut seg_graph_builder = mh.root(x.seg_graph_builder);
-        let mut mem = mh.root(x.mem);
-        let mut fetch = mh.root(x.fetch);
+        let mut cx = mh.root(x.c.cx);
+        let mut equiv_segments = mh.root(x.c.equiv_segments);
+        let mut seg_graph_builder = mh.root(x.t.seg_graph_builder);
+        let mut mem = mh.root(x.c.mem);
+        let mut fetch = mh.root(x.c.fetch);
         // Make sure no fields of `self`/`x` are used past this point.
         #[allow(unused)]
         let x = ();
