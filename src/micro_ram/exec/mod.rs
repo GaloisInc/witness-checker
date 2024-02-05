@@ -85,7 +85,7 @@ pub fn build<'a>(
     ));
     eb.open(mh).init(b, exec, exec_name);
     ExecBuilder::run(&mut eb, mh, b, exec, move |w| &w.execs[exec_name]);
-    eb.take().finish(mh, b, exec)
+    ExecBuilder::finish(eb, mh, b)
 }
 
 impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
@@ -313,29 +313,43 @@ impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
     }
 
     fn finish(
-        self,
+        eb: Rooted<'a, Self>,
         mh: &mut MigrateHandle<'a>,
         b: &impl Builder<'a>,
-        _exec: &ExecBody,
     ) -> (Context<'a>, EquivSegments<'a>) {
-        let x = self;
-        let mut cx = mh.root(x.c.cx);
-        let mut equiv_segments = mh.root(x.c.equiv_segments);
-        let mut seg_graph_builder = mh.root(x.t.seg_graph_builder);
-        let mut mem = mh.root(x.c.mem);
-        let mut fetch = mh.root(x.c.fetch);
-        // Make sure no fields of `self`/`x` are used past this point.
-        #[allow(unused)]
-        let x = ();
+        // Break apart `eb` into pieces and re-root them.
+        let ExecBuilder { c, t } = eb.take();
+        let c = mh.root(c);
+        let t = mh.root(t);
 
         // Force a GC here to ensure that temporaries from the last few segments are flushed.  This
         // prevents having temporaries from those segments and temporaries from the various
         // permutations live at the same time.
         unsafe { mh.force_erase_and_migrate(b.circuit()) };
 
-        info!("seg_graph_builder.finish");
-        seg_graph_builder.take().finish(&cx.open(mh), b);
-        unsafe { mh.erase_and_migrate(b.circuit()) };
+        let (mut cx, equiv_segments) = Common::finish(c, mh, b);
+
+        InstrTraceBuilder::finish(t, mh, b, &mut cx);
+
+        (cx.take(), equiv_segments.take())
+    }
+}
+
+impl<'a> Common<'a> {
+    fn finish(
+        c: Rooted<'a, Self>,
+        mh: &mut MigrateHandle<'a>,
+        b: &impl Builder<'a>,
+    ) -> (
+        Rooted<'a, Context<'a>>,
+        Rooted<'a, EquivSegments<'a>>,
+    ) {
+        // Break apart `c` into pieces and re-root them.
+        let Common { equiv_segments, mem, fetch, cx, .. } = c.take();
+        let mut equiv_segments = mh.root(equiv_segments);
+        let mut mem = mh.root(mem);
+        let mut fetch = mh.root(fetch);
+        let mut cx = mh.root(cx);
 
         info!("mem.assert_consistent");
         mem.take().assert_consistent(mh, &mut cx, b);
@@ -345,7 +359,24 @@ impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
         fetch.take().assert_consistent(mh, &mut cx, b);
         unsafe { mh.erase_and_migrate(b.circuit()) };
 
-        (cx.take(), equiv_segments.take())
+        (cx, equiv_segments)
+    }
+}
+
+impl<'a> InstrTraceBuilder<'a> {
+    fn finish(
+        t: Rooted<'a, Self>,
+        mh: &mut MigrateHandle<'a>,
+        b: &impl Builder<'a>,
+        cx: &mut Rooted<'a, Context<'a>>,
+    ) {
+        // Break apart `t` into pieces and re-root them.
+        let InstrTraceBuilder { seg_graph_builder, .. } = t.take();
+        let mut seg_graph_builder = mh.root(seg_graph_builder);
+
+        info!("seg_graph_builder.finish");
+        seg_graph_builder.take().finish(&cx.open(mh), b);
+        unsafe { mh.erase_and_migrate(b.circuit()) };
     }
 }
 
