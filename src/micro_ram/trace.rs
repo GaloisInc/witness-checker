@@ -872,7 +872,7 @@ pub fn define_calc_step_inner_cases<'a>(
     cases
 }
 
-fn calc_step_inner<'a>(
+pub fn calc_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     ev: &mut CachingEvaluator<'a, '_, eval::Public>,
@@ -1168,7 +1168,7 @@ pub fn define_check_step_function<'a>(
     c.define_function::<(), _>("check_step", &arg_tys, CheckStepFunction)
 }
 
-fn check_step_inner<'a>(
+pub fn check_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     seg_idx: usize,
