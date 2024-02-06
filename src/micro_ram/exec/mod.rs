@@ -47,6 +47,36 @@ struct ExecBuilder<'a, TB> {
     c: Common<'a>,
 }
 
+trait TraceBuilder<'a>: Migrate<'a, 'a, Output = Self> + Sized {
+    fn new(
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        init_state: RamState,
+        debug_segment_graph_path: Option<String>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) -> Self;
+    fn init(
+        &mut self,
+        c: &mut Common<'a>,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        seg_values: &[Vec<TWire<'a, u64>>],
+    );
+    fn run(
+        eb: &mut Rooted<'a, ExecBuilder<'a, Self>>,
+        mh: &mut MigrateHandle<'a>,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    );
+    fn finish(
+        t: Rooted<'a, Self>,
+        mh: &mut MigrateHandle<'a>,
+        b: &impl Builder<'a>,
+        cx: &mut Rooted<'a, Context<'a>>,
+    );
+}
+
 pub fn build<'a>(
     b: &impl Builder<'a>,
     mcx: &'a MigrateContext<'a>,
@@ -92,10 +122,10 @@ pub fn build<'a>(
 
 }
 
-impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
+impl<'a, TB: TraceBuilder<'a>> ExecBuilder<'a, TB> {
     fn build(
         c: Common<'a>,
-        t: InstrTraceBuilder<'a>,
+        t: TB,
         mh: &mut MigrateHandle<'a>,
         b: &impl Builder<'a>,
         exec: &ExecBody,
@@ -104,7 +134,7 @@ impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
     ) -> (Context<'a>, EquivSegments<'a>) {
         let mut eb = mh.root(ExecBuilder { c, t });
         eb.open(mh).init(b, exec, exec_name);
-        InstrTraceBuilder::run(&mut eb, mh, b, exec, project_witness);
+        TB::run(&mut eb, mh, b, exec, project_witness);
         ExecBuilder::finish(eb, mh, b)
     }
 
@@ -142,7 +172,7 @@ impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
 
         let (mut cx, equiv_segments) = Common::finish(c, mh, b);
 
-        InstrTraceBuilder::finish(t, mh, b, &mut cx);
+        TB::finish(t, mh, b, &mut cx);
 
         (cx.take(), equiv_segments.take())
     }

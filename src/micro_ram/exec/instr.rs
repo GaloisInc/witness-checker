@@ -10,7 +10,7 @@ use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use crate::micro_ram::trace::{self, SegmentBuilder, InstrLookup};
 use crate::micro_ram::types::{ExecBody, RamState};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
-use super::{ExecBuilder, Common};
+use super::{ExecBuilder, TraceBuilder, Common};
 
 
 #[derive(Migrate)]
@@ -27,95 +27,7 @@ pub struct InstrTraceBuilder<'a> {
 }
 
 impl<'a> InstrTraceBuilder<'a> {
-    pub(super) fn new(
-        b: &impl Builder<'a>,
-        exec: &ExecBody,
-        init_state: RamState,
-        debug_segment_graph_path: Option<String>,
-        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
-    ) -> InstrTraceBuilder<'a> {
-        let calc_step_inner_cases = trace::define_calc_step_inner_cases(
-            b, exec.params.privilege_levels);
-        let it = exec.trace.as_instr();
-        InstrTraceBuilder {
-            calc_step_func: trace::define_calc_step_function(
-                b,
-                &calc_step_inner_cases,
-                exec.params.num_regs,
-                exec.params.privilege_levels,
-            ),
-            calc_step_inner_cases,
-            check_step_func: trace::define_check_step_function(b),
-            debug_segment_graph_path,
-            seg_graph_builder: SegGraphBuilder::new(
-                b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
-            seg_user_map: HashMap::new(),
-        }
-    }
-
-    pub(super) fn init(
-        &mut self,
-        c: &mut Common<'a>,
-        b: &impl Builder<'a>,
-        exec: &ExecBody,
-        seg_values: &[Vec<TWire<'a, u64>>],
-    ) {
-        if let Some(ref out_path) = self.debug_segment_graph_path {
-            std::fs::write(out_path, self.seg_graph_builder.dump()).unwrap();
-        }
-
-        // Set up initial KnownMem
-        let mut kmem = KnownMem::with_default(b.lit(0));
-        for (seg, values) in exec.init_mem.iter().zip(seg_values.iter()) {
-            kmem.init_segment(seg, &values);
-        }
-        self.seg_graph_builder.set_cpu_init_mem(kmem);
-        debug_assert_eq!(seg_values.len(), exec.init_mem.len());
-
-        // Populate `seg_user_map`.
-        let mut cycle = 0;
-        for (i, chunk) in exec.trace.as_instr().chunks.iter().enumerate() {
-            if let Some(c) = chunk.debug.as_ref().and_then(|d| d.cycle) {
-                cycle = c;
-            }
-
-            let old = self.seg_user_map.insert(chunk.segment, (i, cycle));
-            assert!(old.is_none());
-
-            cycle += chunk.states.len() as u32;
-        }
-    }
-
-    pub(super) fn run(
-        eb: &mut Rooted<'a, ExecBuilder<'a, Self>>,
-        mh: &mut MigrateHandle<'a>,
-        b: &impl Builder<'a>,
-        exec: &ExecBody,
-        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
-    ) {
-        let instr_lookup = InstrLookup::new(&exec.program);
-        for item in eb.open(mh).t.seg_graph_builder.get_order() {
-            match item {
-                SegGraphItem::Segment(idx) => {
-                    let mut eb = eb.open(mh);
-                    let eb = &mut *eb;
-                    eb.t.add_segment(&mut eb.c, b, exec, &instr_lookup, idx, project_witness);
-                },
-                SegGraphItem::Network => {
-                    unsafe { mh.erase_and_migrate(b.circuit()) };
-                    info!("seg_graph_builder.build_network");
-                    let mut seg_graph_builder = eb.project(mh, |eb| &mut eb.t.seg_graph_builder);
-                    SegGraphBuilder::build_network(&mut seg_graph_builder, mh, b, project_witness);
-                    unsafe { mh.erase_and_migrate(b.circuit()) };
-                    continue;
-                },
-            }
-
-            unsafe { mh.erase_and_migrate(b.circuit()) };
-        }
-    }
-
-    pub(super) fn add_segment(
+    fn add_segment(
         &mut self,
         c: &mut Common<'a>,
         b: &impl Builder<'a>,
@@ -181,8 +93,98 @@ impl<'a> InstrTraceBuilder<'a> {
             }
         }
     }
+}
 
-    pub(super) fn finish(
+impl<'a> TraceBuilder<'a> for InstrTraceBuilder<'a> {
+    fn new(
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        init_state: RamState,
+        debug_segment_graph_path: Option<String>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) -> InstrTraceBuilder<'a> {
+        let calc_step_inner_cases = trace::define_calc_step_inner_cases(
+            b, exec.params.privilege_levels);
+        let it = exec.trace.as_instr();
+        InstrTraceBuilder {
+            calc_step_func: trace::define_calc_step_function(
+                b,
+                &calc_step_inner_cases,
+                exec.params.num_regs,
+                exec.params.privilege_levels,
+            ),
+            calc_step_inner_cases,
+            check_step_func: trace::define_check_step_function(b),
+            debug_segment_graph_path,
+            seg_graph_builder: SegGraphBuilder::new(
+                b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
+            seg_user_map: HashMap::new(),
+        }
+    }
+
+    fn init(
+        &mut self,
+        c: &mut Common<'a>,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        seg_values: &[Vec<TWire<'a, u64>>],
+    ) {
+        if let Some(ref out_path) = self.debug_segment_graph_path {
+            std::fs::write(out_path, self.seg_graph_builder.dump()).unwrap();
+        }
+
+        // Set up initial KnownMem
+        let mut kmem = KnownMem::with_default(b.lit(0));
+        for (seg, values) in exec.init_mem.iter().zip(seg_values.iter()) {
+            kmem.init_segment(seg, &values);
+        }
+        self.seg_graph_builder.set_cpu_init_mem(kmem);
+        debug_assert_eq!(seg_values.len(), exec.init_mem.len());
+
+        // Populate `seg_user_map`.
+        let mut cycle = 0;
+        for (i, chunk) in exec.trace.as_instr().chunks.iter().enumerate() {
+            if let Some(c) = chunk.debug.as_ref().and_then(|d| d.cycle) {
+                cycle = c;
+            }
+
+            let old = self.seg_user_map.insert(chunk.segment, (i, cycle));
+            assert!(old.is_none());
+
+            cycle += chunk.states.len() as u32;
+        }
+    }
+
+    fn run(
+        eb: &mut Rooted<'a, ExecBuilder<'a, Self>>,
+        mh: &mut MigrateHandle<'a>,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) {
+        let instr_lookup = InstrLookup::new(&exec.program);
+        for item in eb.open(mh).t.seg_graph_builder.get_order() {
+            match item {
+                SegGraphItem::Segment(idx) => {
+                    let mut eb = eb.open(mh);
+                    let eb = &mut *eb;
+                    eb.t.add_segment(&mut eb.c, b, exec, &instr_lookup, idx, project_witness);
+                },
+                SegGraphItem::Network => {
+                    unsafe { mh.erase_and_migrate(b.circuit()) };
+                    info!("seg_graph_builder.build_network");
+                    let mut seg_graph_builder = eb.project(mh, |eb| &mut eb.t.seg_graph_builder);
+                    SegGraphBuilder::build_network(&mut seg_graph_builder, mh, b, project_witness);
+                    unsafe { mh.erase_and_migrate(b.circuit()) };
+                    continue;
+                },
+            }
+
+            unsafe { mh.erase_and_migrate(b.circuit()) };
+        }
+    }
+
+    fn finish(
         t: Rooted<'a, Self>,
         mh: &mut MigrateHandle<'a>,
         b: &impl Builder<'a>,
