@@ -63,53 +63,49 @@ pub fn build<'a>(
     let mut mh = MigrateHandle::new(mcx);
     let mh = &mut mh;
 
-    let mut eb = mh.root(ExecBuilder::new(
-        b, cx, exec, equiv_segments, init_state,
-        check_steps, expect_zero, expect_write, debug_segment_graph_path,
-        move |w| &w.execs[exec_name],
-    ));
-    eb.open(mh).init(b, exec, exec_name);
-    InstrTraceBuilder::run(
-        &mut eb, mh, b, exec,
-        move |w| &w.execs[exec_name],
+    fn mk_project_witness(
+        exec_name: &'static str,
+    ) -> impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static {
+        move |w| &w.execs[exec_name]
+    }
+    let project_witness = mk_project_witness(exec_name);
+
+    let c = Common::new(
+        b,
+        cx,
+        exec,
+        equiv_segments,
+        init_state.clone(),
+        check_steps,
+        expect_zero,
+        expect_write,
+        project_witness,
     );
-    ExecBuilder::finish(eb, mh, b)
+    let t = InstrTraceBuilder::new(
+        b,
+        exec,
+        init_state,
+        debug_segment_graph_path,
+        project_witness,
+    );
+    ExecBuilder::build(c, t, mh, b, exec, exec_name, project_witness)
+
 }
 
 impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
-    fn new(
+    fn build(
+        c: Common<'a>,
+        t: InstrTraceBuilder<'a>,
+        mh: &mut MigrateHandle<'a>,
         b: &impl Builder<'a>,
-        cx: Context<'a>,
         exec: &ExecBody,
-        equiv_segments: EquivSegments<'a>,
-        init_state: RamState,
-        check_steps: usize,
-        expect_zero: bool,
-        expect_write: Option<u64>,
-        debug_segment_graph_path: Option<String>,
+        exec_name: &'static str,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
-    ) -> ExecBuilder<'a, InstrTraceBuilder<'a>> {
-        ExecBuilder {
-            c: Common {
-                init_state: init_state.clone(),
-                check_steps,
-                expect_zero,
-                expect_write,
-                privilege_levels: exec.params.privilege_levels,
-                equiv_segments,
-                mem: Memory::new(),
-                fetch: Fetch::new(b, &exec.program, project_witness),
-                cx,
-                ev: CachingEvaluator::new()
-            },
-            t: InstrTraceBuilder::new(
-               b,
-               exec,
-               init_state,
-               debug_segment_graph_path,
-               project_witness,
-            ),
-        }
+    ) -> (Context<'a>, EquivSegments<'a>) {
+        let mut eb = mh.root(ExecBuilder { c, t });
+        eb.open(mh).init(b, exec, exec_name);
+        InstrTraceBuilder::run(&mut eb, mh, b, exec, project_witness);
+        ExecBuilder::finish(eb, mh, b)
     }
 
     fn init(&mut self, b: &impl Builder<'a>, exec: &ExecBody, exec_name: &'static str) {
@@ -153,6 +149,31 @@ impl<'a> ExecBuilder<'a, InstrTraceBuilder<'a>> {
 }
 
 impl<'a> Common<'a> {
+    fn new(
+        b: &impl Builder<'a>,
+        cx: Context<'a>,
+        exec: &ExecBody,
+        equiv_segments: EquivSegments<'a>,
+        init_state: RamState,
+        check_steps: usize,
+        expect_zero: bool,
+        expect_write: Option<u64>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) -> Common<'a> {
+        Common {
+            init_state: init_state.clone(),
+            check_steps,
+            expect_zero,
+            expect_write,
+            privilege_levels: exec.params.privilege_levels,
+            equiv_segments,
+            mem: Memory::new(),
+            fetch: Fetch::new(b, &exec.program, project_witness),
+            cx,
+            ev: CachingEvaluator::new()
+        }
+    }
+
     fn init(
         &mut self,
         b: &impl Builder<'a>,
