@@ -119,6 +119,8 @@ pub fn build<'a>(
         },
         Trace::Bbmd(_) => {
             let t = BbmdTraceBuilder::new(
+                b,
+                exec,
             );
             ExecBuilder::build(c, t, mh, b, exec, exec_name, project_witness)
         },

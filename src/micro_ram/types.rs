@@ -1822,6 +1822,12 @@ pub struct BbmdTraceChunk {
     pub states: Vec<RamState>,
 }
 
+impl BbmdBlock {
+    pub fn iter_pcs<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
+        self.pcs.iter().flat_map(|&(lo, hi)| lo .. hi)
+    }
+}
+
 impl BbmdTrace {
     pub fn validate(&self, params: &Params) -> Result<(), String> {
         for (i, seg) in self.blocks.iter().enumerate() {
