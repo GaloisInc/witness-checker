@@ -27,6 +27,32 @@ pub struct InstrTraceBuilder<'a> {
 }
 
 impl<'a> InstrTraceBuilder<'a> {
+    pub(super) fn new(
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        init_state: RamState,
+        debug_segment_graph_path: Option<String>,
+        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
+    ) -> InstrTraceBuilder<'a> {
+        let calc_step_inner_cases = trace::define_calc_step_inner_cases(
+            b, exec.params.privilege_levels);
+        let it = exec.trace.as_instr();
+        InstrTraceBuilder {
+            calc_step_func: trace::define_calc_step_function(
+                b,
+                &calc_step_inner_cases,
+                exec.params.num_regs,
+                exec.params.privilege_levels,
+            ),
+            calc_step_inner_cases,
+            check_step_func: trace::define_check_step_function(b),
+            debug_segment_graph_path,
+            seg_graph_builder: SegGraphBuilder::new(
+                b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
+            seg_user_map: HashMap::new(),
+        }
+    }
+
     fn add_segment(
         &mut self,
         c: &mut Common<'a>,
@@ -96,32 +122,6 @@ impl<'a> InstrTraceBuilder<'a> {
 }
 
 impl<'a> TraceBuilder<'a> for InstrTraceBuilder<'a> {
-    fn new(
-        b: &impl Builder<'a>,
-        exec: &ExecBody,
-        init_state: RamState,
-        debug_segment_graph_path: Option<String>,
-        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
-    ) -> InstrTraceBuilder<'a> {
-        let calc_step_inner_cases = trace::define_calc_step_inner_cases(
-            b, exec.params.privilege_levels);
-        let it = exec.trace.as_instr();
-        InstrTraceBuilder {
-            calc_step_func: trace::define_calc_step_function(
-                b,
-                &calc_step_inner_cases,
-                exec.params.num_regs,
-                exec.params.privilege_levels,
-            ),
-            calc_step_inner_cases,
-            check_step_func: trace::define_check_step_function(b),
-            debug_segment_graph_path,
-            seg_graph_builder: SegGraphBuilder::new(
-                b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
-            seg_user_map: HashMap::new(),
-        }
-    }
-
     fn init(
         &mut self,
         c: &mut Common<'a>,

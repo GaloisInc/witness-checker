@@ -7,10 +7,12 @@ use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
 use crate::micro_ram::context::Context;
 use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::mem::{Memory, EquivSegments};
-use crate::micro_ram::types::{Commitment, ExecBody, RamState, RamInstrRepr};
+use crate::micro_ram::types::{Commitment, ExecBody, Trace, RamState, RamInstrRepr};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
+use self::bbmd::BbmdTraceBuilder;
 use self::instr::InstrTraceBuilder;
 
+mod bbmd;
 mod instr;
 
 
@@ -48,13 +50,6 @@ struct ExecBuilder<'a, TB> {
 }
 
 trait TraceBuilder<'a>: Migrate<'a, 'a, Output = Self> + Sized {
-    fn new(
-        b: &impl Builder<'a>,
-        exec: &ExecBody,
-        init_state: RamState,
-        debug_segment_graph_path: Option<String>,
-        project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
-    ) -> Self;
     fn init(
         &mut self,
         c: &mut Common<'a>,
@@ -111,15 +106,23 @@ pub fn build<'a>(
         expect_write,
         project_witness,
     );
-    let t = InstrTraceBuilder::new(
-        b,
-        exec,
-        init_state,
-        debug_segment_graph_path,
-        project_witness,
-    );
-    ExecBuilder::build(c, t, mh, b, exec, exec_name, project_witness)
-
+    match exec.trace {
+        Trace::Instr(_) => {
+            let t = InstrTraceBuilder::new(
+                b,
+                exec,
+                init_state,
+                debug_segment_graph_path,
+                project_witness,
+            );
+            ExecBuilder::build(c, t, mh, b, exec, exec_name, project_witness)
+        },
+        Trace::Bbmd(_) => {
+            let t = BbmdTraceBuilder::new(
+            );
+            ExecBuilder::build(c, t, mh, b, exec, exec_name, project_witness)
+        },
+    }
 }
 
 impl<'a, TB: TraceBuilder<'a>> ExecBuilder<'a, TB> {
