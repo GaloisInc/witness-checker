@@ -1,5 +1,7 @@
 use std::cmp;
-use zk_circuit_builder::ir::circuit::{CircuitTrait, CircuitExt, Wire, Function, DefineFunction};
+use zk_circuit_builder::ir::circuit::{
+    CircuitTrait, CircuitExt, Wire, Function, DefineFunction, SwitchCase, Ty,
+};
 use zk_circuit_builder::eval::{self, CachingEvaluator};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
@@ -14,9 +16,27 @@ use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 use super::{ExecBuilder, TraceBuilder, Common};
 
 
-#[derive(Migrate)]
 pub struct BbmdTraceBuilder<'a> {
-    _dummy: Option<zk_circuit_builder::ir::circuit::Wire<'a>>,
+    /// Number of advice arguments taken by each block function.
+    counts: AdviceCounts,
+    block_functions: Vec<Function<'a>>,
+    no_op_function: Function<'a>,
+    switch_cases: &'a [SwitchCase<'a>],
+}
+
+impl<'a, 'b> Migrate<'a, 'b> for BbmdTraceBuilder<'a> {
+    type Output = BbmdTraceBuilder<'b>;
+    fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> BbmdTraceBuilder<'b> {
+        let switch_cases = self.switch_cases.iter().map(|&case| v.visit(case)).collect::<Vec<_>>();
+        let switch_cases = v.new_circuit().switch_case_list(&switch_cases);
+
+        BbmdTraceBuilder {
+            counts: self.counts,
+            block_functions: v.visit(self.block_functions),
+            no_op_function: v.visit(self.no_op_function),
+            switch_cases,
+        }
+    }
 }
 
 impl<'a> BbmdTraceBuilder<'a> {
@@ -41,7 +61,7 @@ impl<'a> BbmdTraceBuilder<'a> {
         eprintln!("max advise = {}", max_counts.advise);
 
         // Generate a function for each block
-        let mut block_functions = Vec::new();
+        let mut block_functions = Vec::with_capacity(bt.blocks.len());
         for (i, block) in bt.blocks.iter().enumerate() {
             block_functions.push(define_block_function(
                 b,
@@ -53,8 +73,37 @@ impl<'a> BbmdTraceBuilder<'a> {
             ));
         }
 
+
+        // Generate a list of switch cases
+        let mut switch_cases = Vec::with_capacity(bt.blocks.len() + 1);
+        for (i, &bf) in block_functions.iter().enumerate() {
+            let pattern = b.circuit().bits(Ty::uint(32), i as u32);
+            let body = bf;
+            let case = b.circuit().switch_case::<ExecWitness, (), _>(
+                pattern,
+                body,
+                &[],
+                |_, _, _| (&()).into(),
+            );
+            switch_cases.push(case);
+        }
+
+        let no_op_function = define_no_op_block_function(b, &max_counts, &exec.params);
+        let no_op_case = b.circuit().switch_case::<ExecWitness, (), _>(
+            b.circuit().bits(Ty::uint(32), bt.blocks.len() as u32),
+            no_op_function,
+            &[],
+            |_, _, _| (&()).into(),
+        );
+        switch_cases.push(no_op_case);
+
+        let switch_cases = b.circuit().switch_case_list(&switch_cases);
+
         BbmdTraceBuilder {
-            _dummy: None,
+            counts: max_counts,
+            block_functions,
+            no_op_function,
+            switch_cases,
         }
     }
 }
@@ -90,7 +139,7 @@ impl<'a> TraceBuilder<'a> for BbmdTraceBuilder<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Migrate)]
 struct AdviceCounts {
     mem_ports: usize,
     advise: usize,
@@ -167,6 +216,17 @@ fn count_opcode_advice_inputs(
     }
 }
 
+type BlockFnArgs = (
+    RamState,
+    Vec<MemPort>,
+    Vec<u64>,
+);
+
+type BlockFnResult = (
+    RamState,
+    bool, bool,
+);
+
 fn define_block_function<'a>(
     b: &impl Builder<'a>,
     instrs: &InstrLookup,
@@ -183,17 +243,6 @@ fn define_block_function<'a>(
         num_regs: usize,
         privilege_levels: bool,
     }
-
-    type BlockFnArgs = (
-        RamState,
-        Vec<MemPort>,
-        Vec<u64>,
-    );
-
-    type BlockFnResult = (
-        RamState,
-        bool, bool,
-    );
 
     impl<'a, 'b> DefineFunction<'a> for BlockFunction<'b> {
         fn build_body<C>(self, c: &C, args_wires: &[Wire<'a>]) -> Wire<'a>
@@ -289,13 +338,62 @@ fn define_block_function<'a>(
     let mut arg_tys = Vec::with_capacity(num_args);
     BlockFnArgs::for_each_expected_wire_type(c, &mut sizes.iter().copied(), |t| arg_tys.push(t));
     let name = format!("block_{}", block_idx);
-    c.define_function_unchecked::<(), _>(&name, &arg_tys, BlockFunction {
+    c.define_function::<(), _>(&name, &arg_tys, BlockFunction {
         instrs,
         counts,
         block,
         block_idx,
         num_regs: params.num_regs,
         privilege_levels: params.privilege_levels,
+    })
+}
+
+/// Define a function with the same signature as in `define_block_function`, but which passes
+/// through the state unchanged.
+fn define_no_op_block_function<'a>(
+    b: &impl Builder<'a>,
+    counts: &AdviceCounts,
+    params: &Params,
+) -> Function<'a> {
+    struct NoOpFunction<'b> {
+        counts: &'b AdviceCounts,
+        num_regs: usize,
+    }
+
+    impl<'a, 'b> DefineFunction<'a> for NoOpFunction<'b> {
+        fn build_body<C>(self, c: &C, args_wires: &[Wire<'a>]) -> Wire<'a>
+        where C: CircuitTrait<'a> {
+            let sizes = [self.num_regs, self.counts.mem_ports, self.counts.advise];
+            let args = typed::from_wire_list::<BlockFnArgs>(c.as_base(), &args_wires, &sizes);
+            let (s0, mem_ports, advise_values) = args.repr;
+
+            let cx = Context::new(c);
+            let b = BuilderImpl::from_ref(c);
+
+            let (asserts, bugs) = cx.finish(c);
+            let result = (
+                // State is unchanged.
+                s0,
+                // All asserts passed.
+                b.lit(true),
+                // No bugs detected.
+                b.lit(false),
+            );
+            let (result_wires, _result_sizes) =
+                typed::to_wire_list(&TWire::<BlockFnResult>::new(result));
+
+            c.pack(&result_wires)
+        }
+    }
+
+    let c = b.circuit();
+    let sizes = [params.num_regs, counts.mem_ports, counts.advise];
+    let num_args = BlockFnArgs::expected_num_wires(&mut sizes.iter().copied());
+    let mut arg_tys = Vec::with_capacity(num_args);
+    BlockFnArgs::for_each_expected_wire_type(c, &mut sizes.iter().copied(), |t| arg_tys.push(t));
+    c.define_function::<(), _>("block_no_op", &arg_tys, NoOpFunction {
+        counts,
+        num_regs: params.num_regs,
     })
 }
 
