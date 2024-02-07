@@ -79,7 +79,7 @@ impl<'a> BbmdTraceBuilder<'a> {
         for (i, &bf) in block_functions.iter().enumerate() {
             let pattern = b.circuit().bits(Ty::uint(32), i as u32);
             let body = bf;
-            let case = b.circuit().switch_case::<ExecWitness, (), _>(
+            let case = b.circuit().switch_case::<MultiExecWitness, (), _>(
                 pattern,
                 body,
                 &[],
@@ -89,7 +89,7 @@ impl<'a> BbmdTraceBuilder<'a> {
         }
 
         let no_op_function = define_no_op_block_function(b, &max_counts, &exec.params);
-        let no_op_case = b.circuit().switch_case::<ExecWitness, (), _>(
+        let no_op_case = b.circuit().switch_case::<MultiExecWitness, (), _>(
             b.circuit().bits(Ty::uint(32), bt.blocks.len() as u32),
             no_op_function,
             &[],
@@ -255,7 +255,6 @@ fn define_block_function<'a>(
             let b = BuilderImpl::from_ref(c);
             let mut ev = CachingEvaluator::<eval::Public>::new();
             let block_idx = self.block_idx;
-            let mut kmem = KnownMem::with_default(b.lit(0));
 
             let expect_pc0 = self.block.iter_pcs().next()
                 .unwrap_or_else(|| panic!("block {} has empty pcs list?", self.block_idx));
@@ -301,7 +300,7 @@ fn define_block_function<'a>(
                     &mem_port,
                     advise_value,
                     &s,
-                    &mut kmem,
+                    None,
                 );
 
                 trace::check_step_inner(
