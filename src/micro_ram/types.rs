@@ -2,7 +2,7 @@ use std::cmp::{self, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
-use serde::{de, Deserialize};
+use serde::{de, Serialize, Deserialize};
 use zk_circuit_builder::eval::EvalWire;
 use zk_circuit_builder::gadget::bit_pack;
 use zk_circuit_builder::ir::circuit::{
@@ -1810,7 +1810,7 @@ pub struct BbmdTrace {
     pub chunks: Vec<BbmdTraceChunk>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BbmdBlock {
     pub pcs: Vec<(u64, u64)>,
 }

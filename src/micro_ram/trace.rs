@@ -1288,21 +1288,28 @@ impl<'b> InstrLookup<'b> {
             padding: fetch::PADDING_INSTR,
         }
     }
+
+    pub fn iter_pcs<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
+        self.index.iter().flat_map(|(&base_pc, cs)| {
+            base_pc .. base_pc + cs.len
+        })
+    }
+
+    pub fn get(&self, idx: u64) -> Option<&RamInstr> {
+        let (&start, cs) = self.index.range(..= idx).next_back()?;
+        debug_assert!(start <= idx);
+        let i = usize::try_from(idx - start).unwrap();
+        if i >= cs.instrs.len() {
+            return None;
+        }
+        Some(&cs.instrs[i])
+    }
 }
 
 impl Index<u64> for InstrLookup<'_> {
     type Output = RamInstr;
 
     fn index(&self, idx: u64) -> &RamInstr {
-        let (&start, cs) = match self.index.range(..= idx).next_back() {
-            Some(x) => x,
-            None => return &self.padding,
-        };
-        debug_assert!(start <= idx);
-        let i = usize::try_from(idx - start).unwrap();
-        if i >= cs.instrs.len() {
-            return &self.padding;
-        }
-        &cs.instrs[i]
+        self.get(idx).unwrap_or(&self.padding)
     }
 }

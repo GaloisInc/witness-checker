@@ -22,8 +22,11 @@ pub trait Value: Sized + Serialize {
     fn get_key(&self, k: &str) -> Option<&Self>;
     fn get_index_mut(&mut self, i: usize) -> Option<&mut Self>;
     fn get_key_mut(&mut self, k: &str) -> Option<&mut Self>;
+    fn push_array(&mut self, x: Self);
     fn insert_key(&mut self, k: &str, v: Self);
+    fn remove_key(&mut self, k: &str);
     fn parse<T: DeserializeOwned>(&self) -> Result<T, Error>;
+    fn from_serialize<T: Serialize>(x: &T) -> Result<Self, Error>;
 }
 
 impl Value for serde_cbor::Value {
@@ -82,6 +85,13 @@ impl Value for serde_cbor::Value {
         }
     }
 
+    fn push_array(&mut self, v: Self) {
+        match *self {
+            serde_cbor::Value::Array(ref mut a) => { a.push(v); },
+            _ => panic!("expected array"),
+        }
+    }
+
     fn insert_key(&mut self, k: &str, v: Self) {
         match *self {
             serde_cbor::Value::Map(ref mut m) => { m.insert(k.to_owned().into(), v); },
@@ -89,8 +99,20 @@ impl Value for serde_cbor::Value {
         }
     }
 
+    fn remove_key(&mut self, k: &str) {
+        match *self {
+            serde_cbor::Value::Map(ref mut m) => { m.remove(&k.to_owned().into()); },
+            _ => panic!("expected map"),
+        }
+    }
+
     fn parse<T: DeserializeOwned>(&self) -> Result<T, Error> {
         serde_cbor::value::from_value(self.clone())
+            .map_err(|e| e.to_string())
+    }
+
+    fn from_serialize<T: Serialize>(x: &T) -> Result<Self, Error> {
+        serde_cbor::value::to_value(&x)
             .map_err(|e| e.to_string())
     }
 }
@@ -151,6 +173,13 @@ impl Value for serde_yaml::Value {
         }
     }
 
+    fn push_array(&mut self, v: Self) {
+        match *self {
+            serde_yaml::Value::Sequence(ref mut s) => { s.push(v); },
+            _ => panic!("expected array"),
+        }
+    }
+
     fn insert_key(&mut self, k: &str, v: Self) {
         match *self {
             serde_yaml::Value::Mapping(ref mut m) => { m.insert(k.to_owned().into(), v); },
@@ -158,8 +187,20 @@ impl Value for serde_yaml::Value {
         }
     }
 
+    fn remove_key(&mut self, k: &str) {
+        match *self {
+            serde_yaml::Value::Mapping(ref mut m) => { m.remove(&k.to_owned().into()); },
+            _ => panic!("expected map"),
+        }
+    }
+
     fn parse<T: DeserializeOwned>(&self) -> Result<T, Error> {
         serde_yaml::from_value(self.clone())
+            .map_err(|e| e.to_string())
+    }
+
+    fn from_serialize<T: Serialize>(x: &T) -> Result<Self, Error> {
+        serde_yaml::to_value(&x)
             .map_err(|e| e.to_string())
     }
 }
