@@ -8,6 +8,7 @@ use std::iter;
 use std::mem;
 use std::path::Path;
 use std::slice;
+use cheesecloth::edit_trace::{self, Value, Format};
 use cheesecloth::micro_ram::feature::{self, Version, Feature};
 use cheesecloth::micro_ram::fetch;
 use cheesecloth::micro_ram::parse;
@@ -117,184 +118,8 @@ fn parse_args() -> ArgMatches<'static> {
 }
 
 
-type Error = String;
-
-trait Value: Sized + Serialize {
-    fn from_reader<R: Read>(r: R) -> Result<Self, Error>;
-    fn new_bool(b: bool) -> Self;
-    fn new_u64(x: u64) -> Self;
-    fn new_string(s: String) -> Self;
-    fn new_array(v: Vec<Self>) -> Self;
-    fn new_map() -> Self;
-    fn get_index(&self, i: usize) -> Option<&Self>;
-    fn get_key(&self, k: &str) -> Option<&Self>;
-    fn get_index_mut(&mut self, i: usize) -> Option<&mut Self>;
-    fn get_key_mut(&mut self, k: &str) -> Option<&mut Self>;
-    fn insert_key(&mut self, k: &str, v: Self);
-    fn parse<T: DeserializeOwned>(&self) -> Result<T, Error>;
-}
-
-impl Value for serde_cbor::Value {
-    fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
-        serde_cbor::from_reader(r)
-            .map_err(|e| e.to_string())
-    }
-
-    fn new_bool(x: bool) -> Self {
-        x.into()
-    }
-
-    fn new_u64(x: u64) -> Self {
-        x.into()
-    }
-
-    fn new_string(s: String) -> Self {
-        s.into()
-    }
-
-    fn new_array(v: Vec<Self>) -> Self {
-        v.into()
-    }
-
-    fn new_map() -> Self {
-        serde_cbor::Value::Map(Default::default())
-    }
-
-    fn get_index(&self, i: usize) -> Option<&Self> {
-        match *self {
-            serde_cbor::Value::Array(ref a) => a.get(i),
-            serde_cbor::Value::Map(ref m) => m.get(&(i as u64).into()),
-            _ => panic!("expected array or map"),
-        }
-    }
-
-    fn get_key(&self, k: &str) -> Option<&Self> {
-        match *self {
-            serde_cbor::Value::Map(ref m) => m.get(&k.to_owned().into()),
-            _ => panic!("expected map"),
-        }
-    }
-
-    fn get_index_mut(&mut self, i: usize) -> Option<&mut Self> {
-        match *self {
-            serde_cbor::Value::Array(ref mut a) => a.get_mut(i),
-            serde_cbor::Value::Map(ref mut m) => m.get_mut(&(i as u64).into()),
-            _ => panic!("expected array or map"),
-        }
-    }
-
-    fn get_key_mut(&mut self, k: &str) -> Option<&mut Self> {
-        match *self {
-            serde_cbor::Value::Map(ref mut m) => m.get_mut(&k.to_owned().into()),
-            _ => panic!("expected map"),
-        }
-    }
-
-    fn insert_key(&mut self, k: &str, v: Self) {
-        match *self {
-            serde_cbor::Value::Map(ref mut m) => { m.insert(k.to_owned().into(), v); },
-            _ => panic!("expected map"),
-        }
-    }
-
-    fn parse<T: DeserializeOwned>(&self) -> Result<T, Error> {
-        serde_cbor::value::from_value(self.clone())
-            .map_err(|e| e.to_string())
-    }
-}
-
-impl Value for serde_yaml::Value {
-    fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
-        serde_yaml::from_reader(r)
-            .map_err(|e| e.to_string())
-    }
-
-    fn new_bool(x: bool) -> Self {
-        x.into()
-    }
-
-    fn new_u64(x: u64) -> Self {
-        x.into()
-    }
-
-    fn new_string(s: String) -> Self {
-        s.into()
-    }
-
-    fn new_array(v: Vec<Self>) -> Self {
-        v.into()
-    }
-
-    fn new_map() -> Self {
-        serde_yaml::Value::Mapping(Default::default())
-    }
-
-    fn get_index(&self, i: usize) -> Option<&Self> {
-        match *self {
-            serde_yaml::Value::Sequence(ref s) => s.get(i),
-            serde_yaml::Value::Mapping(ref m) => m.get(&i.into()),
-            _ => panic!("expected sequence or mapping"),
-        }
-    }
-
-    fn get_key(&self, k: &str) -> Option<&Self> {
-        match *self {
-            serde_yaml::Value::Mapping(ref m) => m.get(&k.into()),
-            _ => panic!("expected mapping"),
-        }
-    }
-
-    fn get_index_mut(&mut self, i: usize) -> Option<&mut Self> {
-        match *self {
-            serde_yaml::Value::Sequence(ref mut s) => s.get_mut(i),
-            serde_yaml::Value::Mapping(ref mut m) => m.get_mut(&i.into()),
-            _ => panic!("expected sequence or mapping"),
-        }
-    }
-
-    fn get_key_mut(&mut self, k: &str) -> Option<&mut Self> {
-        match *self {
-            serde_yaml::Value::Mapping(ref mut m) => m.get_mut(&k.into()),
-            _ => panic!("expected mapping"),
-        }
-    }
-
-    fn insert_key(&mut self, k: &str, v: Self) {
-        match *self {
-            serde_yaml::Value::Mapping(ref mut m) => { m.insert(k.to_owned().into(), v); },
-            _ => panic!("expected map"),
-        }
-    }
-
-    fn parse<T: DeserializeOwned>(&self) -> Result<T, Error> {
-        serde_yaml::from_value(self.clone())
-            .map_err(|e| e.to_string())
-    }
-}
-
-
-fn set_param<V: Value>(exec: &mut V, key: &str, value: V) {
-    if let Some(params) = exec.get_key_mut("params") {
-        params.insert_key(key, value);
-    } else {
-        let mut m = V::new_map();
-        m.insert_key(key, value);
-        exec.insert_key("params", m);
-    }
-}
-
 fn add_commitment<V: Value>(exec: &mut V, commitment: String) {
-    set_param(exec, "commitment", V::new_string(commitment));
-}
-
-fn write_output<V: Value>(out_path: &Path, v: &V) -> Result<(), String> {
-    let f = File::create(out_path).map_err(|e| e.to_string())?;
-    match Format::from_path(out_path) {
-        Format::Yaml => serde_yaml::to_writer(f, v).map_err(|e| e.to_string())?,
-        Format::Cbor => serde_cbor::to_writer(f, v).map_err(|e| e.to_string())?,
-        Format::Json => serde_json::to_writer(f, v).map_err(|e| e.to_string())?,
-    }
-    Ok(())
+    edit_trace::set_param(exec, "commitment", V::new_string(commitment));
 }
 
 fn run_verifier<V: Value>(
@@ -309,45 +134,12 @@ fn run_verifier<V: Value>(
     add_commitment(exec, commitment);
 
     if let Some(out_path) = out_path {
-        write_output(out_path, &v)?;
+        edit_trace::write_output(out_path, &v)?;
     } else {
         return Err("must specify an output path with -o for verifier mode".into());
     }
 
     Ok(())
-}
-
-fn parse_file<V: Value>(path: &Path) -> Result<V, String> {
-    let f = File::open(path).map_err(|e| e.to_string())?;
-    V::from_reader(f)
-}
-
-fn check_version<V: Value>(v: &V) -> Result<HashSet<Feature>, String> {
-    let version = v.get_index(0).ok_or("missing version")?.parse::<Version>()?;
-    let mut features = v.get_index(1).ok_or("missing features")?.parse::<HashSet<Feature>>()?;
-    let version_features = feature::lookup_version(version)
-        .unwrap_or_else(|| panic!("unknown version {:?}", version));
-    features.extend(version_features);
-
-    if features.contains(&Feature::MultiExec) {
-        return Err("multi-exec feature is not supported by this tool".into());
-    }
-
-    Ok(features)
-}
-
-fn get_exec<V: Value>(v: &V) -> Result<(ExecBody, &V), String> {
-    let features = check_version(v)?;
-    let v_exec = v.get_index(2).ok_or("missing execution")?;
-    let mut exec = parse::with_features(features, || v_exec.parse::<ExecBody>())?;
-    Ok((exec, v_exec))
-}
-
-fn get_exec_mut<V: Value>(v: &mut V) -> Result<(ExecBody, &mut V), String> {
-    let features = check_version(v)?;
-    let v_exec = v.get_index_mut(2).ok_or("missing execution")?;
-    let mut exec = parse::with_features(features, || v_exec.parse::<ExecBody>())?;
-    Ok((exec, v_exec))
 }
 
 const RANDOMNESS_NAME: &str = "__commitment_randomness__";
@@ -660,24 +452,6 @@ fn set_uncommitted_flags<V: Value>(
 }
 
 
-enum Format {
-    Yaml,
-    Cbor,
-    Json,
-}
-
-impl Format {
-    fn from_path(path: &Path) -> Format {
-        match path.extension().and_then(|os| os.to_str()) {
-            Some("yaml") => Format::Yaml,
-            Some("cbor") => Format::Cbor,
-            Some("json") => Format::Json,
-            _ => Format::Cbor,
-        }
-    }
-}
-
-
 fn to_hex_string(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
@@ -768,8 +542,10 @@ fn run_calc(args: &ArgMatches) -> Result<(), String> {
     let in_path = Path::new(args.value_of_os("trace")
         .ok_or("cbor path is required")?);
     let exec = match Format::from_path(in_path) {
-        Format::Yaml => get_exec(&parse_file::<serde_yaml::Value>(in_path)?)?.0,
-        Format::Cbor => get_exec(&parse_file::<serde_cbor::Value>(in_path)?)?.0,
+        Format::Yaml => edit_trace::get_exec(
+            &edit_trace::parse_file::<serde_yaml::Value>(in_path)?)?.0,
+        Format::Cbor => edit_trace::get_exec(
+            &edit_trace::parse_file::<serde_cbor::Value>(in_path)?)?.0,
         Format::Json => todo!("json support"),
     };
 
@@ -820,8 +596,10 @@ fn run_check(args: &ArgMatches) -> Result<(), String> {
     let in_path = Path::new(args.value_of_os("trace")
         .ok_or("cbor path is required")?);
     let exec = match Format::from_path(in_path) {
-        Format::Yaml => get_exec(&parse_file::<serde_yaml::Value>(in_path)?)?.0,
-        Format::Cbor => get_exec(&parse_file::<serde_cbor::Value>(in_path)?)?.0,
+        Format::Yaml => edit_trace::get_exec(
+            &edit_trace::parse_file::<serde_yaml::Value>(in_path)?)?.0,
+        Format::Cbor => edit_trace::get_exec(
+            &edit_trace::parse_file::<serde_cbor::Value>(in_path)?)?.0,
         Format::Json => todo!("json support"),
     };
 
@@ -859,8 +637,8 @@ fn run_update_cbor(args: &ArgMatches) -> Result<(), String> {
 }
 
 fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> {
-    let mut v = parse_file::<V>(in_path)?;
-    let (exec, v_exec) = get_exec_mut(&mut v)?;
+    let mut v = edit_trace::parse_file::<V>(in_path)?;
+    let (exec, v_exec) = edit_trace::get_exec_mut(&mut v)?;
 
     let randomness_range = find_randomness(&exec, args)?;
     let randomness: Vec<u8>;
@@ -915,11 +693,11 @@ fn run_update_cbor_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<
 
     // Set `params.privilege_levels` if requested
     if args.is_present("set-privilege-levels") {
-        set_param(v_exec, "privilege_levels", V::new_bool(true));
+        edit_trace::set_param(v_exec, "privilege_levels", V::new_bool(true));
     }
 
     if let Some(out_path) = args.value_of_os("output") {
-        write_output(Path::new(out_path), &v)?;
+        edit_trace::write_output(Path::new(out_path), &v)?;
     }
 
     Ok(())
@@ -937,30 +715,6 @@ fn real_main() -> Result<(), String> {
         "update-cbor" => run_update_cbor(sub_args),
         _ => unreachable!("bad command {:?}", cmd),
     }
-
-    /*
-    let in_path = Path::new(args.value_of_os("trace")
-        .ok_or("cbor path is required")?);
-    let out_path = args.value_of_os("output").map(Path::new);
-
-    if let Some(commitment) = args.value_of("verifier-commitment") {
-        // Run in verifier mode, with a fixed commitment.
-        let commitment = commitment.to_owned();
-        match Format::from_path(in_path) {
-            Format::Yaml => run_verifier::<serde_yaml::Value>(in_path, out_path, commitment)?,
-            Format::Cbor => run_verifier::<serde_cbor::Value>(in_path, out_path, commitment)?,
-            Format::Json => todo!("json support"),
-        }
-    } else {
-        match Format::from_path(in_path) {
-            Format::Yaml => run::<serde_yaml::Value>(in_path, out_path)?,
-            Format::Cbor => run::<serde_cbor::Value>(in_path, out_path)?,
-            Format::Json => todo!("json support"),
-        }
-    }
-
-    Ok(())
-    */
 }
 
 fn main() -> Result<(), String> {
