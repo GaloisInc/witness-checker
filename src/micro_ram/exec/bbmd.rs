@@ -125,7 +125,71 @@ impl<'a> TraceBuilder<'a> for BbmdTraceBuilder<'a> {
         exec: &ExecBody,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
-        todo!()
+        let bt = exec.trace.as_bbmd();
+        let counts = mh.open(eb).t.counts.clone();
+        let no_op_block_idx = bt.blocks.len() as u32;
+        let switch_cases = mh.open(eb).t.switch_cases;
+
+        let mut s = b.lit(mh.open(eb).c.init_state.clone());
+        for idx in 0 .. exec.params.trace_len.unwrap() {
+            let choice = b.secret_lazy(move |w| {
+                let ew = project_witness(w);
+                let bt_w = ew.trace.as_bbmd();
+                match bt_w.chunks.get(idx) {
+                    Some(cw) => cw.block_idx as u32,
+                    // Past the end of the trace, use the special no-op block function.
+                    None => no_op_block_idx,
+                }
+            });
+
+            let num_mem_ports = counts.mem_ports;
+            let mem_ports = b.secret_lazy_sized(&[num_mem_ports], move |w| {
+                let ew = project_witness(w);
+                let bt_w = ew.trace.as_bbmd();
+
+                let mut v = Vec::with_capacity(num_mem_ports);
+                if let Some(cw) = bt_w.chunks.get(idx) {
+                    v.extend(cw.mem_ports.iter().cloned());
+                }
+                v.resize_with(num_mem_ports, MemPort::default);
+                v
+            });
+
+            let num_advice_values = counts.advise;
+            let advice_values = b.secret_lazy_sized(&[num_advice_values], move |w| {
+                let ew = project_witness(w);
+                let bt_w = ew.trace.as_bbmd();
+
+                let mut v = Vec::with_capacity(num_advice_values);
+                if let Some(cw) = bt_w.chunks.get(idx) {
+                    v.extend(cw.advice_values.iter().cloned());
+                }
+                v.resize(num_advice_values, 0);
+                v
+            });
+
+            let args = (s, mem_ports, advice_values);
+            let (arg_wires, _arg_sizes) = typed::to_wire_list(&TWire::<BlockFnArgs>::new(args));
+            let arg_wires = b.circuit().wire_list(&arg_wires);
+
+            let switch_result = b.circuit().switch(choice.repr, switch_cases, arg_wires);
+
+            let sizes = [exec.params.num_regs];
+            let num_results = BlockFnResult::expected_num_wires(&mut sizes.iter().copied());
+            let result_wires = (0 .. num_results).map(|i| {
+                b.circuit().extract(switch_result, i)
+            }).collect::<Vec<_>>();
+            let results = typed::from_wire_list::<BlockFnResult>(
+                b.circuit().as_base(), &result_wires, &sizes);
+            let (new_s, asserts, bugs) = results.repr;
+
+            s = new_s;
+
+            let mut eb = mh.open(eb);
+            let cx = &mut eb.c.cx;
+            wire_assert!(cx, b, asserts, "assertion failed in block {}", idx);
+            wire_bug_if!(cx, b, bugs, "bug detected in block {}", idx);
+        }
     }
 
     fn finish(
