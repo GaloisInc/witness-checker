@@ -125,12 +125,16 @@ impl<'a> TraceBuilder<'a> for BbmdTraceBuilder<'a> {
         exec: &ExecBody,
         project_witness: impl Fn(&MultiExecWitness) -> &ExecWitness + Copy + 'static,
     ) {
+        let mut eb = mh.open(eb);
+        let eb = &mut *eb;
+        let cx = &mut eb.c.cx;
         let bt = exec.trace.as_bbmd();
-        let counts = mh.open(eb).t.counts.clone();
+        let counts = eb.t.counts.clone();
+        let check_steps = eb.c.check_steps;
         let no_op_block_idx = bt.blocks.len() as u32;
-        let switch_cases = mh.open(eb).t.switch_cases;
+        let switch_cases = eb.t.switch_cases;
 
-        let mut s = b.lit(mh.open(eb).c.init_state.clone());
+        let mut s = b.lit(eb.c.init_state.clone());
         for idx in 0 .. exec.params.trace_len.unwrap() {
             let choice = b.secret_lazy(move |w| {
                 let ew = project_witness(w);
@@ -183,10 +187,23 @@ impl<'a> TraceBuilder<'a> for BbmdTraceBuilder<'a> {
                 b.circuit().as_base(), &result_wires, &sizes);
             let (new_s, asserts, bugs) = results.repr;
 
+            if check_steps > 0 {
+                // We can't check individual step results since they aren't returned from the block
+                // functions.  Instead, if any checking was requested, we check the output of every
+                // switch.
+                if let Some(chunk) = bt.chunks.get(idx) {
+                    let expect = chunk.states.last().unwrap().clone();
+                    let cycle_post = bt.chunks[..idx + 1].iter()
+                        .map(|c| c.states.len()).sum::<usize>() ;
+                    // `check_state` expects the cycle number and the post state of the
+                    // corresponding step.  Cycle N takes `state.cycle` from `N` to `N+1`.
+                    let cycle_pre = cycle_post - 1;
+                    trace::check_state(cx, b, idx, cycle_pre as u32, &new_s, &b.lit(expect));
+                }
+            }
+
             s = new_s;
 
-            let mut eb = mh.open(eb);
-            let cx = &mut eb.c.cx;
             wire_assert!(cx, b, asserts, "assertion failed in block {}", idx);
             wire_bug_if!(cx, b, bugs, "bug detected in block {}", idx);
         }

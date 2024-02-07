@@ -1023,7 +1023,7 @@ pub fn calc_step_inner<'a>(
     (TWire::new(s2), im)
 }
 
-fn check_state<'a>(
+pub fn check_state<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     seg_idx: usize,
