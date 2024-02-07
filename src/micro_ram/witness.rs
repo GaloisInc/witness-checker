@@ -40,9 +40,16 @@ pub struct InstrTraceWitness {
     pub segments: Vec<SegmentWitness>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct BbmdChunkWitness {
+    pub block_idx: usize,
+    pub mem_ports: Vec<MemPort>,
+    pub advice_values: Vec<u64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct BbmdTraceWitness {
-    // TODO
+    pub chunks: Vec<BbmdChunkWitness>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,16 +99,15 @@ impl ExecWitness {
 
         let instrs = InstrLookup::new(&e.program);
 
-        let mut pc = 0;
-        let mut trace_pos = 0;
-        let mut cycle = 0;
-        let mut prev_state = e.provided_init_state.clone().unwrap_or_else(|| e.initial_state());
-        let mut prev_seg_idx: Option<usize> = None;
+        match (&e.trace, &mut w.trace) {
+            (&Trace::Instr(ref it), &mut TraceWitness::Instr(ref mut it_w)) => {
+                let mut pc = 0;
+                let mut trace_pos = 0;
+                let mut cycle = 0;
+                let mut prev_state = e.provided_init_state.clone()
+                    .unwrap_or_else(|| e.initial_state());
+                let mut prev_seg_idx: Option<usize> = None;
 
-        match (&e.trace, &w.trace) {
-            (&Trace::Instr(ref it), &TraceWitness::Instr(ref it_w)) => {
-                let it = e.trace.as_instr();
-                let it_w = w.trace.as_instr_mut();
                 for tc in &it.chunks {
                     let seg_idx = tc.segment;
                     let seg = &it.segments[seg_idx];
@@ -167,9 +173,42 @@ impl ExecWitness {
                     prev_state = tc.states.last().unwrap().clone();
                 }
             },
-            (&Trace::Bbmd(ref bt), &TraceWitness::Bbmd(ref bt_w)) => {
-                // TODO
+
+            (&Trace::Bbmd(ref bt), &mut TraceWitness::Bbmd(ref mut bt_w)) => {
+                // BBMD never stutters, so there's no need to track `trace_pos` independent of
+                // `cycle`.
+                let mut cycle = 0;
+                for chunk in &bt.chunks {
+                    let mut chunk_w = BbmdChunkWitness {
+                        block_idx: chunk.block_idx,
+                        mem_ports: Vec::new(),
+                        advice_values: Vec::new(),
+                    };
+                    for _ in 0 .. chunk.states.len() {
+                        let advs = e.advice.get(&(cycle as u64 + 1)).map_or(&[] as &[_], |x| x);
+                        for adv in advs {
+                            match *adv {
+                                Advice::MemOp { addr, value, op, width, tainted } => {
+                                    chunk_w.mem_ports.push(MemPort {
+                                        cycle, addr, value, op, width, tainted
+                                    });
+                                },
+                                Advice::Stutter => {
+                                    panic!("Advice::Stutter is not allowed in BBMD mode");
+                                },
+                                Advice::Advise { advise } => {
+                                    chunk_w.advice_values.push(advise);
+                                },
+                            }
+                        }
+                        cycle += 1;
+                    }
+                    eprintln!("chunk witness = {:?}", chunk_w);
+                    bt_w.chunks.push(chunk_w);
+                }
+                assert_eq!(bt.chunks.len(), bt_w.chunks.len());
             },
+
             (_, _) => unreachable!("mismatch between exec and witness traces"),
         }
 
@@ -185,8 +224,8 @@ impl TraceWitness {
                     SegmentWitness::from_raw(s, init_state.clone())
                 }).collect(),
             }),
-            Trace::Bbmd(ref _bt) => TraceWitness::Bbmd(BbmdTraceWitness {
-                // TODO
+            Trace::Bbmd(ref bt) => TraceWitness::Bbmd(BbmdTraceWitness {
+                chunks: Vec::new(),
             }),
         }
     }
