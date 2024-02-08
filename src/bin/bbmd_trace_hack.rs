@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::collections::hash_map::{HashMap, Entry};
 use std::path::Path;
 use clap::{App, Arg, ArgMatches};
 use serde::{Serialize, Deserialize};
@@ -196,6 +197,29 @@ fn mk_block(instrs: &InstrLookup, start_pc: u64) -> BbmdBlock {
     BbmdBlock { pcs }
 }
 
+#[derive(Clone, Debug, Default)]
+struct PcBlocks {
+    blocks: Vec<BbmdBlock>,
+    pc_block_idxs: HashMap<u64, usize>,
+}
+
+impl PcBlocks {
+    pub fn get(&mut self, instrs: &InstrLookup, pc: u64) -> (usize, &BbmdBlock) {
+        let idx = match self.pc_block_idxs.entry(pc) {
+            Entry::Vacant(e) => {
+                let idx = self.blocks.len();
+                self.blocks.push(mk_block(instrs, pc));
+                e.insert(idx);
+                idx
+            },
+            Entry::Occupied(e) => {
+                *e.get()
+            },
+        };
+        (idx, &self.blocks[idx])
+    }
+}
+
 fn rounded_step_count(n: usize) -> usize {
     // Round values >= 1000 to two sig figs; round smaller values to one sig fig.  Single-digit
     // values are always rounded up to 10.
@@ -261,20 +285,12 @@ fn run_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> 
     let instrs = InstrLookup::new(&exec.program);
 
     // Build a block starting from each valid PC.
-    let mut blocks = Vec::new();
-    let mut pc_block_idxs = HashMap::new();
-    for pc in instrs.iter_pcs() {
-        let idx = blocks.len();
-        let block = mk_block(&instrs, pc);
-        blocks.push(block);
-        debug_assert!(!pc_block_idxs.contains_key(&pc), "duplicate entry for pc = {}", pc);
-        pc_block_idxs.insert(pc, idx);
-    }
+    let mut pc_blocks = PcBlocks::default();
 
-    // Build `bbmd_blocks` list.
-    v_exec.remove_key("segments");
-    v_exec.insert_key("bbmd_blocks", V::from_serialize(&blocks)?);
-    eprintln!("bbmd_blocks: {} entries", blocks.len());
+    // Pregenerate blocks for all possible starting PCs.
+    for pc in instrs.iter_pcs() {
+        //let _ = pc_blocks.get(&instrs, pc);
+    }
 
     // Build new `trace` list.
     // TODO: remove stutter
@@ -292,8 +308,7 @@ fn run_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> 
     let mut cur_pc = 0;
     let mut blocks_used = HashSet::new();
     while i < states.len() {
-        let block_idx = pc_block_idxs[&cur_pc];
-        let block = &blocks[block_idx];
+        let (block_idx, block) = pc_blocks.get(&instrs, cur_pc);
         let n = block.pcs.iter().map(|&(lo, hi)| hi - lo).sum();
         let mut chunk = BbmdTraceChunk {
             block: block_idx,
@@ -310,7 +325,12 @@ fn run_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> 
     }
     v_exec.insert_key("trace", V::from_serialize(&trace)?);
     eprintln!("trace: {} entries", trace.len());
-    eprintln!("used {} / {} blocks", blocks_used.len(), blocks.len());
+    eprintln!("used {} / {} blocks", blocks_used.len(), pc_blocks.blocks.len());
+
+    // Set `bbmd_blocks` list.  This is deferred until after the trace is built in case more blocks
+    // are added to `pc_blocks` during trace generation.
+    v_exec.remove_key("segments");
+    v_exec.insert_key("bbmd_blocks", V::from_serialize(&pc_blocks.blocks)?);
 
     // Set `params.trace_len` based on actual trace length.
     let step_count = rounded_step_count(trace.len());
