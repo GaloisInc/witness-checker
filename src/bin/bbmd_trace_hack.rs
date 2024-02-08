@@ -24,6 +24,9 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("OUT.CBOR")
              .help("where to write the new trace using bbmd"))
+        .arg(Arg::with_name("all-blocks")
+             .long("all-blocks")
+             .help("generate blocks for all PCs, not just ones that are used"))
         .get_matches()
 }
 
@@ -290,8 +293,10 @@ fn run_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> 
     let mut pc_blocks = PcBlocks::default();
 
     // Pregenerate blocks for all possible starting PCs.
-    for pc in instrs.iter_pcs() {
-        //let _ = pc_blocks.get(&instrs, pc);
+    if args.is_present("all-blocks") {
+        for pc in instrs.iter_pcs() {
+            let _ = pc_blocks.get(&instrs, pc);
+        }
     }
 
     // Process the advice map to remove Stutter advice.
