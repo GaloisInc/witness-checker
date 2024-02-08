@@ -1,4 +1,3 @@
-## SKIP - bbmd is not yet implemented
 ## FLAGS: --validate-only
 # Basic example using Basic Block Machine for DORA (BBMD).
 
@@ -51,7 +50,7 @@
     - block: 1
       states:
         - [2, [16, 0]]
-        - [3, [8, 0]]
+        - [3, [16, 0]]
 
     - block: 2
       states:

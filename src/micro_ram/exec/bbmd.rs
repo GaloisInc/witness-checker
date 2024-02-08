@@ -57,9 +57,6 @@ impl<'a> BbmdTraceBuilder<'a> {
             max_counts.max_assign(counts);
         }
 
-        eprintln!("max mem ports = {}", max_counts.mem_ports);
-        eprintln!("max advise = {}", max_counts.advise);
-
         // Generate a function for each block
         let mut block_functions = Vec::with_capacity(bt.blocks.len());
         for (i, block) in bt.blocks.iter().enumerate() {

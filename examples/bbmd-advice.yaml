@@ -1,4 +1,3 @@
-## SKIP - bbmd is not yet implemented
 ## FLAGS: --validate-only
 # BBMD example using the `adivse` instruction.  This requires adding advice
 # inputs to the common basic block functions.

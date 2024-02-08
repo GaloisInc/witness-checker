@@ -1,4 +1,3 @@
-## SKIP - bbmd is not yet implemented
 ## FLAGS: --validate-only
 # BBMD example using memory.  This requires adding memory ports to the common
 # basic block functions.

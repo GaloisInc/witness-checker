@@ -203,7 +203,6 @@ impl ExecWitness {
                         }
                         cycle += 1;
                     }
-                    eprintln!("chunk witness = {:?}", chunk_w);
                     bt_w.chunks.push(chunk_w);
                 }
                 assert_eq!(bt.chunks.len(), bt_w.chunks.len());
