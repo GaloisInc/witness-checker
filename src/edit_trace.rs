@@ -11,7 +11,7 @@ use crate::micro_ram::types::ExecBody;
 
 pub type Error = String;
 
-pub trait Value: Sized + Serialize {
+pub trait Value: Sized + Serialize + Clone + PartialEq {
     fn from_reader<R: Read>(r: R) -> Result<Self, Error>;
     fn new_bool(b: bool) -> Self;
     fn new_u64(x: u64) -> Self;
@@ -22,9 +22,15 @@ pub trait Value: Sized + Serialize {
     fn get_key(&self, k: &str) -> Option<&Self>;
     fn get_index_mut(&mut self, i: usize) -> Option<&mut Self>;
     fn get_key_mut(&mut self, k: &str) -> Option<&mut Self>;
+    fn get_key_any(&self, k: &Self) -> Option<&Self>;
+    fn get_key_any_mut(&mut self, k: &Self) -> Option<&mut Self>;
+    fn len(&self) -> usize;
     fn push_array(&mut self, x: Self);
+    fn keys(&self) -> Vec<Self>;
     fn insert_key(&mut self, k: &str, v: Self);
     fn remove_key(&mut self, k: &str);
+    fn insert_key_any(&mut self, k: Self, v: Self);
+    fn remove_key_any(&mut self, k: &Self);
     fn parse<T: DeserializeOwned>(&self) -> Result<T, Error>;
     fn from_serialize<T: Serialize>(x: &T) -> Result<Self, Error>;
 }
@@ -85,10 +91,41 @@ impl Value for serde_cbor::Value {
         }
     }
 
+    fn get_key_any(&self, k: &Self) -> Option<&Self> {
+        match *self {
+            serde_cbor::Value::Map(ref m) => m.get(k),
+            _ => panic!("expected map"),
+        }
+    }
+
+    fn get_key_any_mut(&mut self, k: &Self) -> Option<&mut Self> {
+        match *self {
+            serde_cbor::Value::Map(ref mut m) => m.get_mut(k),
+            _ => panic!("expected map"),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match *self {
+            serde_cbor::Value::Array(ref a) => a.len(),
+            serde_cbor::Value::Map(ref m) => m.len(),
+            _ => panic!("expected array or map"),
+        }
+    }
+
     fn push_array(&mut self, v: Self) {
         match *self {
             serde_cbor::Value::Array(ref mut a) => { a.push(v); },
             _ => panic!("expected array"),
+        }
+    }
+
+    fn keys(&self) -> Vec<Self> {
+        match *self {
+            serde_cbor::Value::Map(ref m) => {
+                m.keys().cloned().collect()
+            },
+            _ => panic!("expected map"),
         }
     }
 
@@ -102,6 +139,20 @@ impl Value for serde_cbor::Value {
     fn remove_key(&mut self, k: &str) {
         match *self {
             serde_cbor::Value::Map(ref mut m) => { m.remove(&k.to_owned().into()); },
+            _ => panic!("expected map"),
+        }
+    }
+
+    fn insert_key_any(&mut self, k: Self, v: Self) {
+        match *self {
+            serde_cbor::Value::Map(ref mut m) => { m.insert(k, v); },
+            _ => panic!("expected map"),
+        }
+    }
+
+    fn remove_key_any(&mut self, k: &Self) {
+        match *self {
+            serde_cbor::Value::Map(ref mut m) => { m.remove(k); },
             _ => panic!("expected map"),
         }
     }
@@ -173,6 +224,28 @@ impl Value for serde_yaml::Value {
         }
     }
 
+    fn get_key_any(&self, k: &Self) -> Option<&Self> {
+        match *self {
+            serde_yaml::Value::Mapping(ref m) => m.get(k),
+            _ => panic!("expected mapping"),
+        }
+    }
+
+    fn get_key_any_mut(&mut self, k: &Self) -> Option<&mut Self> {
+        match *self {
+            serde_yaml::Value::Mapping(ref mut m) => m.get_mut(k),
+            _ => panic!("expected mapping"),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match *self {
+            serde_yaml::Value::Sequence(ref s) => s.len(),
+            serde_yaml::Value::Mapping(ref m) => m.len(),
+            _ => panic!("expected sequence or mapping"),
+        }
+    }
+
     fn push_array(&mut self, v: Self) {
         match *self {
             serde_yaml::Value::Sequence(ref mut s) => { s.push(v); },
@@ -180,17 +253,40 @@ impl Value for serde_yaml::Value {
         }
     }
 
+    fn keys(&self) -> Vec<Self> {
+        match *self {
+            serde_yaml::Value::Mapping(ref m) => {
+                m.iter().map(|(k, _)| k.clone()).collect()
+            },
+            _ => panic!("expected mapping"),
+        }
+    }
+
     fn insert_key(&mut self, k: &str, v: Self) {
         match *self {
             serde_yaml::Value::Mapping(ref mut m) => { m.insert(k.to_owned().into(), v); },
-            _ => panic!("expected map"),
+            _ => panic!("expected mapping"),
         }
     }
 
     fn remove_key(&mut self, k: &str) {
         match *self {
             serde_yaml::Value::Mapping(ref mut m) => { m.remove(&k.to_owned().into()); },
-            _ => panic!("expected map"),
+            _ => panic!("expected mapping"),
+        }
+    }
+
+    fn insert_key_any(&mut self, k: Self, v: Self) {
+        match *self {
+            serde_yaml::Value::Mapping(ref mut m) => { m.insert(k, v); },
+            _ => panic!("expected mapping"),
+        }
+    }
+
+    fn remove_key_any(&mut self, k: &Self) {
+        match *self {
+            serde_yaml::Value::Mapping(ref mut m) => { m.remove(k); },
+            _ => panic!("expected mapping"),
         }
     }
 

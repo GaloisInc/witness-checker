@@ -5,7 +5,9 @@ use clap::{App, Arg, ArgMatches};
 use serde::{Serialize, Deserialize};
 use cheesecloth::edit_trace::{self, Value, Format};
 use cheesecloth::micro_ram::trace::InstrLookup;
-use cheesecloth::micro_ram::types::{VersionedMultiExec, Trace, BbmdBlock, RamInstr, Opcode};
+use cheesecloth::micro_ram::types::{
+    VersionedMultiExec, Trace, BbmdBlock, RamInstr, Opcode, Advice,
+};
 use cheesecloth::mode::if_mode::{Mode, with_mode};
 
 fn parse_args() -> ArgMatches<'static> {
@@ -292,8 +294,40 @@ fn run_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> 
         //let _ = pc_blocks.get(&instrs, pc);
     }
 
+    // Process the advice map to remove Stutter advice.
+    let v_advice = v_exec.get_key_mut("advice").unwrap();
+    let mut v_advice_new = V::new_map();
+    let mut num_removed = 0;
+    let v_str_stutter = V::new_string("Stutter".into());
+    for k in v_advice.keys() {
+        let v_advs = v_advice.get_key_any(&k).unwrap();
+        if let Some(v_adv0) = v_advs.get_index(0) {
+            if v_adv0.get_index(0).unwrap() == &v_str_stutter {
+                num_removed += 1;
+                // Don't insert into `v_advice_new`.
+                continue;
+            }
+        }
+
+        let old_i = k.parse::<u64>().unwrap();
+        let new_i = old_i - num_removed;
+        v_advice_new.insert_key_any(V::new_u64(new_i), v_advs.clone());
+    }
+    *v_advice = v_advice_new;
+
+    // Build a list of indices of states to be discarded.  We don't do this while cleaning up the
+    // advice map because the indices in that map may be off by one depending on whether or not
+    // `Feature::PreAdvice` is set.
+    let mut stutter_indices = HashSet::new();
+    for (&idx, advs) in exec.advice.iter() {
+        if advs.iter().any(|adv| matches!(*adv, Advice::Stutter)) {
+            // `idx` is the index of the stutter's post state, which is the state we want to
+            // delete from the trace.
+            stutter_indices.insert(idx as usize);
+        }
+    }
+
     // Build new `trace` list.
-    // TODO: remove stutter
     let v_trace = v_exec.get_key("trace").unwrap();
     let states = if let Ok(flat) = v_trace.parse::<FlatTrace>() {
         flat.into_iter().skip(1).collect::<Vec<_>>()
@@ -302,6 +336,12 @@ fn run_typed<V: Value>(args: &ArgMatches, in_path: &Path) -> Result<(), String> 
     } else {
         panic!("failed to parse trace")
     };
+    // Remove duplicate states introduced by stutter advice.  Note that state 0 is omitted from
+    // `states`, so the `enumerate` indices are off by 1.
+    let states = states.into_iter().enumerate()
+        .filter(|(i, _)| !stutter_indices.contains(&(i + 1)))
+        .map(|(_, x)| x)
+        .collect::<Vec<_>>();
 
     let mut trace = Vec::new();
     let mut i = 0;
