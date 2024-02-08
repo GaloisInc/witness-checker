@@ -218,6 +218,45 @@ impl<'a> Memory<'a> {
         cp
     }
 
+    /// Directly add some `MemPort`s.
+    ///
+    /// If `project_witness` returns a list of fewer than `num_ports` `MemPort`s, the remaining
+    /// slots will be filled with default values, on the assumption that those slots are unused.
+    pub fn add_mem_ports(
+        &mut self,
+        b: &impl Builder<'a>,
+        num_mem_ports: usize,
+        project_witness: impl Fn(&MultiExecWitness) -> &[MemPort] + Copy + 'static,
+    ) -> TWire<'a, Vec<MemPort>> {
+        let start_idx = self.ports.len();
+        let mem_ports = b.secret_lazy_sized(&[num_mem_ports], move |w| {
+            let mut v = Vec::with_capacity(num_mem_ports);
+            let mem_ports = project_witness(w);
+            debug_assert!(mem_ports.len() <= num_mem_ports);
+            v.extend(mem_ports.iter().cloned());
+            // Fill remaining slots with unused.  As described in `add_cycles_common`, we want to
+            // ensure that all ports are distinct, hence the use of the port index to compute
+            // `addr`.
+            while v.len() < num_mem_ports {
+                let idx = start_idx + v.len();
+                let default_addr = idx as u64 * MemOpWidth::WORD.bytes() as u64;
+                v.push(MemPort {
+                    cycle: MEM_PORT_UNUSED_CYCLE,
+                    addr: default_addr,
+                    value: 0,
+                    op: MemOpKind::Write,
+                    tainted: IfMode::new(|_fp| WORD_BOTTOM),
+                    width: MemOpWidth::WORD,
+                });
+            }
+            debug_assert_eq!(v.len(), num_mem_ports);
+            v
+        });
+        self.ports.extend(mem_ports.repr.clone());
+        self.unused.0.borrow_mut().extend(iter::repeat(false).take(mem_ports.len()));
+        mem_ports
+    }
+
     /// Add a write of `value` to `addr` during initialization.
     pub fn add_initial_write(
         &mut self,

@@ -147,16 +147,14 @@ impl<'a> TraceBuilder<'a> for BbmdTraceBuilder<'a> {
             });
 
             let num_mem_ports = counts.mem_ports;
-            let mem_ports = b.secret_lazy_sized(&[num_mem_ports], move |w| {
+            let mem_ports = eb.c.mem.add_mem_ports(b, counts.mem_ports, move |w| {
                 let ew = project_witness(w);
                 let bt_w = ew.trace.as_bbmd();
-
-                let mut v = Vec::with_capacity(num_mem_ports);
-                if let Some(cw) = bt_w.chunks.get(idx) {
-                    v.extend(cw.mem_ports.iter().cloned());
-                }
-                v.resize_with(num_mem_ports, MemPort::default);
-                v
+                let cw = match bt_w.chunks.get(idx) {
+                    Some(x) => x,
+                    None => return &[],
+                };
+                &cw.mem_ports
             });
 
             let num_advice_values = counts.advise;
