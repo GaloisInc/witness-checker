@@ -733,13 +733,13 @@ fn op_advise<'a>(
     dest: TWire<'a, u8>,
 ) -> TWire<'a, (u64, u8)> {
     if let Some((cx, ev, kmem, y, idx)) = pub_advise_args {
-        if let Some(max) = ev.eval_typed(b.circuit(), y) {
-            wire_assert!(
-                cx, b, b.le(advice, b.lit(max)),
-                "step {}: advice value {} is out of range (expected <= {})",
-                idx, cx.eval(advice), max,
-            );
-            if let Some(kmem) = kmem {
+        wire_assert!(
+            cx, b, b.le(advice, y),
+            "step {}: advice value {} is out of range (expected <= {})",
+            idx, cx.eval(advice), cx.eval(y),
+        );
+        if let Some(kmem) = kmem {
+            if let Some(max) = ev.eval_typed(b.circuit(), y) {
                 kmem.set_wire_range(advice, max);
             }
         }
