@@ -165,9 +165,9 @@ fn mk_block(instrs: &InstrLookup, start_pc: u64) -> BbmdBlock {
     let mut cur_pc = start_pc;
 
     let mut limits = Limits {
-        mem: 4,
+        mem: 2,
         advise: 1,
-        mul_div: 2,
+        mul_div: 1,
     };
 
     loop {
