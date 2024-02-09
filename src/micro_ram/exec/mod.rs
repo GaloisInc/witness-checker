@@ -5,9 +5,8 @@ use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateContext, MigrateHandle, Rooted};
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
 use crate::micro_ram::context::Context;
-use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::mem::{Memory, EquivSegments};
-use crate::micro_ram::types::{Commitment, ExecBody, Trace, RamState, RamInstrRepr};
+use crate::micro_ram::types::{Commitment, ExecBody, Trace, RamState};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 use self::bbmd::BbmdTraceBuilder;
 use self::instr::InstrTraceBuilder;
@@ -31,7 +30,6 @@ struct Common<'a> {
 
     equiv_segments: EquivSegments<'a>,
     mem: Memory<'a>,
-    fetch: Fetch<'a>,
 
     // These fields come last because they contain caches keyed on `Wire`s.  On migration, only
     // wires that were used during the migration of some previous field will be kept in the cache.
@@ -56,6 +54,13 @@ trait TraceBuilder<'a>: Migrate<'a, 'a, Output = Self> + Sized {
         b: &impl Builder<'a>,
         exec: &ExecBody,
         seg_values: &[Vec<TWire<'a, u64>>],
+    );
+    fn hash_commitment(
+        &mut self,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        seg_values: &[Vec<TWire<'a, u64>>],
+        h: &mut Sha256<'a>,
     );
     fn run(
         eb: &mut Rooted<'a, ExecBuilder<'a, Self>>,
@@ -158,6 +163,27 @@ impl<'a, TB: TraceBuilder<'a>> ExecBuilder<'a, TB> {
 
         self.c.init(b, exec, &seg_values);
         self.t.init(&mut self.c, b, exec, &seg_values);
+
+        // Add hash check for the `commitment`.
+        if let Some(commitment) = exec.params.commitment {
+            let _g = b.scoped_label("check commitment");
+            match commitment {
+                Commitment::Sha256(expect_hash) => {
+                    let mut h = Sha256::new(b);
+
+                    // This ordering is consistent with existing hashing logic.
+                    self.t.hash_commitment(b, exec, &seg_values, &mut h);
+                    self.c.hash_commitment(b, exec, &seg_values, &mut h);
+
+                    let actual_hash = h.finish(b);
+                    wire_assert!(
+                        cx = &self.c.cx, b, b.eq(actual_hash, b.lit(expect_hash)),
+                        "bad commitment: actual hash is {:?}, but expected {:?}",
+                        cx.eval(actual_hash), expect_hash,
+                    );
+                },
+            }
+        }
     }
 
     fn finish(
@@ -203,7 +229,6 @@ impl<'a> Common<'a> {
             privilege_levels: exec.params.privilege_levels,
             equiv_segments,
             mem: Memory::new(),
-            fetch: Fetch::new(b, &exec.program, project_witness),
             cx,
             ev: CachingEvaluator::new()
         }
@@ -224,44 +249,21 @@ impl<'a> Common<'a> {
             self.mem.add_initial_write(b, addr, 0);
             self.mem.add_final_read(b, addr, 1);
         }
+    }
 
-        // Add hash check for the `commitment`.
-        if let Some(commitment) = exec.params.commitment {
-            let _g = b.scoped_label("check commitment");
-            match commitment {
-                Commitment::Sha256(expect_hash) => {
-                    let mut h = Sha256::new(b);
-
-                    for (cs, instrs) in exec.program.iter().zip(self.fetch.all_instrs().iter()) {
-                        if !cs.secret || cs.uncommitted {
-                            continue;
-                        }
-                        for instr in instrs {
-                            let RamInstrRepr { opcode, dest, op1, op2, imm } = instr.repr;
-                            h.push(b, opcode);
-                            h.push(b, dest);
-                            h.push(b, op1);
-                            h.push(b, op2);
-                            h.push(b, imm);
-                        }
-                    }
-
-                    for (seg, values) in exec.init_mem.iter().zip(seg_values.iter()) {
-                        if !seg.secret || seg.uncommitted {
-                            continue;
-                        }
-                        for &w in values {
-                            h.push(b, w);
-                        }
-                    }
-
-                    let actual_hash = h.finish(b);
-                    wire_assert!(
-                        cx = &self.cx, b, b.eq(actual_hash, b.lit(expect_hash)),
-                        "bad commitment: actual hash is {:?}, but expected {:?}",
-                        cx.eval(actual_hash), expect_hash,
-                    );
-                },
+    fn hash_commitment(
+        &mut self,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        seg_values: &[Vec<TWire<'a, u64>>],
+        h: &mut Sha256<'a>,
+    ) {
+        for (seg, values) in exec.init_mem.iter().zip(seg_values.iter()) {
+            if !seg.secret || seg.uncommitted {
+                continue;
+            }
+            for &w in values {
+                h.push(b, w);
             }
         }
     }
@@ -275,18 +277,13 @@ impl<'a> Common<'a> {
         Rooted<'a, EquivSegments<'a>>,
     ) {
         // Break apart `c` into pieces and re-root them.
-        let Common { equiv_segments, mem, fetch, cx, .. } = c.take();
+        let Common { equiv_segments, mem, cx, .. } = c.take();
         let mut equiv_segments = mh.root(equiv_segments);
         let mut mem = mh.root(mem);
-        let mut fetch = mh.root(fetch);
         let mut cx = mh.root(cx);
 
         info!("mem.assert_consistent");
         mem.take().assert_consistent(mh, &mut cx, b);
-        unsafe { mh.erase_and_migrate(b.circuit()) };
-
-        info!("fetch.assert_consistent");
-        fetch.take().assert_consistent(mh, &mut cx, b);
         unsafe { mh.erase_and_migrate(b.circuit()) };
 
         (cx, equiv_segments)

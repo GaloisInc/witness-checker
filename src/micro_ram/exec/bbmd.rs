@@ -1,4 +1,5 @@
 use std::cmp;
+use zk_circuit_builder::hash::sha256::Sha256;
 use zk_circuit_builder::ir::circuit::{
     CircuitTrait, CircuitExt, Wire, Function, DefineFunction, SwitchCase, Ty,
 };
@@ -201,6 +202,20 @@ impl<'a> TraceBuilder<'a> for BbmdTraceBuilder<'a> {
 
             wire_assert!(cx, b, asserts, "assertion failed in block {}", idx);
             wire_bug_if!(cx, b, bugs, "bug detected in block {}", idx);
+        }
+    }
+
+    fn hash_commitment(
+        &mut self,
+        _b: &impl Builder<'a>,
+        exec: &ExecBody,
+        _seg_values: &[Vec<TWire<'a, u64>>],
+        _h: &mut Sha256<'a>,
+    ) {
+        // In BBMD mode, there is no need to hash the program, since all code that is executed must
+        // be public.
+        for cs in &exec.program {
+            assert!(!cs.secret);
         }
     }
 

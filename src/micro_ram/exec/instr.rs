@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use log::info;
+use zk_circuit_builder::hash::sha256::Sha256;
 use zk_circuit_builder::ir::circuit::{Bits, Function};
 use zk_circuit_builder::ir::migrate::{self, Migrate};
 use zk_circuit_builder::ir::migrate::handle::{MigrateHandle, Rooted};
 use zk_circuit_builder::ir::typed::{Builder, BuilderExt, TWire};
 use crate::micro_ram::context::Context;
+use crate::micro_ram::fetch::Fetch;
 use crate::micro_ram::known_mem::KnownMem;
 use crate::micro_ram::seg_graph::{SegGraphBuilder, SegGraphItem};
 use crate::micro_ram::trace::{self, SegmentBuilder, InstrLookup};
-use crate::micro_ram::types::{ExecBody, RamState};
+use crate::micro_ram::types::{ExecBody, RamState, RamInstrRepr};
 use crate::micro_ram::witness::{MultiExecWitness, ExecWitness};
 use super::{ExecBuilder, TraceBuilder, Common};
 
@@ -19,6 +21,7 @@ pub struct InstrTraceBuilder<'a> {
     calc_step_inner_cases: Vec<(Bits<'a>, Function<'a>)>,
     check_step_func: Function<'a>,
     seg_graph_builder: SegGraphBuilder<'a>,
+    fetch: Fetch<'a>,
     /// Map from segment index to the index of the trace chunk that uses that segment, along with
     /// the initial cycle of that chunk.  This is used in `add_segment` to initialize the secrets
     /// for the new segment (if that segment is actually used in the trace).
@@ -49,6 +52,7 @@ impl<'a> InstrTraceBuilder<'a> {
             debug_segment_graph_path,
             seg_graph_builder: SegGraphBuilder::new(
                 b, &it.segments, &exec.params, init_state, &it.chunks, project_witness),
+            fetch: Fetch::new(b, &exec.program, project_witness),
             seg_user_map: HashMap::new(),
         }
     }
@@ -72,7 +76,7 @@ impl<'a> InstrTraceBuilder<'a> {
             calc_step_inner_cases: &self.calc_step_inner_cases,
             check_step_func: self.check_step_func,
             mem: &mut c.mem,
-            fetch: &mut c.fetch,
+            fetch: &mut self.fetch,
             params: &exec.params,
             prog: instr_lookup,
             check_steps: c.check_steps,
@@ -155,6 +159,28 @@ impl<'a> TraceBuilder<'a> for InstrTraceBuilder<'a> {
         }
     }
 
+    fn hash_commitment(
+        &mut self,
+        b: &impl Builder<'a>,
+        exec: &ExecBody,
+        seg_values: &[Vec<TWire<'a, u64>>],
+        h: &mut Sha256<'a>,
+    ) {
+        for (cs, instrs) in exec.program.iter().zip(self.fetch.all_instrs().iter()) {
+            if !cs.secret || cs.uncommitted {
+                continue;
+            }
+            for instr in instrs {
+                let RamInstrRepr { opcode, dest, op1, op2, imm } = instr.repr;
+                h.push(b, opcode);
+                h.push(b, dest);
+                h.push(b, op1);
+                h.push(b, op2);
+                h.push(b, imm);
+            }
+        }
+    }
+
     fn run(
         eb: &mut Rooted<'a, ExecBuilder<'a, Self>>,
         mh: &mut MigrateHandle<'a>,
@@ -191,11 +217,16 @@ impl<'a> TraceBuilder<'a> for InstrTraceBuilder<'a> {
         cx: &mut Rooted<'a, Context<'a>>,
     ) {
         // Break apart `t` into pieces and re-root them.
-        let InstrTraceBuilder { seg_graph_builder, .. } = t.take();
+        let InstrTraceBuilder { seg_graph_builder, fetch, .. } = t.take();
         let mut seg_graph_builder = mh.root(seg_graph_builder);
+        let mut fetch = mh.root(fetch);
 
         info!("seg_graph_builder.finish");
         seg_graph_builder.take().finish(&cx.open(mh), b);
+        unsafe { mh.erase_and_migrate(b.circuit()) };
+
+        info!("fetch.assert_consistent");
+        fetch.take().assert_consistent(mh, cx, b);
         unsafe { mh.erase_and_migrate(b.circuit()) };
     }
 }
