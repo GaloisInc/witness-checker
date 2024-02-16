@@ -1751,7 +1751,7 @@ impl Trace {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct InstrTrace {
     pub segments: Vec<Segment>,
     pub chunks: Vec<TraceChunk>,
@@ -1938,6 +1938,11 @@ pub struct Params {
     /// If set, restrict accesses from unprivileged code to privileged code and data.
     #[serde(default)]
     pub privilege_levels: bool,
+    /// If set, use Basic Block Machine for DORA to check this execution.  This changes the format
+    /// of the execution data: it must have a `bbmd_blocks` list instead of public-PC `segments`,
+    /// and the `trace` has a slightly different format.
+    #[serde(default)]
+    pub bbmd: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]

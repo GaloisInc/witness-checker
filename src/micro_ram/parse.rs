@@ -6,8 +6,8 @@ use serde::de::{self, Deserializer, SeqAccess, MapAccess, Visitor};
 use serde::Deserialize;
 use crate::micro_ram::types::{
     VersionedMultiExec, MultiExec, ExecBody, Params, Opcode, MemOpKind, MemOpWidth, RamInstr,
-    RamState, Advice, Trace, InstrTrace, BbmdTrace, TraceChunk, Segment, SegmentConstraint,
-    Commitment, CodeSegment,
+    RamState, Advice, Trace, InstrTrace, BbmdTrace, TraceChunk, BbmdTraceChunk, Segment,
+    SegmentConstraint, BbmdBlock, Commitment, CodeSegment,
 };
 use crate::micro_ram::feature::{self, Feature, Version};
 use crate::mode::if_mode::{AnyTainted, IfMode, is_mode};
@@ -110,16 +110,11 @@ impl<'de> Visitor<'de> for VersionedMultiExecVisitor {
 
 impl<'de> Deserialize<'de> for ExecBody {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let mut exec = d.deserialize_struct(
+        d.deserialize_struct(
             "ExecBody",
             &["program", "init_mem", "params", "trace", "advice"],
             ExecBodyVisitor,
-        )?;
-
-        if !has_feature(Feature::PublicPc) && !has_feature(Feature::Bbmd) {
-        }
-
-        Ok(exec)
+        )
     }
 }
 
@@ -132,36 +127,20 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ExecBody, A::Error> {
-        let mut ft = Vec::<RamState>::new();
-        let mut it = InstrTrace {
-            segments: Vec::new(),
-            chunks: Vec::new(),
-        };
-        let mut bt = BbmdTrace {
-            blocks: Vec::new(),
-            chunks: Vec::new(),
-        };
         let mut ex = ExecBody {
             program: Vec::new(),
             init_mem: Vec::new(),
             params: Params::default(),
             // Dummy trace, to be replaced after `it`/`bt` is populated.
-            trace: Trace::Instr(it.clone()),
+            trace: Trace::Instr(InstrTrace::default()),
             advice: HashMap::new(),
             labels: HashMap::new(),
             provided_init_state: None,
         };
+        let mut trace = None;
 
-        #[derive(Debug)]
-        enum TraceMode {
-            Flat,
-            PublicPc,
-            Bbmd,
-        }
-        let trace_mode =
-            if has_feature(Feature::Bbmd) { TraceMode::Bbmd }
-            else if has_feature(Feature::PublicPc) { TraceMode::PublicPc }
-            else { TraceMode::Flat };
+        let mut instr_segments = None;
+        let mut bbmd_blocks = None;
 
         let mut seen = HashSet::new();
         while let Some(k) = map.next_key::<String>()? {
@@ -190,23 +169,18 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                 "init_mem" => { ex.init_mem = map.next_value()?; },
                 "params" => { ex.params = map.next_value()?; },
 
-                "segments" if matches!(trace_mode, TraceMode::PublicPc) => {
-                    it.segments = map.next_value()?;
+                "segments" => {
+                    instr_segments = Some(map.next_value::<Vec<Segment>>()?);
                 },
-                "bbmd_blocks" if matches!(trace_mode, TraceMode::Bbmd) => {
-                    bt.blocks = map.next_value()?;
+                "bbmd_blocks" => {
+                    bbmd_blocks = Some(map.next_value::<Vec<BbmdBlock>>()?);
                 },
 
-                "trace" => match trace_mode {
-                    TraceMode::Flat => {
-                        ft = map.next_value()?;
-                    },
-                    TraceMode::PublicPc => {
-                        it.chunks = map.next_value()?;
-                    },
-                    TraceMode::Bbmd => {
-                        bt.chunks = map.next_value()?;
-                    },
+                "trace" => {
+                    // We don't know which trace mode to expect until we've seen `params`, which
+                    // could come later in the input.  But the three trace forms are mutually
+                    // exclusive, so we try parsing in each mode and see which one works.
+                    trace = Some(map.next_value::<AnyTrace>()?);
                 },
 
                 "advice" => {
@@ -227,34 +201,71 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
             }
         }
 
-        ex.trace = match trace_mode {
-            TraceMode::Flat => {
-                // Adjust flat traces to fit the public-pc format.  In flat mode, the prover can
-                // provide an initial state, with some restrictions.
+        let trace = trace.ok_or_else(|| serde::de::Error::custom("missing key `trace`"))?;
 
-                let new_segment = Segment {
-                    constraints: vec![],
-                    len: ex.params.trace_len.unwrap() - 1,
-                    successors: vec![],
-                    enter_from_network: false,
-                    exit_to_network: false,
-                };
+        ex.trace = if has_feature(Feature::Bbmd) && ex.params.bbmd {
+            Trace::Bbmd(BbmdTrace {
+                blocks: bbmd_blocks.take().ok_or_else(|| serde::de::Error::custom(
+                    "missing key `bbmd_blocks` for BBMD execution"))?,
+                chunks: match trace {
+                    AnyTrace::Bbmd(x) => x,
+                    _ => return Err(serde::de::Error::custom(
+                        "bad `trace` format for BBMD execution")),
+                },
+            })
+        } else if has_feature(Feature::PublicPc) {
+            Trace::Instr(InstrTrace {
+                segments: instr_segments.take().ok_or_else(|| serde::de::Error::custom(
+                    "missing key `segments` for public PC execution"))?,
+                chunks: match trace {
+                    AnyTrace::Instr(x) => x,
+                    _ => return Err(serde::de::Error::custom(
+                        "bad `trace` format for public PC execution")),
+                },
+            })
+        } else {
+            // Adjust flat traces to fit the public-pc format.  In flat mode, the prover can
+            // provide an initial state, with some restrictions.
+            let states = match trace {
+                AnyTrace::Flat(x) => x,
+                _ => return Err(serde::de::Error::custom(
+                    "bad `trace` format for flat execution")),
+            };
 
-                let provided_init_state = Some(ft[0].clone());
-                let new_chunk = TraceChunk {
-                    segment: 0,
-                    states: ft[1..].to_owned(),
-                    debug: None,
-                };
 
-                it.segments = vec![new_segment];
-                it.chunks = vec![new_chunk];
-                ex.provided_init_state = provided_init_state;
-                Trace::Instr(it)
-            },
-            TraceMode::PublicPc => Trace::Instr(it),
-            TraceMode::Bbmd => Trace::Bbmd(bt),
+            let new_segment = Segment {
+                constraints: vec![],
+                len: ex.params.trace_len.unwrap() - 1,
+                successors: vec![],
+                enter_from_network: false,
+                exit_to_network: false,
+            };
+
+            let provided_init_state = Some(states[0].clone());
+            let new_chunk = TraceChunk {
+                segment: 0,
+                states: states[1..].to_owned(),
+                debug: None,
+            };
+
+            ex.provided_init_state = provided_init_state;
+            Trace::Instr(InstrTrace {
+                segments: vec![new_segment],
+                chunks: vec![new_chunk],
+            })
         };
+
+        // The cases above that use these fields call `take()`, so they should all be `None` by
+        // this point.
+        if instr_segments.is_some() {
+            return Err(serde::de::Error::custom(
+                "key `segments` is unexpected in the current execution mode"));
+        }
+        if bbmd_blocks.is_some() {
+            return Err(serde::de::Error::custom(
+                "key `bbmd_blocks` is unexpected in the current execution mode"));
+        }
+
 
         Ok(ex)
     }
@@ -588,6 +599,42 @@ impl<'de> Visitor<'de> for TraceChunkVisitor {
         };
         seq.finish()?;
         Ok(x)
+    }
+}
+
+
+
+#[derive(Debug)]
+enum AnyTrace {
+    Flat(Vec<RamState>),
+    Instr(Vec<TraceChunk>),
+    Bbmd(Vec<BbmdTraceChunk>),
+}
+
+/// Manual `DeserializeImpl` for `AnyTrace`.  This does roughly the same thing as putting
+/// `#[derive(Deserialize)] #[serde(untagged)]` on the declaration of `AnyTrace`, but provides
+/// better error messages when all variants fail to parse.
+impl<'de> Deserialize<'de> for AnyTrace {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let content = serde::__private::de::Content::deserialize(d)?;
+        let deserializer = serde::__private::de::ContentRefDeserializer::new(&content);
+
+        let err1: D::Error = match Deserialize::deserialize(deserializer) {
+            Ok(x) => return Ok(AnyTrace::Flat(x)),
+            Err(e) => e,
+        };
+        let err2: D::Error = match Deserialize::deserialize(deserializer) {
+            Ok(x) => return Ok(AnyTrace::Instr(x)),
+            Err(e) => e,
+        };
+        let err3: D::Error = match Deserialize::deserialize(deserializer) {
+            Ok(x) => return Ok(AnyTrace::Bbmd(x)),
+            Err(e) => e,
+        };
+        Err(de::Error::custom(format_args!(
+            "failed to parse as AnyTrace::Flat: {err1}; \
+            failed to parse as AnyTrace::Instr: {err2}; \
+            failed to parse as AnyTrace::Bbmd: {err3}")))
     }
 }
 

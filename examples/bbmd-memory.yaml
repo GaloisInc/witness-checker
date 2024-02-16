@@ -27,6 +27,7 @@
   params:
     num_regs: 2
     trace_len: 11
+    bbmd: true
 
   bbmd_blocks:
     - pcs: [[0, 1]]
