@@ -1543,6 +1543,10 @@ impl<'a> migrate::Visitor<'a, 'a> for EraseVisitor<'a, '_> {
         e
     }
 
+    fn visit_wire_weak(&mut self, w: Wire<'a>) -> Option<Wire<'a>> {
+        self.erased_map.get(&w).cloned()
+    }
+
     fn visit_secret(&mut self, s: Secret<'a>) -> Secret<'a> { s }
     fn visit_erased(&mut self, e: Erased<'a>) -> Erased<'a> { e }
 

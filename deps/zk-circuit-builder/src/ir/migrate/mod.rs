@@ -35,9 +35,7 @@ pub trait Visitor<'a, 'b> {
     /// A "weak reference" version of `visit_wire`.  The visitor may return `None` on any call.
     /// For example, a garbage-collecting visitor might return `None` for old wires that have no
     /// corresponding new wire.
-    fn visit_wire_weak(&mut self, w: Wire<'a>) -> Option<Wire<'b>> {
-        Some(self.visit_wire(w))
-    }
+    fn visit_wire_weak(&mut self, w: Wire<'a>) -> Option<Wire<'b>>;
 }
 
 
