@@ -505,8 +505,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             let name_str = self.func_info[*idx].name.clone();
             iter::once(pat_str).chain(iter::once(name_str))
         }));
-        
+
         let (idx, name) = self.add_func_info(&FunctionDesc::Switch(cond_width, branches.to_vec()), &output_count, &input_count);
+        let is_new_function = self.func_private_inputs_count.insert(name.clone(), max_private_input_count).is_none();
+        debug_assert!(is_new_function);
         self.functions.push(IR::new_plugin_function_with_inputs(
             name,
             output_count,
@@ -533,6 +535,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     return Some(idx);
                 }
 
+                let is_new_function = self.func_private_inputs_count.insert(name.clone(), 0).is_none();
+                debug_assert!(is_new_function);
                 self.functions.push(IR::new_plugin_function(
                     name,
                     [n],
@@ -548,6 +552,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 let argc = n * m as u64;
                 let (idx, name) = self.add_func_info(desc, &[], &[argc, argc]);
 
+                let is_new_function = self.func_private_inputs_count.insert(name.clone(), 0).is_none();
+                debug_assert!(is_new_function);
                 self.functions.push(IR::new_plugin_function(
                     name,
                     [],
