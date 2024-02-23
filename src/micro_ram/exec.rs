@@ -299,6 +299,11 @@ impl<'a> ExecBuilder<'a> {
         #[allow(unused)]
         let x = ();
 
+        // Force a GC here to ensure that temporaries from the last few segments are flushed.  This
+        // prevents having temporaries from those segments and temporaries from the various
+        // permutations live at the same time.
+        unsafe { mh.force_erase_and_migrate(b.circuit()) };
+
         info!("seg_graph_builder.finish");
         seg_graph_builder.take().finish(&cx.open(mh), b);
         unsafe { mh.erase_and_migrate(b.circuit()) };
