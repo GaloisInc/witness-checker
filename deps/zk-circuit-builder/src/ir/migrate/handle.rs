@@ -141,9 +141,14 @@ impl<'a> MigrateHandle<'a> {
     /// with `'a` lifetime are accessible outside of a `Rooted` wrapper, those references may be
     /// left dangling after calling this method.
     pub unsafe fn erase_and_migrate<C: CircuitTrait<'a> + ?Sized>(&mut self, c: &C) {
+        // The threshold for triggering GC is dynamic, growing as the circuit itself grows.  A
+        // static threshold could result in high overhead for large circuits due to frequent GC
+        // pauses.  After GC runs, we record `prev_size`, which is the size of the arena when it
+        // contains only live wires.  Afterward, we only GC when the arena size exceeds `prev_size`
+        // by a certain multiple.  The number of live wires tends to increase over time, so
+        // `prev_size` and the GC threshold also increase.
         if c.as_base().gc_size() > self.prev_size * 5 / 2 {
             self.force_erase_and_migrate(c);
-            self.prev_size = c.as_base().gc_size();
         }
     }
 
@@ -151,6 +156,7 @@ impl<'a> MigrateHandle<'a> {
         let mcx = self.mcx;
         c.erase_with(CowBox::from(mcx.witness_value), |v| mcx.erase_in_place(v));
         c.migrate_with(|v| mcx.migrate_in_place(v));
+        self.prev_size = c.as_base().gc_size();
     }
 }
 
