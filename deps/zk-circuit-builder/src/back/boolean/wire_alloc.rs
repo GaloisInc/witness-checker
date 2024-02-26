@@ -59,6 +59,12 @@ impl WireAlloc {
         }
     }
 
+    /// Preallocate some `WireId`s.  These `WireId`s will never be deallocated.  Only one call to
+    /// `preallocate` (or `preallocate_slice`) is allowed; if you need multiple preallocated
+    /// ranges, pass them all in a single call.
+    ///
+    /// Preallocated wires are numbered sequentially starting from zero, so they can be used for
+    /// argument and result wires in SIEVE IR functions.
     pub fn preallocate<const N: usize>(&mut self, ns: [u64; N]) -> [WireId; N] {
         // The preallocated wires are removed from the first bucket (the size of the bucket is
         // reduced) so that they never get deallocated.
