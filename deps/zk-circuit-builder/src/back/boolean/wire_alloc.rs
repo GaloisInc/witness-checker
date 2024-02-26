@@ -38,9 +38,13 @@ impl WireAlloc {
     pub fn new(mut bucket_lifespans: Vec<u32>) -> WireAlloc {
         bucket_lifespans.sort();
 
-        let mut buckets = Vec::with_capacity(bucket_lifespans.len() + 1);
-        let step = WireId::MAX / (bucket_lifespans.len() as u64 + 1);
-        for i in 0 .. bucket_lifespans.len() + 1 {
+        // The first `bucket_lifespans.len()` buckets are for wires whose `expire` time is less
+        // than `bucket_lifetimes[i]` in the future.  The last two buckets are for wires whose
+        // lifespan exceeds `bucket_lifetimes.last()` and for wires with "infinite" (`Time::MAX`)
+        // expiration time.
+        let mut buckets = Vec::with_capacity(bucket_lifespans.len() + 2);
+        let step = WireId::MAX / (bucket_lifespans.len() as u64 + 2);
+        for i in 0 .. bucket_lifespans.len() + 2 {
             let start = step * (i as u64);
             let end = step * (i as u64 + 1);
             buckets.push(WireBucket::new(start, end));
@@ -55,7 +59,15 @@ impl WireAlloc {
         }
     }
 
+    /// Preallocate some `WireId`s.  These `WireId`s will never be deallocated.  Only one call to
+    /// `preallocate` (or `preallocate_slice`) is allowed; if you need multiple preallocated
+    /// ranges, pass them all in a single call.
+    ///
+    /// Preallocated wires are numbered sequentially starting from zero, so they can be used for
+    /// argument and result wires in SIEVE IR functions.
     pub fn preallocate<const N: usize>(&mut self, ns: [u64; N]) -> [WireId; N] {
+        // The preallocated wires are removed from the first bucket (the size of the bucket is
+        // reduced) so that they never get deallocated.
         let bucket = &mut self.buckets[0];
         // We require that no normal allocations have been performed yet.
         assert_eq!(bucket.next, bucket.page_start);
@@ -97,9 +109,13 @@ impl WireAlloc {
         n: u64,
         next_alloc_pos: usize,
     ) -> WireId {
-        let lifespan = expire.saturating_sub(self.now);
-        let i = self.bucket_lifespans.iter().cloned().position(|bl| lifespan <= bl as Time)
-            .unwrap_or(self.bucket_lifespans.len());
+        let i = if expire == Time::MAX {
+            self.bucket_lifespans.len() + 1
+        } else {
+            let lifespan = expire.saturating_sub(self.now);
+            self.bucket_lifespans.iter().cloned().position(|bl| lifespan <= bl as Time)
+                .unwrap_or(self.bucket_lifespans.len())
+        };
         let (wire, opt_page) = self.buckets[i].alloc(expire, n, next_alloc_pos);
         if let Some((alloc, free)) = opt_page {
             self.allocs.push(alloc);
