@@ -477,14 +477,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             input_count,
             private_inputs_count,
             gates,
-        ));        
-    }    
+        ));
+    }
 
     fn plugin_switch_signature(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> (Vec<u64>, Vec<u64>) {
         // Earlier passes in the compiler ensure that a `GateKind::Switch` has at least one branch, and that each branch
         // has the same siganture. So, it is safe to use the first branch arbitrarily.
         let f = &self.func_info[branches[0].0];
-        
+
         let output_count = f.outputs().to_owned();
         let mut input_count = Vec::with_capacity(1 + f.inputs().len());
         input_count.push(cond_width);
@@ -495,10 +495,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     
     fn define_plugin_switch(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> usize {
         let (output_count, input_count) = self.plugin_switch_signature(cond_width, branches);
-        
-        let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));        
+
+        let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
         let mut params = Vec::with_capacity(1 + 2 * branches.len());
-        // TODO(isweet): Support `permissive` mode at some point?                    
+        // TODO(isweet): Support `permissive` mode at some point?
         params.push("strict".into());
         params.extend(branches.iter().flat_map(|(idx, pat)| {
             let pat_str = pat.to_string();
@@ -780,12 +780,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 // The semantics of `Switch` dictate that branches which are not taken (as indicated by the guard condition)
                 // are not executed. This means that the intuitive encoding of a `Switch` using a nested multiplexor is not
                 // correct, because it would execute every branch. Why is that an issue?
-                // 
+                //
                 // First, a nested multiplexor would consume `n * k` private inputs where `n` is the number of inputs
                 // consumed by a single branch and `k` is the number of branches. In contrast, the `Switch` semantics dictate
                 // that it should only consume `n` inputs. Second, the multiplexor would execute the `AssertZero` gates in
                 // the body of every branch. In short, the observable side effects (private input consumption and assertion failure)
                 // are different.
+
                 //
                 // Accounting for the difference in private inputs isn't too hard. The logic for emitting private inputs could be
                 // adjusted so that the appropriate amount of private inputs are padded into the private input stream. When producing
@@ -836,12 +837,12 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
 
         self.define_function(desc)
-    }    
+    }
 
     fn get_private_input_count(&self, func_name: &String) -> u64 {
         self.func_private_inputs_count[func_name]
     }
-    
+
     fn get_private_input_count_id(&self, func_id: usize) -> u64 {
         self.get_private_input_count(&self.func_info[func_id].name)
     }
@@ -930,7 +931,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         // Allocate a dummy wire to hold to outcome of the assertion
         let assert_out = self.alloc_wires(TEMP, 0);
-        
+
         // Call assert_permute. Assert_permute plugin doesn't have an output
         self.call_gate_into(assert_out, FunctionDesc::AssertPermute(n, m), &[inp1, out]);
 
@@ -1079,9 +1080,9 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     }
 
     /// Compute the witness of the assert_permute plugin.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `num_items` - The number of items to be permuted.
     /// * `perm` - The description of the permutation. perm.0 contains the permutation vector.
     /// * `input_values` - The values to be permuted.

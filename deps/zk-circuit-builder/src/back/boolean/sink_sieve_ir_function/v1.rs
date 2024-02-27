@@ -121,7 +121,7 @@ impl SieveIrFormat for SieveIrV1 {
             Gate::For(..) => unreachable!(),
             _ => 0,
         }
-    }    
+    }
     fn visit_relation(
         r: Relation,
         mut visit_gate: impl FnMut(Gate),

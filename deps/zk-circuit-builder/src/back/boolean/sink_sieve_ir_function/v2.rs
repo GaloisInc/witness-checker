@@ -101,7 +101,7 @@ impl SieveIrFormat for SieveIrV2 {
         if !private_input_count.is_zero() {
             private_count.insert(0, private_input_count);
         }
-        
+
         let body = PluginBody {
             name: plugin_name,
             operation: op_name,
@@ -126,7 +126,7 @@ impl SieveIrFormat for SieveIrV2 {
             Gate::Call(name, _, _) => func_private_inputs_counts[name],
             _ => 0,
         }
-    }    
+    }
     fn visit_relation(
         r: Relation,
         mut visit_gate: impl FnMut(Gate),

@@ -117,7 +117,7 @@ impl SieveIrFormat for SieveIrV3 {
         if !private_input_count.is_zero() {
             private_count.insert(0, private_input_count);
         }
-        
+
         let body = PluginBody {
             name: plugin_name,
             operation: op_name,
