@@ -35,7 +35,11 @@ pub trait SieveIrFormat {
     fn gate_private(out: WireId) -> Self::Gate;
     fn gate_copy(out: WireId, a: WireId) -> Self::Gate;
     fn gate_and(out: WireId, a: WireId, b: WireId) -> Self::Gate;
+    fn gate_mul(out: WireId, a: WireId, b: WireId) -> Self::Gate;
+    fn gate_mulc(out: WireId, a: WireId, b: Vec<u8>) -> Self::Gate;
     fn gate_xor(out: WireId, a: WireId, b: WireId) -> Self::Gate;
+    fn gate_add(out: WireId, a: WireId, b: WireId) -> Self::Gate;
+    fn gate_addc(out: WireId, a: WireId, b: Vec<u8>) -> Self::Gate;
     fn gate_not(out: WireId, a: WireId) -> Self::Gate;
     fn gate_new(start: WireId, end: WireId) -> Self::Gate;
     fn gate_delete(start: WireId, end: WireId) -> Self::Gate;

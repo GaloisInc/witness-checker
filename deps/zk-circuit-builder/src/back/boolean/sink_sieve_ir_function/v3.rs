@@ -39,8 +39,20 @@ impl SieveIrFormat for SieveIrV3 {
     fn gate_and(out: WireId, a: WireId, b: WireId) -> Gate {
         Gate::Mul(0, out, a, b)
     }
+    fn gate_mul(out: WireId, a: WireId, b: WireId) -> Self::Gate {
+        Gate::Mul(0, out, a, b)
+    }
+    fn gate_mulc(out: WireId, a: WireId, b: Vec<u8>) -> Gate {
+        Gate::MulConstant(0, out, a, b)
+    }
     fn gate_xor(out: WireId, a: WireId, b: WireId) -> Gate {
         Gate::Add(0, out, a, b)
+    }
+    fn gate_add(out: WireId, a: WireId, b: WireId) -> Gate {
+        Gate::Add(0, out, a, b)
+    }
+    fn gate_addc(out: WireId, a: WireId, b: Vec<u8>) -> Self::Gate {
+        Gate::AddConstant(0, out, a, b)
     }
     fn gate_not(out: WireId, a: WireId) -> Gate {
         Gate::AddConstant(0, out, a, vec![1])
