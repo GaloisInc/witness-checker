@@ -8,6 +8,8 @@ use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
 use crate::eval::Evaluator;
+use scuttlebutt::field::F128p;
+use scuttlebutt::ring::FiniteRing;
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
@@ -535,6 +537,9 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
 
 
 
+fn bool_to_f128p(b: bool) -> F128p {
+    if b { F128p::ONE } else { F128p::ZERO }
+}
 
 #[derive(Migrate)]
 struct FunctionInfo<'w, T> {
@@ -1172,6 +1177,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 mod test {
     use std::collections::{HashMap, HashSet};
     use crate::back::UsePlugins;
+    use crate::back::boolean::sink_sieve_ir_function::SieveIrField;
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
@@ -1593,7 +1599,7 @@ mod test {
     }
 
 
-    fn test_gate_common<'a, const N: usize>(
+    fn test_gate_exhaustive<'a, const N: usize>(
         c: &Circuit<'a, impl CircuitFilter<'a> + 'a>,
         input_bits: [i16; N],
         mut f: impl FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
@@ -1626,34 +1632,34 @@ mod test {
         }
     }
 
-    fn test_gate_with_arith_sink<const N: usize>(
-        arith_sink: TestArithSink,
+    fn test_gate_common<const N: usize>(
         input_bits: [i16; N],
         skip_v2_eval: bool,
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
+        field: SieveIrField,
     ) {
         let arenas = Arenas::new();
         let c = Circuit::new::<()>(&arenas, true, FilterNil);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         let mut backend = Backend::new(TestSink::default());
-        let mut arith_backend = Backend::new(arith_sink);
+        let mut arith_backend = Backend::new(TestArithSink::default());
 
         #[cfg(feature = "sieve_ir")]
         let mut sieve_ir_backend = {
             use zki_sieve::producers::sink::MemorySink;
             let sink = MemorySink::default();
-            let sink = sink_sieve_ir_function::SieveIrV1Sink::new(sink, UsePlugins::all());
+            let sink = sink_sieve_ir_function::SieveIrV1Sink::new(sink, field, UsePlugins::all());
             Backend::new(sink)
         };
         #[cfg(feature = "sieve_ir")]
         let mut sieve_ir_v2_backend = {
             use zki_sieve_v3::producers::sink::MemorySink;
             let sink = MemorySink::default();
-            let sink = sink_sieve_ir_function::SieveIrV2Sink::new(sink, UsePlugins::all());
+            let sink = sink_sieve_ir_function::SieveIrV2Sink::new(sink, field, UsePlugins::all());
             Backend::new(sink)
         };
 
-        test_gate_common(&c, input_bits, f, |w| {
+        test_gate_exhaustive(&c, input_bits, f, |w| {
             backend.enforce_true(&c, &mut ev, w);
             arith_backend.enforce_true(&c, &mut ev, w);
 
@@ -1708,7 +1714,14 @@ mod test {
         input_bits: [i16; N],
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
     ) {
-        test_gate_with_arith_sink(TestArithSink::default(), input_bits, false, f)
+        test_gate_common(input_bits, false, f, SieveIrField::F1b)
+    }
+
+    fn test_gate_f128p<const N: usize>(
+        input_bits: [i16; N],
+        mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
+    ) {
+        test_gate_common(input_bits, false, f, SieveIrField::F128p)
     }
 
     /// Like `test_gate`, but skips testing with the SIEVE IR v2 evaluator.  This is a workaround
@@ -1719,14 +1732,26 @@ mod test {
         input_bits: [i16; N],
         mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
     ) {
-        test_gate_with_arith_sink(TestArithSink::default(), input_bits, true, f)
+        test_gate_common(input_bits, true, f, SieveIrField::F1b)
     }
 
+    fn test_gate_skip_v2_eval_f128p<const N: usize>(
+        input_bits: [i16; N],
+        mut f: impl for<'a> FnMut(&DynCircuit<'a>, [Wire<'a>; N]) -> Wire<'a>,
+    ) {
+        test_gate_common(input_bits, true, f, SieveIrField::F128p)
+    }
 
     #[test]
     fn lit_1() {
         test_gate([], |c, _| c.lit(Ty::bool(), 0));
         test_gate([], |c, _| c.lit(Ty::bool(), 1));
+    }
+
+    #[test]
+    fn lit_1_f128p() {
+        test_gate_f128p([], |c, _| c.lit(Ty::bool(), 0));
+        test_gate_f128p([], |c, _| c.lit(Ty::bool(), 1));
     }
 
 
@@ -1736,8 +1761,18 @@ mod test {
     }
 
     #[test]
+    fn not_1_f128p() {
+        test_gate_f128p([1], |c, [w]| c.not(w));
+    }
+
+    #[test]
     fn and_1() {
         test_gate([1, 1], |c, [a, b]| c.and(a, b));
+    }
+
+    #[test]
+    fn and_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.and(a, b));
     }
 
     #[test]
@@ -1746,8 +1781,18 @@ mod test {
     }
 
     #[test]
+    fn or_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.or(a, b));
+    }
+
+    #[test]
     fn xor_1() {
         test_gate([1, 1], |c, [a, b]| c.xor(a, b));
+    }
+
+    #[test]
+    fn xor_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.xor(a, b));
     }
 
     #[test]
@@ -1757,6 +1802,18 @@ mod test {
             c.shl(a, c.lit(b.ty, amount))
         });
         test_gate([-1, 2], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shl(a, c.lit(b.ty, amount))
+        });
+    }
+
+    #[test]
+    fn shl_1_f128p() {
+        test_gate_f128p([1, 2], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shl(a, c.lit(b.ty, amount))
+        });
+        test_gate_f128p([-1, 2], |c, [a, b]| {
             let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
@@ -1774,10 +1831,27 @@ mod test {
         });
     }
 
+    #[test]
+    fn shr_1_f128p() {
+        test_gate_f128p([1, 2], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shr(a, c.lit(b.ty, amount))
+        });
+        test_gate_f128p([-1, 2], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shr(a, c.lit(b.ty, amount))
+        });
+    }
+
 
     #[test]
     fn neg_1() {
         test_gate([1], |c, [w]| c.neg(w));
+    }
+
+    #[test]
+    fn neg_1_f128p() {
+        test_gate_f128p([1], |c, [w]| c.neg(w));
     }
 
     #[test]
@@ -1786,13 +1860,29 @@ mod test {
     }
 
     #[test]
+    fn add_1_f128p() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        test_gate_f128p([1, 1], |c, [a, b]| c.add(a, b));
+    }
+
+    #[test]
     fn sub_1() {
         test_gate([1, 1], |c, [a, b]| c.sub(a, b));
     }
 
     #[test]
+    fn sub_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.sub(a, b));
+    }
+
+    #[test]
     fn mul_1() {
         test_gate([1, 1], |c, [a, b]| c.mul(a, b));
+    }
+
+    #[test]
+    fn mul_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.mul(a, b));
     }
 
     #[test]
@@ -1804,13 +1894,31 @@ mod test {
     }
 
     #[test]
+    fn wide_mul_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| {
+            let gk = c.intern_gadget_kind(WideMul);
+            c.gadget(gk, &[a, b])
+        });
+    }
+
+    #[test]
     fn div_1() {
         test_gate([1, 1], |c, [a, b]| c.div(a, b));
     }
 
     #[test]
+    fn div_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.div(a, b));
+    }
+
+    #[test]
     fn mod_1() {
         test_gate([1, 1], |c, [a, b]| c.mod_(a, b));
+    }
+
+    #[test]
+    fn mod_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.mod_(a, b));
     }
 
 
@@ -1823,11 +1931,27 @@ mod test {
     }
 
     #[test]
+    fn eq_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.eq(a, b));
+        test_gate_f128p([-1, -1], |c, [a, b]| c.eq(a, b));
+        test_gate_f128p([1], |c, [a]| c.eq(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-1], |c, [a]| c.eq(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
     fn ne_1() {
         test_gate([1, 1], |c, [a, b]| c.ne(a, b));
         test_gate([-1, -1], |c, [a, b]| c.ne(a, b));
         test_gate([1], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
         test_gate([-1], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
+    fn ne_1_f128p() {
+        test_gate_f128p([1, 1], |c, [a, b]| c.ne(a, b));
+        test_gate_f128p([-1, -1], |c, [a, b]| c.ne(a, b));
+        test_gate_f128p([1], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-1], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
     }
 
     #[test]
@@ -1837,9 +1961,21 @@ mod test {
     }
 
     #[test]
+    fn lt_1_f128p() {
+        test_gate_f128p([1], |c, [a]| c.lt(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-1], |c, [a]| c.lt(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
     fn gt_1() {
         test_gate([1], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
         test_gate([-1], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
+    fn gt_1_f128p() {
+        test_gate_f128p([1], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-1], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
     }
 
     #[test]
@@ -1849,9 +1985,21 @@ mod test {
     }
 
     #[test]
+    fn le_1_f128p() {
+        test_gate_f128p([1], |c, [a]| c.le(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-1], |c, [a]| c.le(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
     fn ge_1() {
         test_gate([1], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
         test_gate([-1], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
+    fn ge_1_f128p() {
+        test_gate_f128p([1], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-1], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
     }
 
 
@@ -1863,10 +2011,23 @@ mod test {
         test_gate_skip_v2_eval([1, -1, -1], |c, [x, y, z]| c.mux(x, y, z));
     }
 
+    #[test]
+    fn mux_1_f128p() {
+        // Skip SIEVE IR v2 evaluation, since the current evaluator doesn't support the `mux_v0`
+        // plugin we use.
+        test_gate_skip_v2_eval_f128p([1, 1, 1], |c, [x, y, z]| c.mux(x, y, z));
+        test_gate_skip_v2_eval_f128p([1, -1, -1], |c, [x, y, z]| c.mux(x, y, z));
+    }
+
 
     #[test]
     fn not_3() {
         test_gate([3], |c, [w]| c.not(w));
+    }
+
+    #[test]
+    fn not_3_f128p() {
+        test_gate_f128p([3], |c, [w]| c.not(w));
     }
 
     #[test]
@@ -1875,13 +2036,28 @@ mod test {
     }
 
     #[test]
+    fn and_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.and(a, b));
+    }
+
+    #[test]
     fn or_3() {
         test_gate([3, 3], |c, [a, b]| c.or(a, b));
+    }
+
+        #[test]
+    fn or_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.or(a, b));
     }
 
     #[test]
     fn xor_3() {
         test_gate([3, 3], |c, [a, b]| c.xor(a, b));
+    }
+
+    #[test]
+    fn xor_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.xor(a, b));
     }
 
     #[test]
@@ -1891,6 +2067,18 @@ mod test {
             c.shl(a, c.lit(b.ty, amount))
         });
         test_gate([-3, 3], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shl(a, c.lit(b.ty, amount))
+        });
+    }
+
+    #[test]
+    fn shl_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shl(a, c.lit(b.ty, amount))
+        });
+        test_gate_f128p([-3, 3], |c, [a, b]| {
             let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
             c.shl(a, c.lit(b.ty, amount))
         });
@@ -1908,10 +2096,27 @@ mod test {
         });
     }
 
+    #[test]
+    fn shr_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shr(a, c.lit(b.ty, amount))
+        });
+        test_gate_f128p([-3, 3], |c, [a, b]| {
+            let amount = eval::eval_wire_secret(c.as_base(), b).unwrap().unwrap_single().unwrap();
+            c.shr(a, c.lit(b.ty, amount))
+        });
+    }
+
 
     #[test]
     fn neg_3() {
         test_gate([3], |c, [w]| c.neg(w));
+    }
+
+    #[test]
+    fn neg_3_f128p() {
+        test_gate_f128p([3], |c, [w]| c.neg(w));
     }
 
     #[test]
@@ -1920,13 +2125,28 @@ mod test {
     }
 
     #[test]
+    fn add_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.add(a, b));
+    }
+
+    #[test]
     fn sub_3() {
         test_gate([3, 3], |c, [a, b]| c.sub(a, b));
     }
 
     #[test]
+    fn sub_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.sub(a, b));
+    }
+
+    #[test]
     fn mul_3() {
         test_gate([3, 3], |c, [a, b]| c.mul(a, b));
+    }
+
+    #[test]
+    fn mul_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.mul(a, b));
     }
 
     #[test]
@@ -1938,13 +2158,31 @@ mod test {
     }
 
     #[test]
+    fn wide_mul_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| {
+            let gk = c.intern_gadget_kind(WideMul);
+            c.gadget(gk, &[a, b])
+        });
+    }
+
+    #[test]
     fn div_3() {
         test_gate([3, 3], |c, [a, b]| c.div(a, b));
     }
 
     #[test]
+    fn div_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.div(a, b));
+    }
+
+    #[test]
     fn mod_3() {
         test_gate([3, 3], |c, [a, b]| c.mod_(a, b));
+    }
+
+    #[test]
+    fn mod_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.mod_(a, b));
     }
 
 
@@ -1957,11 +2195,27 @@ mod test {
     }
 
     #[test]
+    fn eq_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.eq(a, b));
+        test_gate_f128p([-3, -3], |c, [a, b]| c.eq(a, b));
+        test_gate_f128p([3], |c, [a]| c.eq(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-3], |c, [a]| c.eq(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
     fn ne_3() {
         test_gate([3, 3], |c, [a, b]| c.ne(a, b));
         test_gate([-3, -3], |c, [a, b]| c.ne(a, b));
         test_gate([3], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
         test_gate([-3], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
+    fn ne_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.ne(a, b));
+        test_gate_f128p([-3, -3], |c, [a, b]| c.ne(a, b));
+        test_gate_f128p([3], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-3], |c, [a]| c.ne(a, c.lit(a.ty, 0)));
     }
 
     #[test]
@@ -1971,9 +2225,21 @@ mod test {
     }
 
     #[test]
+    fn lt_3_f128p() {
+        test_gate_f128p([3], |c, [a]| c.lt(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-3], |c, [a]| c.lt(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
     fn gt_3() {
         test_gate([3], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
         test_gate([-3], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
+    fn gt_3_f128p() {
+        test_gate_f128p([3], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-3], |c, [a]| c.gt(a, c.lit(a.ty, 0)));
     }
 
     #[test]
@@ -1983,9 +2249,21 @@ mod test {
     }
 
     #[test]
+    fn le_3_f128p() {
+        test_gate_f128p([3], |c, [a]| c.le(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-3], |c, [a]| c.le(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
     fn ge_3() {
         test_gate([3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
         test_gate([-3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
+    }
+
+    #[test]
+    fn ge_3_f128p() {
+        test_gate_f128p([3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
+        test_gate_f128p([-3], |c, [a]| c.ge(a, c.lit(a.ty, 0)));
     }
 
 
@@ -1998,8 +2276,21 @@ mod test {
     }
 
     #[test]
+    fn mux_3_f128p() {
+        // Skip SIEVE IR v2 evaluation, since the current evaluator doesn't support the `mux_v0`
+        // plugin we use.
+        test_gate_skip_v2_eval_f128p([1, 3, 3], |c, [x, y, z]| c.mux(x, y, z));
+        test_gate_skip_v2_eval_f128p([1, -3, -3], |c, [x, y, z]| c.mux(x, y, z));
+    }
+
+    #[test]
     fn seq_3() {
         test_gate([3, 3], |c, [a, b]| c.seq(a, b));
+    }
+
+    #[test]
+    fn seq_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| c.seq(a, b));
     }
 
     #[test]
@@ -2007,11 +2298,16 @@ mod test {
         test_gate([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
     }
 
-    fn emit_and_validate<'a>(c: &impl CircuitTrait<'a>, ok: Wire<'a>) {
+    #[test]
+    fn seq_assert_1_f128p() {
+        test_gate_f128p([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
+    }
+
+    fn emit_and_validate<'a>(c: &impl CircuitTrait<'a>, field: SieveIrField, ok: Wire<'a>) {
         use zki_sieve_v5::producers::sink::MemorySink;
 
         let sink = MemorySink::default();
-        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
+        let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, field, UsePlugins::all());
         let mut backend = Backend::new(sink);
         let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         backend.enforce_true(c, &mut ev, ok);
@@ -2086,13 +2382,13 @@ mod test {
         let args = c.wire_list(&[
             c.secret_immediate(ty, 2),
             c.secret_immediate(ty, 3),
-        ]);        
+        ]);
 
         let actual   = c.switch(guard, cases, args);
         let expected = c.lit(ty, 6);
         let ok = c.eq(actual, expected);
 
-        emit_and_validate(&c, ok)
+        emit_and_validate(&c, SieveIrField::F1b, ok)
     }
 
     #[test]
@@ -2160,6 +2456,6 @@ mod test {
         let expected = c.lit(ty, 6);
         let ok = c.eq(actual, expected);
 
-        emit_and_validate(&c, ok)
-    }    
+        emit_and_validate(&c, SieveIrField::F1b, ok)
+    }
 }

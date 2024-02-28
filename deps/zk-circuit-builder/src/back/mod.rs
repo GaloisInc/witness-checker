@@ -451,7 +451,7 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
         use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_function::SieveIrV1Sink;
+        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV1Sink};
         use zki_sieve::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -465,7 +465,7 @@ pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
 
         let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
-        let bool_sink = SieveIrV1Sink::new(sink, UsePlugins::none());
+        let bool_sink = SieveIrV1Sink::new(sink, SieveIrField::F1b, UsePlugins::none());
         let backend = Backend::new(bool_sink);
         return Box::new(BackendWrapper {
             backend,
@@ -529,7 +529,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
     #[cfg(feature = "sieve_ir")]
     {
         use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_function::SieveIrV2Sink;
+        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV2Sink};
         use zki_sieve_v3::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -544,7 +544,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
 
         let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
-        let bool_sink = SieveIrV2Sink::new(sink, use_plugins);
+        let bool_sink = SieveIrV2Sink::new(sink, SieveIrField::F1b, use_plugins);
         let backend = Backend::new(bool_sink);
         return Box::new(BackendWrapper {
             backend,
@@ -611,7 +611,7 @@ pub fn new_boolean_sieve_ir_v3<'a>(
     #[cfg(feature = "sieve_ir")]
     {
         use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_function::SieveIrV3Sink;
+        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV3Sink};
         use zki_sieve_v5::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -626,7 +626,7 @@ pub fn new_boolean_sieve_ir_v3<'a>(
 
         let sink = FilesSink::new_clean(&workspace).unwrap();
         sink.print_filenames();
-        let bool_sink = SieveIrV3Sink::new(sink, use_plugins);
+        let bool_sink = SieveIrV3Sink::new(sink, SieveIrField::F1b, use_plugins);
         let backend = Backend::new(bool_sink);
         return Box::new(BackendWrapper {
             backend,
@@ -656,6 +656,88 @@ pub fn new_boolean_sieve_ir_v3<'a>(
                 self.backend.enforce_true(c, ev, accepted);
                 let bool_sink = self.backend.finish();
                 let _sink = bool_sink.finish();
+
+                eprintln!();
+
+                // Validate the circuit and witness.
+                if validate {
+                    eprintln!("\nValidating SIEVE IR files...");
+                    cli(&Options::from_iter(&["zki_sieve", "validate", &workspace])).unwrap();
+                    cli(&Options::from_iter(&["zki_sieve", "evaluate", &workspace])).unwrap();
+                }
+                cli(&Options::from_iter(&["zki_sieve", "metrics", &workspace])).unwrap();
+            }
+
+            fn has_feature(&self, feature: BackendFeature) -> bool {
+                let standard = matches!(feature,
+                    | BackendFeature::Function
+                    | BackendFeature::ConcatExtractBits
+                    | BackendFeature::WideMul
+                    | BackendFeature::Permute
+                );
+                let switch = matches!(feature, BackendFeature::Switch) && self.use_plugins.disjunction_v0;
+                standard || switch
+            }
+        }
+    }
+    #[cfg(not(feature = "sieve_ir"))]
+    {
+        panic!("SIEVE Phase 3 Circuit IR output is not enabled - build with `--features sieve_ir`");
+    }
+}
+
+pub fn new_f128p_sieve_ir_v3<'a>(
+    workspace: &str,
+    use_plugins: UsePlugins,
+) -> Box<dyn Backend<'a> + 'a> {
+    #[cfg(feature = "sieve_ir")]
+    {
+        use self::boolean::Backend;
+        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV3Sink};
+        use zki_sieve_v5::{
+            cli::{cli, Options, StructOpt},
+            FilesSink,
+        };
+
+        struct BackendWrapper<'w> {
+            backend: Backend<'w, SieveIrV3Sink<FilesSink>>,
+            workspace: String,
+            use_plugins: UsePlugins,
+        }
+
+
+        let sink = FilesSink::new_clean(&workspace).unwrap();
+        sink.print_filenames();
+        let f128p_sink = SieveIrV3Sink::new(sink, SieveIrField::F128p, use_plugins);
+        let backend = Backend::new(f128p_sink);
+        return Box::new(BackendWrapper {
+            backend,
+            workspace: workspace.to_owned(),
+            use_plugins,
+        });
+
+
+        unsafe impl<'w> self::Backend<'w> for BackendWrapper<'w> {
+            fn post_erase(&mut self, v: &mut EraseVisitor<'w, '_>) {
+                self.backend.post_erase(v);
+            }
+
+            fn post_migrate(&mut self, v: &mut MigrateVisitor<'w, 'w, '_>) {
+                self.backend.post_migrate(v);
+            }
+
+            fn finish(
+                mut self: Box<Self>,
+                c: &CircuitBase<'w>,
+                ev: &mut CachingEvaluator<'w, '_, eval::RevealSecrets>,
+                accepted: Wire<'w>,
+                validate: bool,
+            ) {
+                let workspace = self.workspace.clone();
+
+                self.backend.enforce_true(c, ev, accepted);
+                let f128p_sink = self.backend.finish();
+                let _sink = f128p_sink.finish();
 
                 eprintln!();
 

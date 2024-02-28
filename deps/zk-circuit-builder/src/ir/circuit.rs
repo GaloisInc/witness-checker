@@ -3383,6 +3383,29 @@ impl<'a> Bits<'a> {
         0
     }
 
+    pub fn to_le_bytes(&self) -> Vec<u8> {
+        let mut ret = Vec::new();
+        let mut leading_zeroes = true;
+
+        for &x in self.0.iter() {
+            if leading_zeroes && x != 0 {
+                leading_zeroes = false;
+            }
+
+            if leading_zeroes {
+                continue;
+            }
+
+            ret.push(x.to_le_bytes());
+        }
+
+        if ret.is_empty() {
+            return vec![0];
+        }
+
+        ret.into_iter().flatten().collect::<Vec<_>>()
+    }
+
     pub fn as_u64(&self) -> Option<u64> {
         match self.0.len() {
             0 => Some(0),
@@ -3441,6 +3464,11 @@ impl<'a> Bits<'a> {
     pub fn one() -> Bits<'a> {
         Bits(&COMMON_BITS_ONE)
     }
+
+    pub fn one_inv_f128p() -> Bits<'a> {
+        Bits(&COMMON_BITS_ONE_INV_F128P)
+    }
+
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
@@ -3452,10 +3480,12 @@ impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
 
 static COMMON_BITS_ZERO: [u32; 1] = [0];
 static COMMON_BITS_ONE: [u32; 1] = [1];
+static COMMON_BITS_ONE_INV_F128P: [u32; 4] = [0xffffff60u32, 0xffffffffu32, 0xffffffffu32, 0xffffffffu32];
 
 static COMMON_BITS: &[&[u32]] = &[
     &COMMON_BITS_ZERO,
     &COMMON_BITS_ONE,
+    &COMMON_BITS_ONE_INV_F128P,
 ];
 
 pub trait AsBits {

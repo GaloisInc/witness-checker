@@ -3,14 +3,16 @@ use std::convert::TryFrom;
 use std::iter;
 use std::marker::PhantomData;
 use std::mem;
+use crypto_bigint::ArrayEncoding;
 use log::*;
 use num_bigint::BigUint;
+use scuttlebutt::field::{F128p, PrimeFiniteField};
 use zki_sieve;
 use zki_sieve_v3;
 use crate::back::UsePlugins;
-use crate::ir::circuit::Bits;
+use crate::ir::circuit::{Bits, FromBits};
 use crate::routing::benes::{self, BenesNetwork};
-use super::{Sink, WireId, Time, TEMP, Source, AssertNoWrap};
+use super::{Sink, WireId, Time, TEMP, Source, AssertNoWrap, bool_to_f128p};
 use super::arith;
 use super::ops;
 use super::wire_alloc::WireAlloc;
@@ -104,11 +106,22 @@ pub trait SieveIrFormat {
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum SieveIrField {
+    F1b,
+    F128p,
+}
+
+fn f128p_to_le_bytes(f: F128p) -> Vec<u8> {
+    f.into_int::<{ F128p::MIN_LIMBS_NEEDED }>().to_le_byte_array().to_vec()
+}
+
 pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     sink: S,
+    field: SieveIrField,
     alloc: WireAlloc,
     gates: Vec<IR::Gate>,
-    private_bits: Vec<bool>,
+    private_values: Vec<u8>,
     /// Functions in `zki_sieve_v3` representation.  This vector is drained on `flush()`.
     functions: Vec<IR::Function>,
     /// Info about function names and signatures.  This vector persists across `flush()`; it always
@@ -178,6 +191,8 @@ enum FunctionDesc {
     PermuteShuffle(u64, u8, bool),
 
     Switch(u64, Vec<(usize, BigUint)>),
+
+    SubF128p,
 }
 
 impl FunctionDesc {
@@ -215,6 +230,7 @@ impl FunctionDesc {
                 let suffix = branches.iter().map(|(idx, pat)| format!("{}_{}", idx, pat)).collect::<Vec<_>>().join("_");
                 format!("switch_{}_{}", cond_width, suffix)
             },
+            FunctionDesc::SubF128p => "sub_f128p".to_owned(),
         }
     }
 }
@@ -251,9 +267,10 @@ pub trait Dispatch {
 
 impl<S, IR: SieveIrFormat> SieveIrFunctionSink<S, IR>
 where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
-    pub fn new(sink: S, use_plugins: UsePlugins) -> SieveIrFunctionSink<S, IR> {
+    pub fn new(sink: S, field: SieveIrField, use_plugins: UsePlugins) -> SieveIrFunctionSink<S, IR> {
         SieveIrFunctionSink {
             sink,
+            field,
             alloc: WireAlloc::new(vec![
                 0,          // 0 (temporaries)
                 1 << 4,     // 16
@@ -264,7 +281,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 1 << 18,    // 256k
             ]),
             gates: Vec::new(),
-            private_bits: Vec::new(),
+            private_values: Vec::new(),
             functions: Vec::new(),
             func_info: Vec::new(),
             func_private_inputs_count: HashMap::new(),
@@ -277,6 +294,23 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
+    fn field_le_bytes(&self) -> Vec<u8> {
+        match self.field {
+            SieveIrField::F1b => vec![2],
+            SieveIrField::F128p => {
+                let modulus = F128p::modulus_int::<{ F128p::MIN_LIMBS_NEEDED }>();
+                modulus.to_le_byte_array().to_vec()
+            }
+        }
+    }
+
+    fn private_input_size(&self) -> usize {
+        match self.field {
+            SieveIrField::F1b => 1,
+            SieveIrField::F128p => 16,
+        }
+    }
+
     pub fn finish(mut self) -> S {
         self.flush(true);
         self.sink
@@ -284,6 +318,39 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
     fn alloc_wires(&mut self, expire: Time, n: u64) -> WireId {
         self.alloc.alloc(expire, n, self.gates.len())
+    }
+
+    fn add_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+        let out = self.alloc_wires(expire, 1);
+        self.gates.push(IR::gate_add(out, a, b));
+        out
+    }
+
+    fn addc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+        let out = self.alloc_wires(expire, 1);
+        self.gates.push(IR::gate_addc(out, a, b.to_le_bytes()));
+        out
+    }
+
+    fn mul_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+        let out = self.alloc_wires(expire, 1);
+        self.gates.push(IR::gate_mul(out, a, b));
+        out
+    }
+
+    fn mulc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+        let out = self.alloc_wires(expire, 1);
+        self.gates.push(IR::gate_mulc(out, a, b.to_le_bytes()));
+        out
+    }
+
+    fn neg_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+        let one_inv = Bits::one_inv_f128p();
+        self.mulc_f128p(expire, a, one_inv)
+    }
+
+    fn sub_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+        self.emit_call(expire, FunctionDesc::SubF128p, &[a, b])
     }
 
     fn lit_zero_gate_into(&mut self, out: WireId, n: u64) {
@@ -349,21 +416,52 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }
     }
 
+    fn and_gate_into_f1b(&mut self, out: WireId, a: WireId, b: WireId) {
+        self.gates.push(IR::gate_and(out, a, b))
+    }
+    fn and_gate_into_f128p(&mut self, out: WireId, a: WireId, b: WireId) {
+        self.gates.push(IR::gate_mul(out, a, b))
+    }
     fn and_gate_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
         for i in 0 .. n {
-            self.gates.push(IR::gate_and(out + i, a + i, b + i));
+            match self.field {
+                SieveIrField::F1b => self.and_gate_into_f1b(out + i, a + i, b + i),
+                SieveIrField::F128p => self.and_gate_into_f128p(out + i, a + i, b + i),
+            }
         }
     }
 
+    fn xor_gate_into_f1b(&mut self, out: WireId, a: WireId, b: WireId) {
+        self.gates.push(IR::gate_xor(out, a, b));
+    }
+    fn xor_gate_into_f128p(&mut self, out: WireId, a: WireId, b: WireId) {
+        let sub_a_b = self.sub_f128p(TEMP, a, b);
+        let result = self.mul_f128p(TEMP, sub_a_b, sub_a_b);
+        self.copy_into(out, 1, result);
+    }
     fn xor_gate_into(&mut self, out: WireId, n: u64, a: WireId, b: WireId) {
         for i in 0 .. n {
-            self.gates.push(IR::gate_xor(out + i, a + i, b + i));
+            match self.field {
+                SieveIrField::F1b => self.xor_gate_into_f1b(out + i, a + i, b + i),
+                SieveIrField::F128p => self.xor_gate_into_f128p(out + i, a + i, b + i),
+            }
         }
     }
 
+    fn not_gate_into_f1b(&mut self, out: WireId, a: WireId) {
+        self.gates.push(IR::gate_not(out, a));
+    }
+    fn not_gate_into_f128p(&mut self, out: WireId, a: WireId) {
+        let neg_a = self.neg_f128p(TEMP, a);
+        let result = self.addc_f128p(TEMP, neg_a, Bits::one());
+        self.copy_into(out, 1, result);
+    }
     fn not_gate_into(&mut self, out: WireId, n: u64, a: WireId) {
         for i in 0 .. n {
-            self.gates.push(IR::gate_not(out + i, a + i));
+            match self.field {
+                SieveIrField::F1b   => self.not_gate_into_f1b(out + i, a + i),
+                SieveIrField::F128p => self.not_gate_into_f128p(out + i, a + i),
+            }
         }
     }
 
@@ -390,9 +488,10 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn sub_sink(&mut self) -> SieveIrFunctionSink<VecSink<IR>, IR> {
         SieveIrFunctionSink::<_, IR> {
             sink: VecSink::default(),
+            field: self.field,
             alloc: WireAlloc::new(vec![]),
             gates: Vec::new(),
-            private_bits: Vec::new(),
+            private_values: Vec::new(),
             functions: Vec::new(),
             // Move `func_info` and `func_map` into `sub_sink`, so it can access functions defined
             // previously.
@@ -805,7 +904,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 //
                 // That being said, support for a non-plugin implementation of `GateKind::Switch` is possible but left to future work.
                 unimplemented!()
-            }
+            },
+            FunctionDesc::SubF128p => {
+                let [out, a, b] = sub_sink.alloc.preallocate([1, 1, 1]);
+                let neg_b = sub_sink.neg_f128p(TEMP, b);
+                let ab = sub_sink.add_f128p(TEMP, a, neg_b);
+                sub_sink.copy_into(out, 1, ab);
+                (vec![1], vec![1, 1])
+            },
         };
 
         let zki_sink = self.finish_sub_sink(sub_sink);
@@ -1123,7 +1229,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     continue;
                 }
                 let swap = flags.contains(benes::SwitchFlags::F_SWAP);
-                self.private_bits.push(swap);
+                self.private_values.push(swap as u8);
             }
         }
     }
@@ -1148,7 +1254,11 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     }
     fn private_value(&mut self, n: u64, value: Bits) {
         for i in 0 .. n {
-            self.private_bits.push(value.get(i as usize));
+            let b = value.get(i as usize);
+            match self.field {
+                SieveIrField::F1b   => self.private_values.push(b as u8),
+                SieveIrField::F128p => self.private_values.append(&mut f128p_to_le_bytes(bool_to_f128p(b))),
+            }
         }
     }
     fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
@@ -1363,7 +1473,7 @@ impl<S: zki_sieve::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV1> {
         use zki_sieve_v3::structs::IR_VERSION;
         use zki_sieve::structs::gates::Gate;
         use zki_sieve::structs::header::Header;
-        use zki_sieve::structs::relation::{Relation, BOOL, FUNCTION};
+        use zki_sieve::structs::relation::{Relation, BOOL, ARITH, FUNCTION};
         use zki_sieve::structs::witness::Witness;
 
         // There are no `@new` gates in IR0/IR1, so we don't need to process `AllocPage`s.
@@ -1383,12 +1493,12 @@ impl<S: zki_sieve::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV1> {
         // Build and emit the messages
         let header = Header {
             version: IR_VERSION.to_string(),
-            field_characteristic: vec![2],
+            field_characteristic: self.field_le_bytes(),
             field_degree: 1,
         };
         let r = Relation {
             header: header.clone(),
-            gate_mask: BOOL,
+            gate_mask: match self.field { SieveIrField::F1b => BOOL, SieveIrField::F128p => ARITH },
             feat_mask: FUNCTION,
             functions,
             gates,
@@ -1396,9 +1506,11 @@ impl<S: zki_sieve::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV1> {
         self.sink.push_relation_message(&r).unwrap();
         self.emitted_relation = true;
 
-        if self.private_bits.len() > 0 {
-            let short_witness = mem::take(&mut self.private_bits).into_iter()
-                .map(|b| vec![b as u8]).collect();
+        if self.private_values.len() > 0 {
+            let chunk_size = self.private_input_size();
+            let short_witness = mem::take(&mut self.private_values).chunks(chunk_size).map(|chunk| {
+                chunk.to_vec()
+            }).collect();
             let w = Witness {
                 header,
                 short_witness,
@@ -1433,12 +1545,12 @@ impl<S: zki_sieve_v3::Sink> SieveIrFunctionSink<S, SieveIrV2> {
             if self.use_plugin_disjunction_v0 {
                 r.plugins.push(SWITCH_PLUGIN_NAME.into());
             }
-            r.types = vec![Type::Field(vec![2])];
+            r.types = vec![Type::Field(self.field_le_bytes())];
 
             // Ensure every circuit contains at least one public input message.
             let p = PublicInputs {
                 version: IR_VERSION.to_string(),
-                type_value: Type::Field(vec![2]),
+                type_value: Type::Field(self.field_le_bytes()),
                 inputs: vec![],
             };
             self.sink.push_public_inputs_message(&p).unwrap();
@@ -1526,18 +1638,21 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
             self.emit_sieve_v2(chunk_directives);
         }
 
-        if self.private_bits.len() > 0 {
-            let mut private_bits_iter = mem::take(&mut self.private_bits).into_iter();
+        if self.private_values.len() > 0 {
+            let chunk_size = self.private_input_size();
+            let page_size  = GATE_PAGE_SIZE / chunk_size;
+            let private_values = mem::take(&mut self.private_values);
+            let mut private_values_iter = private_values.chunks(chunk_size).map(|chunk| {
+                chunk.to_vec()
+            });
             loop {
-                let chunk_inputs = private_bits_iter.by_ref().take(GATE_PAGE_SIZE)
-                    .map(|b| vec![b as u8])
-                    .collect::<Vec<_>>();
+                let chunk_inputs = private_values_iter.by_ref().take(page_size).collect::<Vec<_>>();
                 if chunk_inputs.len() == 0 {
                     break;
                 }
                 let p = PrivateInputs {
                     version: IR_VERSION.to_string(),
-                    type_value: Type::Field(vec![2]),
+                    type_value: Type::Field(self.field_le_bytes()),
                     inputs: chunk_inputs,
                 };
                 self.sink.push_private_inputs_message(&p).unwrap();
@@ -1571,12 +1686,12 @@ impl<S: zki_sieve_v5::Sink> SieveIrFunctionSink<S, SieveIrV3> {
             if self.use_plugin_disjunction_v0 {
                 r.plugins.push(SWITCH_PLUGIN_NAME.into());
             }
-            r.types = vec![Type::Field(vec![2])];
+            r.types = vec![Type::Field(self.field_le_bytes())];
 
             // Ensure every circuit contains at least one public input message.
             let p = PublicInputs {
                 version: IR_VERSION.to_string(),
-                type_value: Type::Field(vec![2]),
+                type_value: Type::Field(self.field_le_bytes()),
                 inputs: vec![],
             };
             self.sink.push_public_inputs_message(&p).unwrap();
@@ -1664,18 +1779,21 @@ impl<S: zki_sieve_v5::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV3> {
             self.emit_sieve_v3(chunk_directives);
         }
 
-        if self.private_bits.len() > 0 {
-            let mut private_bits_iter = mem::take(&mut self.private_bits).into_iter();
+        if self.private_values.len() > 0 {
+            let chunk_size = self.private_input_size();
+            let page_size = GATE_PAGE_SIZE / chunk_size;
+            let private_values = mem::take(&mut self.private_values);
+            let mut private_values_iter = private_values.chunks(chunk_size).map(|chunk| {
+                chunk.to_vec()
+            });
             loop {
-                let chunk_inputs = private_bits_iter.by_ref().take(GATE_PAGE_SIZE)
-                    .map(|b| vec![b as u8])
-                    .collect::<Vec<_>>();
+                let chunk_inputs = private_values_iter.by_ref().take(page_size).collect::<Vec<_>>();
                 if chunk_inputs.len() == 0 {
                     break;
                 }
                 let p = PrivateInputs {
                     version: IR_VERSION.to_string(),
-                    type_value: Type::Field(vec![2]),
+                    type_value: Type::Field(self.field_le_bytes()),
                     inputs: chunk_inputs,
                 };
                 self.sink.push_private_inputs_message(&p).unwrap();
