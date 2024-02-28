@@ -1575,7 +1575,8 @@ enum WireDepsInner<'a> {
     Small(Range<u8>, [Option<Wire<'a>>; 3]),
     Large(slice::Iter<'a, Wire<'a>>),
     Large2(iter::Chain<slice::Iter<'a, Wire<'a>>, slice::Iter<'a, Wire<'a>>>),
-    OneMany(iter::Chain<iter::Once<Wire<'a>>, iter::Cloned<slice::Iter<'a, Wire<'a>>>>)
+    OneMany(iter::Chain<iter::Once<Wire<'a>>, iter::Cloned<slice::Iter<'a, Wire<'a>>>>),
+    Dyn(Box<dyn DoubleEndedIterator<Item = Wire<'a>> + 'a>),
 }
 
 impl<'a> WireDeps<'a> {
@@ -1618,6 +1619,16 @@ impl<'a> WireDeps<'a> {
             inner: WireDepsInner::OneMany(iter::once(a).chain(ws.iter().cloned())),
         }
     }
+
+    fn switch(cond: Wire<'a>, cases: &'a [SwitchCase<'a>], args: &'a [Wire<'a>]) -> WireDeps<'a> {
+        let cond  = iter::once(cond);
+        let cases = cases.iter().map(|&case| case.project_deps).flatten().cloned();
+        let args  = args.iter().cloned();
+
+        WireDeps {
+            inner: WireDepsInner::Dyn(Box::new(cond.chain(cases).chain(args)))
+        }
+    }
 }
 
 impl<'a> Iterator for WireDepsInner<'a> {
@@ -1632,6 +1643,7 @@ impl<'a> Iterator for WireDepsInner<'a> {
             WireDepsInner::Large(ref mut it) => it.next().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next().cloned(),
             WireDepsInner::OneMany(ref mut it) => it.next(),
+            WireDepsInner::Dyn(ref mut it) => it.next(),
         }
     }
 }
@@ -1646,6 +1658,7 @@ impl<'a> DoubleEndedIterator for WireDepsInner<'a> {
             WireDepsInner::Large(ref mut it) => it.next_back().cloned(),
             WireDepsInner::Large2(ref mut it) => it.next_back().cloned(),
             WireDepsInner::OneMany(ref mut it) => it.next_back(),
+            WireDepsInner::Dyn(ref mut it) => it.next_back(),
         }
     }
 }
@@ -1692,11 +1705,12 @@ pub fn gate_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
 pub fn wire_and_secret_deps<'a>(w: Wire<'a>) -> WireDeps<'a> {
     gate_and_secret_deps(w.kind)
 }
- 
+
 pub fn gate_and_secret_deps<'a>(gk: GateKind<'a>) -> WireDeps<'a> {
     match gk {
         GateKind::Secret(s) => WireDeps::many(s.deps),
         GateKind::Call(c) => WireDeps::many2(c.args, c.project_deps),
+        GateKind::Switch(cond, cases, args) => WireDeps::switch(cond, cases, args),
         _ => gate_deps(gk),
     }
 }
