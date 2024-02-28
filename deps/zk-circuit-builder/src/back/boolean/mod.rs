@@ -24,7 +24,6 @@ mod ops;
 pub mod sink_sieve_ir_function;
 mod wire_alloc;
 
-
 pub type WireId = u64;
 
 fn type_bits(ty: Ty) -> u64 {
@@ -216,7 +215,7 @@ pub trait Sink: Sized {
 
 fn from_bristol(sink: &mut impl Sink, expire: Time, circuit: bristol_fashion::Circuit, inputs: Vec<(WireId, u64)>) -> Vec<(WireId, u64)> {
     use bristol_fashion::{Wire, Gate};
-    
+
     // The caller provided the number of expected inputs
     assert_eq!(circuit.input_sizes().len(), inputs.len());
 
@@ -224,7 +223,7 @@ fn from_bristol(sink: &mut impl Sink, expire: Time, circuit: bristol_fashion::Ci
     for (i, &n) in circuit.input_sizes().iter().enumerate() {
         assert_eq!(n, inputs[i].1);
     }
-    
+
     let mut wire_map: HashMap<Wire, WireId> = HashMap::new();
 
     let mut offset = 0;
@@ -426,7 +425,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         self.emit_call(c, sink, get_log, call);
 
         let padding_amt = max_private_input_count - private_input_count;
-        
+
         sink.private_value(padding_amt, Bits::zero());
     }
 }
@@ -519,7 +518,7 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
     ) {
         self.log.push(PrivateOp::Permute(num_items, perm, permuted_wires, wire_widths));
     }
-    
+
     fn emit_switch(
         &mut self,
         _c: &CircuitBase<'a>,
@@ -926,7 +925,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                     // `Gt` and `Le` are slow cases.
                     (CmpOp::Gt, true) => {
                         // `a > 0` if the sign bit is 0 and the rest of `a` is nonzero.
-                        let sign_inv = self.sink.not(TEMP, 1, sign); 
+                        let sign_inv = self.sink.not(TEMP, 1, sign);
                         let a_inv = self.sink.not(TEMP, m - 1, a);
                         let a_zero = self.sink.and_all(TEMP, m - 1, a_inv);
                         let a_nonzero = self.sink.not(TEMP, 1, a_zero);
@@ -934,7 +933,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                     },
                     (CmpOp::Le, true) => {
                         // The inverse of `Gt`.
-                        let sign_inv = self.sink.not(TEMP, 1, sign); 
+                        let sign_inv = self.sink.not(TEMP, 1, sign);
                         let a_inv = self.sink.not(TEMP, m - 1, a);
                         let a_zero = self.sink.and_all(TEMP, m - 1, a_inv);
                         let a_nonzero = self.sink.not(TEMP, 1, a_zero);
@@ -2010,11 +2009,11 @@ mod test {
 
     fn emit_and_validate<'a>(c: &impl CircuitTrait<'a>, ok: Wire<'a>) {
         use zki_sieve_v5::producers::sink::MemorySink;
-        
+
         let sink = MemorySink::default();
         let sink = sink_sieve_ir_function::SieveIrV3Sink::new(sink, UsePlugins::all());        
         let mut backend = Backend::new(sink);
-        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();        
+        let mut ev = CachingEvaluator::<eval::RevealSecrets>::new();
         backend.enforce_true(c, &mut ev, ok);
 
         use zki_sieve_v5::Source;
@@ -2031,24 +2030,24 @@ mod test {
         if !violations.is_empty() {
             eprintln!("{}", violations.join("\n"));
             panic!("Encountered a SIEVE IR V3 validation error.")
-        }        
+        }
     }
-    
+
     #[test]
     fn switch_u8_no_private_inputs() {
         use std::convert::TryInto;
 
         macro_rules! test_ty {
             () => { Ty::uint(8) };
-        }        
-        
+        }
+
         struct SwitchConst;
         impl<'b> DefineFunction<'b> for SwitchConst {
             fn build_body<C: CircuitTrait<'b>>(self, c: &C, _args: &[Wire<'b>]) -> Wire<'b> {
                 c.lit(test_ty!(), 0)
             }
         }
-        
+
         struct SwitchAdd;
         impl<'b> DefineFunction<'b> for SwitchAdd {
             fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
@@ -2065,7 +2064,7 @@ mod test {
             }
         }
 
-        let arenas = Arenas::new();  
+        let arenas = Arenas::new();
         let c = Circuit::new::<()>(&arenas, true, FilterNil);
 
         let ty = test_ty!();
@@ -2103,14 +2102,14 @@ mod test {
         macro_rules! test_ty {
             () => { Ty::uint(8) };
         }
-        
+
         struct SwitchConst;
         impl<'b> DefineFunction<'b> for SwitchConst {
             fn build_body<C: CircuitTrait<'b>>(self, c: &C, _args: &[Wire<'b>]) -> Wire<'b> {
                 c.lit(test_ty!(), 0)
             }
         }
-        
+
         struct SwitchAdd;
         impl<'b> DefineFunction<'b> for SwitchAdd {
             fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
@@ -2133,7 +2132,7 @@ mod test {
             }
         }
 
-        let arenas = Arenas::new();  
+        let arenas = Arenas::new();
         let c = Circuit::new::<()>(&arenas, true, FilterNil);
 
         let ty = test_ty!();
@@ -2155,7 +2154,7 @@ mod test {
         let args = c.wire_list(&[
             c.secret_immediate(ty, 2),
             c.secret_immediate(ty, 3),
-        ]);        
+        ]);
 
         let actual   = c.switch(guard, cases, args);
         let expected = c.lit(ty, 6);

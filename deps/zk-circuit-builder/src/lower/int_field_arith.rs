@@ -138,7 +138,7 @@ impl<'a, F, P> IntFieldArith<'a, F, P> {
         }
     }
 }
-    
+
 impl<'a, F: CircuitFilter<'a> + 'a, P: PrimeFiniteField + AsField + FromBits + AsBits> CircuitFilter<'a> for IntFieldArith<'a, F, P>
 where F: Migrate<'a, 'a, Output = F>,
       P::Error: Debug,
@@ -171,7 +171,7 @@ where
             
             bounds.insert(new_wire, old_repr);
         }
-        
+
         IntFieldArith {
             inner: v.visit(self.inner),
             _field: PhantomData,

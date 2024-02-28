@@ -24,25 +24,27 @@ macro_rules! init_circuit {
     }
 }
 
+
+
 macro_rules! define_unary {
     ($rust_type:ident, $ckt_type:ident) => {
         paste! {
             fn [<unary_ $rust_type _f128p>](a: $rust_type, op: UnOp, expected: $rust_type) {
                 init_circuit!(ckt_e, ckt_a);
-            
+
                 let ty = Ty::$ckt_type($rust_type::BITS as usize);
                 let a_e = ckt_e.lit(ty, a);
                 let res_a_e = ckt_e.unary(op, a_e);
-                
+
                 let a_a = ckt_a.lit(ty, a);
                 let res_a_a = ckt_a.unary(op, a_a);
-                
+
                 let expected = eval::Value::SingleInteger(num_bigint::BigInt::from(expected));
                 let source = eval::eval_wire_public(ckt_e.as_base(), res_a_e).unwrap();
                 let target = eval::eval_wire_public(ckt_a.as_base(), res_a_a).unwrap();
-                
+
                 assert_eq!(expected, source);
-                assert_eq!(source, target);    
+                assert_eq!(source, target);
             }
         }
     }
@@ -70,22 +72,22 @@ macro_rules! define_binary {
         paste! {
             fn [<binary_ $rust_type _f128p>](a: $rust_type, b: $rust_type, op: BinOp, expected: $rust_type) {
                 init_circuit!(ckt_e, ckt_a);
-            
+
                 let ty = Ty::$ckt_type($rust_type::BITS as usize);
                 let a_e = ckt_e.lit(ty, a);
                 let b_e = ckt_e.lit(ty, b);
                 let res_a_e = ckt_e.binary(op, a_e, b_e);
-                
+
                 let a_a = ckt_a.lit(ty, a);
                 let b_a = ckt_a.lit(ty, b);
                 let res_a_a = ckt_a.binary(op, a_a, b_a);
-                
+
                 let expected = eval::Value::SingleInteger(num_bigint::BigInt::from(expected));
                 let source = eval::eval_wire_public(ckt_e.as_base(), res_a_e).unwrap();
                 let target = eval::eval_wire_secret(ckt_a.as_base(), res_a_a).unwrap();
-                
+
                 assert_eq!(expected, source);
-                assert_eq!(source, target);    
+                assert_eq!(source, target);
             }
         }
     }

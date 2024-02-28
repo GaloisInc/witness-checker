@@ -789,7 +789,7 @@ pub fn eval_cast<'a>(c: &CircuitBase<'a>, a_bits: Bits<'a>, from: Ty<'a>, to: Ty
         let a_int = a_bits.to_bigint(from);
         trunc(c, to, a_int)
     } else if from.is_integer() && to.is_galois_field() {
-        let a_int = a_bits.to_bigint(from);        
+        let a_int = a_bits.to_bigint(from);
         let f = to.get_galois_field().unwrap();
         // Ensures that the machine integer fits within the field,
         // which is necessary because conversion will panic if it doesn't.
@@ -1014,7 +1014,7 @@ fn eval_switch_case<'a, 'b>(
     let dep_bits = switch_case.project_deps.iter().map(|&w| {
         outer_ecx.get_value(w).map(|(bits, _sec)| bits)
     }).collect::<Result<Vec<_>, _>>()?;
-    
+
     let mut inner_eval = outer_ecx.enter_function(
         c, arg_bits, switch_case.project_witness, &dep_bits);
     EvalWire::eval_wire_bits(&mut inner_eval, c, body.result_wire)

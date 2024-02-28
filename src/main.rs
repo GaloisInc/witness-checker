@@ -345,7 +345,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
 
     // Build Circuit for each execution,
     // using the memequivalences to use the same wire
-    // for equivalent mem segments. 
+    // for equivalent mem segments.
     for (name,exec) in multi_exec.inner.execs.iter(){
         // Generate IR code to check the trace.
         let init_state = exec.provided_init_state.clone().unwrap_or_else(|| exec.initial_state());
@@ -448,4 +448,3 @@ fn main() -> io::Result<()> {
 
     unsafe { with_mode(mode, || real_main(args)) }
 }
-

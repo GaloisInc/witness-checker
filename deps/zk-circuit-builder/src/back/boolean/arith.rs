@@ -90,7 +90,6 @@ pub fn sub(
     }
 }
 
-
 /// Add `n`-bit input `a` to 1-bit input `b`, producing an `n`-bit result.
 fn add_1<S: Sink>(
     sink: &mut S,
@@ -868,13 +867,13 @@ mod test {
     fn add_opt_u64(lhs: u64, rhs: u64) {
         let _ = env_logger::builder().is_test(true).try_init();
         let mut sink = TestNoWrapSink::default();
-        
+
         let n = 64;
         let a = sink.lit(TEMP, n, Bits(&[lhs as u32, (lhs >> 32) as u32]));
         let b = sink.lit(TEMP, n, Bits(&[rhs as u32, (rhs >> 32) as u32]));
         let out = arith::add(&mut sink, TEMP, n, a, b, AssertNoWrap::No);
         let out_val = sink.inner.get_uint(n, out);
-        assert_eq!((BigUint::from(lhs) + BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)                
+        assert_eq!((BigUint::from(lhs) + BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)
     }
 
     #[test]
@@ -885,15 +884,15 @@ mod test {
     fn sub_opt_with(lhs: u64, rhs: u64) {
         let _ = env_logger::builder().is_test(true).try_init();
         let mut sink = TestNoWrapSink::default();
-        
+
         let n = 64;
         let a = sink.lit(TEMP, n, Bits(&[lhs as u32]));
         let b = sink.lit(TEMP, n, Bits(&[rhs as u32]));
         let out = arith::sub(&mut sink, TEMP, n, a, b);
         let out_val = sink.inner.get_uint(n, out);
-        assert_eq!((BigUint::from(lhs) - BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)        
+        assert_eq!((BigUint::from(lhs) - BigUint::from(rhs)), out_val, "with lhs = {}, rhs = {}", lhs, rhs)
     }
-    
+
     #[test]
     fn sub_opt() {
         sub_opt_with(1073741827, 1073741825)
@@ -902,7 +901,7 @@ mod test {
     fn neg_opt_with(x: u64, expected: BigUint) {
         let _ = env_logger::builder().is_test(true).try_init();
         let mut sink = TestNoWrapSink::default();
-        
+
         let n = 64;
         let a = sink.lit(TEMP, n, Bits(&[x as u32]));
         let out = arith::neg(&mut sink, TEMP, n, a);

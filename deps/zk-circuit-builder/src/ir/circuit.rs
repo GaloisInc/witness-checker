@@ -1212,6 +1212,8 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::AssertZero(a))
     }
 
+
+
     /// Define a function.  The closure receives a list of argument wires (of types `arg_tys`), and
     /// returns a wire representing the output of the function.
     ///
@@ -1263,7 +1265,6 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.as_base().in_function.set(old_in_function);
         func
     }
-
 
     fn current_label(&self) -> &'a str {
         self.as_base().current_label()
@@ -1621,7 +1622,7 @@ impl<'a> WireDeps<'a> {
 
 impl<'a> Iterator for WireDepsInner<'a> {
     type Item = Wire<'a>;
-    
+
     fn next(&mut self) -> Option<Wire<'a>> {
         match *self {
             WireDepsInner::Small(ref mut range, ref arr) => {
@@ -2472,7 +2473,7 @@ impl<'a, 'b> Migrate<'a, 'b> for GateKind<'a> {
 
                 let branches = branches.iter().map(|&branch| v.visit(branch)).collect::<Vec<_>>();
                 let branches = v.new_circuit().intern_switch_case_list(&branches);
-     
+
                 Switch(v.visit(cond), branches, args)
             },
             Seq(a, b) => Seq(v.visit(a), v.visit(b)),

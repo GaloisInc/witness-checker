@@ -445,7 +445,6 @@ pub fn new_sieve_ir_v3<'a>(
     }
 }
 
-
 pub mod boolean;
 
 pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
@@ -595,7 +594,7 @@ pub fn new_boolean_sieve_ir_v2<'a>(
                     | BackendFeature::Permute
                 );
                 let switch = matches!(feature, BackendFeature::Switch) && self.use_plugins.disjunction_v0;
-                standard || switch                
+                standard || switch
             }
         }
     }
