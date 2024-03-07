@@ -2061,6 +2061,7 @@ static COMMON_TY_I8: TyKind = TyKind::I8;
 static COMMON_TY_I16: TyKind = TyKind::I16;
 static COMMON_TY_I32: TyKind = TyKind::I32;
 static COMMON_TY_I64: TyKind = TyKind::I64;
+static COMMON_TY_F128P: TyKind = TyKind::GF(Field::F128p);
 static COMMON_TY_RAW_BITS: TyKind = TyKind::RawBits;
 
 static COMMON_TYPES: &[&TyKind] = &[
@@ -2074,6 +2075,7 @@ static COMMON_TYPES: &[&TyKind] = &[
     &COMMON_TY_I16,
     &COMMON_TY_I32,
     &COMMON_TY_I64,
+    &COMMON_TY_F128P,
     &COMMON_TY_RAW_BITS,
 ];
 
@@ -2084,6 +2086,10 @@ impl Ty<'_> {
 
     pub fn bool<'a>() -> Ty<'a> {
         Ty(&COMMON_TY_BOOL)
+    }
+
+    pub fn f128p<'a>() -> Ty<'a> {
+        Ty(&COMMON_TY_F128P)
     }
 
     pub fn uint<'a>(width: usize) -> Ty<'a> {

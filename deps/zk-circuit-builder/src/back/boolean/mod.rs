@@ -1,7 +1,7 @@
 use std::cmp;
 use std::collections::btree_map::BTreeMap;
 use std::collections::hash_map::{self, HashMap};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::mem;
 use log::*;
@@ -28,8 +28,36 @@ mod wire_alloc;
 
 pub type WireId = u64;
 
+/// A summary of the `ir::circuit` types that are supported by `Sink`.
+enum TySummary {
+    Int(u64),
+    F128p,
+}
+
+impl<'a> TryFrom<Ty<'a>> for TySummary {
+    type Error = ();
+
+    fn try_from(value: Ty) -> Result<Self, Self::Error> {
+        match *value {
+            TyKind::Int(n) => Ok(TySummary::Int(n.bits() as u64)),
+            TyKind::Uint(n) => Ok(TySummary::Int(n.bits() as u64)),
+            TyKind::GF(Field::F40b) |
+            TyKind::GF(Field::F45b) |
+            TyKind::GF(Field::F56b) |
+            TyKind::GF(Field::F63b) |
+            TyKind::GF(Field::F64b) => Err(()),
+            TyKind::GF(Field::F128p) => Ok(TySummary::F128p),
+            TyKind::Bundle(_) => Err(()),
+            TyKind::RawBits => Err(()),
+        }
+    }
+}
+
 fn type_bits(ty: Ty) -> u64 {
-    ty.integer_size().bits() as u64
+    match ty.try_into().unwrap() {
+        TySummary::Int(n) => n,
+        TySummary::F128p => unreachable!(),
+    }
 }
 
 fn as_lit(wire: Wire) -> Option<BigUint> {
@@ -727,6 +755,18 @@ impl<'w, S: Sink> Backend<'w, S> {
         }
     }
 
+    fn type_width(&self, ty: Ty) -> u64 {
+        match ty.try_into().unwrap() {
+            TySummary::Int(n) => n,
+            TySummary::F128p => {
+                assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                1
+            }
+        }
+    }
+
+
+
     /// Populate `wire_map` with entries for all the wires in `wires`.  Temporary intermediate
     /// values will not be kept in `wire_map`.  The caller is responsible for removing the entries
     /// from `wire_map`, if desired.
@@ -822,14 +862,14 @@ impl<'w, S: Sink> Backend<'w, S> {
         expire: Time,
         w: Wire<'w>,
     ) -> WireId {
-        // Check for (potentially) non-integer cases first.
         match w.kind {
             GateKind::Pack(ws) => {
                 // We only allow single-level bundles.
                 let entries = ws.iter().map(|&w| {
-                    (Source::Wires(self.wire_map[&w]), type_bits(w.ty))
+                    let sz = self.type_width(w.ty);
+                    (Source::Wires(self.wire_map[&w]), sz)
                 }).collect::<Vec<_>>();
-                return self.sink.concat_chunks(expire, &entries);
+                self.sink.concat_chunks(expire, &entries)
             },
             GateKind::Call(call) => {
                 let function_map = &self.function_map;
@@ -840,25 +880,43 @@ impl<'w, S: Sink> Backend<'w, S> {
                 if c.is_prover() {
                     private.emit_call(c.as_base(), &mut self.sink, &mut get_log, call);
                 }
-                return out;
+                out
             },
             GateKind::Switch(cond, branches, args) => {
                 assert!(self.sink.has_switch(), "Switch gate is unsupported with this Sink");
                 let cond_w = self.wire_map[&cond];
                 let function_map = &self.function_map;
-                let branches_w = branches.iter().map(|branch| (function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
                 let args_w = args.iter().map(|arg| self.wire_map[arg]).collect::<Vec<_>>();
-                let n = type_bits(cond.ty);
-                let (out, private_input_counts) = self.sink.switch(expire, cond_w, n, branches_w, &args_w);
-                let mut get_log = |func| function_map[&func].private_log.clone();
-                if c.is_prover() {
-                    private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args);
+
+                match cond.ty.try_into().unwrap() {
+                    TySummary::Int(n) => {
+                        let branches_w = branches.iter().map(|branch| (function_map[&branch.body].id, branch.pattern.to_biguint())).collect::<Vec<_>>();
+                        let (out, private_input_counts) = self.sink.switch(expire, cond_w, n, branches_w, &args_w);
+                        let mut get_log = |func| function_map[&func].private_log.clone();
+                        if c.is_prover() {
+                            private.emit_switch(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args);
+                        }
+                        out
+                    },
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        let branches_w = branches.iter().map(|branch| {
+                            let pat = prime_field_bits_to_bigint(branch.pattern, Field::F128p.bit_size(), Field::F128p).to_biguint().unwrap();
+                            (function_map[&branch.body].id, pat)
+                        }).collect::<Vec<_>>();
+                        let (out, private_input_counts) = self.sink.switch_f128p(expire, cond_w, branches_w, &args_w);
+                        let mut get_log = |func| function_map[&func].private_log.clone();
+                        if c.is_prover() {
+                            private.emit_switch_f128p(c.as_base(), &mut self.sink, &mut get_log, cond, branches, private_input_counts, args);
+                        }
+                        out
+                    },
                 }
-                return out;
-            }
+            },
             GateKind::Gadget(gk, ws) => {
                 if let Some(g) = gk.cast::<Permute>() {
                     assert!(S::HAS_PERMUTE, "Permute gadget is unsupported with this Sink");
+
                     let mut chunks = Vec::with_capacity(g.items * g.wires_per_item);
                     let mut wire_widths = Vec::with_capacity(g.wires_per_item);
                     for i in 0 .. g.items {
@@ -873,11 +931,11 @@ impl<'w, S: Sink> Backend<'w, S> {
                     }
                     let a = self.sink.concat_chunks(TEMP, &chunks);
 
-                    let bits_per_item = ws[1 .. 1 + g.wires_per_item].iter()
+                    let wires_per_item = ws[1 .. 1 + g.wires_per_item].iter()
                         .map(|w| type_bits(w.ty)).sum::<u64>();
                     let out = self.sink.permute(
                         expire,
-                        bits_per_item,
+                        wires_per_item,
                         u64::try_from(g.items).unwrap(),
                         a,
                     );
@@ -893,31 +951,75 @@ impl<'w, S: Sink> Backend<'w, S> {
                         );
                     }
 
-                    return out;
+                    out
+                } else if let Some(_) = gk.cast::<ConcatBits>() {
+                    let mut entries = Vec::with_capacity(ws.len());
+                    for w in ws {
+                        let val = self.wire_map[&w];
+                        let width = type_bits(w.ty);
+                        entries.push((Source::Wires(val), width));
+                    }
+                    self.sink.concat_chunks(expire, &entries)
+                } else if let Some(g) = gk.cast::<ExtractBits>() {
+                    let n = type_bits(w.ty);
+                    debug_assert!(ws.len() == 1);
+                    debug_assert_eq!((g.end - g.start) as u64, n);
+                    let w = ws[0];
+                    let val = self.wire_map[&w];
+                    self.sink.copy(expire, n, val + g.start as u64)
+                } else if gk.is::<WideMul>() {
+                    let n = type_bits(w.ty);
+                    debug_assert!(ws.len() == 2);
+                    debug_assert_eq!(ws[0].ty, ws[1].ty);
+                    let m = type_bits(ws[0].ty);
+                    debug_assert_eq!(m * 2, n);
+                    let a = self.wire_map[&ws[0]];
+                    let b = self.wire_map[&ws[1]];
+                    self.sink.wide_mul(expire, m, a, b)
+                } else {
+                    unimplemented!("Gadget({})", gk.name());
                 }
             },
             GateKind::AssertZero(aw) => {
-                let v = self.wire_map[&aw];
-                let width = type_bits(aw.ty);
-                self.sink.assert_zero(width, v);
-                return self.sink.concat_chunks(expire, &[]);
+                let a = self.wire_map[&aw];
+                match aw.ty.try_into().unwrap() {
+                    TySummary::Int(n) => self.sink.assert_zero(n, a),
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        self.sink.assert_zero_f128p(a)
+                    }
+                };
+                self.sink.concat_chunks(expire, &[])
             },
-            _ => {},
-        }
 
-        // Only integer types should remain, so we can safely get the bit width in advance.
-        let n = type_bits(w.ty);
-        match w.kind {
-            GateKind::Lit(val, ty) => {
-                assert!(ty.is_integer());
-                self.sink.lit(expire, n, val)
-            },
-            GateKind::Secret(_secret) => {
-                assert!(w.ty.is_integer());
-                let out = self.sink.private(expire, n);
-                if c.is_prover() {
-                    private.emit(c.as_base(), &mut self.sink, w);
+            GateKind::Lit(val, ty) => match ty.try_into().unwrap() {
+                TySummary::Int(n) => self.sink.lit(expire, n, val),
+                TySummary::F128p => {
+                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                    self.sink.lit_f128p(expire, val)
                 }
+            },
+
+            GateKind::Secret(_secret) => {
+                let summary = w.ty.try_into().unwrap();
+                let out = match summary {
+                    TySummary::Int(n) => self.sink.private(expire, n),
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        self.sink.private_f128p(expire)
+                    },
+                };
+
+                if c.is_prover() {
+                    match summary {
+                        TySummary::Int(_n) => private.emit(c.as_base(), &mut self.sink, w),
+                        TySummary::F128p => {
+                            assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                            private.emit_f128p(c.as_base(), &mut self.sink, w)
+                        },
+                    };
+                }
+
                 out
             },
 
@@ -925,91 +1027,118 @@ impl<'w, S: Sink> Backend<'w, S> {
 
             GateKind::Argument(i, _) => {
                 assert!(i < self.args.len(),
-                    "saw Argument({}), but there are only {} args here", i, self.args.len());
+                        "saw Argument({}), but there are only {} args here", i, self.args.len());
+                // TODO(isweet): Could `args` be moved into `Sink`?
                 self.args[i]
             },
 
             GateKind::Unary(op, aw) => {
                 let a = self.wire_map[&aw];
-                match op {
-                    UnOp::Neg => self.sink.neg(expire, n, a),
-                    UnOp::Not => self.sink.not(expire, n, a),
+                match w.ty.try_into().unwrap() {
+                    TySummary::Int(n) => match op {
+                        UnOp::Neg => self.sink.neg(expire, n, a),
+                        UnOp::Not => self.sink.not(expire, n, a),
+                    },
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        match op {
+                            UnOp::Neg => self.sink.neg_f128p(expire, a),
+                            UnOp::Not => unreachable!(),
+                        }
+                    },
                 }
             },
 
             GateKind::Binary(op, aw, bw) => {
                 let a = self.wire_map[&aw];
                 let b = self.wire_map[&bw];
-                match op {
-                    BinOp::Add => self.sink.add(expire, n, a, b),
-                    BinOp::Sub => self.sink.sub(expire, n, a, b),
-                    BinOp::Mul => self.sink.mul(expire, n, a, b),
-                    // TODO: combine Div and Mod into a single DivMod gadget to allow higher-level
-                    // optimizations
-                    BinOp::Div | BinOp::Mod => {
-                        // Only unsigned division is supported.
-                        if !matches!(*aw.ty, TyKind::Uint(_)) {
-                            unimplemented!("{:?} for {:?}", op, aw.ty);
-                        }
+                match w.ty.try_into().unwrap() {
+                    TySummary::Int(n) => match op {
+                        BinOp::Add => self.sink.add(expire, n, a, b),
+                        BinOp::Sub => self.sink.sub(expire, n, a, b),
+                        BinOp::Mul => self.sink.mul(expire, n, a, b),
+                        // TODO: combine Div and Mod into a single DivMod gadget to allow higher-level
+                        // optimizations
+                        BinOp::Div | BinOp::Mod => {
+                            // Only unsigned division is supported.
+                            if !matches!(*aw.ty, TyKind::Uint(_)) {
+                                unimplemented!("{:?} for {:?}", op, aw.ty);
+                            }
 
-                        // Add witness variables for quotient and remainder.
-                        let (quot_expire, rem_expire) = match op {
-                            BinOp::Div => (expire, TEMP),
-                            BinOp::Mod => (TEMP, expire),
-                            _ => unreachable!(),
-                        };
-                        let quot = self.sink.private(quot_expire, n);
-                        let rem = self.sink.private(rem_expire, n);
+                            // Add witness variables for quotient and remainder.
+                            let (quot_expire, rem_expire) = match op {
+                                BinOp::Div => (expire, TEMP),
+                                BinOp::Mod => (TEMP, expire),
+                                _ => unreachable!(),
+                            };
+                            let quot = self.sink.private(quot_expire, n);
+                            let rem = self.sink.private(rem_expire, n);
 
-                        if c.is_prover() {
-                            private.emit_quot_rem(c.as_base(), &mut self.sink, aw, bw);
-                        }
+                            if c.is_prover() {
+                                private.emit_quot_rem(c.as_base(), &mut self.sink, aw, bw);
+                            }
 
-                        // Assert: a == quot * b + rem
-                        {
-                            let quot_times_b = self.sink.mul_no_wrap(TEMP, n, quot, b);
-                            let quot_times_b_plus_rem =
-                                self.sink.add_no_wrap(TEMP, n, quot_times_b, rem);
-                            let eq_bits_inv = self.sink.xor(TEMP, n, a, quot_times_b_plus_rem);
-                            self.sink.assert_zero(n, eq_bits_inv);
-                        }
+                            // Assert: a == quot * b + rem
+                            {
+                                let quot_times_b = self.sink.mul_no_wrap(TEMP, n, quot, b);
+                                let quot_times_b_plus_rem =
+                                    self.sink.add_no_wrap(TEMP, n, quot_times_b, rem);
+                                let eq_bits_inv = self.sink.xor(TEMP, n, a, quot_times_b_plus_rem);
+                                self.sink.assert_zero(n, eq_bits_inv);
+                            }
 
-                        // Assert: rem < b || b == 0
-                        {
-                            let rem_ext = self.sink.concat_chunks(TEMP, &[
-                                (Source::Wires(rem), n),
-                                (Source::Zero, 1),
-                            ]);
-                            let b_ext = self.sink.concat_chunks(TEMP, &[
-                                (Source::Wires(b), n),
-                                (Source::Zero, 1),
-                            ]);
-                            let rem_minus_b_ext = self.sink.sub(TEMP, n + 1, rem_ext, b_ext);
-                            // `rem < b` if the sign bit of `rem - b` is set.
-                            let rem_lt_b = rem_minus_b_ext + n;
-                            let rem_lt_b_inv = self.sink.not(TEMP, 1, rem_lt_b);
+                            // Assert: rem < b || b == 0
+                            {
+                                let rem_ext = self.sink.concat_chunks(TEMP, &[
+                                    (Source::Wires(rem), n),
+                                    (Source::Zero, 1),
+                                ]);
+                                let b_ext = self.sink.concat_chunks(TEMP, &[
+                                    (Source::Wires(b), n),
+                                    (Source::Zero, 1),
+                                ]);
+                                let rem_minus_b_ext = self.sink.sub(TEMP, n + 1, rem_ext, b_ext);
+                                // `rem < b` if the sign bit of `rem - b` is set.
+                                let rem_lt_b = rem_minus_b_ext + n;
+                                let rem_lt_b_inv = self.sink.not(TEMP, 1, rem_lt_b);
 
-                            let b_inv = self.sink.not(TEMP, n, b);
-                            let b_zero = self.sink.and_all(TEMP, n, b_inv);
-                            let b_zero_inv = self.sink.not(TEMP, 1, b_zero);
+                                let b_inv = self.sink.not(TEMP, n, b);
+                                let b_zero = self.sink.and_all(TEMP, n, b_inv);
+                                let b_zero_inv = self.sink.not(TEMP, 1, b_zero);
 
-                            let ok_inv = self.sink.and(TEMP, 1, rem_lt_b_inv, b_zero_inv);
-                            self.sink.assert_zero(1, ok_inv);
-                        }
+                                let ok_inv = self.sink.and(TEMP, 1, rem_lt_b_inv, b_zero_inv);
+                                self.sink.assert_zero(1, ok_inv);
+                            }
 
-                        match op {
-                            BinOp::Div => quot,
-                            BinOp::Mod => rem,
-                            _ => unreachable!(),
-                        }
+                            match op {
+                                BinOp::Div => quot,
+                                BinOp::Mod => rem,
+                                _ => unreachable!(),
+                            }
+                        },
+                        BinOp::And => self.sink.and(expire, n, a, b),
+                        BinOp::Or => self.sink.or(expire, n, a, b),
+                        BinOp::Xor => self.sink.xor(expire, n, a, b),
                     },
-                    BinOp::And => self.sink.and(expire, n, a, b),
-                    BinOp::Or => self.sink.or(expire, n, a, b),
-                    BinOp::Xor => self.sink.xor(expire, n, a, b),
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        match op {
+                            BinOp::Add => self.sink.add_f128p(expire, a, b),
+                            BinOp::Sub => self.sink.sub_f128p(expire, a, b),
+                            BinOp::Mul => self.sink.mul_f128p(expire, a, b),
+                            BinOp::Div |
+                            BinOp::Mod |
+                            BinOp::And |
+                            BinOp::Or  |
+                            BinOp::Xor => unreachable!(),
+                        }
+                    }
                 }
             },
 
             GateKind::Shift(op, val_wire, amount_wire) => {
+                assert!(w.ty.is_integer());
+                let n = type_bits(w.ty);
                 let val = self.wire_map[&val_wire];
 
                 let amount = as_lit(amount_wire).unwrap_or_else(|| {
@@ -1045,6 +1174,7 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
 
             GateKind::Compare(op, aw, bw) if as_lit(bw).map_or(false, |x| x.is_zero()) => {
+                assert!(w.ty.is_integer());
                 let a = self.wire_map[&aw];
                 let m = type_bits(aw.ty);
                 let sign = a + m - 1;
@@ -1104,6 +1234,7 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
 
             GateKind::Compare(op, aw, bw) => {
+                assert!(w.ty.is_integer());
                 let a = self.wire_map[&aw];
                 let b = self.wire_map[&bw];
                 let m = type_bits(aw.ty);
@@ -1126,6 +1257,8 @@ impl<'w, S: Sink> Backend<'w, S> {
             },
 
             GateKind::Mux(cw, tw, ew) => {
+                assert!(w.ty.is_integer());
+                let n = type_bits(w.ty);
                 debug_assert_eq!(cw.ty, Ty::bool());
                 let c = self.wire_map[&cw];
                 let t = self.wire_map[&tw];
@@ -1135,84 +1268,121 @@ impl<'w, S: Sink> Backend<'w, S> {
 
             GateKind::Cast(aw, _ty) => {
                 let a = self.wire_map[&aw];
-                let m = type_bits(aw.ty);
 
-                if n <= m {
-                    // Truncate `a` (of width `m`) to width `n`.
-                    self.sink.copy(expire, n, a)
-                } else {
-                    // Zero- or sign-extend `a` (of width `m`) to width `n`.
-                    let padding = match *aw.ty {
-                        TyKind::Uint(_) => Source::Zero,
-                        TyKind::Int(_) => Source::RepWire(a + m - 1),
-                        _ => unimplemented!("Cast from {:?}", aw.ty),
-                    };
-                    self.sink.concat_chunks(expire, &[
-                        (Source::Wires(a), m),
-                        (padding, n - m),
-                    ])
+                match aw.ty.try_into().unwrap() {
+                    TySummary::Int(m) => match w.ty.try_into().unwrap() {
+                        TySummary::Int(n) => {
+                            if n <= m {
+                                self.sink.copy(expire, n, a)
+                            } else {
+                                let padding = match *aw.ty {
+                                    TyKind::Uint(_) => Source::Zero,
+                                    TyKind::Int(_) => Source::RepWire(a + m - 1),
+                                    _ => unreachable!(),
+                                };
+                                self.sink.concat_chunks(expire, &[
+                                    (Source::Wires(a), m),
+                                    (padding, n - m),
+                                ])
+                            }
+                        },
+                        TySummary::F128p => {
+                            assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                            self.sink.to_f128p(expire, m, a)
+                        }
+                    },
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        match w.ty.try_into().unwrap() {
+                            TySummary::Int(n) => {
+                                let field_n = Field::F128p.bit_size().0 as u64;
+                                let real_n = n;
+                                let rest_n = field_n - real_n;
+                                let real = self.sink.private(expire, real_n);
+                                let rest = self.sink.private(TEMP, rest_n);
+
+                                if c.is_prover() {
+                                    private.emit_from_f128p(c.as_base(), &mut self.sink, aw);
+                                }
+
+                                let bits = self.sink.concat_chunks(TEMP, &[
+                                    (Source::Wires(real), real_n),
+                                    (Source::Wires(rest), rest_n),
+                                ]);
+
+                                let val = self.sink.to_f128p(TEMP, field_n, bits);
+                                let diff = self.sink.sub_f128p(TEMP, a, val);
+                                self.sink.assert_zero_f128p(diff);
+
+                                real
+
+                            },
+                            TySummary::F128p => todo!(),
+                        }
+                    },
                 }
             },
-
-            GateKind::Pack(..) => unimplemented!("Pack"),
 
             GateKind::Extract(bw, i) => {
                 let offset = self.bundle_ty_offset(bw.ty, i);
-                self.sink.copy(expire, n, self.wire_map[&bw] + offset)
-            },
-
-            GateKind::Gadget(gk, ws) => {
-                if let Some(_) = gk.cast::<ConcatBits>() {
-                    let mut entries = Vec::with_capacity(ws.len());
-                    for w in ws {
-                        let val = self.wire_map[&w];
-                        let width = type_bits(w.ty);
-                        entries.push((Source::Wires(val), width));
-                    }
-                    self.sink.concat_chunks(expire, &entries)
-                } else if let Some(g) = gk.cast::<ExtractBits>() {
-                    debug_assert!(ws.len() == 1);
-                    debug_assert_eq!((g.end - g.start) as u64, n);
-                    let w = ws[0];
-                    let val = self.wire_map[&w];
-                    self.sink.copy(expire, n, val + g.start as u64)
-                } else if gk.is::<WideMul>() {
-                    debug_assert!(ws.len() == 2);
-                    debug_assert_eq!(ws[0].ty, ws[1].ty);
-                    let m = type_bits(ws[0].ty);
-                    debug_assert_eq!(m * 2, n);
-                    let a = self.wire_map[&ws[0]];
-                    let b = self.wire_map[&ws[1]];
-                    self.sink.wide_mul(expire, m, a, b)
+                if w.ty.is_integer() {
+                    let n = type_bits(w.ty);
+                    self.sink.copy(expire, n, self.wire_map[&bw] + offset)
+                } else if let Some(Field::F128p) = w.ty.get_galois_field() {
+                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                    self.sink.copy_f128p(expire, self.wire_map[&bw] + offset)
                 } else {
-                    unimplemented!("Gadget({})", gk.name());
+                    unimplemented!()
                 }
             },
 
-            // `Call` should be handled by the case above.
-            GateKind::Call(..) => unreachable!(),
-
-            // `Switch` should be handled by the case above.
-            GateKind::Switch(..) => unreachable!(),
-            
             // `a` is pre-evaluated, so it can be ignored
             GateKind::Seq(_aw, bw) => {
-                let b = self.wire_map[&bw];                
+                assert!(w.ty.is_integer());
+                let b = self.wire_map[&bw];
                 let width = type_bits(bw.ty);
                 self.sink.copy(expire, width, b)
             },
-
-            // `AssertZero` should be handled by the case above.
-            GateKind::AssertZero(..) => unreachable!(),
         }
     }
 
     fn define_function(&mut self, c: &CircuitBase<'w>, f: Function<'w>) {
-        let arg_ns = f.arg_tys.iter().map(|&ty| type_bits(ty)).collect::<Vec<_>>();
+        // TODO(isweet): Why are we allowed to assume that the parameters all have integer type?
+        // What about e.g. a `TyKind::Bundle` type for one of the parameters?
+        let arg_ns = f.arg_tys.iter().map(|&ty| {
+            if ty.is_integer() {
+                type_bits(ty)
+            } else if let Some(Field::F128p) = ty.get_galois_field() {
+                assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                1
+            } else {
+                unimplemented!("define_function({:?})", ty)
+            }
+        }).collect::<Vec<_>>();
         let return_ty = f.result_wire.ty;
         let return_n = match *return_ty {
-            TyKind::Bundle(btys) => btys.tys().iter().map(|&ty| type_bits(ty)).sum(),
-            _ => type_bits(return_ty),
+            // TODO(isweet): Why isn't this recursive? Are bundles always non-recursive?
+            // I thought I saw documentation about that somewhere else...
+            TyKind::Bundle(btys) => btys.tys().iter().map(|&ty| {
+                if ty.is_integer() {
+                    type_bits(ty)
+                } else if let Some(Field::F128p) = ty.get_galois_field() {
+                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                    1
+                } else {
+                    unimplemented!("define_function({:?})", ty)
+                }
+            }).sum(),
+            _ => {
+                if return_ty.is_integer() {
+                    type_bits(return_ty)
+                } else if let Some(Field::F128p) = return_ty.get_galois_field() {
+                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                    1
+                } else {
+                    unimplemented!("define_function({:?})", return_ty)
+                }
+            },
         };
 
         eprintln!("define_function({:?})", f.name);
@@ -1257,7 +1427,14 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let mut pos = 0;
                 for &ty in btys.tys() {
                     offsets.push(pos);
-                    pos += type_bits(ty);
+                    let n = if ty.is_integer() {
+                        type_bits(ty)
+                    } else if let Some(Field::F128p) = ty.get_galois_field() {
+                        1
+                    } else {
+                        unimplemented!()
+                    };
+                    pos += n;
                 }
                 offsets.push(pos);
                 e.insert(offsets)
@@ -2720,6 +2897,69 @@ mod test {
         let ok = c.eq(actual, expected);
 
         emit_and_validate(&c, SieveIrField::F1b, ok)
+    }
+
+    #[test]
+    fn switch_f128p_no_private_inputs() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        use std::convert::TryInto;
+
+        macro_rules! test_ty {
+            () => { Ty::f128p() };
+        }
+
+        struct SwitchConst;
+        impl<'b> DefineFunction<'b> for SwitchConst {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, _args: &[Wire<'b>]) -> Wire<'b> {
+                c.lit(test_ty!(), F128p::ZERO)
+            }
+        }
+
+        struct SwitchAdd;
+        impl<'b> DefineFunction<'b> for SwitchAdd {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.add(a, b)
+            }
+        }
+
+        struct SwitchMul;
+        impl<'b> DefineFunction<'b> for SwitchMul {
+            fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+                let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+                c.mul(a, b)
+            }
+        }
+
+        let arenas = Arenas::new();
+        let c = Circuit::new::<()>(&arenas, true, FilterNil);
+
+        let ty = test_ty!();
+        let const_pat = c.bits(ty, F128p::ZERO);
+        let add_pat   = c.bits(ty, F128p::ONE);
+        let mul_pat   = c.bits(ty, F128p::try_from(2 as u128).unwrap());
+
+        let switch_const = c.define_function::<(), _>("switch_const", &[ty, ty], SwitchConst);
+        let switch_add   = c.define_function::<(), _>("switch_add",   &[ty, ty], SwitchAdd);
+        let switch_mul   = c.define_function::<(), _>("switch_mul",   &[ty, ty], SwitchMul);
+
+        let cases = c.switch_case_list(&[
+            c.switch_case(const_pat, switch_const, &[], |_, &(), _| (&()).into()),
+            c.switch_case(add_pat,   switch_add,   &[], |_, &(), _| (&()).into()),
+            c.switch_case(mul_pat,   switch_mul,   &[], |_, &(), _| (&()).into()),
+        ]);
+
+        let guard = c.lit(ty, F128p::try_from(2 as u128).unwrap());
+        let args = c.wire_list(&[
+            c.secret_immediate(ty, F128p::try_from(2 as u128).unwrap()),
+            c.secret_immediate(ty, F128p::try_from(3 as u128).unwrap()),
+        ]);
+
+        let actual   = c.cast(c.switch(guard, cases, args), Ty::uint(8));
+        let expected = c.lit(Ty::uint(8), 6);
+        let ok = c.eq(actual, expected);
+
+        emit_and_validate(&c, SieveIrField::F128p, ok)
     }
 
     #[test]
