@@ -7,14 +7,14 @@ use std::mem;
 use log::*;
 use num_bigint::BigUint;
 use num_traits::Zero;
-use crate::eval::Evaluator;
 use scuttlebutt::field::F128p;
 use scuttlebutt::ring::FiniteRing;
+use crate::eval::{Evaluator, prime_field_bits_to_bigint};
 use crate::gadget::arith::WideMul;
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
-    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call, SwitchCase,
+    Wire, Ty, EraseVisitor, MigrateVisitor, Bits, AsBits, Function, Call, SwitchCase, Field,
 };
 use crate::ir::migrate::{self, Migrate};
 use crate::routing::gadget::Permute;
@@ -323,6 +323,12 @@ trait PrivateOps<'a> {
         sink: &mut impl Sink,
         w: Wire<'a>,
     );
+    fn emit_f128p(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    );
     fn emit_quot_rem(
         &mut self,
         c: &CircuitBase<'a>,
@@ -356,6 +362,22 @@ trait PrivateOps<'a> {
         private_input_counts: Vec<u64>,
         args: &'a [Wire<'a>],
     );
+    fn emit_switch_f128p(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+    );
+    fn emit_from_f128p(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    );
 }
 
 struct PrivateDirect<E> {
@@ -378,6 +400,16 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         let n = type_bits(w.ty);
         let bits = self.ev.eval_wire_bits(c, w).unwrap().0;
         sink.private_value(n, bits);
+    }
+
+    fn emit_f128p(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        let bits = self.ev.eval_wire_bits(c, w).unwrap().0;
+        sink.private_value_f128p(bits);
     }
 
     fn emit_quot_rem(
@@ -417,10 +449,13 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         for op in get_log(call.func) {
             match op {
                 PrivateOp::Emit(w) => sub_ops.emit(c, sink, w),
+                PrivateOp::EmitF128p(w) => sub_ops.emit_f128p(c, sink, w),
                 PrivateOp::QuotRem(numer, denom) => sub_ops.emit_quot_rem(c, sink, numer, denom),
                 PrivateOp::Call(call) => sub_ops.emit_call(c, sink, get_log, call),
                 PrivateOp::Permute(n, perm, permuted_wires, wire_widths) => sub_ops.emit_permute(c, sink, n, perm, permuted_wires, wire_widths),
                 PrivateOp::Switch(cond, branches, private_input_counts, args) => sub_ops.emit_switch(c, sink, get_log, cond, branches, private_input_counts, args),
+                PrivateOp::SwitchF128p(cond, branches, private_input_counts, args) => sub_ops.emit_switch_f128p(c, sink, get_log, cond, branches, private_input_counts, args),
+                PrivateOp::FromF128p(w) => sub_ops.emit_from_f128p(c, sink, w),
             }
         }
     }
@@ -451,8 +486,8 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
     ) {
         let max_private_input_count = *private_input_counts.iter().max().unwrap();
         let (cond_val, _cond_sec) = self.ev.eval_wire_bits(c, cond).unwrap();
-        let cond_val = cond_val.to_biguint(); 
-        let (branch_idx, branch)  = branches.iter().enumerate().find(|(idx, branch)| {
+        let cond_val = cond_val.to_biguint();
+        let (branch_idx, branch)  = branches.iter().enumerate().find(|(_idx, branch)| {
             let pattern = branch.pattern.to_biguint();
             // TODO(isweet): Compare as `Bits` once #59 is fixed.
             cond_val == pattern
@@ -466,15 +501,59 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
 
         sink.private_value(padding_amt, Bits::zero());
     }
+
+    fn emit_switch_f128p(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+    ) {
+        let max_private_input_count = *private_input_counts.iter().max().unwrap();
+        let cond_val = self.ev.eval_wire_bits(c, cond).unwrap().0;
+        let cond_val = prime_field_bits_to_bigint(cond_val, Field::F128p.bit_size(), Field::F128p).to_biguint().unwrap();
+        let (branch_idx, branch)  = branches.iter().enumerate().find(|(_idx, branch)| {
+            let pattern = branch.pattern.to_biguint();
+            // TODO(isweet): Compare as `Bits` once #59 is fixed.
+            cond_val == pattern
+        }).unwrap();
+        let private_input_count = private_input_counts[branch_idx];
+
+        let call = c.call_with_secret_project(branch.body, args, branch.project_deps, branch.project_witness);
+        self.emit_call(c, sink, get_log, call);
+
+        let padding_amt = max_private_input_count - private_input_count;
+
+        sink.private_value(padding_amt, Bits::zero());
+    }
+
+    fn emit_from_f128p(
+        &mut self,
+        c: &CircuitBase<'a>,
+        sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        let width = Field::F128p.bit_size();
+        let f_bits = self.ev.eval_wire_bits(c, w).unwrap().0;
+        let uint = prime_field_bits_to_bigint(f_bits, width, Field::F128p);
+        let uint_bits = uint.as_bits(c, width);
+        sink.private_value(width.0 as u64, uint_bits);
+    }
 }
 
 #[derive(Clone, Debug)]
 enum PrivateOp<'a> {
     Emit(Wire<'a>),
+    EmitF128p(Wire<'a>),
     QuotRem(Wire<'a>, Wire<'a>),
     Call(Call<'a>),
     Permute(u64, Wire<'a>, Vec<Wire<'a>>, Vec<u64>),
     Switch(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>]),
+    SwitchF128p(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>]),
+    FromF128p(Wire<'a>),
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
@@ -483,6 +562,7 @@ impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PrivateOp<'b> {
         match self {
             PrivateOp::Emit(a) => PrivateOp::Emit(v.visit(a)),
+            PrivateOp::EmitF128p(a) => PrivateOp::Emit(v.visit(a)),
             PrivateOp::QuotRem(a, b) => PrivateOp::QuotRem(v.visit(a), v.visit(b)),
             PrivateOp::Call(call) => PrivateOp::Call(v.visit(call)),
             PrivateOp::Permute(n, perm, perm_wires, wire_widths) => PrivateOp::Permute(n, v.visit(perm), v.visit(perm_wires), wire_widths),
@@ -494,6 +574,15 @@ impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
                 let args = v.new_circuit().wire_list(&args);
                 PrivateOp::Switch(v.visit(cond), branches, private_input_counts, args)
             }
+            PrivateOp::SwitchF128p(cond, branches, private_input_counts, args) => {
+                let branches = branches.iter().map(|&branch| v.visit(branch)).collect::<Vec<_>>();
+                let branches = v.new_circuit().switch_case_list(&branches);
+
+                let args = args.iter().map(|&arg| v.visit(arg)).collect::<Vec<_>>();
+                let args = v.new_circuit().wire_list(&args);
+                PrivateOp::SwitchF128p(v.visit(cond), branches, private_input_counts, args)
+            }
+            PrivateOp::FromF128p(w) => PrivateOp::FromF128p(v.visit(w)),
         }
     }
 }
@@ -523,6 +612,15 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         w: Wire<'a>,
     ) {
         self.log.push(PrivateOp::Emit(w));
+    }
+
+    fn emit_f128p(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::EmitF128p(w));
     }
 
     fn emit_quot_rem(
@@ -569,8 +667,29 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
     ) {
         self.log.push(PrivateOp::Switch(cond, branches, private_input_counts, args));
     }
-}
 
+    fn emit_switch_f128p(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        _get_log: &mut impl FnMut(Function<'a>) -> Vec<PrivateOp<'a>>,
+        cond: Wire<'a>,
+        branches: &'a [SwitchCase<'a>],
+        private_input_counts: Vec<u64>,
+        args: &'a [Wire<'a>],
+    ) {
+        self.log.push(PrivateOp::SwitchF128p(cond, branches, private_input_counts, args));
+    }
+
+    fn emit_from_f128p(
+        &mut self,
+        _c: &CircuitBase<'a>,
+        _sink: &mut impl Sink,
+        w: Wire<'a>,
+    ) {
+        self.log.push(PrivateOp::FromF128p(w));
+    }
+}
 
 
 fn bool_to_f128p(b: bool) -> F128p {
