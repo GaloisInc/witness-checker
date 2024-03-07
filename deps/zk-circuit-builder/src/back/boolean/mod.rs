@@ -1229,7 +1229,7 @@ mod test {
         /// Values of ordinary wires.
         pub m: HashMap<WireId, bool>,
         pub m_f128p: HashMap<WireId, F128p>,
-        /// Indices of osecret wires.  The index gives the position of the wire's value in
+        /// Indices of secret wires.  The index gives the position of the wire's value in
         /// `secret_values`.
         ///
         /// No `WireId` should appear in both `m` and `secret_map`.
