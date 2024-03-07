@@ -1553,7 +1553,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         branches: Vec<(Self::FunctionId, BigUint)>,
         args: &[WireId],
     ) -> (WireId, Vec<u64>) {
-        let mut call_args = Vec::with_capacity(args.len());
+        let mut call_args = Vec::with_capacity(1 + args.len());
         call_args.push(cond);
         call_args.extend_from_slice(args);
         let (private_input_counts, branches) = branches.into_iter().map(|(idx, pat)| {
