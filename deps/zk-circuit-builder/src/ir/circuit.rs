@@ -72,7 +72,7 @@ use bumpalo::Bump;
 use crypto_bigint::{Uint, Word};
 use log::info;
 use num_bigint::{BigUint, BigInt, Sign};
-use num_traits::{Zero};
+use num_traits::Zero;
 use crate::eval::{self, EvalWire, CachingEvaluator};
 use crate::ir::migrate::{self, Migrate, Visitor as _};
 use crate::util::CowBox;
