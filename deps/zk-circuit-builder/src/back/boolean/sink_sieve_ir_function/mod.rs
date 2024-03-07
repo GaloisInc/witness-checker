@@ -581,6 +581,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let private_inputs_count = gates.iter().map(|g| IR::gate_private_inputs_count(g, &self.func_private_inputs_count)).sum();
         let is_new_function = self.func_private_inputs_count.insert(name.clone(), private_inputs_count).is_none();
         debug_assert!(is_new_function);
+
         self.functions.push(IR::new_function(
             name,
             output_count,
@@ -660,6 +661,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         let (idx, name) = self.add_func_info(&FunctionDesc::SwitchF128p(branches.to_vec()), &output_count, &input_count);
         let is_new_function = self.func_private_inputs_count.insert(name.clone(), max_private_input_count).is_none();
         debug_assert!(is_new_function);
+
         self.functions.push(IR::new_plugin_function_with_inputs(
             name,
             output_count,
@@ -688,6 +690,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
                 let is_new_function = self.func_private_inputs_count.insert(name.clone(), 0).is_none();
                 debug_assert!(is_new_function);
+
                 self.functions.push(IR::new_plugin_function(
                     name,
                     [n],
@@ -705,6 +708,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
                 let is_new_function = self.func_private_inputs_count.insert(name.clone(), 0).is_none();
                 debug_assert!(is_new_function);
+
                 self.functions.push(IR::new_plugin_function(
                     name,
                     [],
