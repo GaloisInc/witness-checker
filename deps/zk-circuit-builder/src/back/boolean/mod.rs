@@ -66,7 +66,7 @@ impl AssertNoWrap {
     }
 }
 
-/// Trait for emitting actual boolean gates.  For example, there's an implementation of this trait
+/// Trait for emitting actual gates.  For example, there's an implementation of this trait
 /// for emitting gates in SIEVE IR v2 (IR0+) format.
 ///
 /// # Wire expiration
@@ -158,7 +158,43 @@ pub trait Sink: Sized {
     /// first 8 of those 72 bits would hold the value `0_u8`, the next 16 would be `1_u16`, the next 8
     /// would be `10_u8`, and so on.
     fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]);
-    
+
+    fn has_f128p(&self) -> bool;
+    fn lit_f128p(&mut self, expire: Time, bits: Bits) -> WireId;
+    fn private_f128p(&mut self, expire: Time) -> WireId;
+    fn private_value_f128p(&mut self, bits: Bits);
+    fn copy_f128p(&mut self, expire: Time, a: WireId) -> WireId;
+    fn addc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId;
+    fn add_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId;
+    fn sub_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId;
+    fn mulc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId;
+    fn mul_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId;
+    fn neg_f128p(&mut self, expire: Time, a: WireId) -> WireId;
+    /// Convert a Boolean wire into an F128p wire containing `0` or `1`
+    fn bool_to_f128p(&mut self, expire: Time, a: WireId) -> WireId;
+    /// Convert an `n`-bit machine integer into an F128p element
+    fn to_f128p(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
+        if n == 0 {
+            return self.lit_f128p(expire, Bits::zero())
+        }
+
+        let init = self.bool_to_f128p(expire, a);
+        (1..n).fold(init, |sum, exp| {
+            let coeff = Bits::pow2_f128p(exp as u8);
+            let w = self.bool_to_f128p(TEMP, a + exp);
+            let term = self.mulc_f128p(TEMP, w, coeff);
+            self.add_f128p(expire, sum, term)
+        })
+    }
+    fn assert_zero_f128p(&mut self, a: WireId);
+    fn switch_f128p(
+        &mut self,
+        expire: Time,
+        cond: WireId,
+        branches: Vec<(Self::FunctionId, BigUint)>,
+        args: &[WireId],
+    ) -> (WireId, Vec<u64>);
+
     fn has_switch(&self) -> bool;
     fn switch(
         &mut self,
@@ -1176,12 +1212,15 @@ impl<'w, S: Sink> Backend<'w, S> {
 #[cfg(test)]
 mod test {
     use std::collections::{HashMap, HashSet};
+    use scuttlebutt::field::F128p;
+    use scuttlebutt::ring::FiniteRing;
+
     use crate::back::UsePlugins;
     use crate::back::boolean::sink_sieve_ir_function::SieveIrField;
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
-        IntSize, DefineFunction,
+        IntSize, DefineFunction, FromBits,
     };
     use super::*;
 
@@ -1189,13 +1228,17 @@ mod test {
     pub struct TestSink {
         /// Values of ordinary wires.
         pub m: HashMap<WireId, bool>,
-        /// Indices of secret wires.  The index gives the position of the wire's value in
+        pub m_f128p: HashMap<WireId, F128p>,
+        /// Indices of osecret wires.  The index gives the position of the wire's value in
         /// `secret_values`.
         ///
         /// No `WireId` should appear in both `m` and `secret_map`.
         pub secret_map: HashMap<WireId, usize>,
+        pub secret_map_f128p: HashMap<WireId, usize>,
         pub secret_values: Vec<bool>,
+        pub secret_values_f128p: Vec<F128p>,
         pub next_secret_idx: usize,
+        pub next_secret_f128p_idx: usize,
         pub next: WireId,
         pub expire_map: BTreeMap<Time, Vec<WireId>>,
         pub count_and: u64,
@@ -1221,6 +1264,17 @@ mod test {
             BigUint::from_radix_le(&bits, 2).unwrap()
         }
 
+        pub fn get_f128p(&self, w: WireId) -> F128p {
+            if let Some(&x) = self.m_f128p.get(&w) {
+                x
+            } else if let Some(&idx) = self.secret_map_f128p.get(&w) {
+                self.secret_values_f128p.get(idx).cloned()
+                    .unwrap_or_else(|| panic!("secret value has not yet been provided"))
+            } else {
+                panic!("accessed wire {} before definition", w);
+            }
+        }
+
         fn alloc(
             &mut self,
             expire: Time,
@@ -1243,11 +1297,26 @@ mod test {
             assert!(old.is_none());
         }
 
+        fn set_f128p(&mut self, w: WireId, val: F128p) {
+            assert!(!self.secret_map_f128p.contains_key(&w));
+            let old = self.m_f128p.insert(w, val);
+            assert!(old.is_none());
+        }
+
         fn set_secret(&mut self, w: WireId) -> usize {
             assert!(!self.m.contains_key(&w));
             let idx = self.next_secret_idx;
             self.next_secret_idx += 1;
             let old = self.secret_map.insert(w, idx);
+            assert!(old.is_none());
+            idx
+        }
+
+        fn set_secret_f128p(&mut self, w: WireId) -> usize {
+            assert!(!self.m_f128p.contains_key(&w));
+            let idx = self.next_secret_f128p_idx;
+            self.next_secret_f128p_idx += 1;
+            let old = self.secret_map_f128p.insert(w, idx);
             assert!(old.is_none());
             idx
         }
@@ -1268,6 +1337,18 @@ mod test {
             w
         }
 
+        pub fn init_f128p(
+            &mut self,
+            expire: Time,
+            val: F128p,
+            desc: std::fmt::Arguments,
+        ) -> WireId {
+            let w = self.alloc(expire, 1);
+            let idx = self.set_f128p(w, val);
+            trace!("{} = {} = {:?}", w, desc, val);
+            w
+        }
+
         pub fn init_secret(
             &mut self,
             expire: Time,
@@ -1279,6 +1360,17 @@ mod test {
                 let idx = self.set_secret(w + i);
                 trace!("{} = {}[{}] = <secret #{}>", w + i, desc, i, idx);
             }
+            w
+        }
+
+        pub fn init_secret_f128p(
+            &mut self,
+            expire: Time,
+            desc: std::fmt::Arguments,
+        ) -> WireId {
+            let w = self.alloc(expire, 1);
+            let idx = self.set_secret_f128p(w);
+            trace!("{} = {} = <secret #{}>", w, desc, idx);
             w
         }
     }
@@ -1418,8 +1510,10 @@ mod test {
                 for w in self.expire_map.remove(&k).unwrap() {
                     trace!("expired: {}", w);
                     let old1 = self.m.remove(&w);
+                    let old1_f128p = self.m_f128p.remove(&w);
                     let old2 = self.secret_map.remove(&w);
-                    assert!(old1.is_some() || old2.is_some());
+                    let old2_f128p = self.secret_map_f128p.remove(&w);
+                    assert!(old1.is_some() || old1_f128p.is_some() || old2.is_some() || old2_f128p.is_some());
                 }
             }
         }
@@ -1450,6 +1544,75 @@ mod test {
             unimplemented!()
         }
         fn permute_private_values(&mut self, _num_items: u64, _perm: Bits, _input_values: Vec<Bits>, _wire_widths: &[u64]) {
+            unimplemented!()
+        }
+
+        fn has_f128p(&self) -> bool {
+            true
+        }
+        fn lit_f128p(&mut self, expire: Time, bits: Bits) -> WireId {
+            self.init_f128p(expire, F128p::from_bits(bits), format_args!("lit_f128p({:?})", bits))
+        }
+        fn private_f128p(&mut self, expire: Time) -> WireId {
+            self.init_secret_f128p(expire, format_args!("private_f128p"))
+        }
+        fn private_value_f128p(&mut self, bits: Bits) {
+            self.secret_values_f128p.push(F128p::from_bits(bits))
+        }
+        fn copy_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            self.init_f128p(expire, self.get_f128p(a), format_args!("copy_f128p({})", a))
+        }
+        fn addc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+            let a_f128p = self.get_f128p(a);
+            let b_f128p = F128p::from_bits(b);
+            let out_f128p = a_f128p + b_f128p;
+            self.init_f128p(expire, out_f128p, format_args!("addc_f128p({}, {:?})", a, b))
+        }
+        fn add_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            let a_f128p = self.get_f128p(a);
+            let b_f128p = self.get_f128p(b);
+            let out_f128p = a_f128p + b_f128p;
+            self.init_f128p(expire, out_f128p, format_args!("add_f128p({}, {})", a, b))
+        }
+        fn sub_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            let a_f128p = self.get_f128p(a);
+            let b_f128p = self.get_f128p(b);
+            let out_f128p = a_f128p - b_f128p;
+            self.init_f128p(expire, out_f128p, format_args!("sub_f128p({}, {})", a, b))
+        }
+        fn mulc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+            let a_f128p = self.get_f128p(a);
+            let b_f128p = F128p::from_bits(b);
+            let out_f128p = a_f128p * b_f128p;
+            self.init_f128p(expire, out_f128p, format_args!("mulc_f128p({}, {:?})", a, b))
+        }
+        fn mul_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            let a_f128p = self.get_f128p(a);
+            let b_f128p = self.get_f128p(b);
+            let out_f128p = a_f128p * b_f128p;
+            self.init_f128p(expire, out_f128p, format_args!("mul_f128p({}, {:?})", a, b))
+        }
+        fn neg_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            let a_f128p = self.get_f128p(a);
+            let out_f128p = -a_f128p;
+            self.init_f128p(expire, out_f128p, format_args!("neg_f128p({})", a))
+        }
+        fn bool_to_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            let v = bool_to_f128p(self.get(a));
+            self.init_f128p(expire, v, format_args!("bool_to_f128p({})", a))
+        }
+        fn assert_zero_f128p(&mut self, a: WireId) {
+            let v = self.get_f128p(a);
+            trace!("assert_zero_f128p({}) = {:?}", a, v);
+            assert_eq!(v, F128p::ZERO);
+        }
+        fn switch_f128p(
+            &mut self,
+            expire: Time,
+            cond: WireId,
+            branches: Vec<(Self::FunctionId, BigUint)>,
+            args: &[WireId],
+        ) -> (WireId, Vec<u64>) {
             unimplemented!()
         }
 
@@ -1581,6 +1744,55 @@ mod test {
         }
         fn permute_private_values(&mut self, num_items: u64, perm: Bits, input_values: Vec<Bits>, wire_widths: &[u64]) {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
+        }
+
+        fn has_f128p(&self) -> bool {
+            self.inner.has_f128p()
+        }
+        fn lit_f128p(&mut self, expire: Time, bits: Bits) -> WireId {
+            self.inner.lit_f128p(expire, bits)
+        }
+        fn private_f128p(&mut self, expire: Time) -> WireId {
+            self.inner.private_f128p(expire)
+        }
+        fn private_value_f128p(&mut self, bits: Bits) {
+            self.inner.private_value_f128p(bits)
+        }
+        fn copy_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            self.inner.copy_f128p(expire, a)
+        }
+        fn addc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+            self.inner.addc_f128p(expire, a, b)
+        }
+        fn add_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            self.inner.add_f128p(expire, a, b)
+        }
+        fn sub_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            self.inner.sub_f128p(expire, a, b)
+        }
+        fn mulc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+            self.inner.mulc_f128p(expire, a, b)
+        }
+        fn mul_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            self.inner.mul_f128p(expire, a, b)
+        }
+        fn neg_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            self.inner.neg_f128p(expire, a)
+        }
+        fn bool_to_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            self.inner.bool_to_f128p(expire, a)
+        }
+        fn assert_zero_f128p(&mut self, a: WireId) {
+            self.inner.assert_zero_f128p(a)
+        }
+        fn switch_f128p(
+            &mut self,
+            expire: Time,
+            cond: WireId,
+            branches: Vec<(Self::FunctionId, BigUint)>,
+            args: &[WireId],
+        ) -> (WireId, Vec<u64>) {
+            self.inner.switch_f128p(expire, cond, branches, args)
         }
 
         fn has_switch(&self) -> bool {

@@ -191,8 +191,10 @@ enum FunctionDesc {
     PermuteShuffle(u64, u8, bool),
 
     Switch(u64, Vec<(usize, BigUint)>),
+    SwitchF128p(Vec<(usize, BigUint)>),
 
     SubF128p,
+    ToF128p(u64),
 }
 
 impl FunctionDesc {
@@ -230,7 +232,12 @@ impl FunctionDesc {
                 let suffix = branches.iter().map(|(idx, pat)| format!("{}_{}", idx, pat)).collect::<Vec<_>>().join("_");
                 format!("switch_{}_{}", cond_width, suffix)
             },
+            FunctionDesc::SwitchF128p(ref branches) => {
+                let suffix = branches.iter().map(|(idx, pat)| format!("{}_{}", idx, pat)).collect::<Vec<_>>().join("_");
+                format!("switch_f128p_{}", suffix)
+            }
             FunctionDesc::SubF128p => "sub_f128p".to_owned(),
+            FunctionDesc::ToF128p(n) => format!("to_f128p_{}", n),
         }
     }
 }
@@ -595,7 +602,18 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
 
         (output_count, input_count)
     }
-    
+
+    fn plugin_switch_signature_f128p(&mut self, branches: &[(usize, BigUint)]) -> (Vec<u64>, Vec<u64>) {
+        let f = &self.func_info[branches[0].0];
+
+        let output_count = f.outputs().to_owned();
+        let mut input_count = Vec::with_capacity(1 + f.inputs().len());
+        input_count.push(1);
+        input_count.extend_from_slice(f.inputs());
+
+        (output_count, input_count)
+    }
+
     fn define_plugin_switch(&mut self, cond_width: u64, branches: &[(usize, BigUint)]) -> usize {
         let (output_count, input_count) = self.plugin_switch_signature(cond_width, branches);
 
@@ -610,6 +628,36 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         }));
 
         let (idx, name) = self.add_func_info(&FunctionDesc::Switch(cond_width, branches.to_vec()), &output_count, &input_count);
+        let is_new_function = self.func_private_inputs_count.insert(name.clone(), max_private_input_count).is_none();
+        debug_assert!(is_new_function);
+
+        self.functions.push(IR::new_plugin_function_with_inputs(
+            name,
+            output_count,
+            input_count,
+            SWITCH_PLUGIN_NAME.into(),
+            "switch".into(),
+            params,
+            0,
+            max_private_input_count,
+        ));
+
+        idx
+    }
+
+    fn define_plugin_switch_f128p(&mut self, branches: &[(usize, BigUint)]) -> usize {
+        let (output_count, input_count) = self.plugin_switch_signature_f128p(branches);
+
+        let max_private_input_count = self.get_max_private_input_count_ids(branches.iter().map(|branch| branch.0));
+        let mut params = Vec::with_capacity(1 + 2 * branches.len());
+        params.push("strict".into());
+        params.extend(branches.iter().flat_map(|(idx, pat)| {
+            let pat_str = pat.to_string();
+            let name_str = self.func_info[*idx].name.clone();
+            iter::once(pat_str).chain(iter::once(name_str))
+        }));
+
+        let (idx, name) = self.add_func_info(&FunctionDesc::SwitchF128p(branches.to_vec()), &output_count, &input_count);
         let is_new_function = self.func_private_inputs_count.insert(name.clone(), max_private_input_count).is_none();
         debug_assert!(is_new_function);
         self.functions.push(IR::new_plugin_function_with_inputs(
@@ -684,6 +732,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             }
 
             FunctionDesc::Switch(cond_width, ref branches) if self.use_plugin_disjunction_v0 => Some(self.define_plugin_switch(cond_width, branches)),
+            FunctionDesc::SwitchF128p(ref branches) if self.use_plugin_disjunction_v0 => Some(self.define_plugin_switch_f128p(branches)),
 
             _ => None,
         }
@@ -877,7 +926,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 }
                 (vec![n * (1 << k)], vec![n * (1 << k)])
             },
-            FunctionDesc::Switch(_cond_width, _branches) => {
+            FunctionDesc::Switch(_, _) | FunctionDesc::SwitchF128p(_) => {
                 // TODO(isweet): A non-plugin version of `GateKind::Switch` is difficult to support in the current design.
                 //
                 // The semantics of `Switch` dictate that branches which are not taken (as indicated by the guard condition)
@@ -911,6 +960,23 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 let ab = sub_sink.add_f128p(TEMP, a, neg_b);
                 sub_sink.copy_into(out, 1, ab);
                 (vec![1], vec![1, 1])
+            },
+            FunctionDesc::ToF128p(n) => {
+                let [out, a] = sub_sink.alloc.preallocate([1, n]);
+                let result = if n == 0 {
+                    sub_sink.lit_f128p(TEMP, Bits::zero())
+                } else {
+                    let init = sub_sink.bool_to_f128p(TEMP, a);
+                    (1..n).fold(init, |sum, exp| {
+                        let coeff = Bits::pow2_f128p(exp as u8);
+                        let w = sub_sink.bool_to_f128p(TEMP, a + exp);
+                        let term = sub_sink.mulc_f128p(TEMP, w, coeff);
+                        sub_sink.add_f128p(TEMP, sum, term)
+                    })
+                };
+                sub_sink.copy_into(out, 1, result);
+
+                (vec![1], vec![n])
             },
         };
 
@@ -1399,6 +1465,73 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         } else {
             self.permute_private_values_no_plugin(num_items, perm);
         }
+    }
+
+    fn has_f128p(&self) -> bool {
+        self.field == SieveIrField::F128p
+    }
+    fn lit_f128p(&mut self, expire: Time, bits: Bits) -> WireId {
+        let w = self.alloc_wires(expire, 1);
+        let bytes = bits.to_le_bytes();
+        self.gates.push(IR::gate_constant(w, bytes));
+        w
+    }
+    fn private_f128p(&mut self, expire: Time) -> WireId {
+        let out = self.alloc_wires(expire, 1);
+        self.private_into(out, 1);
+        out
+    }
+    fn private_value_f128p(&mut self, bits: Bits) {
+        self.private_values.append(&mut f128p_to_le_bytes(F128p::from_bits(bits)))
+    }
+    fn copy_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+        let out = self.alloc_wires(expire, 1);
+        self.copy_into(out, 1, a);
+        out
+    }
+    fn addc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+        self.addc_f128p(expire, a, b)
+    }
+    fn add_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+        self.add_f128p(expire, a, b)
+    }
+    fn sub_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+        self.sub_f128p(expire, a, b)
+    }
+    fn mulc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+        self.mulc_f128p(expire, a, b)
+    }
+    fn mul_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+        self.mul_f128p(expire, a, b)
+    }
+    fn neg_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+        self.neg_f128p(expire, a)
+    }
+    fn bool_to_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+        self.copy_f128p(expire, a)
+    }
+    fn to_f128p(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
+        self.emit_call(expire, FunctionDesc::ToF128p(n), &[a])
+    }
+    fn assert_zero_f128p(&mut self, a: WireId) {
+        self.assert_zero(1, a)
+    }
+    fn switch_f128p(
+        &mut self,
+        expire: Time,
+        cond: WireId,
+        branches: Vec<(Self::FunctionId, BigUint)>,
+        args: &[WireId],
+    ) -> (WireId, Vec<u64>) {
+        let mut call_args = Vec::with_capacity(1 + args.len());
+        call_args.push(cond);
+        call_args.extend_from_slice(args);
+        let (private_input_counts, branches) = branches.into_iter().map(|(idx, pat)| {
+            let private_input_count = self.get_private_input_count_id(idx);
+            (private_input_count, (idx, pat))
+        }).unzip();
+        let out = self.emit_call(expire, FunctionDesc::SwitchF128p(branches), &call_args);
+        (out, private_input_counts)
     }
 
     fn has_switch(&self) -> bool {

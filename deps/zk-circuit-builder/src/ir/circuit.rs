@@ -152,6 +152,10 @@ impl<'a> CircuitBase<'a> {
         for &bits in COMMON_BITS {
             intern.insert(bits);
         }
+
+        for bits in COMMON_BITS_POW2_F128P_REF {
+            intern.insert(bits);
+        }
     }
 
     fn preload_common_strs(&self) {
@@ -3469,6 +3473,9 @@ impl<'a> Bits<'a> {
         Bits(&COMMON_BITS_ONE_INV_F128P)
     }
 
+    pub fn pow2_f128p(exp: u8) -> Bits<'a> {
+        Bits(&COMMON_BITS_POW2_F128P[exp as usize])
+    }
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
@@ -3478,15 +3485,35 @@ impl<'a, 'b> Migrate<'a, 'b> for Bits<'a> {
     }
 }
 
+const fn pow2_f128p(exp: usize) -> [u32; 4] {
+    let digit = 1u32 << (exp % 32);
+    let loc = exp / 32;
+    let mut result = [0u32; 4];
+    result[loc] = digit;
+    result
+}
+
 static COMMON_BITS_ZERO: [u32; 1] = [0];
 static COMMON_BITS_ONE: [u32; 1] = [1];
 static COMMON_BITS_ONE_INV_F128P: [u32; 4] = [0xffffff60u32, 0xffffffffu32, 0xffffffffu32, 0xffffffffu32];
+
+const POW2_F128P_LIM: usize = 128;
+static COMMON_BITS_POW2_F128P: [[u32; 4]; POW2_F128P_LIM] = {
+    let mut i = 0;
+    let mut result = [[0u32; 4]; POW2_F128P_LIM];
+    while i < POW2_F128P_LIM {
+        result[i] = pow2_f128p(i);
+        i += 1;
+    }
+    result
+};
 
 static COMMON_BITS: &[&[u32]] = &[
     &COMMON_BITS_ZERO,
     &COMMON_BITS_ONE,
     &COMMON_BITS_ONE_INV_F128P,
 ];
+static COMMON_BITS_POW2_F128P_REF: &[[u32; 4]] = &COMMON_BITS_POW2_F128P;
 
 pub trait AsBits {
     /// Convert `self` to `Bits`, interned in circuit `c`.  `width` is the size of the output;

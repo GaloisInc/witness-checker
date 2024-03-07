@@ -844,6 +844,55 @@ mod test {
             self.inner.permute_private_values(num_items, perm, input_values, wire_widths)
         }
 
+        fn has_f128p(&self) -> bool {
+            self.inner.has_f128p()
+        }
+        fn lit_f128p(&mut self, expire: Time, bits: Bits) -> WireId {
+            self.inner.lit_f128p(expire, bits)
+        }
+        fn private_f128p(&mut self, expire: Time) -> WireId {
+            self.inner.private_f128p(expire)
+        }
+        fn private_value_f128p(&mut self, bits: Bits) {
+            self.inner.private_value_f128p(bits)
+        }
+        fn copy_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            self.inner.copy_f128p(expire, a)
+        }
+        fn addc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+            self.inner.addc_f128p(expire, a, b)
+        }
+        fn add_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            self.inner.add_f128p(expire, a, b)
+        }
+        fn sub_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            self.inner.sub_f128p(expire, a, b)
+        }
+        fn mulc_f128p(&mut self, expire: Time, a: WireId, b: Bits) -> WireId {
+            self.inner.mulc_f128p(expire, a, b)
+        }
+        fn mul_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
+            self.inner.mul_f128p(expire, a, b)
+        }
+        fn neg_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            self.inner.neg_f128p(expire, a)
+        }
+        fn bool_to_f128p(&mut self, expire: Time, a: WireId) -> WireId {
+            self.inner.bool_to_f128p(expire, a)
+        }
+        fn assert_zero_f128p(&mut self, a: WireId) {
+            self.inner.assert_zero_f128p(a)
+        }
+        fn switch_f128p(
+            &mut self,
+            expire: Time,
+            cond: WireId,
+            branches: Vec<(Self::FunctionId, BigUint)>,
+            args: &[WireId],
+        ) -> (WireId, Vec<u64>) {
+            self.inner.switch_f128p(expire, cond, branches, args)
+        }
+
         fn has_switch(&self) -> bool {
             self.inner.has_switch()
         }
