@@ -117,8 +117,8 @@ where
 }
 
 struct NumBounds {
-    valid_bits: u16,
-    real_bits: u16,
+    _valid_bits: u16,
+    _real_bits: u16,
 }
 
 pub struct IntFieldArith<'a, F, P> {
