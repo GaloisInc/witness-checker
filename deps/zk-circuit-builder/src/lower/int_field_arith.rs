@@ -2,6 +2,8 @@ use num_bigint::{BigUint, ToBigInt};
 use num_traits::Zero;
 use scuttlebutt::field::PrimeFiniteField;
 use scuttlebutt::field::F128p;
+use crate::ir::circuit::CallData;
+use crate::ir::circuit::SwitchCaseData;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize, Ty};
 use crate::eval::bigint_to_prime_field_bits;
 use crate::ir::migrate::{self, Migrate};
@@ -16,6 +18,129 @@ trait AsField {
 
 impl AsField for F128p {
     const AS_FIELD: Field = Field::F128p;
+}
+
+// Replaces one type with another. If `from_ty` is
+// a compound type, recursively replace its components.
+// The `to_ty` may only be an atomic (non-compound) type.
+//
+// For example,
+//   * cast_type(Int, F128p) => F128p
+//   * cast_type(F128p, Int) => Int
+//   * cast_type(Bundle[Int, Int], F128p) => Bundle[cast_type(Int, F128p), cast_type(Int, F128p)] => Bundle[F128p, F128p]
+//   * cast_type(Int, Bundle[Int, Int]) => error
+//   * cast_type(Bundle[Int, Int], Bundle[F128p, F128p]) => error
+fn cast_type<'a>(
+    c: &CircuitBase<'a>,
+    from_ty: Ty<'a>,
+    to_ty: Ty<'a>,
+) -> Ty<'a> {
+    assert!(!matches!(*to_ty, TyKind::Bundle(_)));
+    match *from_ty {
+        TyKind::Bundle(btys) => c.ty_bundle(&btys.tys().iter().map(|&ty| cast_type(c, ty, to_ty)).collect::<Vec<_>>()),
+        _ => to_ty,
+    }
+}
+
+fn cast_wire<'a>(
+    c: &CircuitBase<'a>,
+    w: Wire<'a>,
+    ty: Ty<'a>,
+) -> Wire<'a> {
+    match *w.ty {
+        TyKind::Bundle(from_btys) => match *ty {
+            TyKind::Bundle(to_btys) => {
+                assert_eq!(from_btys.len(), to_btys.len());
+
+                let mut ws = Vec::with_capacity(from_btys.len());
+                for i in 0..from_btys.len() {
+                    let w_i = cast_wire(c, c.extract(w, i), to_btys.ty(i));
+                    ws.push(w_i);
+                }
+                c.pack(c.wire_list(&ws))
+            },
+            _ => unreachable!(),
+        },
+        _ => c.cast(w, ty),
+    }
+}
+
+// Recursively step through the body of a function and re-label each argument `i`
+// as having type `new_ty`, and then cast that argument back to its old type.
+fn cast_arguments<'a>(
+    c: &CircuitBase<'a>,
+    gk: GateKind<'a>,
+    new_tys: &[Ty<'a>],
+) -> Wire<'a> {
+    match gk {
+        GateKind::Argument(i, ty) => cast_wire(c, c.gate(GateKind::Argument(i, new_tys[i])), ty),
+
+        GateKind::Lit(_, _) => c.gate(gk),
+        GateKind::Secret(secret) => {
+            let secret = c.map_secret_deps(secret, |c, deps| {
+                c.wire_list(&deps.iter().map(|dep| cast_arguments(c, dep.kind, new_tys)).collect::<Vec<_>>())
+            });
+            c.secret(secret)
+        },
+        GateKind::Erased(_) => c.gate(gk),
+        GateKind::Unary(op, a) => {
+            let a = cast_arguments(c, a.kind, new_tys);
+            c.unary(op, a)
+        },
+        GateKind::Binary(op, a, b) => {
+            let a = cast_arguments(c, a.kind, new_tys);
+            let b = cast_arguments(c, b.kind, new_tys);
+            c.binary(op, a, b)
+        },
+        GateKind::Shift(op, a, b) => {
+            let a = cast_arguments(c, a.kind, new_tys);
+            let b = cast_arguments(c, b.kind, new_tys);
+            c.shift(op, a, b)
+        },
+        GateKind::Compare(op, a, b) => {
+            let a = cast_arguments(c, a.kind, new_tys);
+            let b = cast_arguments(c, b.kind, new_tys);
+            c.compare(op, a, b)
+        },
+        GateKind::Mux(cond, a, b) => {
+            let cond = cast_arguments(c, cond.kind, new_tys);
+            let a = cast_arguments(c, a.kind, new_tys);
+            let b = cast_arguments(c, b.kind, new_tys);
+            c.mux(cond, a, b)
+        },
+        GateKind::Cast(w, ty) => {
+            let w = cast_arguments(c, w.kind, new_tys);
+            c.cast(w, ty)
+        },
+        GateKind::Pack(ws) => {
+            let ws = c.wire_list(&ws.iter().map(|&w| cast_arguments(c, w.kind, new_tys)).collect::<Vec<_>>());
+            c.pack(ws)
+        },
+        GateKind::Extract(w, i) => {
+            let w = cast_arguments(c, w.kind, new_tys);
+            c.extract(w, i)
+        },
+        GateKind::Gadget(gadget, args) => {
+            let args = c.wire_list(&args.iter().map(|&arg| cast_arguments(c, arg.kind, new_tys)).collect::<Vec<_>>());
+            c.gadget(gadget, args)
+        },
+        GateKind::Call(call) => {
+            let CallData { func, args, project_deps, project_witness } = *call;
+            let args = c.wire_list(&args.iter().map(|&arg| cast_arguments(c, arg.kind, new_tys)).collect::<Vec<_>>());
+            let project_deps = c.wire_list(&project_deps.iter().map(|&dep| cast_arguments(c, dep.kind, new_tys)).collect::<Vec<_>>());
+            c.gate(GateKind::Call(c.call_with_secret_project(func, args, project_deps, project_witness)))
+        },
+        GateKind::Switch(..) => unimplemented!("Lowering nested `GateKind::Switch` is not supported."),
+        GateKind::Seq(a, b) => {
+            let a = cast_arguments(c, a.kind, new_tys);
+            let b = cast_arguments(c, b.kind, new_tys);
+            c.seq(a, b)
+        },
+        GateKind::AssertZero(w) => {
+            let w = cast_arguments(c, w.kind, new_tys);
+            c.assert_zero(w)
+        },
+    }
 }
 
 fn int_field_arith<'a, F: PrimeFiniteField + AsField + FromBits + AsBits>(
@@ -119,6 +244,23 @@ where
                 }, ty))
             });
             Some(ret)
+        },
+        GateKind::Switch(guard, cases, args) if guard.ty.is_integer() => {
+            let guard_f = c.cast(guard, field_ty);
+            let arg_tys = args.iter().map(|&arg| cast_type(c.as_base(), arg.ty, field_ty)).collect::<Vec<_>>();
+            let cases_f = c.switch_case_list(&cases.iter().map(|&case| {
+                let SwitchCaseData { pattern, body, project_deps, project_witness } = *case;
+                let pattern_f = crate::eval::bigint_to_prime_field_bits(c.as_base(), pattern.to_bigint(guard.ty), guard.ty.integer_size(), F::AS_FIELD);
+                let body_f = c.as_base().map_function(body, |c, _, result| {
+                    let result_ty = cast_type(c.as_base(), result.ty, field_ty);
+                    let result = cast_wire(c.as_base(), cast_arguments(c.as_base(), result.kind, &arg_tys), result_ty);
+                    (c.ty_list(&arg_tys), result)
+                });
+                c.switch_case_with_secret_project(pattern_f, body_f, project_deps, project_witness)
+            }).collect::<Vec<_>>());
+            let args_f = c.wire_list(&args.iter().enumerate().map(|(i, &arg)| cast_wire(c.as_base(), arg, arg_tys[i])).collect::<Vec<_>>());
+            let result = c.switch(guard_f, cases_f, args_f);
+            Some(cast_wire(c.as_base(), result, ty))
         },
         _ => None,
     }

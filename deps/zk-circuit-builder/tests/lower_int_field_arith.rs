@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use zk_circuit_builder::eval;
 use zk_circuit_builder::ir::circuit::{
     Arenas, Circuit, CircuitTrait, CircuitExt, Wire, Ty, FilterNil, GateValue, AsBits, IntSize,
-    DefineFunction, TyKind, Field, UnOp, BinOp,
+    DefineFunction, TyKind, Field, UnOp, BinOp, Bits, CircuitFilter,
 };
 use zk_circuit_builder::lower::int_field_arith::IntFieldArith;
 use zk_circuit_builder::util::CowBox;
@@ -229,3 +229,73 @@ define_bin_ops!(u64, i64);
 
 define_tests!(u64);
 define_tests!(i64);
+
+fn run_u8_f128p_switch<'a, F: CircuitFilter<'a>>(arenas: &'a Arenas, filter: F) {
+    struct SwitchF;
+    impl<'b> DefineFunction<'b> for SwitchF {
+        fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+            let ty = Ty::uint(u8::BITS as usize);
+            let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+            let w = c.secret_lazy_derived(ty, c.wire_list(&[b]), |c, w: &u8, deps| {
+                let &[b]: &[Bits; 1] = deps.try_into().unwrap();
+                let b = b.as_u8().unwrap();
+                (b * w).as_bits(c.as_base(), Ty::uint(u8::BITS as usize).integer_size())
+            });
+            c.add(a, w)
+        }
+    }
+
+    struct SwitchG;
+    impl<'b> DefineFunction<'b> for SwitchG {
+        fn build_body<C: CircuitTrait<'b>>(self, c: &C, args: &[Wire<'b>]) -> Wire<'b> {
+            let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
+            c.mul(a, b)
+        }
+    }
+
+    let c   = Circuit::new::<u8>(arenas, true, filter);
+    let ckt = &c;
+    let ty = Ty::uint(u8::BITS as usize);
+
+    let pat_f    = ckt.bits(ty, 0);
+    let switch_f = ckt.define_function::<u8, _>("switch_f", &[ty, ty], SwitchF);
+
+    let pat_g    = ckt.bits(ty, 1);
+    let switch_g = ckt.define_function::<(), _>("switch_g", &[ty, ty], SwitchG);
+
+    let dep_f  = ckt.lit(ty, 2);
+    let deps_f = ckt.wire_list(&[dep_f]);
+    let cases  = ckt.switch_case_list(&[
+        ckt.switch_case(pat_f, switch_f, deps_f, |_, w: &u8, deps| {
+            let &[dep]: &[Bits; 1] = deps.try_into().unwrap();
+            let dep = dep.as_u8().unwrap();
+            CowBox::Owned(Box::new(w + dep))
+        }),
+        ckt.switch_case(pat_g, switch_g, &[], |_, &(), _| (&()).into()),
+    ]);
+
+    let guard = ckt.lit(ty, 0);
+    let args  = ckt.wire_list(&[
+        ckt.secret_immediate(ty, 3),
+        ckt.secret_immediate(ty, 4),
+    ]);
+
+    let switch = ckt.switch(guard, cases, args);
+
+    let expected = eval::Value::SingleInteger(num_bigint::BigInt::from(31));
+    let actual = eval::eval_wire_secret_with_witness(ckt.as_base(), switch, &(5 as u8)).unwrap();
+
+    assert_eq!(expected, actual)
+}
+
+#[test]
+fn lower_int_field_u8_f128p_switch() {
+    /* Expected: Evaluate the circuit before lowering */
+    let arenas_e = Arenas::new();
+    let filter_e = FilterNil;
+    run_u8_f128p_switch(&arenas_e, filter_e);
+
+    let arenas_a = Arenas::new();
+    let filter_a = IntFieldArith::<_, F128p>::new(FilterNil, true);
+    run_u8_f128p_switch(&arenas_a, filter_a);
+}

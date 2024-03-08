@@ -1052,6 +1052,15 @@ pub fn eval_wire<'a, S: SecretEvaluator<'a> + Default>(
     EvalWire::eval_wire_bits(&mut ev, c, w)
 }
 
+pub fn eval_wire_with_witness<'a, W: 'static, S: SecretEvaluator<'a> + Default>(
+    c: &CircuitBase<'a>,
+    w: Wire<'a>,
+    witness: &W,
+) -> Result<(Bits<'a>, bool), Error<'a>> {
+    let mut ev = CachingEvaluator::<S>::with_witness(witness);
+    EvalWire::eval_wire_bits(&mut ev, c, w)
+}
+
 pub fn eval_wire_public<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
     let (bits, sec) = eval_wire::<Public>(c, w).ok()?;
     debug_assert!(!sec);
@@ -1060,6 +1069,11 @@ pub fn eval_wire_public<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
 
 pub fn eval_wire_secret<'a>(c: &CircuitBase<'a>, w: Wire<'a>) -> Option<Value> {
     let (bits, _sec) = eval_wire::<RevealSecrets>(c, w).ok()?;
+    Some(Value::from_bits(w.ty, bits))
+}
+
+pub fn eval_wire_secret_with_witness<'a, W: 'static>(c: &CircuitBase<'a>, w: Wire<'a>, witness: &W) -> Option<Value> {
+    let (bits, _sec) = eval_wire_with_witness::<_, RevealSecrets>(c, w, witness).unwrap();
     Some(Value::from_bits(w.ty, bits))
 }
 

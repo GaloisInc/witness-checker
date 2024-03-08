@@ -498,6 +498,39 @@ impl<'a> CircuitBase<'a> {
         Secret(self.arena().alloc(sd))
     }
 
+    pub fn map_secret_deps<F>(
+        &self,
+        secret: Secret<'a>,
+        f: F,
+    ) -> Secret<'a>
+    where F: Fn(&CircuitBase<'a>, &'a [Wire<'a>]) -> &'a [Wire<'a>],
+    {
+        let SecretData { ty, used: _, init, deps } = *secret;
+        let deps = f(self, deps);
+        Secret(self.arena().alloc(SecretData {
+            ty,
+            used: Cell::new(false),
+            init,
+            deps,
+        }))
+    }
+
+    pub fn map_function<F>(
+        &self,
+        func: Function<'a>,
+        f: F,
+    ) -> Function<'a>
+    where F: Fn(&CircuitBase<'a>, &'a [Ty<'a>], Wire<'a>) -> (&'a [Ty<'a>], Wire<'a>),
+    {
+        let FunctionDef { name, arg_tys, result_wire, witness_type } = *func;
+        let (arg_tys, result_wire) = f(self, arg_tys, result_wire);
+        Function(self.arena().alloc(FunctionDef {
+            name,
+            arg_tys,
+            result_wire,
+            witness_type,
+        }))
+    }
 
     fn scoped_label_exact<T: fmt::Display>(&self, label: T) -> CellResetGuard<&'a str> {
         let new = self.intern_str(&label.to_string());
@@ -1172,6 +1205,21 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
         self.gate(GateKind::Call(call))
     }
 
+    fn switch_case_with_secret_project(
+        &self,
+        pattern: Bits<'a>,
+        body: Function<'a>,
+        project_deps: &'a [Wire<'a>],
+        project_witness: SecretProjectFn<'a>,
+    ) -> SwitchCase<'a> {
+        self.as_base().alloc_switch_case(SwitchCaseData {
+            pattern,
+            body,
+            project_deps,
+            project_witness,
+        })
+    }
+
     fn switch_case<W, W2, F>(
         &self,
         pattern: Bits<'a>,
@@ -1189,13 +1237,7 @@ pub trait CircuitExt<'a>: CircuitTrait<'a> {
             TypeId::of::<W>() == TypeId::of::<()>());
         debug_assert_eq!(TypeId::of::<W2>(), body.witness_type);
         let project_witness = self.as_base().alloc_secret_project_fn(project_witness);
-        let switch_case = self.as_base().alloc_switch_case(SwitchCaseData {
-            pattern,
-            body,
-            project_witness,
-            project_deps,
-        });
-        switch_case
+        self.switch_case_with_secret_project(pattern, body, project_deps, project_witness)
     }
 
     fn switch(
@@ -3414,6 +3456,14 @@ impl<'a> Bits<'a> {
         }
 
         ret.into_iter().flatten().collect::<Vec<_>>()
+    }
+
+    pub fn as_u8(&self) -> Option<u8> {
+        match self.0.len() {
+            0 => Some(0),
+            1 => Some(self.0[0] as u8),
+            _ => None,
+        }
     }
 
     pub fn as_u64(&self) -> Option<u64> {
