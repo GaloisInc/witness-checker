@@ -21,19 +21,18 @@ impl AsField for F128p {
 fn int_field_arith<'a, F: PrimeFiniteField + AsField + FromBits + AsBits>(
     c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
     gk: GateKind<'a>,
-) -> Wire<'a>
+) -> Option<Wire<'a>>
 where
     F::Error: Debug,
 {
     let ty = gk.ty(c);
-    let ty_width = ty.integer_size().bits();
-    let ty_size = BigUint::from(2_u64).pow(ty_width as u32);
-    
+
     let field_ty = c.ty(TyKind::GF(F::AS_FIELD));
     let field_width = F::AS_FIELD.bit_size().bits();
     let field_size = F::AS_FIELD.modulus().unwrap();
     match gk {
         GateKind::Unary(Neg, a) if ty.is_integer() => {
+            let ty_width = ty.integer_size().bits();
             assert!(ty_width + 1 < field_width);
             let a_f = c.cast(a, field_ty);
             // TODO(isweet): A little ugly to compute this above as `ty_size`
@@ -42,22 +41,29 @@ where
             let two_f = F::try_from(2 as u128).unwrap();
             let max_f = c.lit(field_ty, two_f.pow(ty.integer_size().bits() as u128));
             let neg_a_f = c.sub(max_f, a_f);
-            c.cast(neg_a_f, ty)
+            let ret = c.cast(neg_a_f, ty);
+            Some(ret)
         },
         GateKind::Binary(Add, a, b) if ty.is_integer() => {
+            let ty_width = ty.integer_size().bits();
             assert!(ty_width + 1 < field_width);
             let a_f = c.cast(a, field_ty);
             let b_f = c.cast(b, field_ty);
             let sum_f = c.add(a_f, b_f);
-            c.cast(sum_f, ty)            
+            let ret = c.cast(sum_f, ty);
+            Some(ret)
         },
         GateKind::Binary(Sub, a, b) if ty.is_integer() => {
+            let ty_width = ty.integer_size().bits();
             assert!(ty_width + 2 < field_width);
             // This is necessary to prevent underflowing the field, which
             // is handled by the negation gate.
-            c.add(a, c.neg(b))
+            let ret = c.add(a, c.neg(b));
+            Some(ret)
         },
         GateKind::Binary(Mul, a, b) if ty.is_integer() => {
+            let ty_width = ty.integer_size().bits();
+            let ty_size = BigUint::from(2_u64).pow(ty_width as u32);
             // For (unsigned) integers of width `w`, the maximum result
             // of multiplication is (2^w - 1)^2. There is a margin between
             // that value and 2^(2 * w) - 1, which is the largest value
@@ -68,7 +74,8 @@ where
             let a_f = c.cast(a, field_ty);
             let b_f = c.cast(b, field_ty);
             let prod_f = c.mul(a_f, b_f);
-            c.cast(prod_f, ty)            
+            let ret = c.cast(prod_f, ty);
+            Some(ret)
         },
         GateKind::Binary(op @ Div, a, b) | GateKind::Binary(op @ Mod, a, b) if ty.is_uint() => {
             let width = ty.integer_size();
@@ -103,16 +110,17 @@ where
             let ok = c.or(rem_minus_denom_is_neg, denom_zero);                          // r < b \/ b == 0
             
             // Asserts that q * b - (a - r) == 0 (which implies that a == q * b + r)
-            c.seq(c.assert_zero(diff_all), {
+            let ret = c.seq(c.assert_zero(diff_all), {
                 // Asserts that either the remainder is less than the denominator, or the denominator is zero
                 c.seq(c.assert_zero(c.not(ok)), c.cast(match op {
                     Div => quot_f,
                     Mod => rem_f,
                     _   => unreachable!(),
                 }, ty))
-            })
+            });
+            Some(ret)
         },
-        _ => c.gate(gk),
+        _ => None,
     }
 }
 
@@ -149,7 +157,10 @@ where F: Migrate<'a, 'a, Output = F>,
         let c = CircuitRef { base, filter: &self.inner };
 
         if self.active {
-            return int_field_arith::<P>(&c, gk);
+            let c = CircuitRef { base, filter: self };
+            if let Some(w) = int_field_arith::<P>(&c, gk) {
+                return w;
+            }
         }
 
         c.gate(gk)
