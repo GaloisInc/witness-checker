@@ -13,6 +13,7 @@ sieve_ir = ["zk-circuit-builder/sieve_ir"]
 
 [dependencies]
 zk-circuit-builder = { path = "deps/zk-circuit-builder", default-features = false, features = ["f128p"] }
+scuttlebutt = { path = "deps/swanky/scuttlebutt" }
 
 # Note: This is an older version of arrayvec, compatible with older Rust
 arrayvec = "0.5.2"

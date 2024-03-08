@@ -31,6 +31,8 @@ use cheesecloth::micro_ram::witness::MultiExecWitness;
 use cheesecloth::mode::if_mode::{AnyTainted, IfMode, Mode, is_mode, with_mode};
 use cheesecloth::mode::tainted;
 
+use scuttlebutt::field::F128p;
+
 fn parse_args() -> ArgMatches<'static> {
     App::new("witness-checker")
         .about("generate a witness checker circuit for a given MicroRAM execution trace")
@@ -256,6 +258,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let use_plugins = args.value_of("available-plugins")
         .map(UsePlugins::from_str)
         .unwrap_or_else(UsePlugins::all);
+    let mut is_f128p_sieve_ir_v3 = false;
     let mut backend =
         if let Some(workspace) = args.value_of("sieve-ir-out") {
             assert!(modulus.is_none(),
@@ -283,6 +286,7 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         } else if let Some(workspace) = args.value_of("f128p-sieve-ir-v3-out") {
             assert!(modulus.is_none(),
                     "--field-modulus is not supported with --f128p-sieve-ir-v3-out");
+            is_f128p_sieve_ir_v3 = true;
             back::new_f128p_sieve_ir_v3(workspace, use_plugins)
         } else if let Some(dest) = args.value_of_os("zkif-out") {
             assert!(modulus.is_none(), "--field-modulus is not supported with --zkif-out");
@@ -322,7 +326,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
         ok
     };
 
+
     let cf = FilterNil;
+    let cf = lower::int_field_arith::IntFieldArith::<'_, _,  F128p>::new(cf, is_f128p_sieve_ir_v3);
     let cf = cf.add_pass(|c, gk| lower::bool_::not_to_xor(c, gk));
     let cf = cf.add_pass(|c, gk| lower::bool_::compare_to_logic(c, gk));
     let cf = cf.add_pass(|c, gk| lower::bool_::mux(c, gk));
