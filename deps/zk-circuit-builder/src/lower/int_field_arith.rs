@@ -93,8 +93,8 @@ where
                 let rem = if b.is_zero() { a } else { a % b };
                 bigint_to_prime_field_bits(c, rem.to_bigint().unwrap(), width, F::AS_FIELD)
             });
-            
-            let a_f = c.cast(a, field_ty);            
+
+            let a_f = c.cast(a, field_ty);
             let b_f = c.cast(b, field_ty);
             let quot_times_denom_f = c.mul(quot_f, b_f);               // q * b
             let num_minus_rem_f = c.sub(a_f, rem_f);                   // a - r
@@ -108,7 +108,7 @@ where
             let rem_minus_denom_is_neg = c.lt(rem_minus_denom, c.lit(neg_check_ty, 0)); // r - b < 0 (i.e. r < b)
             let denom_zero = c.eq(b, c.lit(b.ty, 0));                                   // b == 0
             let ok = c.or(rem_minus_denom_is_neg, denom_zero);                          // r < b \/ b == 0
-            
+
             // Asserts that q * b - (a - r) == 0 (which implies that a == q * b + r)
             let ret = c.seq(c.assert_zero(diff_all), {
                 // Asserts that either the remainder is less than the denominator, or the denominator is zero
@@ -179,7 +179,7 @@ where
                 Some(x) => x,
                 None => continue,
             };
-            
+
             bounds.insert(new_wire, old_repr);
         }
 
