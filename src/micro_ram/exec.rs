@@ -278,15 +278,10 @@ impl<'a> ExecBuilder<'a> {
         // data to initialize the segment's secrets.
         if let Some(&(chunk_idx, cycle)) = self.seg_user_map.get(&idx) {
             let chunk = &exec.trace[chunk_idx];
-            let debug_prev_state = chunk.debug.as_ref().and_then(|d| d.prev_state.as_ref());
-            let prev_state = if let Some(s) = debug_prev_state {
-                s
-            } else if chunk_idx == 0 {
-                &self.init_state
-            } else {
-                exec.trace[chunk_idx - 1].states.last().expect("empty chunk")
-            };
-            seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
+
+            if self.check_steps > 0 {
+                seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
+            }
 
             // FIXME: this leaks information, namely, the identity of the last used segment.  We
             // should either forbid mixing `--expect-zero` with public PC, or otherwise ensure that
