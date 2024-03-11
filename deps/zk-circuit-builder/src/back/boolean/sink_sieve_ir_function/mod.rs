@@ -267,6 +267,22 @@ pub trait Dispatch {
     fn flush(&mut self, free_all_pages: bool);
 }
 
+fn lsb_hex_str(width: u64, n: &BigUint) -> String {
+    assert_eq!(width % 8, 0);
+
+    let width_bytes = (width / 8) as usize;
+    let mut bytes = n.to_bytes_le();
+    bytes.append(&mut vec![0u8; width_bytes - bytes.len()]);
+    let mut result = String::with_capacity(2 * (1 + width_bytes));
+
+    result.push_str("0x");
+    for b in bytes {
+        result.push_str(&format!("{:X}", b.reverse_bits()));
+    }
+
+    result
+}
+
 impl<S, IR: SieveIrFormat> SieveIrFunctionSink<S, IR>
 where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     pub fn new(sink: S, field: SieveIrField, use_plugins: UsePlugins) -> SieveIrFunctionSink<S, IR> {
@@ -618,7 +634,14 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         // TODO(isweet): Support `permissive` mode at some point?
         params.push("strict".into());
         params.extend(branches.iter().flat_map(|(idx, pat)| {
-            let pat_str = pat.to_string();
+            // The condition wires are layed out least significant bit first,
+            // so the pattern must be converted to the same representation before
+            // being emitted into SIEVE IR.
+            //
+            // TODO: This whole module should be converted to represent integers
+            // as contiguous wires with the most significant bit first to achieve
+            // consistency with the expectations of various SIEVE IR plugins.
+            let pat_str = lsb_hex_str(cond_width, pat);
             let name_str = self.func_info[*idx].name.clone();
             iter::once(pat_str).chain(iter::once(name_str))
         }));
