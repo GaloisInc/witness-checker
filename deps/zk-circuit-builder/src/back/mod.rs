@@ -91,6 +91,10 @@ macro_rules! declare_use_plugins {
                 }
                 ap
             }
+
+            pub fn list_plugins() -> String {
+                [$(stringify!($plugin),)*].join(", ")
+            }
         }
     };
 }

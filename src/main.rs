@@ -115,7 +115,7 @@ fn parse_args() -> ArgMatches<'static> {
              .long("available-plugins")
              .takes_value(true)
              .value_name("NAMES")
-             .help("enable only the listed IR0+ plugins (default: enable all plugins)"))
+             .help(&format!("enable only the listed IR0+ plugins (default: enable all plugins)\navailable plugins: {}", UsePlugins::list_plugins())))
         .arg(Arg::with_name("no-functions")
              .long("no-functions")
              .help("Do not generate functions in the output circuit"))
