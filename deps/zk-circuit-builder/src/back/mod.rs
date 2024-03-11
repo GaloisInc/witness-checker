@@ -450,8 +450,8 @@ pub mod boolean;
 pub fn new_boolean_sieve_ir<'a>(workspace: &str) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
-        use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV1Sink};
+        use self::boolean::{SieveIrField, Backend};
+        use self::boolean::sink_sieve_ir_function::SieveIrV1Sink;
         use zki_sieve::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -528,8 +528,8 @@ pub fn new_boolean_sieve_ir_v2<'a>(
 ) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
-        use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV2Sink};
+        use self::boolean::{SieveIrField, Backend};
+        use self::boolean::sink_sieve_ir_function::SieveIrV2Sink;
         use zki_sieve_v3::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -610,8 +610,8 @@ pub fn new_boolean_sieve_ir_v3<'a>(
 ) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
-        use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV3Sink};
+        use self::boolean::{SieveIrField, Backend};
+        use self::boolean::sink_sieve_ir_function::SieveIrV3Sink;
         use zki_sieve_v5::{
             cli::{cli, Options, StructOpt},
             FilesSink,
@@ -692,8 +692,8 @@ pub fn new_f128p_sieve_ir_v3<'a>(
 ) -> Box<dyn Backend<'a> + 'a> {
     #[cfg(feature = "sieve_ir")]
     {
-        use self::boolean::Backend;
-        use self::boolean::sink_sieve_ir_function::{SieveIrField, SieveIrV3Sink};
+        use self::boolean::{SieveIrField, Backend};
+        use self::boolean::sink_sieve_ir_function::SieveIrV3Sink;
         use zki_sieve_v5::{
             cli::{cli, Options, StructOpt},
             FilesSink,

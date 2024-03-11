@@ -10,6 +10,7 @@ use scuttlebutt::field::{F128p, PrimeFiniteField};
 use zki_sieve;
 use zki_sieve_v3;
 use crate::back::UsePlugins;
+use crate::back::boolean::SieveIrField;
 use crate::ir::circuit::{Bits, FromBits};
 use crate::routing::benes::{self, BenesNetwork};
 use super::{Sink, WireId, Time, TEMP, Source, AssertNoWrap, bool_to_f128p};
@@ -104,12 +105,6 @@ pub trait SieveIrFormat {
         visit_gate: impl FnMut(Self::Gate),
         visit_function: impl FnMut(Self::Function),
     );
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum SieveIrField {
-    F1b,
-    F128p,
 }
 
 fn f128p_to_le_bytes(f: F128p) -> Vec<u8> {

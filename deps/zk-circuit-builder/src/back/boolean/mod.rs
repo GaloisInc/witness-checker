@@ -26,6 +26,12 @@ mod ops;
 pub mod sink_sieve_ir_function;
 mod wire_alloc;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum SieveIrField {
+    F1b,
+    F128p,
+}
+
 pub type WireId = u64;
 
 /// A summary of the `ir::circuit` types that are supported by `Sink`.
@@ -1512,7 +1518,6 @@ mod test {
     use scuttlebutt::ring::FiniteRing;
 
     use crate::back::UsePlugins;
-    use crate::back::boolean::sink_sieve_ir_function::SieveIrField;
     use crate::eval::{self, CachingEvaluator};
     use crate::ir::circuit::{
         Circuit, CircuitFilter, CircuitExt, DynCircuit, FilterNil, Arenas, Wire, Ty, TyKind,
@@ -2811,6 +2816,7 @@ mod test {
         test_gate_f128p([1], |c, [a]| c.seq(c.assert_zero(c.sub(a, a)), a));
     }
 
+    #[cfg(feature = "sieve_ir")]
     fn emit_and_validate<'a>(c: &impl CircuitTrait<'a>, field: SieveIrField, ok: Wire<'a>) {
         use zki_sieve_v5::producers::sink::MemorySink;
 
@@ -2837,6 +2843,7 @@ mod test {
         }
     }
 
+    #[cfg(feature = "sieve_ir")]
     #[test]
     fn switch_u8_no_private_inputs() {
         use std::convert::TryInto;
@@ -2899,6 +2906,7 @@ mod test {
         emit_and_validate(&c, SieveIrField::F1b, ok)
     }
 
+    #[cfg(feature = "sieve_ir")]
     #[test]
     fn switch_f128p_no_private_inputs() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -2962,6 +2970,7 @@ mod test {
         emit_and_validate(&c, SieveIrField::F128p, ok)
     }
 
+    #[cfg(feature = "sieve_ir")]
     #[test]
     fn switch_u8_private_inputs() {
         use std::convert::TryInto;
