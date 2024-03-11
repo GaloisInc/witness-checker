@@ -116,6 +116,9 @@ fn parse_args() -> ArgMatches<'static> {
              .takes_value(true)
              .value_name("NAMES")
              .help("enable only the listed IR0+ plugins (default: enable all plugins)"))
+        .arg(Arg::with_name("no-functions")
+             .long("no-functions")
+             .help("Do not generate functions in the output circuit"))
 
         // Special flag for T&E, used by generate_statements.py
         .arg(Arg::with_name("test-expand-trace")
@@ -320,8 +323,9 @@ fn real_main(args: ArgMatches<'static>) -> io::Result<()> {
     let cf = cf.add_pass(|c, gk| lower::bundle::unbundle_mux(c, gk));
     let cf = lower::gadget::DecomposeGadgets::new(cf, move |g| !gadget_supported(g));
     let cf = cf.add_pass(|c, gk| lower::bit_pack::concat_bits_flat(c, gk));
+    let use_functions = !args.is_present("no-functions") && backend.has_feature(BackendFeature::Function);
     let c = Circuit::new::<MultiExecWitness>(&arenas, is_prover, cf)
-        .set_allow_functions(backend.has_feature(BackendFeature::Function))
+        .set_allow_functions(use_functions)
         .set_allow_switches(backend.has_feature(BackendFeature::Switch));
     let c = &c;
 
