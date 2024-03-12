@@ -93,7 +93,11 @@ impl<'a> KnownMem<'a> {
         addr: u64,
         width: MemOpWidth,
     ) -> Option<TWire<'a, u64>> {
-        assert!(addr % width.bytes() as u64 == 0);
+        if addr % width.bytes() as u64 != 0 {
+            // Unaligned access.  We return `None` as if we have no data about the result.
+            return None;
+        }
+
         let end = end_addr(addr, width);
         let (waddr, _offset) = split_mem_addr(addr);
 
@@ -229,7 +233,13 @@ impl<'a> KnownMem<'a> {
         width: MemOpWidth,
         poisoned: bool,
     ) {
-        assert!(addr % width.bytes() as u64 == 0);
+        if addr % width.bytes() as u64 != 0 {
+            // Unaligned access.  We clear the affected memory, so afterward we have no knowledge
+            // about the contents.
+            self.clear_range(addr, addr + width.bytes() as u64);
+            return;
+        }
+
         let end = end_addr(addr, width);
         let (waddr, _offset) = split_mem_addr(addr);
 
