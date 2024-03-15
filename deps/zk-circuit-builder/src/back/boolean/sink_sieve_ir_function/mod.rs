@@ -108,9 +108,6 @@ pub trait SieveIrFormat {
     );
 }
 
-fn f128p_to_le_bytes(f: F128p) -> Vec<u8> {
-    f.into_int::<{ F128p::MIN_LIMBS_NEEDED }>().to_le_byte_array().to_vec()
-}
 
 pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     sink: S,
@@ -1274,8 +1271,12 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn private_value_bit(&mut self, b: bool) {
         match self.field {
             SieveIrField::F1b   => self.private_values.push(b as u8),
-            SieveIrField::F128p => self.private_values.append(&mut f128p_to_le_bytes(bool_to_f128p(b))),
+            SieveIrField::F128p => self.private_value_f128p(bool_to_f128p(b)),
         }
+    }
+
+    fn private_value_f128p(&mut self, f: F128p) {
+        self.private_values.extend_from_slice(f.into_int::<{ F128p::MIN_LIMBS_NEEDED }>().to_le_byte_array().as_ref())
     }
 
     /// Compute the witness of the assert_permute plugin.
@@ -1502,7 +1503,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         out
     }
     fn private_value_f128p(&mut self, bits: Bits) {
-        self.private_values.append(&mut f128p_to_le_bytes(F128p::from_bits(bits)))
+        self.private_value_f128p(F128p::from_bits(bits))
     }
     fn copy_f128p(&mut self, expire: Time, a: WireId) -> WireId {
         let out = self.alloc_wires(expire, 1);
