@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use std::iter;
 use std::marker::PhantomData;
 use std::mem;
+use std::fmt::Write;
 use crypto_bigint::ArrayEncoding;
 use log::*;
 use num_bigint::BigUint;
@@ -278,7 +279,7 @@ fn lsb_hex_str(width: u64, n: &BigUint) -> String {
 
     result.push_str("0x");
     for b in bytes {
-        result.push_str(&format!("{:02X}", b.reverse_bits()));
+        write!(result, "{:02X}", b.reverse_bits()).unwrap();
     }
 
     result
