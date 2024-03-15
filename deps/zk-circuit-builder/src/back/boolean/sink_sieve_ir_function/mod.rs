@@ -269,7 +269,7 @@ pub trait Dispatch {
     fn flush(&mut self, free_all_pages: bool);
 }
 
-fn lsb_hex_str(width: u64, n: &BigUint) -> String {
+fn bit_reversed_hex_str(width: u64, n: &BigUint) -> String {
     assert_eq!(width % 8, 0);
 
     let width_bytes = (width / 8) as usize;
@@ -643,7 +643,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
             // TODO: This whole module should be converted to represent integers
             // as contiguous wires with the most significant bit first to achieve
             // consistency with the expectations of various SIEVE IR plugins.
-            let pat_str = lsb_hex_str(cond_width, pat);
+            let pat_str = bit_reversed_hex_str(cond_width, pat);
             let name_str = self.func_info[*idx].name.clone();
             iter::once(pat_str).chain(iter::once(name_str))
         }));
