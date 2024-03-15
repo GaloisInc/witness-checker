@@ -116,6 +116,7 @@ pub struct SieveIrFunctionSink<S, IR: SieveIrFormat> {
     field: SieveIrField,
     alloc: WireAlloc,
     gates: Vec<IR::Gate>,
+    /// Private values to be emitted. Each private value occupies [`Self::private_input_size()`] bytes.
     private_values: Vec<u8>,
     /// Functions in `zki_sieve_v3` representation.  This vector is drained on `flush()`.
     functions: Vec<IR::Function>,
