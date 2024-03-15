@@ -3414,7 +3414,6 @@ impl<'a, 'b> Migrate<'a, 'b> for Label<'a> {
     }
 }
 
-
 /// An arbitrary-sized array of bits.  Used to represent values in the circuit and
 /// evaluator.
 ///
@@ -3436,26 +3435,22 @@ impl<'a> Bits<'a> {
     }
 
     pub fn to_le_bytes(&self) -> Vec<u8> {
-        let mut ret = Vec::new();
-        let mut leading_zeroes = true;
+        let digit_size = mem::size_of::<u32>();
+        let mut ret = Vec::with_capacity(self.0.len() * digit_size);
+        let mut last_nonzero_byte_idx = 0;
 
-        for &x in self.0.iter() {
-            if leading_zeroes && x != 0 {
-                leading_zeroes = false;
+        for (i, &digit) in self.0.iter().enumerate() {
+            let digit_le_bytes = digit.to_le_bytes();
+            for (j, &byte) in digit_le_bytes.iter().enumerate() {
+                if byte != 0 {
+                    last_nonzero_byte_idx = digit_size * i + j;
+                }
             }
-
-            if leading_zeroes {
-                continue;
-            }
-
-            ret.push(x.to_le_bytes());
+            ret.extend_from_slice(&digit_le_bytes);
         }
 
-        if ret.is_empty() {
-            return vec![0];
-        }
-
-        ret.into_iter().flatten().collect::<Vec<_>>()
+        ret.truncate(last_nonzero_byte_idx + 1);
+        ret
     }
 
     pub fn as_u8(&self) -> Option<u8> {
@@ -3710,5 +3705,18 @@ impl TryFrom<Bits<'_>> for u64 {
             return Err(BitsToIntError { actual: bits.width(), expected: 64 });
         }
         Ok(bits.0[0] as u64 | (bits.0[1] as u64) << 32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_le_bytes() {
+        let x = Bits(&[0, 0x0000ff00, 0, 0]);
+        let expected = vec![0, 0, 0, 0, 0, 0xff];
+        let actual = x.to_le_bytes();
+        assert_eq!(expected, actual)
     }
 }
