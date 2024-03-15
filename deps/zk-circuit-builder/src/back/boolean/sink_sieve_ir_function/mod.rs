@@ -278,7 +278,7 @@ fn lsb_hex_str(width: u64, n: &BigUint) -> String {
 
     result.push_str("0x");
     for b in bytes {
-        result.push_str(&format!("{:X}", b.reverse_bits()));
+        result.push_str(&format!("{:02X}", b.reverse_bits()));
     }
 
     result
