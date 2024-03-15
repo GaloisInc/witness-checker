@@ -1271,6 +1271,13 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
         ));
     }
 
+    fn private_value_bit(&mut self, b: bool) {
+        match self.field {
+            SieveIrField::F1b   => self.private_values.push(b as u8),
+            SieveIrField::F128p => self.private_values.append(&mut f128p_to_le_bytes(bool_to_f128p(b))),
+        }
+    }
+
     /// Compute the witness of the assert_permute plugin.
     ///
     /// # Arguments
@@ -1311,7 +1318,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                     continue;
                 }
                 let swap = flags.contains(benes::SwitchFlags::F_SWAP);
-                self.private_values.push(swap as u8);
+                self.private_value_bit(swap);
             }
         }
     }
@@ -1337,10 +1344,7 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     fn private_value(&mut self, n: u64, value: Bits) {
         for i in 0 .. n {
             let b = value.get(i as usize);
-            match self.field {
-                SieveIrField::F1b   => self.private_values.push(b as u8),
-                SieveIrField::F128p => self.private_values.append(&mut f128p_to_le_bytes(bool_to_f128p(b))),
-            }
+            self.private_value_bit(b);
         }
     }
     fn copy(&mut self, expire: Time, n: u64, a: WireId) -> WireId {
