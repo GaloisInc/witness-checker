@@ -273,7 +273,7 @@ fn lsb_hex_str(width: u64, n: &BigUint) -> String {
 
     let width_bytes = (width / 8) as usize;
     let mut bytes = n.to_bytes_le();
-    bytes.append(&mut vec![0u8; width_bytes - bytes.len()]);
+    bytes.resize(width_bytes, 0);
     let mut result = String::with_capacity(2 * (1 + width_bytes));
 
     result.push_str("0x");
