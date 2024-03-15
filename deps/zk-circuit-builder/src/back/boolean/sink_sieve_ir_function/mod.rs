@@ -190,7 +190,6 @@ enum FunctionDesc {
     Switch(u64, Vec<(usize, BigUint)>),
     SwitchF128p(Vec<(usize, BigUint)>),
 
-    SubF128p,
     ToF128p(u64),
 }
 
@@ -233,7 +232,6 @@ impl FunctionDesc {
                 let suffix = branches.iter().map(|(idx, pat)| format!("{}_{}", idx, pat)).collect::<Vec<_>>().join("_");
                 format!("switch_f128p_{}", suffix)
             }
-            FunctionDesc::SubF128p => "sub_f128p".to_owned(),
             FunctionDesc::ToF128p(n) => format!("to_f128p_{}", n),
         }
     }
@@ -370,7 +368,8 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
     }
 
     fn sub_f128p(&mut self, expire: Time, a: WireId, b: WireId) -> WireId {
-        self.emit_call(expire, FunctionDesc::SubF128p, &[a, b])
+        let neg_b = self.neg_f128p(TEMP, b);
+        self.add_f128p(expire, a, neg_b)
     }
 
     fn lit_zero_gate_into(&mut self, out: WireId, n: u64) {
@@ -977,13 +976,6 @@ where Self: Dispatch, SieveIrFunctionSink<VecSink<IR>, IR>: Dispatch {
                 //
                 // That being said, support for a non-plugin implementation of `GateKind::Switch` is possible but left to future work.
                 unimplemented!()
-            },
-            FunctionDesc::SubF128p => {
-                let [out, a, b] = sub_sink.alloc.preallocate([1, 1, 1]);
-                let neg_b = sub_sink.neg_f128p(TEMP, b);
-                let ab = sub_sink.add_f128p(TEMP, a, neg_b);
-                sub_sink.copy_into(out, 1, ab);
-                (vec![1], vec![1, 1])
             },
             FunctionDesc::ToF128p(n) => {
                 let [out, a] = sub_sink.alloc.preallocate([1, n]);
