@@ -62,7 +62,7 @@ impl<'a> TryFrom<Ty<'a>> for TySummary {
 fn type_bits(ty: Ty) -> u64 {
     match ty.try_into().unwrap() {
         TySummary::Int(n) => n,
-        TySummary::F128p => unreachable!(),
+        TySummary::F128p => panic!("type_bits is only well-defined on integers (given: {:?})", ty),
     }
 }
 
