@@ -230,6 +230,14 @@ define_bin_ops!(u64, i64);
 define_tests!(u64);
 define_tests!(i64);
 
+fn bits_as_u8(bits: &Bits) -> u8 {
+    match bits.0.len() {
+        0 => 0,
+        1 => bits.0[0] as u8,
+        _ => panic!("bits_as_u8 on Bits larger than one element"),
+    }
+}
+
 fn run_u8_f128p_switch<'a, F: CircuitFilter<'a>>(arenas: &'a Arenas, filter: F) {
     struct SwitchF;
     impl<'b> DefineFunction<'b> for SwitchF {
@@ -238,7 +246,7 @@ fn run_u8_f128p_switch<'a, F: CircuitFilter<'a>>(arenas: &'a Arenas, filter: F) 
             let &[a, b]: &[Wire; 2] = args.try_into().unwrap();
             let w = c.secret_lazy_derived(ty, c.wire_list(&[b]), |c, w: &u8, deps| {
                 let &[b]: &[Bits; 1] = deps.try_into().unwrap();
-                let b = b.as_u8().unwrap();
+                let b = bits_as_u8(&b);
                 (b * w).as_bits(c.as_base(), Ty::uint(u8::BITS as usize).integer_size())
             });
             c.add(a, w)
@@ -268,7 +276,7 @@ fn run_u8_f128p_switch<'a, F: CircuitFilter<'a>>(arenas: &'a Arenas, filter: F) 
     let cases  = ckt.switch_case_list(&[
         ckt.switch_case(pat_f, switch_f, deps_f, |_, w: &u8, deps| {
             let &[dep]: &[Bits; 1] = deps.try_into().unwrap();
-            let dep = dep.as_u8().unwrap();
+            let dep = bits_as_u8(&dep);
             CowBox::Owned(Box::new(w + dep))
         }),
         ckt.switch_case(pat_g, switch_g, &[], |_, &(), _| (&()).into()),

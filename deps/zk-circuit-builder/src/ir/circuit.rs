@@ -3453,23 +3453,6 @@ impl<'a> Bits<'a> {
         ret
     }
 
-    pub fn as_u8(&self) -> Option<u8> {
-        match self.0.len() {
-            0 => Some(0),
-            1 => Some(self.0[0] as u8),
-            _ => None,
-        }
-    }
-
-    pub fn as_u64(&self) -> Option<u64> {
-        match self.0.len() {
-            0 => Some(0),
-            1 => Some(self.0[0] as u64),
-            2 => Some(self.0[0] as u64 | (self.0[1] as u64) << 32),
-            _ => None,
-        }
-    }
-
     pub fn is_zero(&self) -> bool {
         self.0.iter().all(|&x| x == 0)
     }
