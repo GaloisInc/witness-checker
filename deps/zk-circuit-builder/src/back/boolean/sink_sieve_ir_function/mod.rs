@@ -260,6 +260,9 @@ const GATE_PAGE_SIZE: usize = 64 * 1024;
 /// flushes.
 const GATE_FLUSH_SIZE: usize = GATE_PAGE_SIZE - 256;
 
+/// Strict upper limit on the number of bytes per `PrivateInputs` message.
+const PRIVATE_INPUT_PAGE_SIZE: usize = 1024 * 1024;
+
 pub trait Dispatch {
     fn flush(&mut self, free_all_pages: bool);
 }
@@ -1794,7 +1797,7 @@ impl<S: zki_sieve_v3::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV2> {
 
         if self.private_values.len() > 0 {
             let chunk_size = self.private_input_size();
-            let page_size  = GATE_PAGE_SIZE / chunk_size;
+            let page_size  = PRIVATE_INPUT_PAGE_SIZE / chunk_size;
             let private_values = mem::take(&mut self.private_values);
             let mut private_values_iter = private_values.chunks(chunk_size).map(|chunk| {
                 chunk.to_vec()
@@ -1935,7 +1938,7 @@ impl<S: zki_sieve_v5::Sink> Dispatch for SieveIrFunctionSink<S, SieveIrV3> {
 
         if self.private_values.len() > 0 {
             let chunk_size = self.private_input_size();
-            let page_size = GATE_PAGE_SIZE / chunk_size;
+            let page_size = PRIVATE_INPUT_PAGE_SIZE / chunk_size;
             let private_values = mem::take(&mut self.private_values);
             let mut private_values_iter = private_values.chunks(chunk_size).map(|chunk| {
                 chunk.to_vec()
