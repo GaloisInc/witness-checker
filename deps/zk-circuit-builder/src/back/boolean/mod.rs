@@ -1034,7 +1034,6 @@ impl<'w, S: Sink> Backend<'w, S> {
             GateKind::Argument(i, _) => {
                 assert!(i < self.args.len(),
                         "saw Argument({}), but there are only {} args here", i, self.args.len());
-                // TODO(isweet): Could `args` be moved into `Sink`?
                 self.args[i]
             },
 
