@@ -1048,7 +1048,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                         assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
                         match op {
                             UnOp::Neg => self.sink.neg_f128p(expire, a),
-                            UnOp::Not => unreachable!(),
+                            UnOp::Not => panic!("Undefined F128p operation: {:?}", op),
                         }
                     },
                 }
@@ -1135,7 +1135,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                             BinOp::Mod |
                             BinOp::And |
                             BinOp::Or  |
-                            BinOp::Xor => unreachable!(),
+                            BinOp::Xor => panic!("Undefined F128p operation: {:?}", op),
                         }
                     }
                 }
