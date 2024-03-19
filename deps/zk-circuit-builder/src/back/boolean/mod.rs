@@ -1318,7 +1318,10 @@ impl<'w, S: Sink> Backend<'w, S> {
                         real
 
                     },
-                    (TySummary::F128p, TySummary::F128p) => todo!(),
+                    (TySummary::F128p, TySummary::F128p) => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        self.sink.copy_f128p(expire, a)
+                    },
                 }
             },
 
