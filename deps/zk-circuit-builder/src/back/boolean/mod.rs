@@ -1274,57 +1274,51 @@ impl<'w, S: Sink> Backend<'w, S> {
             GateKind::Cast(aw, _ty) => {
                 let a = self.wire_map[&aw];
 
-                match aw.ty.try_into().unwrap() {
-                    TySummary::Int(m) => match w.ty.try_into().unwrap() {
-                        TySummary::Int(n) => {
-                            if n <= m {
-                                self.sink.copy(expire, n, a)
-                            } else {
-                                let padding = match *aw.ty {
-                                    TyKind::Uint(_) => Source::Zero,
-                                    TyKind::Int(_) => Source::RepWire(a + m - 1),
-                                    _ => unreachable!(),
-                                };
-                                self.sink.concat_chunks(expire, &[
-                                    (Source::Wires(a), m),
-                                    (padding, n - m),
-                                ])
-                            }
-                        },
-                        TySummary::F128p => {
-                            assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                            self.sink.to_f128p(expire, m, a)
+                match (aw.ty.try_into().unwrap(), w.ty.try_into().unwrap()) {
+                    (TySummary::Int(m), TySummary::Int(n)) => {
+                        if n <= m {
+                            self.sink.copy(expire, n, a)
+                        } else {
+                            let padding = match *aw.ty {
+                                TyKind::Uint(_) => Source::Zero,
+                                TyKind::Int(_) => Source::RepWire(a + m - 1),
+                                _ => unreachable!(),
+                            };
+                            self.sink.concat_chunks(expire, &[
+                                (Source::Wires(a), m),
+                                (padding, n - m),
+                            ])
                         }
                     },
-                    TySummary::F128p => {
+                    (TySummary::Int(m), TySummary::F128p) => {
                         assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                        match w.ty.try_into().unwrap() {
-                            TySummary::Int(n) => {
-                                let field_n = Field::F128p.bit_size().0 as u64;
-                                let real_n = n;
-                                let rest_n = field_n - real_n;
-                                let real = self.sink.private(expire, real_n);
-                                let rest = self.sink.private(TEMP, rest_n);
-
-                                if c.is_prover() {
-                                    private.emit_from_f128p(c.as_base(), &mut self.sink, aw);
-                                }
-
-                                let bits = self.sink.concat_chunks(TEMP, &[
-                                    (Source::Wires(real), real_n),
-                                    (Source::Wires(rest), rest_n),
-                                ]);
-
-                                let val = self.sink.to_f128p(TEMP, field_n, bits);
-                                let diff = self.sink.sub_f128p(TEMP, a, val);
-                                self.sink.assert_zero_f128p(diff);
-
-                                real
-
-                            },
-                            TySummary::F128p => todo!(),
-                        }
+                        self.sink.to_f128p(expire, m, a)
                     },
+                    (TySummary::F128p, TySummary::Int(n)) => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        let field_n = Field::F128p.bit_size().0 as u64;
+                        let real_n = n;
+                        let rest_n = field_n - real_n;
+                        let real = self.sink.private(expire, real_n);
+                        let rest = self.sink.private(TEMP, rest_n);
+
+                        if c.is_prover() {
+                            private.emit_from_f128p(c.as_base(), &mut self.sink, aw);
+                        }
+
+                        let bits = self.sink.concat_chunks(TEMP, &[
+                            (Source::Wires(real), real_n),
+                            (Source::Wires(rest), rest_n),
+                        ]);
+
+                        let val = self.sink.to_f128p(TEMP, field_n, bits);
+                        let diff = self.sink.sub_f128p(TEMP, a, val);
+                        self.sink.assert_zero_f128p(diff);
+
+                        real
+
+                    },
+                    (TySummary::F128p, TySummary::F128p) => todo!(),
                 }
             },
 
