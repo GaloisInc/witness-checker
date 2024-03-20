@@ -209,6 +209,9 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                     "missing key `bbmd_blocks` for BBMD execution"))?,
                 chunks: match trace {
                     AnyTrace::Bbmd(x) => x,
+                    AnyTrace::Ambiguous(pairs) => pairs.into_iter()
+                        .map(|(block_idx, states)| BbmdTraceChunk { block_idx, states })
+                        .collect(),
                     _ => return Err(serde::de::Error::custom(
                         "bad `trace` format for BBMD execution")),
                 },
@@ -219,6 +222,9 @@ impl<'de> Visitor<'de> for ExecBodyVisitor {
                     "missing key `segments` for public PC execution"))?,
                 chunks: match trace {
                     AnyTrace::Instr(x) => x,
+                    AnyTrace::Ambiguous(pairs) => pairs.into_iter()
+                        .map(|(segment, states)| TraceChunk { segment, states, debug: None })
+                        .collect(),
                     _ => return Err(serde::de::Error::custom(
                         "bad `trace` format for public PC execution")),
                 },
@@ -607,6 +613,10 @@ impl<'de> Visitor<'de> for TraceChunkVisitor {
 #[derive(Debug)]
 enum AnyTrace {
     Flat(Vec<RamState>),
+    /// MicroRAM outputs the trace as a list of pairs rather than a map with named keys.  Without
+    /// the names, there's no distinction between the `Instr` and `Bbmd` formats when parsing.
+    /// Thus, we parse into this generic form and convert to the more specific type later.
+    Ambiguous(Vec<(usize, Vec<RamState>)>),
     Instr(Vec<TraceChunk>),
     Bbmd(Vec<BbmdTraceChunk>),
 }
@@ -624,17 +634,22 @@ impl<'de> Deserialize<'de> for AnyTrace {
             Err(e) => e,
         };
         let err2: D::Error = match Deserialize::deserialize(deserializer) {
-            Ok(x) => return Ok(AnyTrace::Instr(x)),
+            Ok(x) => return Ok(AnyTrace::Ambiguous(x)),
             Err(e) => e,
         };
         let err3: D::Error = match Deserialize::deserialize(deserializer) {
+            Ok(x) => return Ok(AnyTrace::Instr(x)),
+            Err(e) => e,
+        };
+        let err4: D::Error = match Deserialize::deserialize(deserializer) {
             Ok(x) => return Ok(AnyTrace::Bbmd(x)),
             Err(e) => e,
         };
         Err(de::Error::custom(format_args!(
             "failed to parse as AnyTrace::Flat: {err1}; \
-            failed to parse as AnyTrace::Instr: {err2}; \
-            failed to parse as AnyTrace::Bbmd: {err3}")))
+            failed to parse as AnyTrace::Ambiguous: {err2}; \
+            failed to parse as AnyTrace::Instr: {err3}; \
+            failed to parse as AnyTrace::Bbmd: {err4}")))
     }
 }
 
