@@ -1,10 +1,11 @@
+use std::cell::RefCell;
 use num_bigint::{BigUint, ToBigInt};
 use num_traits::Zero;
 use scuttlebutt::field::PrimeFiniteField;
 use scuttlebutt::field::F128p;
 use crate::ir::circuit::CallData;
 use crate::ir::circuit::SwitchCaseData;
-use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize, Ty};
+use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize, Ty, Function};
 use crate::eval::bigint_to_prime_field_bits;
 use crate::ir::migrate::{self, Migrate};
 use std::fmt::Debug;
@@ -145,6 +146,10 @@ fn cast_arguments<'a>(
 
 fn int_field_arith<'a, F: PrimeFiniteField + AsField + FromBits + AsBits>(
     c: &CircuitRef<'a, '_, impl CircuitFilter<'a>>,
+    // We pass `arith_func_map` as `&RefCell<T>` instead of `&mut T` to prevent having a long-lived
+    // borrow across the call to `int_field_arith`.  This prevents a panic in cases where
+    // `int_field_arith` is reentrant.
+    arith_func_map: &RefCell<HashMap<Function<'a>, Function<'a>>>,
     gk: GateKind<'a>,
 ) -> Option<Wire<'a>>
 where
@@ -251,11 +256,19 @@ where
             let cases_f = c.switch_case_list(&cases.iter().map(|&case| {
                 let SwitchCaseData { pattern, body, project_deps, project_witness } = *case;
                 let pattern_f = crate::eval::bigint_to_prime_field_bits(c.as_base(), pattern.to_bigint(guard.ty), guard.ty.integer_size(), F::AS_FIELD);
-                let body_f = c.as_base().map_function(body, |c, _, result| {
-                    let result_ty = cast_type(c.as_base(), result.ty, field_ty);
-                    let result = cast_wire(c.as_base(), cast_arguments(c.as_base(), result.kind, &arg_tys), result_ty);
-                    (c.ty_list(&arg_tys), result)
-                });
+                let opt_arith_body = arith_func_map.borrow().get(&body).copied();
+                let body_f = if let Some(arith_body) = opt_arith_body {
+                    arith_body
+                } else {
+                    let arith_body = c.as_base().map_function(body, |c, _, result| {
+                        let result_ty = cast_type(c.as_base(), result.ty, field_ty);
+                        let result = cast_wire(c.as_base(), cast_arguments(c.as_base(), result.kind, &arg_tys), result_ty);
+                        (c.ty_list(&arg_tys), result)
+                    });
+                    let old = arith_func_map.borrow_mut().insert(body, arith_body);
+                    assert!(old.is_none(), "duplicate conversion of function {:?}?", body);
+                    arith_body
+                };
                 c.switch_case_with_secret_project(pattern_f, body_f, project_deps, project_witness)
             }).collect::<Vec<_>>());
             let args_f = c.wire_list(&args.iter().enumerate().map(|(i, &arg)| cast_wire(c.as_base(), arg, arg_tys[i])).collect::<Vec<_>>());
@@ -276,6 +289,9 @@ pub struct IntFieldArith<'a, F, P> {
     _field: PhantomData<P>,
     active: bool,
     bounds: HashMap<Wire<'a>, NumBounds>,
+    /// Map from original function definition to a version where all inputs and outputs are
+    /// converted to arithmetic types.
+    arith_func_map: RefCell<HashMap<Function<'a>, Function<'a>>>,
 }
 
 impl<'a, F, P> IntFieldArith<'a, F, P> {
@@ -285,6 +301,7 @@ impl<'a, F, P> IntFieldArith<'a, F, P> {
             _field: PhantomData,
             active,
             bounds: HashMap::new(),
+            arith_func_map: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -300,7 +317,7 @@ where F: Migrate<'a, 'a, Output = F>,
 
         if self.active {
             let c = CircuitRef { base, filter: self };
-            if let Some(w) = int_field_arith::<P>(&c, gk) {
+            if let Some(w) = int_field_arith::<P>(&c, &self.arith_func_map, gk) {
                 return w;
             }
         }
@@ -330,6 +347,7 @@ where
             _field: PhantomData,
             active: self.active,
             bounds,
+            arith_func_map: v.visit(self.arith_func_map),
         }
     }
 }
