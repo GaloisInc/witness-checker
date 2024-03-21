@@ -66,82 +66,101 @@ fn cast_wire<'a>(
     }
 }
 
-// Recursively step through the body of a function and re-label each argument `i`
-// as having type `new_ty`, and then cast that argument back to its old type.
 fn cast_arguments<'a>(
     c: &CircuitBase<'a>,
-    gk: GateKind<'a>,
+    w: Wire<'a>,
     new_tys: &[Ty<'a>],
 ) -> Wire<'a> {
-    match gk {
+    let mut cache = HashMap::new();
+    cast_arguments_cached(c, &mut cache, w, new_tys)
+}
+
+/// Recursively step through the body of a function and re-label each argument `i`
+/// as having type `new_ty[i]`, and then cast that argument back to its old type.
+fn cast_arguments_cached<'a>(
+    c: &CircuitBase<'a>,
+    cache: &mut HashMap<Wire<'a>, Wire<'a>>,
+    w: Wire<'a>,
+    new_tys: &[Ty<'a>],
+) -> Wire<'a> {
+    if let Some(w_cast) = cache.get(&w).copied() {
+        return w_cast;
+    }
+
+    let w_cast = match w.kind {
         GateKind::Argument(i, ty) => cast_wire(c, c.gate(GateKind::Argument(i, new_tys[i])), ty),
 
-        GateKind::Lit(_, _) => c.gate(gk),
+        GateKind::Lit(_, _) => w,
         GateKind::Secret(secret) => {
             let secret = c.map_secret_deps(secret, |c, deps| {
-                c.wire_list(&deps.iter().map(|dep| cast_arguments(c, dep.kind, new_tys)).collect::<Vec<_>>())
+                let deps_cast = deps.iter()
+                    .map(|&dep| cast_arguments_cached(c, cache, dep, new_tys))
+                    .collect::<Vec<_>>();
+                c.wire_list(&deps_cast)
             });
             c.secret(secret)
         },
-        GateKind::Erased(_) => c.gate(gk),
+        GateKind::Erased(_) => w,
         GateKind::Unary(op, a) => {
-            let a = cast_arguments(c, a.kind, new_tys);
+            let a = cast_arguments_cached(c, cache, a, new_tys);
             c.unary(op, a)
         },
         GateKind::Binary(op, a, b) => {
-            let a = cast_arguments(c, a.kind, new_tys);
-            let b = cast_arguments(c, b.kind, new_tys);
+            let a = cast_arguments_cached(c, cache, a, new_tys);
+            let b = cast_arguments_cached(c, cache, b, new_tys);
             c.binary(op, a, b)
         },
         GateKind::Shift(op, a, b) => {
-            let a = cast_arguments(c, a.kind, new_tys);
-            let b = cast_arguments(c, b.kind, new_tys);
+            let a = cast_arguments_cached(c, cache, a, new_tys);
+            let b = cast_arguments_cached(c, cache, b, new_tys);
             c.shift(op, a, b)
         },
         GateKind::Compare(op, a, b) => {
-            let a = cast_arguments(c, a.kind, new_tys);
-            let b = cast_arguments(c, b.kind, new_tys);
+            let a = cast_arguments_cached(c, cache, a, new_tys);
+            let b = cast_arguments_cached(c, cache, b, new_tys);
             c.compare(op, a, b)
         },
         GateKind::Mux(cond, a, b) => {
-            let cond = cast_arguments(c, cond.kind, new_tys);
-            let a = cast_arguments(c, a.kind, new_tys);
-            let b = cast_arguments(c, b.kind, new_tys);
+            let cond = cast_arguments_cached(c, cache, cond, new_tys);
+            let a = cast_arguments_cached(c, cache, a, new_tys);
+            let b = cast_arguments_cached(c, cache, b, new_tys);
             c.mux(cond, a, b)
         },
         GateKind::Cast(w, ty) => {
-            let w = cast_arguments(c, w.kind, new_tys);
+            let w = cast_arguments_cached(c, cache, w, new_tys);
             c.cast(w, ty)
         },
         GateKind::Pack(ws) => {
-            let ws = c.wire_list(&ws.iter().map(|&w| cast_arguments(c, w.kind, new_tys)).collect::<Vec<_>>());
+            let ws = c.wire_list(&ws.iter().map(|&w| cast_arguments_cached(c, cache, w, new_tys)).collect::<Vec<_>>());
             c.pack(ws)
         },
         GateKind::Extract(w, i) => {
-            let w = cast_arguments(c, w.kind, new_tys);
+            let w = cast_arguments_cached(c, cache, w, new_tys);
             c.extract(w, i)
         },
         GateKind::Gadget(gadget, args) => {
-            let args = c.wire_list(&args.iter().map(|&arg| cast_arguments(c, arg.kind, new_tys)).collect::<Vec<_>>());
+            let args = c.wire_list(&args.iter().map(|&arg| cast_arguments_cached(c, cache, arg, new_tys)).collect::<Vec<_>>());
             c.gadget(gadget, args)
         },
         GateKind::Call(call) => {
             let CallData { func, args, project_deps, project_witness } = *call;
-            let args = c.wire_list(&args.iter().map(|&arg| cast_arguments(c, arg.kind, new_tys)).collect::<Vec<_>>());
-            let project_deps = c.wire_list(&project_deps.iter().map(|&dep| cast_arguments(c, dep.kind, new_tys)).collect::<Vec<_>>());
+            let args = c.wire_list(&args.iter().map(|&arg| cast_arguments_cached(c, cache, arg, new_tys)).collect::<Vec<_>>());
+            let project_deps = c.wire_list(&project_deps.iter().map(|&dep| cast_arguments_cached(c, cache, dep, new_tys)).collect::<Vec<_>>());
             c.gate(GateKind::Call(c.call_with_secret_project(func, args, project_deps, project_witness)))
         },
         GateKind::Switch(..) => unimplemented!("Lowering nested `GateKind::Switch` is not supported."),
         GateKind::Seq(a, b) => {
-            let a = cast_arguments(c, a.kind, new_tys);
-            let b = cast_arguments(c, b.kind, new_tys);
+            let a = cast_arguments_cached(c, cache, a, new_tys);
+            let b = cast_arguments_cached(c, cache, b, new_tys);
             c.seq(a, b)
         },
         GateKind::AssertZero(w) => {
-            let w = cast_arguments(c, w.kind, new_tys);
+            let w = cast_arguments_cached(c, cache, w, new_tys);
             c.assert_zero(w)
         },
-    }
+    };
+    cache.insert(w, w_cast);
+    w_cast
 }
 
 fn int_field_arith<'a, F: PrimeFiniteField + AsField + FromBits + AsBits>(
@@ -262,7 +281,7 @@ where
                 } else {
                     let arith_body = c.as_base().map_function(body, |c, _, result| {
                         let result_ty = cast_type(c.as_base(), result.ty, field_ty);
-                        let result = cast_wire(c.as_base(), cast_arguments(c.as_base(), result.kind, &arg_tys), result_ty);
+                        let result = cast_wire(c.as_base(), cast_arguments(c.as_base(), result, &arg_tys), result_ty);
                         (c.ty_list(&arg_tys), result)
                     });
                     let old = arith_func_map.borrow_mut().insert(body, arith_body);

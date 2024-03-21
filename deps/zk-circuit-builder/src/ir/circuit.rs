@@ -501,9 +501,9 @@ impl<'a> CircuitBase<'a> {
     pub fn map_secret_deps<F>(
         &self,
         secret: Secret<'a>,
-        f: F,
+        mut f: F,
     ) -> Secret<'a>
-    where F: Fn(&CircuitBase<'a>, &'a [Wire<'a>]) -> &'a [Wire<'a>],
+    where F: FnMut(&CircuitBase<'a>, &'a [Wire<'a>]) -> &'a [Wire<'a>],
     {
         let SecretData { ty, used: _, init, deps } = *secret;
         let deps = f(self, deps);
@@ -518,9 +518,9 @@ impl<'a> CircuitBase<'a> {
     pub fn map_function<F>(
         &self,
         func: Function<'a>,
-        f: F,
+        mut f: F,
     ) -> Function<'a>
-    where F: Fn(&CircuitBase<'a>, &'a [Ty<'a>], Wire<'a>) -> (&'a [Ty<'a>], Wire<'a>),
+    where F: FnMut(&CircuitBase<'a>, &'a [Ty<'a>], Wire<'a>) -> (&'a [Ty<'a>], Wire<'a>),
     {
         let FunctionDef { name, arg_tys, result_wire, witness_type } = *func;
         let (arg_tys, result_wire) = f(self, arg_tys, result_wire);
