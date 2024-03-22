@@ -261,7 +261,7 @@ const GATE_PAGE_SIZE: usize = 64 * 1024;
 const GATE_FLUSH_SIZE: usize = GATE_PAGE_SIZE - 256;
 
 /// Strict upper limit on the number of bytes per `PrivateInputs` message.
-const PRIVATE_INPUT_PAGE_SIZE: usize = 1024 * 1024;
+const PRIVATE_INPUT_PAGE_SIZE: usize = 64 * 1024;
 
 pub trait Dispatch {
     fn flush(&mut self, free_all_pages: bool);
