@@ -411,6 +411,7 @@ trait PrivateOps<'a> {
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
         w: Wire<'a>,
+        width: u16,
     );
 }
 
@@ -489,7 +490,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
                 PrivateOp::Permute(n, perm, permuted_wires, wire_widths) => sub_ops.emit_permute(c, sink, n, perm, permuted_wires, wire_widths),
                 PrivateOp::Switch(cond, branches, private_input_counts, args) => sub_ops.emit_switch(c, sink, get_log, cond, branches, private_input_counts, args),
                 PrivateOp::SwitchF128p(cond, branches, private_input_counts, args) => sub_ops.emit_switch_f128p(c, sink, get_log, cond, branches, private_input_counts, args),
-                PrivateOp::FromF128p(w) => sub_ops.emit_from_f128p(c, sink, w),
+                PrivateOp::FromF128p(w, width) => sub_ops.emit_from_f128p(c, sink, w, width),
             }
         }
     }
@@ -569,6 +570,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         c: &CircuitBase<'a>,
         sink: &mut impl Sink,
         w: Wire<'a>,
+        output_width: u16,
     ) {
         let width = Field::F128p.bit_size();
         // Convert the resulting `Bits` to and from `BigInt` to 'canonicalize' them.
@@ -577,7 +579,7 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         let f_bits = self.ev.eval_wire_bits(c, w).unwrap().0;
         let uint = prime_field_bits_to_bigint(f_bits, width, Field::F128p);
         let uint_bits = uint.as_bits(c, width);
-        sink.private_value(width.0 as u64, uint_bits);
+        sink.private_value(output_width as u64, uint_bits);
     }
 }
 
@@ -590,7 +592,7 @@ enum PrivateOp<'a> {
     Permute(u64, Wire<'a>, Vec<Wire<'a>>, Vec<u64>),
     Switch(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>]),
     SwitchF128p(Wire<'a>, &'a [SwitchCase<'a>], Vec<u64>, &'a [Wire<'a>]),
-    FromF128p(Wire<'a>),
+    FromF128p(Wire<'a>, u16),
 }
 
 impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
@@ -619,7 +621,7 @@ impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
                 let args = v.new_circuit().wire_list(&args);
                 PrivateOp::SwitchF128p(v.visit(cond), branches, private_input_counts, args)
             }
-            PrivateOp::FromF128p(w) => PrivateOp::FromF128p(v.visit(w)),
+            PrivateOp::FromF128p(w, width) => PrivateOp::FromF128p(v.visit(w), width),
         }
     }
 }
@@ -723,8 +725,9 @@ impl<'a> PrivateOps<'a> for PrivateLog<'a> {
         _c: &CircuitBase<'a>,
         _sink: &mut impl Sink,
         w: Wire<'a>,
+        width: u16,
     ) {
-        self.log.push(PrivateOp::FromF128p(w));
+        self.log.push(PrivateOp::FromF128p(w, width));
     }
 }
 
@@ -1300,20 +1303,37 @@ impl<'w, S: Sink> Backend<'w, S> {
                     },
                     (TySummary::F128p, TySummary::Int(n)) => {
                         assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                        let field_n = Field::F128p.bit_size().0 as u64;
+                        let field_n = Field::F128p.bit_size().0 as u64 - 1;
                         let real_n = n;
                         let rest_n = field_n - real_n;
                         let real = self.sink.private(expire, real_n);
                         let rest = self.sink.private(TEMP, rest_n);
 
                         if c.is_prover() {
-                            private.emit_from_f128p(c.as_base(), &mut self.sink, aw);
+                            private.emit_from_f128p(c.as_base(), &mut self.sink, aw, field_n as u16);
                         }
 
                         let bits = self.sink.concat_chunks(TEMP, &[
                             (Source::Wires(real), real_n),
                             (Source::Wires(rest), rest_n),
                         ]);
+
+                        // Make sure the `bits` are actually bits (either 0 or 1).
+                        //
+                        // TODO: This can be done much more efficiently if we know a bound on the
+                        // size of the value.  Currently, we only assume that it's less than
+                        // `2^(field_bit_size - 1)`.  The `-1` lets us avoid worrying about
+                        // overflow in `to_f128p`: `2^field_bit_size - 1` would exceed the field
+                        // modulus, but values less than `2^(field_bit_size - 1)` will not.
+                        // However, if we knew a stricter bound, we could create (and check) fewer
+                        // `bits`.
+                        for i in 0 .. field_n {
+                            let minus_zero = bits + i;
+                            let minus_one = self.sink.addc_f128p(
+                                TEMP, minus_zero, Bits::one_inv_f128p());
+                            let product = self.sink.mul_f128p(TEMP, minus_zero, minus_one);
+                            self.sink.assert_zero_f128p(product);
+                        }
 
                         let val = self.sink.to_f128p(TEMP, field_n, bits);
                         let diff = self.sink.sub_f128p(TEMP, a, val);
