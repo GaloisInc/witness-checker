@@ -571,6 +571,9 @@ impl<'a, E: Evaluator<'a>> PrivateOps<'a> for PrivateDirect<E> {
         w: Wire<'a>,
     ) {
         let width = Field::F128p.bit_size();
+        // Convert the resulting `Bits` to and from `BigInt` to 'canonicalize' them.
+        // This ensures that the behavior of this code is independent of the chosen bit
+        // representation of `F128p` values.
         let f_bits = self.ev.eval_wire_bits(c, w).unwrap().0;
         let uint = prime_field_bits_to_bigint(f_bits, width, Field::F128p);
         let uint_bits = uint.as_bits(c, width);
