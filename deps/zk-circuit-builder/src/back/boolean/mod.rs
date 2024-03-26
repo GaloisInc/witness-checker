@@ -1357,8 +1357,7 @@ impl<'w, S: Sink> Backend<'w, S> {
     }
 
     fn define_function(&mut self, c: &CircuitBase<'w>, f: Function<'w>) {
-        // TODO(isweet): Why are we allowed to assume that the parameters all have integer type?
-        // What about e.g. a `TyKind::Bundle` type for one of the parameters?
+        // Assumption: The function `f` does not contain any parameters of `Bundle` type.
         let arg_ns = f.arg_tys.iter().map(|&ty| {
             if ty.is_integer() {
                 type_bits(ty)
@@ -1371,8 +1370,7 @@ impl<'w, S: Sink> Backend<'w, S> {
         }).collect::<Vec<_>>();
         let return_ty = f.result_wire.ty;
         let return_n = match *return_ty {
-            // TODO(isweet): Why isn't this recursive? Are bundles always non-recursive?
-            // I thought I saw documentation about that somewhere else...
+            // Assumption: The function `f` does not return nested `Bundle` type.
             TyKind::Bundle(btys) => btys.tys().iter().map(|&ty| {
                 if ty.is_integer() {
                     type_bits(ty)
