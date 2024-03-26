@@ -752,6 +752,16 @@ pub struct Backend<'w, S: Sink> {
     bundle_ty_offsets: HashMap<Ty<'w>, Vec<u64>>,
 }
 
+fn type_width(sink: &impl Sink, ty: Ty) -> u64 {
+    match ty.try_into().unwrap() {
+        TySummary::Int(n) => n,
+        TySummary::F128p => {
+            assert!(sink.has_f128p(), "F128p operations are unsupported with this Sink");
+            1
+        }
+    }
+}
+
 impl<'w, S: Sink> Backend<'w, S> {
     pub fn new(sink: S) -> Backend<'w, S> {
         Backend {
@@ -763,18 +773,6 @@ impl<'w, S: Sink> Backend<'w, S> {
             bundle_ty_offsets: HashMap::new(),
         }
     }
-
-    fn type_width(&self, ty: Ty) -> u64 {
-        match ty.try_into().unwrap() {
-            TySummary::Int(n) => n,
-            TySummary::F128p => {
-                assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                1
-            }
-        }
-    }
-
-
 
     /// Populate `wire_map` with entries for all the wires in `wires`.  Temporary intermediate
     /// values will not be kept in `wire_map`.  The caller is responsible for removing the entries
@@ -875,7 +873,7 @@ impl<'w, S: Sink> Backend<'w, S> {
             GateKind::Pack(ws) => {
                 // We only allow single-level bundles.
                 let entries = ws.iter().map(|&w| {
-                    let sz = self.type_width(w.ty);
+                    let sz = type_width(&self.sink, w.ty);
                     (Source::Wires(self.wire_map[&w]), sz)
                 }).collect::<Vec<_>>();
                 self.sink.concat_chunks(expire, &entries)
@@ -1358,39 +1356,12 @@ impl<'w, S: Sink> Backend<'w, S> {
 
     fn define_function(&mut self, c: &CircuitBase<'w>, f: Function<'w>) {
         // Assumption: The function `f` does not contain any parameters of `Bundle` type.
-        let arg_ns = f.arg_tys.iter().map(|&ty| {
-            if ty.is_integer() {
-                type_bits(ty)
-            } else if let Some(Field::F128p) = ty.get_galois_field() {
-                assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                1
-            } else {
-                unimplemented!("define_function({:?})", ty)
-            }
-        }).collect::<Vec<_>>();
+        let arg_ns = f.arg_tys.iter().map(|&ty| type_width(&self.sink, ty)).collect::<Vec<_>>();
         let return_ty = f.result_wire.ty;
         let return_n = match *return_ty {
             // Assumption: The function `f` does not return nested `Bundle` type.
-            TyKind::Bundle(btys) => btys.tys().iter().map(|&ty| {
-                if ty.is_integer() {
-                    type_bits(ty)
-                } else if let Some(Field::F128p) = ty.get_galois_field() {
-                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                    1
-                } else {
-                    unimplemented!("define_function({:?})", ty)
-                }
-            }).sum(),
-            _ => {
-                if return_ty.is_integer() {
-                    type_bits(return_ty)
-                } else if let Some(Field::F128p) = return_ty.get_galois_field() {
-                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                    1
-                } else {
-                    unimplemented!("define_function({:?})", return_ty)
-                }
-            },
+            TyKind::Bundle(btys) => btys.tys().iter().map(|&ty| type_width(&self.sink, ty)).sum(),
+            _ => type_width(&self.sink, return_ty),
         };
 
         eprintln!("define_function({:?})", f.name);
@@ -1422,7 +1393,8 @@ impl<'w, S: Sink> Backend<'w, S> {
     }
 
     fn bundle_ty_offsets(&mut self, ty: Ty<'w>) -> &[u64] {
-        match self.bundle_ty_offsets.entry(ty) {
+        let bty_offsets = &mut self.bundle_ty_offsets;
+        match bty_offsets.entry(ty) {
             hash_map::Entry::Occupied(e) => e.into_mut(),
             hash_map::Entry::Vacant(e) => {
                 let btys = match *ty {
@@ -1435,13 +1407,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                 let mut pos = 0;
                 for &ty in btys.tys() {
                     offsets.push(pos);
-                    let n = if ty.is_integer() {
-                        type_bits(ty)
-                    } else if let Some(Field::F128p) = ty.get_galois_field() {
-                        1
-                    } else {
-                        unimplemented!()
-                    };
+                    let n = type_width(&self.sink, ty);
                     pos += n;
                 }
                 offsets.push(pos);
