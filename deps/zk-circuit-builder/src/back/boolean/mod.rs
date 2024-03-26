@@ -1346,10 +1346,14 @@ impl<'w, S: Sink> Backend<'w, S> {
 
             // `a` is pre-evaluated, so it can be ignored
             GateKind::Seq(_aw, bw) => {
-                assert!(w.ty.is_integer());
                 let b = self.wire_map[&bw];
-                let width = type_bits(bw.ty);
-                self.sink.copy(expire, width, b)
+                match w.ty.try_into().unwrap() {
+                    TySummary::Int(n) => self.sink.copy(expire, n, b),
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        self.sink.copy_f128p(expire, b)
+                    },
+                }
             },
         }
     }
