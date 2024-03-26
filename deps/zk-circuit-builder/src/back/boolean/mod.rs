@@ -1333,14 +1333,12 @@ impl<'w, S: Sink> Backend<'w, S> {
 
             GateKind::Extract(bw, i) => {
                 let offset = self.bundle_ty_offset(bw.ty, i);
-                if w.ty.is_integer() {
-                    let n = type_bits(w.ty);
-                    self.sink.copy(expire, n, self.wire_map[&bw] + offset)
-                } else if let Some(Field::F128p) = w.ty.get_galois_field() {
-                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
-                    self.sink.copy_f128p(expire, self.wire_map[&bw] + offset)
-                } else {
-                    unimplemented!()
+                match w.ty.try_into().unwrap() {
+                    TySummary::Int(n) => self.sink.copy(expire, n, self.wire_map[&bw] + offset),
+                    TySummary::F128p => {
+                        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                        self.sink.copy_f128p(expire, self.wire_map[&bw] + offset)
+                    }
                 }
             },
 
