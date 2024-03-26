@@ -962,6 +962,7 @@ impl<'w, S: Sink> Backend<'w, S> {
 
                     out
                 } else if let Some(_) = gk.cast::<ConcatBits>() {
+                    assert!(w.ty.is_integer(), "ConcatBits gadget is only supported on Int/Uint");
                     let mut entries = Vec::with_capacity(ws.len());
                     for w in ws {
                         let val = self.wire_map[&w];
@@ -970,6 +971,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                     }
                     self.sink.concat_chunks(expire, &entries)
                 } else if let Some(g) = gk.cast::<ExtractBits>() {
+                    assert!(w.ty.is_integer(), "ExtractBits gadget is only supported on Int/Uint");
                     let n = type_bits(w.ty);
                     debug_assert!(ws.len() == 1);
                     debug_assert_eq!((g.end - g.start) as u64, n);
@@ -977,6 +979,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                     let val = self.wire_map[&w];
                     self.sink.copy(expire, n, val + g.start as u64)
                 } else if gk.is::<WideMul>() {
+                    assert!(w.ty.is_integer(), "WideMul gadget is only supported on Int/Uint");
                     let n = type_bits(w.ty);
                     debug_assert!(ws.len() == 2);
                     debug_assert_eq!(ws[0].ty, ws[1].ty);
