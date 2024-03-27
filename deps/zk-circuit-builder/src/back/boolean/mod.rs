@@ -599,7 +599,7 @@ impl<'a, 'b> Migrate<'a, 'b> for PrivateOp<'a> {
     fn migrate<V: migrate::Visitor<'a, 'b> + ?Sized>(self, v: &mut V) -> PrivateOp<'b> {
         match self {
             PrivateOp::Emit(a) => PrivateOp::Emit(v.visit(a)),
-            PrivateOp::EmitF128p(a) => PrivateOp::Emit(v.visit(a)),
+            PrivateOp::EmitF128p(a) => PrivateOp::EmitF128p(v.visit(a)),
             PrivateOp::QuotRem(a, b) => PrivateOp::QuotRem(v.visit(a), v.visit(b)),
             PrivateOp::Call(call) => PrivateOp::Call(v.visit(call)),
             PrivateOp::Permute(n, perm, perm_wires, wire_widths) => PrivateOp::Permute(n, v.visit(perm), v.visit(perm_wires), wire_widths),
