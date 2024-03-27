@@ -2342,7 +2342,6 @@ mod test {
 
     #[test]
     fn add_1_f128p() {
-        let _ = env_logger::builder().is_test(true).try_init();
         test_gate_f128p([1, 1], |c, [a, b]| c.add(a, b));
     }
 
