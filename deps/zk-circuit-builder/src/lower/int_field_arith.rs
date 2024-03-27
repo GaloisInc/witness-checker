@@ -21,16 +21,16 @@ impl AsField for F128p {
     const AS_FIELD: Field = Field::F128p;
 }
 
-// Replaces one type with another. If `from_ty` is
-// a compound type, recursively replace its components.
-// The `to_ty` may only be an atomic (non-compound) type.
-//
-// For example,
-//   * cast_type(Int, F128p) => F128p
-//   * cast_type(F128p, Int) => Int
-//   * cast_type(Bundle[Int, Int], F128p) => Bundle[cast_type(Int, F128p), cast_type(Int, F128p)] => Bundle[F128p, F128p]
-//   * cast_type(Int, Bundle[Int, Int]) => error
-//   * cast_type(Bundle[Int, Int], Bundle[F128p, F128p]) => error
+/// Replaces one type with another. If `from_ty` is
+/// a compound type, recursively replace its components.
+/// The `to_ty` may only be an atomic (non-compound) type.
+///
+/// For example,
+///   * cast_type(Int, F128p) => F128p
+///   * cast_type(F128p, Int) => Int
+///   * cast_type(Bundle[Int, Int], F128p) => Bundle[cast_type(Int, F128p), cast_type(Int, F128p)] => Bundle[F128p, F128p]
+///   * cast_type(Int, Bundle[Int, Int]) => error
+///   * cast_type(Bundle[Int, Int], Bundle[F128p, F128p]) => error
 fn cast_type<'a>(
     c: &CircuitBase<'a>,
     from_ty: Ty<'a>,
