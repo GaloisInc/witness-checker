@@ -60,6 +60,8 @@ fn cast_wire<'a>(
                 }
                 c.pack(c.wire_list(&ws))
             },
+            // All calls to `cast_wire` pass a `ty` that is derived from `w.ty` in
+            // a way that preserves the structure (bundles and their length). See: `cast_type`.
             _ => unreachable!(),
         },
         _ => c.cast(w, ty),
@@ -269,6 +271,11 @@ where
             });
             Some(ret)
         },
+        // For performance, we lower an `Int/Uint(n)` into a single `F128p`
+        // element (rather than having the backend lower into `n` `F128p` elements).
+        // As a result, we must modify the function signatures for each branch to accept
+        // and provide `F128p` elements. This is because SIEVE IR and the optimized protocol
+        // for `Switch`, called Dora, require that the guard and all the branches operate over a single field.
         GateKind::Switch(guard, cases, args) if guard.ty.is_integer() => {
             let guard_f = c.cast(guard, field_ty);
             let arg_tys = args.iter().map(|&arg| cast_type(c.as_base(), arg.ty, field_ty)).collect::<Vec<_>>();
