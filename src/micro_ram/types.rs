@@ -1821,6 +1821,17 @@ impl Segment {
         for c in &self.constraints {
             match *c {
                 SegmentConstraint::Pc(pc) => return Some(pc),
+                SegmentConstraint::SpontaneousJump(_) => {},
+            }
+        }
+        None
+    }
+
+    pub fn spontaneous_jump_pc(&self) -> Option<u64> {
+        for c in &self.constraints {
+            match *c {
+                SegmentConstraint::Pc(_) => {},
+                SegmentConstraint::SpontaneousJump(dest) => return Some(dest),
             }
         }
         None
@@ -1838,6 +1849,11 @@ impl Segment {
 #[derive(Clone, Debug)]
 pub enum SegmentConstraint {
     Pc(u64),
+    /// This segment performs a spontaneous jump by setting the PC to `.0` on entry.
+    ///
+    /// If the segment also has `SegmentConstraint::Pc`, the two constraints should have identical
+    /// addresses or else the segment will be unusable.
+    SpontaneousJump(u64),
 }
 
 #[derive(Clone, Debug)]

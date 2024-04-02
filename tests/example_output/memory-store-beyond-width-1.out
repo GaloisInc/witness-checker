@@ -4,4 +4,4 @@ invalid trace: Write to 0 on cycle 5 modified outside width W2: 0x20202020202020
 invalid trace: assert failed in memory check 4
 invalid trace: Write to 0 on cycle 8 modified outside width W4: 0x404040404040404 != 0x202020204040404
 invalid trace: assert failed in memory check 6
-internal evaluator: 140 asserts passed, 3 failed; found 0 bugs; overall status: BAD
+internal evaluator: 128 asserts passed, 3 failed; found 0 bugs; overall status: BAD

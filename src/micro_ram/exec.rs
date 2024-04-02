@@ -251,12 +251,26 @@ impl<'a> ExecBuilder<'a> {
         };
 
         let seg_def = &exec.segments[idx];
-        let prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
+        let mut prev_state = self.seg_graph_builder.get_initial(b, idx).clone();
         let prev_kmem = self.seg_graph_builder.take_initial_mem(idx);
-        let (mut seg, kmem) = segment_builder.run(idx, seg_def, prev_state, prev_kmem, move |w| {
-            let ew = project_witness(w);
-            &ew.segments[idx]
-        });
+
+        let external_advice_storage: [_; 2];
+        let mut external_advice = None;
+
+        if let Some(jump_dest) = seg_def.spontaneous_jump_pc() {
+            let pc = prev_state.pc;
+            let cycle = b.cast(prev_state.cycle);
+            prev_state.pc = b.lit(jump_dest);
+            external_advice_storage = [pc, cycle];
+            external_advice = Some(&external_advice_storage as &[_]);
+        }
+
+        let (mut seg, kmem) = segment_builder.run(
+            idx, seg_def, prev_state, prev_kmem, external_advice,
+            move |w| {
+                let ew = project_witness(w);
+                &ew.segments[idx]
+            });
         self.seg_graph_builder.set_final(idx, seg.final_state().clone());
         self.seg_graph_builder.set_final_mem(idx, kmem);
 
@@ -264,15 +278,10 @@ impl<'a> ExecBuilder<'a> {
         // data to initialize the segment's secrets.
         if let Some(&(chunk_idx, cycle)) = self.seg_user_map.get(&idx) {
             let chunk = &exec.trace[chunk_idx];
-            let debug_prev_state = chunk.debug.as_ref().and_then(|d| d.prev_state.as_ref());
-            let prev_state = if let Some(s) = debug_prev_state {
-                s
-            } else if chunk_idx == 0 {
-                &self.init_state
-            } else {
-                exec.trace[chunk_idx - 1].states.last().expect("empty chunk")
-            };
-            seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
+
+            if self.check_steps > 0 {
+                seg.check_states(&self.cx, b, cycle, self.check_steps, &chunk.states);
+            }
 
             // FIXME: this leaks information, namely, the identity of the last used segment.  We
             // should either forbid mixing `--expect-zero` with public PC, or otherwise ensure that

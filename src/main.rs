@@ -84,7 +84,8 @@ fn parse_args() -> ArgMatches<'static> {
              .help("check only that the trace is valid; don't require it to demonstrate a bug"))
         .arg(Arg::with_name("expect-zero")
              .long("expect-zero")
-             .help("check that r0 == 0 in the final state"))
+             .help("check that r0 == 0 in the final state \
+                (WARNING: this leaks information about the trace!)"))
         .arg(Arg::with_name("expect-write")
              .long("expect-write")
              .takes_value(true)
@@ -101,7 +102,8 @@ fn parse_args() -> ArgMatches<'static> {
              .long("check-steps")
              .takes_value(true)
              .value_name("1")
-             .help("check state against the trace every D steps"))
+             .help("check state against the trace every D steps \
+                (WARNING: this leaks information about the trace!)"))
         .arg(Arg::with_name("verifier-mode")
              .long("verifier-mode")
              .help("run in verifier mode, constructing the circuit but not the secret witness"))

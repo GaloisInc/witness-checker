@@ -48,6 +48,9 @@ define_features! {
     /// If present, the `program` is split into multiple code segments, similar to the way
     /// `init_mem` is broken into segments.
     CodeSegments = "code-segments",
+
+    /// Allow use of the `spontaneous_jump` constraint on trace segments.
+    SpontaneousJump = "spontaneous-jump",
 }
 
 
@@ -97,6 +100,8 @@ define_versions! {
     (0,1,7,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
     // 0.1.9.0 adds a new TraceReturn extension instruction, but this should never appear in CBOR.
     (0,1,9,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
+    // 0.1.10.0 adds the `spontaneous_jump` constraint for trace segments.
+    (0,1,10,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments SpontaneousJump },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {
