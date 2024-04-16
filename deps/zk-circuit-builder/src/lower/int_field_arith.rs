@@ -3,6 +3,7 @@ use num_bigint::{BigUint, ToBigInt};
 use num_traits::Zero;
 use scuttlebutt::field::PrimeFiniteField;
 use scuttlebutt::field::F128p;
+use crate::gadget::arith::EmbedMulF128p;
 use crate::ir::circuit::CallData;
 use crate::ir::circuit::SwitchCaseData;
 use crate::ir::circuit::{CircuitTrait, CircuitExt, CircuitBase, CircuitRef, CircuitFilter, AsBits, FromBits, GateKind, TyKind, Wire, Bits, UnOp::Neg, BinOp::{Add, Sub, Mul, Div, Mod}, Field, IntSize, Ty, Function};
@@ -222,10 +223,8 @@ where
             // represent the result of a width `w` multiplication as long
             // as (2^w - 1)^2 < `p`.
             assert!((ty_size - BigUint::from(1_u32)).pow(2_u32) < field_size);
-            let a_f = c.cast(a, field_ty);
-            let b_f = c.cast(b, field_ty);
-            let prod_f = c.mul(a_f, b_f);
-            let ret = c.cast(prod_f, ty);
+            let gk = c.intern_gadget_kind(EmbedMulF128p);
+            let ret = c.gadget(gk, &[a, b]);
             Some(ret)
         },
         GateKind::Binary(op @ Div, a, b) | GateKind::Binary(op @ Mod, a, b) if ty.is_uint() => {

@@ -10,7 +10,7 @@ use num_traits::Zero;
 use scuttlebutt::field::F128p;
 use scuttlebutt::ring::FiniteRing;
 use crate::eval::{Evaluator, prime_field_bits_to_bigint};
-use crate::gadget::arith::WideMul;
+use crate::gadget::arith::{WideMul, EmbedMulF128p};
 use crate::gadget::bit_pack::{ConcatBits, ExtractBits};
 use crate::ir::circuit::{
     self, CircuitTrait, CircuitExt, CircuitBase, BinOp, CmpOp, GateKind, ShiftOp, TyKind, UnOp,
@@ -865,6 +865,51 @@ impl<'w, S: Sink> Backend<'w, S> {
         wires.iter().cloned().map(|w| self.wire_map[&w]).collect::<Vec<_>>()
     }
 
+    fn decompose_f128p(
+        &mut self,
+        c: &impl CircuitTrait<'w>,
+        private: &mut impl PrivateOps<'w>,
+        expire: Time,
+        width: u64,
+        truncate_to: u64,
+        aw: Wire<'w>,
+    ) -> WireId {
+        assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+        // Note: This is needed for soundness of decomposition! If we allow decomposition of
+        // a value that requires 128 bits to represent, the prover may cheat by providing advice
+        // bits that overflow the field modulus.
+        assert!(width < Field::F128p.bit_size().0.into());
+        let a = self.wire_map[&aw];
+
+        let real_n = truncate_to;
+        let rest_n = width - real_n;
+        let real = self.sink.private(expire, real_n);
+        let rest = self.sink.private(TEMP, rest_n);
+
+        if c.is_prover() {
+            private.emit_from_f128p(c.as_base(), &mut self.sink, aw, width as u16);
+        }
+
+        let bits = self.sink.concat_chunks(TEMP, &[
+            (Source::Wires(real), real_n),
+            (Source::Wires(rest), rest_n),
+        ]);
+
+        for i in 0 .. width {
+            let minus_zero = bits + i;
+            let minus_one = self.sink.addc_f128p(
+                TEMP, minus_zero, Bits::one_inv_f128p());
+            let product = self.sink.mul_f128p(TEMP, minus_zero, minus_one);
+            self.sink.assert_zero_f128p(product);
+        }
+
+        let val = self.sink.to_f128p(TEMP, width, bits);
+        let diff = self.sink.sub_f128p(TEMP, a, val);
+        self.sink.assert_zero_f128p(diff);
+
+        real
+    }
+
     fn convert_wire(
         &mut self,
         c: &impl CircuitTrait<'w>,
@@ -989,6 +1034,57 @@ impl<'w, S: Sink> Backend<'w, S> {
                     let a = self.wire_map[&ws[0]];
                     let b = self.wire_map[&ws[1]];
                     self.sink.wide_mul(expire, m, a, b)
+                } else if gk.is::<EmbedMulF128p>() {
+                    assert!(w.ty.is_integer(), "EmbedMulF128p gadget is only supported on Int/Uint");
+                    assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
+                    let n = type_bits(w.ty);
+                    debug_assert!(ws.len() == 2);
+                    debug_assert_eq!(ws[0].ty, ws[1].ty);
+                    let m = type_bits(ws[0].ty);
+                    debug_assert_eq!(m, n);
+                    let a = self.wire_map[&ws[0]];
+                    let b = self.wire_map[&ws[1]];
+
+                    // Divide the inputs in half
+                    let lo_width = n / 2;
+                    let hi_width = n - (n / 2);
+
+                    let a_lo = a;
+                    let a_hi = a + lo_width;
+
+                    let b_lo = b;
+                    let b_hi = b + lo_width;
+
+                    // Convert each half-input to F128p
+                    let a_lo_f = self.sink.to_f128p(TEMP, lo_width, a_lo);
+                    let a_hi_f = self.sink.to_f128p(TEMP, hi_width, a_hi);
+
+                    let b_lo_f = self.sink.to_f128p(TEMP, lo_width, b_lo);
+                    let b_hi_f = self.sink.to_f128p(TEMP, hi_width, b_hi);
+
+                    // Compute each cross-term
+                    let a_lo_b_lo_f = self.sink.mul_f128p(TEMP, a_lo_f, b_lo_f);
+                    let a_lo_b_hi_f = self.sink.mul_f128p(TEMP, a_lo_f, b_hi_f);
+                    let a_hi_b_lo_f = self.sink.mul_f128p(TEMP, a_hi_f, b_lo_f);
+                    let shift_a_lo_b_hi_f = self.sink.mulc_f128p(TEMP, a_lo_b_hi_f, Bits::pow2_f128p(lo_width as u8));
+                    let shift_a_hi_b_lo_f = self.sink.mulc_f128p(TEMP, a_hi_b_lo_f, Bits::pow2_f128p(lo_width as u8));
+
+                    // The final cross-term is ommitted by virtue of the fact that we know we are truncating
+                    // the result to width `n` (i.e. taking the result modulo 2^n). For more information, see:
+                    // https://gitlab-ext.galois.com/fromager/cheesecloth/witness-checker/-/merge_requests/93#note_204188
+
+                    // Sum the cross-terms
+                    let tmp = self.sink.add_f128p(TEMP, shift_a_lo_b_hi_f, shift_a_hi_b_lo_f);
+                    let sum = self.sink.add_f128p(TEMP, a_lo_b_lo_f, tmp);
+
+                    // Decompose and truncate
+                    // The maximum width of the sum is:
+                    //    max(max(width(a_lo * b_lo), width(2^lo_width * a_lo * b_hi)) + 1, width(2^lo_width * a_hi * b_lo)) + 1
+                    //  = max(max(2 * lo_width, lo_width + n) + 1, lo_width + n) + 1
+                    //  = max(lo_width + n + 1, lo_width + n) + 1
+                    //  = lo_width + n + 2
+                    let sum_width = lo_width + n + 2;
+                    self.decompose_f128p(c, private, expire, sum_width, n, todo!())
                 } else {
                     unimplemented!("Gadget({})", gk.name());
                 }
@@ -1137,7 +1233,8 @@ impl<'w, S: Sink> Backend<'w, S> {
                         match op {
                             BinOp::Add => self.sink.add_f128p(expire, a, b),
                             BinOp::Sub => self.sink.sub_f128p(expire, a, b),
-                            BinOp::Mul => self.sink.mul_f128p(expire, a, b),
+                            // BinOp::Mul => self.sink.mul_f128p(expire, a, b),
+                            BinOp::Mul |
                             BinOp::Div |
                             BinOp::Mod |
                             BinOp::And |
@@ -1304,43 +1401,7 @@ impl<'w, S: Sink> Backend<'w, S> {
                     (TySummary::F128p, TySummary::Int(n)) => {
                         assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
                         let field_n = Field::F128p.bit_size().0 as u64 - 1;
-                        let real_n = n;
-                        let rest_n = field_n - real_n;
-                        let real = self.sink.private(expire, real_n);
-                        let rest = self.sink.private(TEMP, rest_n);
-
-                        if c.is_prover() {
-                            private.emit_from_f128p(c.as_base(), &mut self.sink, aw, field_n as u16);
-                        }
-
-                        let bits = self.sink.concat_chunks(TEMP, &[
-                            (Source::Wires(real), real_n),
-                            (Source::Wires(rest), rest_n),
-                        ]);
-
-                        // Make sure the `bits` are actually bits (either 0 or 1).
-                        //
-                        // TODO: This can be done much more efficiently if we know a bound on the
-                        // size of the value.  Currently, we only assume that it's less than
-                        // `2^(field_bit_size - 1)`.  The `-1` lets us avoid worrying about
-                        // overflow in `to_f128p`: `2^field_bit_size - 1` would exceed the field
-                        // modulus, but values less than `2^(field_bit_size - 1)` will not.
-                        // However, if we knew a stricter bound, we could create (and check) fewer
-                        // `bits`.
-                        for i in 0 .. field_n {
-                            let minus_zero = bits + i;
-                            let minus_one = self.sink.addc_f128p(
-                                TEMP, minus_zero, Bits::one_inv_f128p());
-                            let product = self.sink.mul_f128p(TEMP, minus_zero, minus_one);
-                            self.sink.assert_zero_f128p(product);
-                        }
-
-                        let val = self.sink.to_f128p(TEMP, field_n, bits);
-                        let diff = self.sink.sub_f128p(TEMP, a, val);
-                        self.sink.assert_zero_f128p(diff);
-
-                        real
-
+                        self.decompose_f128p(c, private, expire, field_n, n, aw)
                     },
                     (TySummary::F128p, TySummary::F128p) => {
                         assert!(self.sink.has_f128p(), "F128p operations are unsupported with this Sink");
@@ -2647,6 +2708,14 @@ mod test {
     #[test]
     fn mul_3_f128p() {
         test_gate_f128p([3, 3], |c, [a, b]| c.mul(a, b));
+    }
+
+    #[test]
+    fn embedded_mul_3_f128p() {
+        test_gate_f128p([3, 3], |c, [a, b]| {
+            let gk = c.intern_gadget_kind(EmbedMulF128p);
+            c.gadget(gk, &[a, b])
+        });
     }
 
     #[test]

@@ -2,7 +2,7 @@ use num_bigint::{BigInt, BigUint};
 use crate::eval::{Value, EvalResult};
 use crate::ir::circuit::{
     CircuitExt, CircuitBase, DynCircuitRef, Wire, Ty, TyKind, IntSize, GadgetKind,
-    GadgetKindRef,
+    GadgetKindRef, CircuitTrait,
 };
 use crate::ir::typed::{Builder, Repr, TWire};
 
@@ -214,6 +214,62 @@ impl<'a> GadgetKind<'a> for WideMulSplit {
     }
 }
 
+/// Perform an integer multiplication by embedding into F128p and immediately truncating.
+///
+/// This is only intended to be used by the `lower::int_field_arith` lowering pass. It is
+/// semantically equivalent to `GateKind::Binary(BinOp::Mul, a, b)`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct EmbedMulF128p;
+impl_gadget_kind_support!(EmbedMulF128p);
+
+impl<'a> GadgetKind<'a> for EmbedMulF128p {
+    fn transfer<'b>(&self, c: &CircuitBase<'b>) -> GadgetKindRef<'b> {
+        c.intern_gadget_kind(self.clone())
+    }
+
+    fn typecheck(&self, c: &CircuitBase<'a>, arg_tys: &[Ty<'a>]) -> Ty<'a> {
+        assert!(arg_tys.len() == 2, "expected exactly 2 arguments");
+        let (a_sz, a_sign) = match *arg_tys[0] {
+            TyKind::Uint(sz) => (sz, false),
+            TyKind::Int(sz) => (sz, true),
+            _ => panic!("expected Uint or Int, but got {:?}", arg_tys[0]),
+        };
+        let (b_sz, b_sign) = match *arg_tys[1] {
+            TyKind::Uint(sz) => (sz, false),
+            TyKind::Int(sz) => (sz, true),
+            _ => panic!("expected Uint or Int, but got {:?}", arg_tys[1]),
+        };
+        assert_eq!(a_sz, b_sz, "WideMul inputs must have the same width");
+
+        if a_sign || b_sign {
+            c.ty(TyKind::Int(IntSize(a_sz.bits())))
+        } else {
+            c.ty(TyKind::Uint(IntSize(a_sz.bits())))
+        }
+    }
+
+    fn decompose(&self, c: DynCircuitRef<'a, '_>, args: &[Wire<'a>]) -> Wire<'a> {
+        // Note: It is important to use `as_base` here so that the `int_field_arith` pass doesn't
+        // apply to this gate. That pass is the one that introduces this gadget when it sees an
+        // integer multiplication.
+        //
+        // In short, when the user creates a circuit `c.mul(a, b)` the `int_lower_arith` pass will
+        // turn that into a `EmbedMulF128p` gadget. If the backend supports the gadget, the multiplication
+        // will be implemented efficiently. If it doesn't, then the following code will just turn the
+        // original `c.mul(a, b)` back into a multiplication gate _without_ invoking `int_lower_arith`.
+
+        // TODO: Arguably, this should be a `panic!` instead, since a full binary multiplier using F128p
+        // for each bit is almost certainly not what the user wants. Thoughts?
+        c.as_base().mul(args[0], args[1])
+    }
+
+    fn eval(&self, _arg_tys: &[Ty<'a>], args: &[EvalResult<'a>]) -> EvalResult<'a> {
+        let a = args[0].as_ref()?.as_single().unwrap();
+        let b = args[1].as_ref()?.as_single().unwrap();
+        let product = a * b;
+        Ok(Value::SingleInteger(product))
+    }
+}
 
 /// Perform double-word multiplication (for example, a `32 x 32 -> 64` bit multiply).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
