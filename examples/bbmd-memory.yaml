@@ -1,0 +1,95 @@
+## FLAGS: --validate-only
+# BBMD example using memory.  This requires adding memory ports to the common
+# basic block functions.
+
+- [0,1,0,0]
+- [bbmd]
+-
+  program:
+    - [mov, 0, null, true, 5]
+
+    # Top of loop (pc = 1)
+    # If the value is `N`, write `N` to address `100 + N`.
+    - [add, 1, 0, true, 100]
+    - [store1, null, 0, false, 1]
+    - [and, 1, 0, true, 1]
+    - [cjmp, null, 1, true, 5]
+
+    # Low bit is 0 (pc = 5)
+    - [shr, 0, 0, true, 1]
+    - [jmp, null, null, true, 1]
+
+    # Low bit is 1 (pc = 7)
+    - [mull, 0, 0, true, 3]
+    - [add, 0, 0, true, 1]
+    - [jmp, null, null, true, 1]
+
+  params:
+    num_regs: 2
+    trace_len: 11
+    bbmd: true
+
+  bbmd_blocks:
+    - pcs: [[0, 1]]
+    # Condition check (1..5) and false case (5..7)
+    - pcs: [[1, 7]]
+    # Condition check (1..5) and true  case (7..10)
+    - pcs: [[1, 5], [7, 10]]
+
+  trace:
+    - block: 0
+      states:
+        - [1, [5, 0]]
+
+    - block: 2
+      states:
+        - [2, [5, 105]]
+        - [3, [5, 105]]
+        - [4, [5, 1]]
+        - [7, [5, 1]]
+        - [8, [15, 1]]
+        - [9, [16, 1]]
+        - [1, [16, 1]]
+
+    - block: 1
+      states:
+        - [2, [16, 116]]
+        - [3, [16, 116]]
+        - [4, [16, 0]]
+        - [5, [16, 0]]
+        - [6, [8, 0]]
+        - [1, [8, 0]]
+
+    - block: 1
+      states:
+        - [2, [8, 108]]
+        - [3, [8, 108]]
+        - [4, [8, 0]]
+        - [5, [8, 0]]
+        - [6, [4, 0]]
+        - [1, [4, 0]]
+
+    - block: 1
+      states:
+        - [2, [4, 104]]
+        - [3, [4, 104]]
+        - [4, [4, 0]]
+        - [5, [4, 0]]
+        - [6, [2, 0]]
+        - [1, [2, 0]]
+
+    - block: 1
+      states:
+        - [2, [2, 102]]
+        - [3, [2, 102]]
+        - [4, [2, 0]]
+        - [5, [2, 0]]
+        - [6, [1, 0]]
+        - [1, [1, 0]]
+
+  advice:
+    3:  [[MemOp, 105, 0x0000000000000500, write, 1]]
+    10: [[MemOp, 116, 0x0000001000000000, write, 1]]
+    16: [[MemOp, 108, 0x0000000800000500, write, 1]]
+    22: [[MemOp, 104, 0x0000000800000504, write, 1]]
+    28: [[MemOp, 102, 0x0002000000000000, write, 1]]

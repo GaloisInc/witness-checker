@@ -51,6 +51,10 @@ define_features! {
 
     /// Allow use of the `spontaneous_jump` constraint on trace segments.
     SpontaneousJump = "spontaneous-jump",
+
+    /// Use Basic Block Machine for DORA (BBMD).  This affects the trace format and circuit
+    /// generation.
+    Bbmd = "bbmd",
 }
 
 
@@ -100,8 +104,8 @@ define_versions! {
     (0,1,7,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
     // 0.1.9.0 adds a new TraceReturn extension instruction, but this should never appear in CBOR.
     (0,1,9,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments },
-    // 0.1.10.0 adds the `spontaneous_jump` constraint for trace segments.
-    (0,1,10,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments SpontaneousJump },
+    // 0.1.10.0 adds the `spontaneous_jump` constraint for trace segments and the BBMD trace mode.
+    (0,1,10,0) = { PublicPc PreAdvice HeapInit AdviseMaxBound CodeSegments SpontaneousJump Bbmd },
 }
 
 pub fn lookup_version(v: Version) -> Option<HashSet<Feature>> {

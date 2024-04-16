@@ -281,7 +281,7 @@ fn calc_step<'a>(
     let opcode = ev.eval_typed(b.circuit(), instr.opcode).and_then(Opcode::from_raw);
     if opcode.is_some() || !b.circuit().allow_functions() {
         return calc_step_inner(
-            cx, b, ev, calc_step_inner_cases, privilege_levels, idx, opcode, instr, mem_port, advice, s1, kmem);
+            cx, b, ev, calc_step_inner_cases, privilege_levels, idx, opcode, instr, mem_port, advice, s1, Some(kmem));
     }
 
     // The opcode is unknown, so it could be performing any store at any address.
@@ -361,7 +361,7 @@ pub fn define_calc_step_function<'a>(
                 &mem_port,
                 advice,
                 &s1,
-                &mut kmem,
+                Some(&mut kmem),
             );
 
             let (asserts, bugs) = cx.finish(c);
@@ -638,7 +638,7 @@ fn op_load<'a>(
     b: &impl Builder<'a>,
     pub_load_args: Option<(
         &mut CachingEvaluator<'a, '_, eval::Public>,
-        &mut KnownMem<'a>,
+        Option<&mut KnownMem<'a>>,
         bool,
         TWire<'a, u64>,
         TWire<'a, u64>,
@@ -650,7 +650,7 @@ fn op_load<'a>(
 ) -> TWire<'a, (u64, u8)> {
     let known_value = if let Some((ev, kmem, privilege_levels, pc, y, mem_port_unused)) = pub_load_args {
         let y_addr = privileged_addr(b, privilege_levels, pc, y);
-        kmem.load(b, ev, y_addr, w).map(|v| (v, mem_port_unused))
+        kmem.and_then(|kmem| kmem.load(b, ev, y_addr, w).map(|v| (v, mem_port_unused)))
     } else {
         None
     };
@@ -673,7 +673,7 @@ fn op_store<'a>(
     b: &impl Builder<'a>,
     pub_store_args: Option<(
         &mut CachingEvaluator<'a, '_, eval::Public>,
-        &mut KnownMem<'a>,
+        Option<&mut KnownMem<'a>>,
         bool,
         TWire<'a, u64>,
         TWire<'a, u64>,
@@ -684,7 +684,9 @@ fn op_store<'a>(
     if let Some((ev, kmem, privilege_levels, pc, x, y, w)) = pub_store_args {
         let y_addr = privileged_addr(b, privilege_levels, pc, y);
         let (addr, value) = (y_addr, x);
-        kmem.store(b, ev, addr, value, w);
+        if let Some(kmem) = kmem {
+            kmem.store(b, ev, addr, value, w);
+        }
     }
     no_op(b)
 }
@@ -693,7 +695,7 @@ fn op_poison8<'a>(
     b: &impl Builder<'a>,
     pub_poison8_args: Option<(
         &mut CachingEvaluator<'a, '_, eval::Public>,
-        &mut KnownMem<'a>,
+        Option<&mut KnownMem<'a>>,
         bool,
         TWire<'a, u64>,
         TWire<'a, u64>,
@@ -703,7 +705,9 @@ fn op_poison8<'a>(
     if let Some((ev, kmem, privilege_levels, pc, x, y)) = pub_poison8_args {
         let y_addr = privileged_addr(b, privilege_levels, pc, y);
         let (addr, value) = (y_addr, x);
-        kmem.poison(b, ev, addr, value, MemOpWidth::W8);
+        if let Some(kmem) = kmem {
+            kmem.poison(b, ev, addr, value, MemOpWidth::W8);
+        }
     }
     no_op(b)
 }
@@ -722,20 +726,22 @@ fn op_advise<'a>(
     pub_advise_args: Option<(
         &Context<'a>,
         &mut CachingEvaluator<'a, '_, eval::Public>,
-        &mut KnownMem<'a>,
+        Option<&mut KnownMem<'a>>,
         TWire<'a, u64>,
         usize,        
     )>,
     dest: TWire<'a, u8>,
 ) -> TWire<'a, (u64, u8)> {
     if let Some((cx, ev, kmem, y, idx)) = pub_advise_args {
-        if let Some(max) = ev.eval_typed(b.circuit(), y) {
-            wire_assert!(
-                cx, b, b.le(advice, b.lit(max)),
-                "step {}: advice value {} is out of range (expected <= {})",
-                idx, cx.eval(advice), max,
-            );
-            kmem.set_wire_range(advice, max);
+        wire_assert!(
+            cx, b, b.le(advice, y),
+            "step {}: advice value {} is out of range (expected <= {})",
+            idx, cx.eval(advice), cx.eval(y),
+        );
+        if let Some(kmem) = kmem {
+            if let Some(max) = ev.eval_typed(b.circuit(), y) {
+                kmem.set_wire_range(advice, max);
+            }
         }
     }
     TWire::new((advice, dest))
@@ -872,7 +878,7 @@ pub fn define_calc_step_inner_cases<'a>(
     cases
 }
 
-fn calc_step_inner<'a>(
+pub fn calc_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     ev: &mut CachingEvaluator<'a, '_, eval::Public>,
@@ -884,7 +890,7 @@ fn calc_step_inner<'a>(
     mem_port: &TWire<'a, MemPort>,
     advice: TWire<'a, u64>,
     s1: &TWire<'a, RamState>,
-    kmem: &mut KnownMem<'a>,
+    mut kmem: Option<&mut KnownMem<'a>>,
 ) -> (TWire<'a, RamState>, CalcIntermediate<'a>) {
     let _g = b.scoped_label("calc_step");
     let c = b.circuit();
@@ -941,18 +947,18 @@ fn calc_step_inner<'a>(
     case!(Opcode::Cnjmp, op_cnjmp(b, privilege_levels, s1.pc, x, y));
 
     for w in MemOpWidth::iter() {
-        let pub_load_args = if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, y, &mut mem_port_unused)) } else { None };
+        let pub_load_args = if opcode.is_some() { Some((&mut *ev, kmem.as_deref_mut(), privilege_levels, s1.pc, y, &mut mem_port_unused)) } else { None };
         case!(w.load_opcode(), op_load(b, pub_load_args, mem_port, w, instr.dest));
     }
     for w in MemOpWidth::iter() {
-        let pub_store_args = if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, x, y, w)) } else { None };
+        let pub_store_args = if opcode.is_some() { Some((&mut *ev, kmem.as_deref_mut(), privilege_levels, s1.pc, x, y, w)) } else { None };
         case!(w.store_opcode(), op_store(b, pub_store_args));
     }
-    case!(Opcode::Poison8, op_poison8(b, if opcode.is_some() { Some((&mut *ev, &mut *kmem, privilege_levels, s1.pc, x, y)) } else { None }));
+    case!(Opcode::Poison8, op_poison8(b, if opcode.is_some() { Some((&mut *ev, kmem.as_deref_mut(), privilege_levels, s1.pc, x, y)) } else { None }));
 
     case!(Opcode::Answer, op_answer(b, s1.pc));
 
-    case!(Opcode::Advise, op_advise(b, advice, if opcode.is_some() { Some((cx, ev, kmem, y, idx)) } else { None }, instr.dest));
+    case!(Opcode::Advise, op_advise(b, advice, if opcode.is_some() { Some((cx, ev, kmem.as_deref_mut(), y, idx)) } else { None }, instr.dest));
 
     case!(Opcode::Stutter, op_stutter(b, s1.pc));
 
@@ -1002,7 +1008,9 @@ fn calc_step_inner<'a>(
         }
     } else {
         // The opcode is unknown, so it could be performing any store at any address.
-        kmem.clear();
+        if let Some(kmem) = kmem.as_deref_mut() {
+            kmem.clear();
+        }
     }
 
     let s2 = RamStateRepr { cycle, pc, regs, live, tainted_regs };
@@ -1015,7 +1023,7 @@ fn calc_step_inner<'a>(
     (TWire::new(s2), im)
 }
 
-fn check_state<'a>(
+pub fn check_state<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     seg_idx: usize,
@@ -1168,7 +1176,7 @@ pub fn define_check_step_function<'a>(
     c.define_function::<(), _>("check_step", &arg_tys, CheckStepFunction)
 }
 
-fn check_step_inner<'a>(
+pub fn check_step_inner<'a>(
     cx: &Context<'a>,
     b: &impl Builder<'a>,
     seg_idx: usize,
@@ -1280,21 +1288,28 @@ impl<'b> InstrLookup<'b> {
             padding: fetch::PADDING_INSTR,
         }
     }
+
+    pub fn iter_pcs<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
+        self.index.iter().flat_map(|(&base_pc, cs)| {
+            base_pc .. base_pc + cs.len
+        })
+    }
+
+    pub fn get(&self, idx: u64) -> Option<&RamInstr> {
+        let (&start, cs) = self.index.range(..= idx).next_back()?;
+        debug_assert!(start <= idx);
+        let i = usize::try_from(idx - start).unwrap();
+        if i >= cs.instrs.len() {
+            return None;
+        }
+        Some(&cs.instrs[i])
+    }
 }
 
 impl Index<u64> for InstrLookup<'_> {
     type Output = RamInstr;
 
     fn index(&self, idx: u64) -> &RamInstr {
-        let (&start, cs) = match self.index.range(..= idx).next_back() {
-            Some(x) => x,
-            None => return &self.padding,
-        };
-        debug_assert!(start <= idx);
-        let i = usize::try_from(idx - start).unwrap();
-        if i >= cs.instrs.len() {
-            return &self.padding;
-        }
-        &cs.instrs[i]
+        self.get(idx).unwrap_or(&self.padding)
     }
 }

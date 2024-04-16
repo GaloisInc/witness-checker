@@ -19,7 +19,7 @@ fn golden_tests() -> io::Result<()> {
         .output()?;
     assert!(output.status.success());
 
-    for entry in fs::read_dir("examples")? {
+    'outer: for entry in fs::read_dir("examples")? {
         let entry = entry?;
         let path = entry.path();
 
@@ -35,6 +35,9 @@ fn golden_tests() -> io::Result<()> {
         for line in f.lines() {
             let line = line?;
             let line = line.trim();
+            if line.starts_with("## SKIP") {
+                continue 'outer;
+            }
             if let Some(rest) = strip_prefix(line, "## FLAGS: ") {
                 has_custom_flags = true;
                 for part in rest.split_whitespace() {

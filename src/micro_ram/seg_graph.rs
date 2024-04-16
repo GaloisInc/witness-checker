@@ -162,7 +162,7 @@ impl<'a> SegGraphBuilder<'a> {
                 assert!(!sg.edges.contains_key(&(i, j)), "duplicate edge {} -> {}", i, j);
                 sg.edges.insert((i, j), b.secret_lazy(move |w| {
                     let w: &ExecWitness = project_witness(w);
-                    w.segments[j].pred == Some(i)
+                    w.trace.as_instr().segments[j].pred == Some(i)
                 }));
 
                 sg.segments[j].preds.push(Predecessor {
@@ -176,7 +176,7 @@ impl<'a> SegGraphBuilder<'a> {
                 assert!(!sg.from_net.contains_key(&i), "duplicate edge net -> {}", i);
                 sg.from_net.insert(i, b.secret_lazy(move |w| {
                     let w: &ExecWitness = project_witness(w);
-                    w.segments[i].from_net
+                    w.trace.as_instr().segments[i].from_net
                 }));
                 let output_id = network.add_output();
                 sg.segments[i].preds.push(Predecessor {
@@ -190,7 +190,7 @@ impl<'a> SegGraphBuilder<'a> {
                 assert!(!sg.to_net.contains_key(&i), "duplicate edge {} -> net", i);
                 sg.to_net.insert(i, b.secret_lazy(move |w| {
                     let w: &ExecWitness = project_witness(w);
-                    w.segments[i].to_net
+                    w.trace.as_instr().segments[i].to_net
                 }));
                 sg.network_inputs.push(NetworkInputNode {
                     pred: Predecessor {
@@ -337,7 +337,7 @@ impl<'a> SegGraphBuilder<'a> {
                         preds: vec![*pred],
                         secret: b.secret_lazy_sized(&sizes, move |w| {
                             let w: &ExecWitness = project_witness(w);
-                            let w: &SegmentWitness = &w.segments[i];
+                            let w: &SegmentWitness = &w.trace.as_instr().segments[i];
                             let live = match pred_src {
                                 StateSource::CpuInit => true,
                                 StateSource::Segment(j) => w.pred == Some(j),
@@ -665,8 +665,8 @@ impl<'a> SegGraphBuilder<'a> {
                 let w = project_witness(w);
                 let (seg_to_net_map, seg_from_net_map) = deps;
                 let mut conns = Vec::with_capacity(n);
-                debug_assert_eq!(n, w.segments.len());
-                for (i, seg) in w.segments.iter().enumerate() {
+                debug_assert_eq!(n, w.trace.as_instr().segments.len());
+                for (i, seg) in w.trace.as_instr().segments.iter().enumerate() {
                     if seg.to_net {
                         let src = i;
                         let dest = seg.succ.unwrap();
