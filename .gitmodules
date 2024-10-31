@@ -9,4 +9,4 @@
 	url = ../zkinterface-sieve.git
 [submodule "deps/swanky"]
 	path = deps/swanky
-	url = ../../../crypto/swanky.git
+	url = https://github.com/GaloisInc/swanky
